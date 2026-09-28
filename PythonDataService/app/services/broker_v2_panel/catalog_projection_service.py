@@ -45,21 +45,47 @@ def holdings_text(exposure: Mapping[str, float]) -> str:
     return ", ".join(f"{quantity:g} {symbol}" for symbol, quantity in sorted(exposure.items()))
 
 
-def bot_group(*, world: AuthorityKind, mode: str, running: bool, holds_money: bool) -> BotGroup:
+def bot_world(authority_world: AuthorityKind, mode: str) -> AuthorityKind:
+    """The world one bot trades in: its authority's, or simulated for a Dry Run.
+
+    A bot configured to simulate trades simulated cash whatever account it
+    sits under (PRD #2560 D4/D5), so its group and its label both follow
+    this one answer and can never disagree (H23).
+    """
+    return "synthetic" if mode == "dry_run" else authority_world
+
+
+def bot_group(*, world: AuthorityKind, running: bool, holds_money: bool) -> BotGroup:
     """Where a bot sits on its account's Home (PRD #2560 D5/D7).
 
-    A Dry Run -- a simulated world, or a bot configured to simulate -- is
-    always its own group, whatever it holds. Any other bot is running while it
-    runs; once stopped it is holding while it has position cost or
-    still-claimed money (``holds_money``), and finished when it is flat with
-    nothing still claimed. Nothing is archived by hand: a holding bot moves to
-    finished by itself once its money is released.
+    ``world`` is the bot's own (``bot_world``). A Dry Run is always its own
+    group, whatever it holds. Any other bot is running while it runs; once
+    stopped it is holding while it has position cost or still-claimed money
+    (``holds_money``), and finished when it is flat with nothing still
+    claimed. Nothing is archived by hand: a holding bot moves to finished by
+    itself once its money is released.
     """
-    if world == "synthetic" or mode == "dry_run":
+    if world == "synthetic":
         return "dry_run"
     if running:
         return "running"
     return "holding" if holds_money else "finished"
+
+
+def ended_at_ms(status: BotStatusView, *, latest_stop_ms: int | None) -> int | None:
+    """When a stopped bot's run ended; ``None`` while it runs or never ran.
+
+    The latest run's own stop instant is the answer. A run that ended without
+    one -- a crash leaves its run row open -- ended when its duty outcome was
+    recorded, and a retirement with no run ended when it retired.
+    """
+    if status.running:
+        return None
+    if latest_stop_ms is not None:
+        return latest_stop_ms
+    if status.duty_outcome is not None:
+        return status.duty_outcome.recorded_at_ms
+    return status.last_transition_at_ms if status.phase == "RETIRED" else None
 
 
 class SqliteCatalogProjectionUnavailable(RuntimeError):
@@ -199,11 +225,14 @@ def compose_catalog_view(
     account_id: str,
     world: AuthorityKind,
     holds_money: bool,
+    latest_stop_ms: int | None,
 ) -> BotCatalogView:
     """Compose one roster row from a bot's status and its rollup (§5).
 
     The roster preserves the backend-owned Running or Stopped intent.
+    ``world`` is the row's authority's; the row's own world follows its mode.
     """
+    world = bot_world(world, status.mode)
     return BotCatalogView(
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
@@ -224,7 +253,7 @@ def compose_catalog_view(
         day_pnl=day_pnl(rollup.realized_pnl_today, rollup.open_pnl),
         last_activity_at_ms=rollup.last_activity_at_ms,
         needs_attention=rollup.needs_attention or _lifecycle_needs_attention(status),
-        group=bot_group(world=world, mode=status.mode, running=status.running, holds_money=holds_money),
+        group=bot_group(world=world, running=status.running, holds_money=holds_money),
         world_label=WORLD_LABELS[world],
-        ended_at_ms=None if status.running else status.last_transition_at_ms,
+        ended_at_ms=ended_at_ms(status, latest_stop_ms=latest_stop_ms),
     )

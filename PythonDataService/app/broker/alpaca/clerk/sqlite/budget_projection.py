@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
-from app.broker.alpaca.clerk.sqlite.envelope_reservations import DEAD_ORDER_STATES, EntryCashClaim, entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryCashClaim, entry_cash_claims
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
@@ -211,31 +211,27 @@ def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
 
     The fact-level twin of ``account_money``'s stopped-slice rule
     (``position_cost + still_claimed > 0``), read without a cash observation
-    so Home can group its bots while the money bar cannot be drawn: a nonzero
-    attributed position is cost on the bar, and an ENTRY holding a cash
-    reservation still claims its unfilled remainder -- the remainder
-    ``entry_cash_claims`` prices: nothing for a dead order, else its quantity
-    less its effective fills. A stopped bot in this set is holding; one
-    outside it is finished.
+    so Home can group its bots while the money bar cannot be drawn. Still
+    claimed is exactly what the bar prices it as: ``entry_cash_claims``'
+    unfilled remainder (nothing for a dead order, else its quantity less its
+    effective fills) and its fee -- the one definition, never a second copy
+    in SQL. Position cost is a nonzero attributed position. A stopped bot in
+    this set is holding; one outside it is finished.
     """
-    positions = conn.execute(
-        "SELECT strategy_instance_id, attributed_qty FROM positions "
-        "WHERE attributed_qty <> 0 AND strategy_instance_id IS NOT NULL"
-    ).fetchall()
-    claims = conn.execute(
-        "SELECT DISTINCT e.strategy_instance_id FROM envelope_reservations r "
-        "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
-        "JOIN effect_operations e ON e.effect_operation_id = r.effect_operation_id "
-        "WHERE e.strategy_instance_id IS NOT NULL "
-        f"AND LOWER(COALESCE(o.broker_state, '')) NOT IN ({', '.join('?' for _ in DEAD_ORDER_STATES)}) "
-        "AND r.quantity > COALESCE((SELECT SUM(f.qty) FROM fills f WHERE f.order_ref = o.order_ref "
-        "AND NOT EXISTS (SELECT 1 FROM fills s WHERE s.superseded_execution_ref = f.execution_id)), 0)",
-        DEAD_ORDER_STATES,
-    ).fetchall()
-    return frozenset(
-        {str(row[0]) for row in positions if position_quantity_is_nonzero(float(row[1]))}
-        | {str(row[0]) for row in claims}
-    )
+    with money_context():
+        claimed = {
+            claim.strategy_instance_id
+            for claim in entry_cash_claims(conn, seen_before_ms=0)
+            if claim.unfilled_cost + claim.unfilled_fee > ZERO
+        }
+    positioned = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT strategy_instance_id, attributed_qty FROM positions WHERE strategy_instance_id IS NOT NULL"
+        )
+        if position_quantity_is_nonzero(float(row[1]))
+    }
+    return frozenset(claimed | positioned)
 
 
 @dataclass(frozen=True)
@@ -274,13 +270,37 @@ def project_bot_results(
     return results
 
 
+class BotResultsMemo:
+    """The last whole-life results read, keyed by the custody revision it read.
+
+    A Finished bot's result moves only with a custody transition -- a fill, a
+    correction, or new fee evidence, which the Clerk records as a transition
+    too -- and every transition advances ``control_revision``. So a roster
+    poll at an unchanged revision reuses the last answer instead of running
+    the lifetime fee projection again. An unresolved read is never kept.
+    """
+
+    def __init__(self) -> None:
+        self._last: tuple[tuple[int, tuple[str, ...]], dict[str, BotResult]] | None = None
+
+    def get(self, key: tuple[int, tuple[str, ...]]) -> dict[str, BotResult] | None:
+        last = self._last
+        return dict(last[1]) if last is not None and last[0] == key else None
+
+    def put(self, key: tuple[int, tuple[str, ...]], results: dict[str, BotResult]) -> None:
+        self._last = (key, dict(results))
+
+
 def read_bot_results(
     db_path: Path, *, now_ms: int, fee_evidence_checked_at_ms: int | None, strategy_instance_ids: Sequence[str],
+    memo: BotResultsMemo | None = None,
 ) -> dict[str, BotResult]:
     """``project_bot_results`` on its own query-only snapshot of the custody file.
 
     A roster poll reads whole-life results without ever holding the Clerk's
-    writer: its lifetime fee projection is the costly part of the read.
+    writer: its lifetime fee projection is the costly part of the read, so it
+    is skipped when ``memo`` already holds this snapshot's revision. Blocking
+    work: callers on the event loop run it in a worker thread.
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
@@ -289,8 +309,16 @@ def read_bot_results(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
         conn.execute("BEGIN")
+        revision = int(conn.execute("SELECT control_revision FROM control_meta WHERE id = 1").fetchone()[0])
+        key = (revision, tuple(strategy_instance_ids))
+        cached = None if memo is None else memo.get(key)
+        if cached is not None:
+            return cached
         fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
-        return project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
+        results = project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
+        if memo is not None:
+            memo.put(key, results)
+        return results
     finally:
         conn.close()
 

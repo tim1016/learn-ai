@@ -38,16 +38,19 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.schemas.account_authority import AuthorityKind
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotGroup,
     BotPanelView,
     PanelAction,
     PanelActionRequest,
@@ -64,11 +67,15 @@ from app.services.broker_v2_panel.action_execution_service import (
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
+    bot_group,
+    bot_world,
+    ended_at_ms,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
     CatalogHomeFacts,
     build_sqlite_catalog,
+    with_finished_results,
 )
 from app.services.broker_v2_panel.sqlite_roster_status import (
     RosterMembership,
@@ -720,7 +727,7 @@ async def read_sqlite_catalog(
                 raise SqliteCatalogRevisionMismatch(
                     "SQLite roster membership changed during catalog projection."
                 )
-            return build_sqlite_catalog(
+            rows = build_sqlite_catalog(
                 statuses,
                 projections,
                 economic_rollups=economic_rollups,
@@ -730,6 +737,8 @@ async def read_sqlite_catalog(
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
                 raise
+            continue
+        return await with_finished_results(rows, facade.repository.bot_results)
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
@@ -738,7 +747,7 @@ def _catalog_home(facade: SqliteAlpacaClerkFacade, membership: RosterMembership)
     return CatalogHomeFacts(
         world=authority_kind_for_account(facade.account_id, account_mode=facade.account_mode),
         holding_money=membership.holding_money,
-        read_results=facade.repository.bot_results,
+        latest_stops=facade.repository.latest_run_stops(),
     )
 
 
@@ -807,7 +816,7 @@ async def read_sqlite_catalog_from_facade(
                 raise SqliteCatalogRevisionMismatch(
                     "SQLite roster membership changed during catalog projection."
                 )
-            return build_sqlite_catalog(
+            rows = build_sqlite_catalog(
                 statuses,
                 projections,
                 economic_rollups=economic_rollups,
@@ -817,6 +826,8 @@ async def read_sqlite_catalog_from_facade(
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
                 raise
+            continue
+        return await with_finished_results(rows, facade.repository.bot_results)
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
@@ -1041,6 +1052,73 @@ __all__ = [
     "read_sqlite_panel_evidence",
     "read_sqlite_roster_statuses",
 ]
+
+
+async def read_account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProjection:
+    """The account's custody projection alone, on its own snapshot, off the loop."""
+    def read() -> ClerkProjection:
+        reader = SqliteClerkProjectionReader.from_facade(facade)
+        try:
+            return reader.account_snapshot()
+        finally:
+            reader.close()
+
+    return await asyncio.to_thread(read)
+
+
+@dataclass(frozen=True)
+class HomeRosterBot:
+    """Where one live registration sits on its account's Home (PRD #2560 D7).
+
+    ``group`` is ``None`` when the bot's lifecycle cannot be read, so where it
+    sits is unknown. ``unclean_ended_at_ms`` is when a stopped bot's run ended
+    without a clean exit (a crash, an unverified exit), else ``None``.
+    """
+
+    strategy_instance_id: str
+    symbol: str
+    group: BotGroup | None
+    unclean_ended_at_ms: int | None
+
+
+def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> list[HomeRosterBot]:
+    """Each live registration's Home group, placed by the catalog's own rule.
+
+    The same roster status the catalog builds -- so a crashed bot whose run
+    row is stuck ACTIVE is stopped here exactly as it is there -- the same
+    holding set (``roster_membership``) and the same ``bot_group``. A retired
+    registration with no live custody is the catalog's inert row (#1911) and
+    is skipped. A bot whose lifecycle cannot be read is kept, ungrouped: a
+    bad bot never hides its siblings. Blocking: callers run it off the loop.
+    """
+    membership = roster_membership(repository)
+    stops = repository.latest_run_stops()
+    bots: list[HomeRosterBot] = []
+    for registration in repository.strategy_instances():
+        sid = str(registration["strategy_instance_id"])
+        if sid in membership.inert_terminal:
+            continue
+        try:
+            status = build_roster_status("alpaca", registration, repository)
+        except SqliteCatalogProjectionUnavailable:
+            logger.error("Could not read one bot's lifecycle for Home", extra={
+                "action": "home_roster_unreadable", "strategy_instance_id": sid,
+                "account_id": repository.account_id,
+            }, exc_info=True)
+            bots.append(HomeRosterBot(sid, str(registration["symbol"]), None, None))
+            continue
+        outcome = status.duty_outcome
+        unclean = not status.running and outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
+        bots.append(HomeRosterBot(
+            strategy_instance_id=sid,
+            symbol=status.symbol,
+            group=bot_group(
+                world=bot_world(world, status.mode), running=status.running,
+                holds_money=sid in membership.holding_money,
+            ),
+            unclean_ended_at_ms=ended_at_ms(status, latest_stop_ms=stops.get(sid)) if unclean else None,
+        ))
+    return bots
 
 
 async def read_account_custody(

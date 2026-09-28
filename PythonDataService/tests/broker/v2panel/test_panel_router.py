@@ -57,6 +57,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
 from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED
+from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -595,6 +596,69 @@ async def test_catalog_scoped_returns_sqlite_roster(api) -> None:
     assert [row["strategy_instance_id"] for row in rows] == [SID]
     assert rows[0]["strategy_key"] == "deployment_validation"
     assert rows[0]["desired_state"] == "RUNNING"
+
+
+async def test_catalog_places_each_bot_on_home_from_its_own_custody_over_http(tmp_path: Path) -> None:
+    """Review A5/A2/B6 (#2562): the Home fields through the real route and a
+    real repository -- running, holding, finished and Dry Run rows, each
+    stopped row dated by its own run's stop instant (never a status
+    transition that is empty for a stopped bot), and a Dry Run under a real
+    account worded as a Dry Run."""
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry(tmp_path, sids=()))  # type: ignore[arg-type]
+    port = _FakeBrokerPort()
+    get_broker_registry().register(port)  # type: ignore[arg-type]
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path, clock=clock)
+    bots = (("running", "trade"), ("holding", "trade"), ("finished", "trade"), ("simulated", "dry_run"))
+    for sid, mode in bots:
+        repo.register_strategy_instance(
+            strategy_instance_id=sid, symbol="SPY", config_hash="config-1",
+            strategy_key="deployment_validation", display_name="Deployment Validation",
+            config_json=json.dumps({"mode": mode, "quantity": 1, "carryover_policy": "FORBID"}),
+        )
+        submit_start_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=_run_id(sid), clock=repo.clock)
+    bought = accept_enter(
+        repo, account_id=ACCT, strategy_instance_id="holding", decision_id="dec-holding",
+        lifecycle_run_id=_run_id("holding"), leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+    )
+    _append_slice(repo, bought, execution_id="holding-buy", quantity=2, source_event_at_ms=_T0, fee=0)
+    stopped_at: dict[str, int | None] = {}
+    for sid in ("holding", "finished"):
+        submit_stop_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=_run_id(sid), clock=repo.clock)
+        stopped_at[sid] = repo.latest_run(sid).stopped_at_ms
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=port, trade=port)  # type: ignore[arg-type]
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with _client(app) as client:
+            response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/catalog")
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
+
+    assert response.status_code == 200, response.text
+    rows = {row["strategy_instance_id"]: row for row in response.json()}
+    assert {sid: (row["group"], row["world_label"]) for sid, row in rows.items()} == {
+        "running": ("running", "PAPER · practice money"),
+        "holding": ("holding", "PAPER · practice money"),
+        "finished": ("finished", "PAPER · practice money"),
+        "simulated": ("dry_run", "DRY RUN · simulated cash"),
+    }
+    assert None not in stopped_at.values()
+    assert {sid: rows[sid]["ended_at_ms"] for sid in ("running", "holding", "finished")} == {
+        "running": None, "holding": stopped_at["holding"], "finished": stopped_at["finished"],
+    }
+    assert rows["holding"]["status_explanation"] == "Stopped · still holds 2 SPY · no bot is managing it"
+    # No fee evidence was ever recorded: the whole-life result is unknown,
+    # never $0.
+    assert (rows["finished"]["final_result_usd"], rows["finished"]["trade_count"]) == (None, None)
 
 
 async def test_panel_scoped_uses_sqlite_projection(api) -> None:

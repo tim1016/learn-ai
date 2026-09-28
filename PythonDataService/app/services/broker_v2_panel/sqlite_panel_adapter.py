@@ -7,8 +7,9 @@ Every action and action token comes from the SQLite recovery catalog.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
@@ -338,13 +339,13 @@ class CatalogHomeFacts:
     """What places an authority's rows on its account's Home (PRD #2560).
 
     ``world`` is the authority's own; ``holding_money`` the bots with position
-    cost or still-claimed money; ``read_results`` reads Finished bots'
-    whole-life results (``ClerkSqliteRepository.bot_results``).
+    cost or still-claimed money; ``latest_stops`` each bot's newest run's stop
+    instant (``ClerkSqliteRepository.latest_run_stops``).
     """
 
     world: AuthorityKind
     holding_money: frozenset[str]
-    read_results: Callable[[Sequence[str]], dict[str, BotResult]]
+    latest_stops: Mapping[str, int | None]
 
 
 def build_sqlite_catalog(
@@ -355,7 +356,11 @@ def build_sqlite_catalog(
     account_id: str,
     home: CatalogHomeFacts,
 ) -> list[BotCatalogView]:
-    """Compose the activated catalog from SQLite config, folds, and economics."""
+    """Compose the activated catalog from SQLite config, folds, and economics.
+
+    Finished rows' whole-life results are not read here: that read is the
+    costly one, and ``with_finished_results`` runs it off the event loop.
+    """
     identified_statuses = [require_sqlite_catalog_identity(status) for status in statuses]
     _require_one_catalog_economic_revision(
         identified_statuses,
@@ -370,28 +375,31 @@ def build_sqlite_catalog(
             account_id=account_id,
             world=home.world,
             holds_money=status.strategy_instance_id in home.holding_money,
+            latest_stop_ms=home.latest_stops.get(status.strategy_instance_id),
         )
         for status in statuses
     ]
-    rows = adapt_sqlite_catalog(rows, projections, economic_rollups)
-    return _with_finished_results(rows, home.read_results)
+    return adapt_sqlite_catalog(rows, projections, economic_rollups)
 
 
-def _with_finished_results(
+async def with_finished_results(
     rows: list[BotCatalogView],
     read_results: Callable[[Sequence[str]], dict[str, BotResult]],
 ) -> list[BotCatalogView]:
     """Give each Finished row its whole life: its executions and its result.
 
-    Read only when a row is Finished. When the fee evidence cannot vouch for
-    a result the rows keep it unknown -- said in the log, never shown as $0 --
-    and the roster still renders.
+    Read only when a row is Finished, in a worker thread: the lifetime fee
+    projection is blocking work and never runs on the event loop
+    (``ClerkSqliteRepository.bot_results`` reuses it at an unchanged custody
+    revision). When the fee evidence cannot vouch for a result the rows keep
+    it unknown -- said in the log, never shown as $0 -- and the roster still
+    renders.
     """
     finished = [row.strategy_instance_id for row in rows if row.group == "finished"]
     if not finished:
         return rows
     try:
-        results = read_results(finished)
+        results = await asyncio.to_thread(read_results, finished)
     except BudgetUnavailable:
         logger.warning(
             "Finished bots' results are unavailable; the rows show them as unknown",

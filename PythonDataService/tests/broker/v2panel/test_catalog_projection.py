@@ -25,8 +25,8 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogRevisionMismatch,
     status_label_for,
 )
-from app.services.broker_v2_panel.sqlite_panel_adapter import build_sqlite_catalog
-from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID, home_facts
+from app.services.broker_v2_panel.sqlite_panel_adapter import build_sqlite_catalog, with_finished_results
+from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID, home_facts, read_results_from
 
 
 def _status(
@@ -540,7 +540,7 @@ def test_a_bot_scoped_hold_still_commands_only_its_own_row() -> None:
 # ── Home groups (PRD #2560 D5/D7) ────────────────────────────────────────────
 
 
-def _home_row(
+async def _home_row(
     *,
     running: bool,
     exposure: dict[str, float],
@@ -548,76 +548,89 @@ def _home_row(
     world: Literal["real_paper", "real_live", "shadow", "synthetic"] = "real_paper",
     mode: Literal["log_only", "dry_run", "trade"] = "trade",
     results: dict[str, BotResult] | None = None,
+    latest_stop_ms: int | None = 7,
 ):
-    [row] = build_sqlite_catalog(
+    rows = build_sqlite_catalog(
         [_status(sid=SID, mode=mode, running=running, phase="ON_DUTY" if running else "OFF_DUTY",
                  desired_state="RUNNING" if running else "STOPPED", duty_kind=None if running else "STOPPED")],
         projections={SID: _projection(sid=SID)},
         economic_rollups={SID: _economic_snapshot(sid=SID, exposure=exposure)},
         account_id=ACCT,
-        home=home_facts(world=world, holding=holding, results=results),
+        home=home_facts(world=world, holding=holding, latest_stops={SID: latest_stop_ms}),
     )
+    [row] = await with_finished_results(rows, read_results_from(results))
     return row
 
 
-def test_a_running_bot_is_running_whatever_it_holds() -> None:
-    row = _home_row(running=True, exposure={"SPY": 2.0}, holding=(SID,))
+async def test_a_running_bot_is_running_whatever_it_holds() -> None:
+    row = await _home_row(running=True, exposure={"SPY": 2.0}, holding=(SID,))
 
     assert (row.group, row.world_label, row.ended_at_ms) == ("running", "PAPER · practice money", None)
     assert row.status_explanation == "Running · holds 2 SPY"
     assert row.final_result_usd is None
 
 
-def test_a_stopped_bot_with_shares_is_holding_and_says_no_bot_manages_them() -> None:
-    row = _home_row(running=False, exposure={"SPY": 2.0}, holding=(SID,))
+async def test_a_stopped_bot_with_shares_is_holding_and_says_no_bot_manages_them() -> None:
+    row = await _home_row(running=False, exposure={"SPY": 2.0}, holding=(SID,))
 
     assert row.group == "holding"
     assert row.status_explanation == "Stopped · still holds 2 SPY · no bot is managing it"
-    assert row.ended_at_ms == 2
+    # Its run's own stop instant, never its status's last transition.
+    assert row.ended_at_ms == 7
 
 
-def test_a_stopped_flat_bot_whose_entry_still_claims_money_is_holding_not_finished() -> None:
-    row = _home_row(running=False, exposure={}, holding=(SID,))
+async def test_a_run_that_ended_without_a_stop_instant_ended_at_its_duty_outcome() -> None:
+    """A crash leaves its run row open: the outcome's record time is the end."""
+    row = await _home_row(running=False, exposure={}, latest_stop_ms=None)
+
+    assert row.ended_at_ms == 1
+
+
+async def test_a_stopped_flat_bot_whose_entry_still_claims_money_is_holding_not_finished() -> None:
+    row = await _home_row(running=False, exposure={}, holding=(SID,))
 
     assert row.group == "holding"
     assert row.status_explanation == "Stopped · an entry order is still working · no bot is managing it"
     assert row.final_result_usd is None
 
 
-def test_a_stopped_flat_fully_released_bot_is_finished_with_its_whole_life_result() -> None:
-    row = _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("9.9750"), trade_count=2)})
+async def test_a_stopped_flat_fully_released_bot_is_finished_with_its_whole_life_result() -> None:
+    row = await _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("9.9750"), trade_count=2)})
 
     assert row.group == "finished"
     # Python authors the dollars: half-even display cents, sign kept.
-    assert (row.final_result_usd, row.trade_count, row.ended_at_ms) == ("9.98", 2, 2)
+    assert (row.final_result_usd, row.trade_count, row.ended_at_ms) == ("9.98", 2, 7)
     assert row.status_explanation == "Off duty and flat."
 
 
-def test_a_finished_loss_keeps_its_sign() -> None:
-    row = _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("-0.22"), trade_count=3)})
+async def test_a_finished_loss_keeps_its_sign() -> None:
+    row = await _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("-0.22"), trade_count=3)})
 
     assert row.final_result_usd == "-0.22"
 
 
-def test_a_finished_result_the_fees_cannot_vouch_for_is_unknown_never_zero() -> None:
-    row = _home_row(running=False, exposure={})
+async def test_a_finished_result_the_fees_cannot_vouch_for_is_unknown_never_zero() -> None:
+    row = await _home_row(running=False, exposure={})
 
     assert row.group == "finished"
     assert (row.final_result_usd, row.trade_count) == (None, None)
 
 
 @pytest.mark.parametrize(
-    ("world", "mode", "running", "label"),
+    ("world", "mode", "running"),
     [
-        ("synthetic", "trade", True, "DRY RUN · simulated cash"),
-        ("synthetic", "trade", False, "DRY RUN · simulated cash"),
-        ("real_paper", "dry_run", False, "PAPER · practice money"),
+        ("synthetic", "trade", True),
+        ("synthetic", "trade", False),
+        # H23 / review B6: a Dry Run under a real account is worded as a Dry
+        # Run, never with its account's real-money label.
+        ("real_paper", "dry_run", False),
+        ("real_live", "dry_run", True),
     ],
 )
-def test_a_dry_run_is_its_own_group_whatever_it_holds(world, mode, running, label) -> None:
-    row = _home_row(running=running, exposure={"SPY": 1.0}, holding=(SID,), world=world, mode=mode)
+async def test_a_dry_run_is_its_own_group_and_world_whatever_it_holds(world, mode, running) -> None:
+    row = await _home_row(running=running, exposure={"SPY": 1.0}, holding=(SID,), world=world, mode=mode)
 
-    assert (row.group, row.world_label) == ("dry_run", label)
+    assert (row.group, row.world_label) == ("dry_run", "DRY RUN · simulated cash")
     assert row.final_result_usd is None
 
 
@@ -625,5 +638,30 @@ def test_a_dry_run_is_its_own_group_whatever_it_holds(world, mode, running, labe
     ("world", "label"),
     [("real_live", "LIVE · real money"), ("shadow", "SHADOW · simulated fills on your live account")],
 )
-def test_every_world_is_worded_one_way(world, label) -> None:
-    assert _home_row(running=True, exposure={}, world=world).world_label == label
+async def test_every_world_is_worded_one_way(world, label) -> None:
+    assert (await _home_row(running=True, exposure={}, world=world)).world_label == label
+
+
+async def test_finished_results_are_read_off_the_event_loop() -> None:
+    """Review A4: the lifetime fee projection is blocking work; a Home poll
+    must never run it on the event loop thread."""
+    import threading
+
+    loop_thread = threading.current_thread()
+    readers: list[threading.Thread] = []
+
+    def read(sids):
+        readers.append(threading.current_thread())
+        return {sid: BotResult(result=Decimal("1"), trade_count=1) for sid in sids}
+
+    rows = build_sqlite_catalog(
+        [_status(sid=SID, mode="trade", running=False, phase="OFF_DUTY", desired_state="STOPPED", duty_kind="STOPPED")],
+        projections={SID: _projection(sid=SID)},
+        economic_rollups={SID: _economic_snapshot(sid=SID, exposure={})},
+        account_id=ACCT,
+        home=home_facts(),
+    )
+    [row] = await with_finished_results(rows, read)
+
+    assert row.final_result_usd == "1.00"
+    assert readers and readers[0] is not loop_thread

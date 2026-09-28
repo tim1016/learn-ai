@@ -33,6 +33,22 @@ _inflight_reads: dict[
 ] = {}
 
 
+def cached_broker_account_snapshot(broker: str) -> BrokerAccountSnapshot | None:
+    """The latest account observation still fresh in the cache, never a read.
+
+    For readers that must never contact the broker (the lane's attention
+    read): ``None`` means nothing fresh was observed, not that all is well.
+    """
+    cached = _snapshot_cache.get(broker)
+    if cached is None:
+        return None
+    cached_port, snapshot, expires_at_ms = cached
+    registry = get_broker_registry()
+    if broker not in registry.registered_brokers() or registry.resolve(broker) is not cached_port:
+        return None
+    return snapshot if now_ms_utc() < expires_at_ms else None
+
+
 async def resolve_broker_account_snapshot(broker: str) -> BrokerAccountSnapshot:
     """Return one cached or coalesced account observation for ``broker``."""
     port = get_broker_registry().resolve(broker)

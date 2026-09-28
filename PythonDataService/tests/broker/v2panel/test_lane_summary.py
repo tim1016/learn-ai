@@ -13,6 +13,9 @@ from app.schemas.broker_v2_panel import LaneAttentionAction, LaneAttentionItem, 
 from app.services.bot_runner import BotTaskRegistry
 from app.services.broker_v2_panel import lane_summary
 
+#: The real read, kept before any fixture replaces it.
+_REAL_ATTENTION_READ = lane_summary.lane_attention_read
+
 
 @pytest.fixture
 def lane(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
@@ -53,6 +56,7 @@ async def test_a_count_that_cannot_be_taken_is_absent_and_the_rest_still_report(
 async def test_a_lane_with_no_clerk_reports_attention_unknown_not_zero(lane: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     """Review B2: the bell of a lane serving no account lists nothing, but
     that is "not counted" -- the card must not read "none need attention"."""
+    monkeypatch.setattr(lane_summary, "lane_attention_read", _REAL_ATTENTION_READ)
     monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: None)
 
     counts = await lane_summary.lane_counts()

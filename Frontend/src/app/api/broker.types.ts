@@ -1547,24 +1547,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cohort-archive presentation: archivable bots grouped with per-leg executability facts (ADR 0052) */
-        get: operations["get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get"];
-        put?: never;
-        /** Archive a batch of finished bots with per-leg receipts (ADR 0052) */
-        post: operations["run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
         parameters: {
             query?: never;
@@ -2368,30 +2350,6 @@ export interface paths {
         get: operations["fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Cohort Archive Read
-         * @description Fleet-routed GET /accounts/{account_id}/bots/cohort-archive (bot_panel_read).
-         */
-        get: operations["fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get"];
-        put?: never;
-        /**
-         * Fleet Bot Cohort Archive
-         * @description Fleet-routed POST /accounts/{account_id}/bots/cohort-archive (bot_action).
-         */
-        post: operations["fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8102,6 +8060,8 @@ export interface components {
             account_shortfall_usd?: string | null;
             /** Cash Usd */
             cash_usd?: string | null;
+            /** Deploy Refusal */
+            deploy_refusal?: string | null;
             /** Detail */
             detail: string;
             /** Equity Usd */
@@ -12195,78 +12155,6 @@ export interface components {
             refused_count: number;
             /** Replayed Count */
             replayed_count: number;
-        };
-        /**
-         * CohortArchiveCohort
-         * @description One (strategy_key, symbol) group of archivable members.
-         */
-        CohortArchiveCohort: {
-            /** Enabled Count */
-            enabled_count: number;
-            /** Legs */
-            legs: components["schemas"]["CohortArchiveLeg"][];
-            /** Strategy Key */
-            strategy_key: string;
-            /** Strategy Label */
-            strategy_label: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * CohortArchiveLeg
-         * @description One archivable roster member with its executability facts (ADR 0047).
-         */
-        CohortArchiveLeg: {
-            /** Blocker Headline */
-            blocker_headline: string | null;
-            /** Concurrency Token */
-            concurrency_token: string | null;
-            /** Enabled */
-            enabled: boolean;
-            /** Revision */
-            revision: number | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * CohortArchiveLegRequest
-         * @description One leg the operator confirmed — echoes the presented action facts.
-         *
-         *     Carries no ``action_id``: this endpoint archives, and nothing else. A
-         *     client that could name the action could reach a different mutation
-         *     through a surface whose confirmation copy described archiving.
-         */
-        CohortArchiveLegRequest: {
-            /** Concurrency Token */
-            concurrency_token: string;
-            /** Revision */
-            revision: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * CohortArchiveRequest
-         * @description Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5).
-         */
-        CohortArchiveRequest: {
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Legs */
-            legs: components["schemas"]["CohortArchiveLegRequest"][];
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * CohortArchiveView
-         * @description Backend-authored cohort-archive presentation (ADR 0052).
-         */
-        CohortArchiveView: {
-            /** Account Id */
-            account_id: string;
-            /** Cohorts */
-            cohorts: components["schemas"]["CohortArchiveCohort"][];
-            /** Observed At Ms */
-            observed_at_ms: number;
         };
         /**
          * CohortFlattenCohort
@@ -18074,7 +17962,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "hold" | "channel" | "out_of_sync" | "exit" | "uncertainty" | "stopped_holding" | "position_unverified" | "legacy_budget";
+            kind: "account" | "hold" | "channel" | "out_of_sync" | "exit" | "uncertainty" | "stopped_holding" | "position_unverified" | "legacy_budget";
             /** Reason Code */
             reason_code: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
@@ -31441,78 +31329,6 @@ export interface operations {
             };
         };
     };
-    get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortArchiveView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CohortArchiveRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortActionResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
@@ -33189,80 +33005,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {

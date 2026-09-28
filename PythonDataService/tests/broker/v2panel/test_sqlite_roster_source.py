@@ -114,6 +114,14 @@ class _Repository:
     def bot_results(self, strategy_instance_ids: list[str]) -> dict[str, BotResult]:
         return {sid: BotResult(result=Decimal("0"), trade_count=0) for sid in strategy_instance_ids}
 
+    def latest_run_stops(self) -> dict[str, int | None]:
+        """Derived from ``latest_run``, so the batch read cannot disagree with it."""
+        return {
+            str(registration["strategy_instance_id"]): run.stopped_at_ms
+            for registration in self.strategy_instances()
+            if (run := self.latest_run(str(registration["strategy_instance_id"]))) is not None
+        }
+
     def active_run(self, strategy_instance_id: str):
         if strategy_instance_id == "active-spy":
             return SimpleNamespace(

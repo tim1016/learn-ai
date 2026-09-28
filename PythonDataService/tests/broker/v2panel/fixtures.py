@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult, BudgetUnavailable
@@ -26,16 +26,21 @@ def home_facts(
     *,
     world: AuthorityKind = "real_paper",
     holding: Sequence[str] = (),
-    results: Mapping[str, BotResult] | None = None,
+    latest_stops: Mapping[str, int | None] | None = None,
 ) -> CatalogHomeFacts:
-    """Home facts for a built catalog; with no ``results`` the fee evidence is unknown."""
+    """Home facts for a built catalog; no bot has stopped a run unless named."""
+    return CatalogHomeFacts(world=world, holding_money=frozenset(holding), latest_stops=dict(latest_stops or {}))
+
+
+def read_results_from(results: Mapping[str, BotResult] | None) -> Callable[[Sequence[str]], dict[str, BotResult]]:
+    """A Finished-results read; with no ``results`` the fee evidence is unknown."""
 
     def read_results(sids: Sequence[str]) -> dict[str, BotResult]:
         if results is None:
             raise BudgetUnavailable("Fee evidence is unresolved: no evidence in this fixture")
         return {sid: results[sid] for sid in sids}
 
-    return CatalogHomeFacts(world=world, holding_money=frozenset(holding), read_results=read_results)
+    return read_results
 
 
 def order_ref(sid: str, intent: str) -> str:

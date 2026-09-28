@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.money import (
     normalize_money,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -136,27 +137,16 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         else:
             with repo.write_fence():
-                if repo.budget_authority_version() < 2:
-                    raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
-                sync = runtime.envelope_sync
-                if sync is None:
-                    raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
-                risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
-                if not risk.allowed:
-                    raise BudgetUnavailable(risk.detail)
-                snapshot = sync.risk_snapshot()
-                observation = risk.observation
-                if observation is None or snapshot.policy is None:
-                    raise BudgetUnavailable("Set a daily loss limit in Settings and wait for fresh cash and risk evidence.")
+                observation, policy = _account_admission(repo, runtime)
                 # One read under the fence: the bar's free to deploy IS this
                 # preview's unreserved cash, by construction.
                 money = _read_account_money(repo, observation)
                 available = money.budget.unreserved_cents
                 observed_at = observation.observed_at_ms
-                risk_revision = snapshot.policy.revision
+                risk_revision = policy.revision
                 with money_context():
-                    percent = normalize_money(snapshot.policy.loss_fraction) * 100
-                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
+                    percent = normalize_money(policy.loss_fraction) * 100
+                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(policy.loss_usd))}. Existing exit terms stay fixed."
         with money_context():
             shortcuts = [DeploymentBudgetShortcut(
                 key="position_headroom", label="1.2 × one position",
@@ -200,6 +190,27 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return DeploymentBudgetPreview(state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id)
+
+
+def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:
+    """What a Deploy on the account's money is admitted against, or why not.
+
+    The caller holds the custody fence. ``BudgetUnavailable`` carries the
+    owner-facing reason Deploy refuses on: the one statement the Deploy
+    preview and the account-money read (``deploy_refusal``) both give.
+    """
+    if repo.budget_authority_version() < 2:
+        raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
+    sync = runtime.envelope_sync
+    if sync is None:
+        raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
+    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    if not risk.allowed:
+        raise BudgetUnavailable(risk.detail)
+    policy = sync.risk_snapshot().policy
+    if risk.observation is None or policy is None:
+        raise BudgetUnavailable("Set a daily loss limit in Settings and wait for fresh cash and risk evidence.")
+    return risk.observation, policy
 
 
 def _amount_refusal(reviewed_revision: int, amount: int, *, risk_revision: int, minimum: int, available: int | None) -> str | None:
@@ -410,7 +421,14 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
         observation = None if sync is None else sync.display_observation(repo.clock())
         if observation is None:
             return AccountMoneyView(state="unavailable", detail=_NO_FRESH_READING, world=world, account_id=account_id)
-        return _money_view(repo, observation, world=world, account_id=account_id)
+        view = _money_view(repo, observation, world=world, account_id=account_id)
+        if view.state != "ready":
+            return view
+        try:
+            _account_admission(repo, runtime)
+        except BudgetUnavailable as refusal:
+            return view.model_copy(update={"deploy_refusal": str(refusal)})
+        return view
 
 
 def _money_view(

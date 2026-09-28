@@ -101,7 +101,60 @@ def test_results_read_on_their_own_snapshot_match_the_writers(account: ClerkSqli
     assert account.bot_results(["c", "a"]) == written
 
 
+def test_a_poll_at_an_unchanged_custody_revision_reuses_the_last_results(
+    account: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review A4: the lifetime fee projection ran on every Home poll. A
+    Finished result moves only with a custody transition, so an unchanged
+    revision reuses the last answer; a new transition reads again."""
+    from app.broker.alpaca.clerk.sqlite import fee_evidence
+
+    projections: list[int] = []
+    real = fee_evidence.custody_fee_attribution
+
+    def counted(*args: object, **kwargs: object):
+        projections.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fee_evidence, "custody_fee_attribution", counted)
+
+    first = account.bot_results(["c"])
+    again = account.bot_results(["c"])
+    assert again == first
+    assert len(projections) == 1
+
+    _stop(account, "d")
+    assert account.bot_results(["c"]) == first
+    assert len(projections) == 2
+
+
 def test_results_the_fee_evidence_cannot_vouch_for_are_refused_never_zero(account: ClerkSqliteRepository) -> None:
     with pytest.raises(BudgetUnavailable, match="Fee evidence"):
         # No producer has checked the fee evidence in this process.
         read_bot_results(account.db_path, now_ms=NOON, fee_evidence_checked_at_ms=None, strategy_instance_ids=["c"])
+
+
+def test_an_entry_filled_in_fractional_slices_claims_nothing_once_it_is_filled(tmp_path: Path) -> None:
+    """Review A3: holding was a second copy of the bar's rule, in SQL,
+    comparing REAL sums unnormalized -- 0.1 + 0.7 < 0.8 in float, so a fully
+    filled entry still "claimed" money and its stopped, flat bot stayed in
+    Holding forever. The one rule, ``entry_cash_claims``, normalizes."""
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 25_000)
+        entry = accept_enter(
+            repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="enter-a",
+            lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=0.8),
+            reference_price=100, envelope=_gate(),
+        )
+        _append_slice(repo, entry, execution_id="a-1", quantity=0.1, source_event_at_ms=NOON - 3, fee=0)
+        _append_slice(repo, entry, execution_id="a-2", quantity=0.7, source_event_at_ms=NOON - 2, fee=0)
+        _stop(repo, "a")
+        # Its shares are closed elsewhere (an exit order this fixture does not
+        # model), so only the entry's claim can keep it holding.
+        repo._conn.execute("UPDATE positions SET attributed_qty = 0 WHERE strategy_instance_id = 'a'")
+        repo._conn.commit()
+
+        assert repo.bots_holding_money() == frozenset()
+    finally:
+        repo.close()

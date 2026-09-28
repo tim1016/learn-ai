@@ -71,7 +71,7 @@ _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE = OperatorMove(
 # ADR 0047: the only condition whose copy the recovery catalog cannot author,
 # because its cure is not a panel action at all. The lens deliberately does not
 # render an `open_runbook` button, so the ceremony must be in the prose too.
-_AUTHORITY_FAILED_HEADLINE = "This account's custody authority has failed."
+AUTHORITY_FAILED_HEADLINE = "This account's custody authority has failed."
 _AUTHORITY_FAILED_DETAIL = (
     "Recovery replaces the authority and cannot run while this process holds "
     "its execution lease, so it is an offline ceremony: stop the data plane, "
@@ -164,6 +164,16 @@ def build_account_operator_posture(ctx: AccountOperatorPostureContext) -> Accoun
     )
 
 
+def build_account_eligibility_posture(ctx: AccountOperatorPostureContext) -> AccountOperatorPosture | None:
+    """The account's own eligibility condition alone, or ``None`` when it has none.
+
+    For a reader that lists every custody episode separately (the lane's
+    attention read), so the dominant custody condition must not mask an
+    account Alpaca has blocked or that is in the wrong mode.
+    """
+    return _eligibility_condition(ctx)
+
+
 def _posture(
     *,
     condition_id: str,
@@ -243,7 +253,7 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
         disposition: Disposition = "terminal"
         condition_id = f"alpaca_clerk_authority_failure:{ctx.authority_health}"
         severity: Literal["blocking", "warning"] = "blocking"
-        headline, detail = _AUTHORITY_FAILED_HEADLINE, _AUTHORITY_FAILED_DETAIL
+        headline, detail = AUTHORITY_FAILED_HEADLINE, _AUTHORITY_FAILED_DETAIL
     elif primary is not None and primary.available:
         disposition = "fix_here"
         condition_id = f"alpaca_clerk_recovery:{primary.action_id}"
