@@ -204,6 +204,14 @@ function brokers() {
     listPositions: vi.fn().mockResolvedValue(positions()),
     listActivities: vi.fn().mockResolvedValue(activities()),
     getPortfolioHistoryProof: vi.fn().mockResolvedValue(portfolioHistoryProof()),
+    // The trader lens always mounts `app-fee-attribution` alongside positions
+    // and activity; an unmocked call previously failed silently as plain text
+    // and only became visible once the fee-attribution error row was given
+    // `role="alert"` like its siblings.
+    getFeeAttribution: vi.fn().mockResolvedValue({
+      account_id: 'PA1', observed_at_ms: 1_700_000_000_000, authority_revision: 1,
+      available: true, known: true, account_unattributed_usd: '0', messages: [], rows: [],
+    }),
   };
 }
 

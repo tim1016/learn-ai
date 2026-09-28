@@ -4,7 +4,7 @@
     @if (fees.isLoading()) {
       <p>Reading account fee evidence…</p>
     } @else if (fees.error()) {
-      <p>Fee evidence is unavailable. Refresh to retry.</p>
+      <p role="alert">Fee evidence is unavailable. Refresh to retry.</p>
     } @else if (view(); as report) {
       @for (message of report.messages; track message) {
         <p role="status">{{ message }}</p>

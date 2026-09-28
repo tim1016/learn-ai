@@ -59,6 +59,9 @@ describe('BotBannerComponent', () => {
 
     const link = screen.getByRole('link', { name: 'Deploy again' });
     expect(link.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/deploy');
+    // Its own class, not the unrelated manual-order control's.
+    expect(link.classList.contains('bot-banner__deploy-again')).toBe(true);
+    expect(link.classList.contains('bot-banner__manual-order')).toBe(false);
     expect(screen.queryByRole('button', { name: /^(Pause|Continue|Resume)$/ })).toBeNull();
     expect(requested).toEqual([]);
   });

@@ -4,7 +4,6 @@ import { FormField, form, maxLength, pattern, readonly as readOnly, required } f
 
 import { extractServerMessage } from '../operation-error';
 import type { ResourceTarget } from '../../../fleet/resource-target';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { DEPLOYMENT_WORLD_LABELS, BrokerV2PanelService, type DeployBotBody, type DeploymentBudgetInput, type DeploymentBudgetPreview } from '../v2-panel/lib/broker-v2-panel.service';
 
@@ -21,7 +20,7 @@ export function budgetReviewContext(target: ResourceTarget, body: DeployBotBody)
 @Component({
   selector: 'app-deploy-budget-review',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, FormField, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [CurrencyPipe, FormField, TimestampDisplayComponent],
   templateUrl: './deploy-budget-review.component.html',
   styleUrl: './deploy-budget-review.component.scss',
 })

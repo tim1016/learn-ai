@@ -18,7 +18,10 @@ const state: State = {
 
 async function setup(initial = state) {
   const service = {
-    readRiskLimits: vi.fn().mockResolvedValue(initial),
+    // A fresh object per call, like a real HTTP round-trip: reusing the same
+    // reference would hide a re-seeding bug behind the resource's own
+    // reference-equality check on its resolved value.
+    readRiskLimits: vi.fn().mockImplementation(async () => ({ ...initial })),
     applyRiskLimits: vi.fn().mockResolvedValue({ ...initial, risk_revision: 4, loss_usd: 200 }),
     clearRiskHold: vi.fn().mockResolvedValue(state),
   };
@@ -58,6 +61,27 @@ describe('ConfigurationRiskLimitsComponent', () => {
     expect(await screen.findByText('Risk limits changed since review.')).toBeTruthy();
     expect(service.applyRiskLimits).toHaveBeenCalledOnce();
     expect(screen.queryByText('Risk limits applied. No restart or redeployment is needed.')).toBeNull();
+  });
+
+  it('keeps an edited draft after the refusal banner reloads the resource', async () => {
+    // Reload firing after a stale-write refusal must not discard what the
+    // operator already typed (linkedSignal does not freeze on its own —
+    // see the sibling profile/account-evidence editors on this surface).
+    const service = await setup();
+    service.applyRiskLimits.mockRejectedValue(new HttpErrorResponse({ status: 409, error: {
+      detail: { reason: 'revision_conflict', message: 'Risk limits changed since review.', next_step: 'Reload and review again.' },
+    } }));
+
+    const cap = screen.getByRole('spinbutton', { name: 'Loss cap (USD)' });
+    await userEvent.clear(cap);
+    await userEvent.type(cap, '250');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply risk limits' }));
+    await screen.findByText('Risk limits changed since review.');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
+    await waitFor(() => expect(service.readRiskLimits).toHaveBeenCalledTimes(2));
+
+    expect((screen.getByRole('spinbutton', { name: 'Loss cap (USD)' }) as HTMLInputElement).value).toBe('250');
   });
 
   it('exposes the guarded Clear action and never treats a limit edit as clearing', async () => {
