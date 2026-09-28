@@ -31,6 +31,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
@@ -41,7 +42,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
     (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
         run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
-        explanation="Pending", next_action="Refresh",
+        explanation="Pending", next_action="Refresh", first_deployed_at_ms=0,
     )),
     (BudgetDeployCommandReceipt, "first_deployed_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
@@ -158,6 +159,14 @@ def test_dry_run_never_copies_parent_cash_or_risk(authority) -> None:
     assert preview.budget_usd == "2000.00"
 
 
+_CLAIMED_AT = 1
+
+
+def _submitted(sid: str) -> DeploySubmission:
+    """The ledger claim a Deploy of ``sid`` would hold."""
+    return DeploySubmission(submission_key="submission-0001", strategy_instance_id=sid, claimed_at_ms=_CLAIMED_AT, request_fingerprint="f")
+
+
 async def test_recovery_returns_committed_outcome_even_after_evidence_expires(authority) -> None:
     repo, _, snapshot = authority
     request = _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1))
@@ -167,8 +176,10 @@ async def test_recovery_returns_committed_outcome_even_after_evidence_expires(au
     gate.publish(snapshot.observation)
     submit_budgeted_deploy(repo, strategy_instance_id="review-a", lifecycle_run_id="run", world="real_paper", committed_cents=50_000, configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")), risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal(100), request_fingerprint=budget_deploy.request_fingerprint(request, custody_account_id=repo.account_id, world="real_paper"))
     snapshot.observation = None
-    receipt = await budget_deploy.command_receipt(repo.account_id, "review-a")
+    receipt = await budget_deploy.command_receipt(repo.account_id, _submitted("review-a"))
     assert receipt.status == "pending" and receipt.committed_usd == "500.00"
+    # The first-deploy instant is the custody commit's, never the name claim's.
+    assert receipt.first_deployed_at_ms == repo.deployment_budget("review-a")["committed_at_ms"] != _CLAIMED_AT
     # H12: every read says what is recorded, never that a result is "returned unchanged".
     assert receipt.message == "review-a is committed; its launch is not confirmed yet"
     assert "unchanged" not in receipt.explanation and "$500.00 is set aside" in receipt.explanation
@@ -322,7 +333,7 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         monkeypatch.setattr(budget_deploy, "_primary", lambda account: SimpleNamespace(sqlite_repository=primary_repo))
         monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: recovered)
 
-        receipt = await budget_deploy.command_receipt("PARENT", sid)
+        receipt = await budget_deploy.command_receipt("PARENT", _submitted(sid))
 
         assert receipt is not None
         assert receipt.status == "failed" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
@@ -331,7 +342,7 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         assert get_clerk_runtime(f"sim:{sid}") is None
         assert recovered.bindings_for_broker("alpaca") == []
         # An identity no private authority ever held still reads the primary.
-        assert await budget_deploy.command_receipt("PARENT", "never-deployed") is None
+        assert await budget_deploy.command_receipt("PARENT", _submitted("never-deployed")) is None
     finally:
         await close_synthetic_clerk_runtimes()
         primary_repo.close()

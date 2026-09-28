@@ -1160,8 +1160,7 @@
             "type": "string"
           },
           "submission_key": {
-            "maxLength": 64,
-            "minLength": 8,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
             "title": "Submission Key",
             "type": "string"
           },
@@ -6826,18 +6825,11 @@
             "type": "string"
           },
           "first_deployed_at_ms": {
-            "anyOf": [
-              {
-                "format": "int64",
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "First Deployed At Ms"
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Deployed At Ms",
+            "type": "integer"
           },
           "message": {
             "title": "Message",
@@ -6919,7 +6911,8 @@
           "committed_usd",
           "message",
           "explanation",
-          "next_action"
+          "next_action",
+          "first_deployed_at_ms"
         ],
         "title": "BudgetDeployCommandReceipt",
         "type": "object"
@@ -14156,6 +14149,58 @@
           }
         },
         "title": "DeflatedSharpeResponse",
+        "type": "object"
+      },
+      "DeploySubmissionUncommitted": {
+        "additionalProperties": false,
+        "description": "The recovery read's answer for a key that named a bot whose Deploy has not committed.\n\n``status`` is what this clerk knows, never a guess: ``in_flight`` while\nthis process is sending that Deploy now; ``not_committed`` when nothing\nis sending it and custody holds no commit for the name -- nothing was set\naside. A committed Deploy answers with its ``BudgetDeployCommandReceipt``\ninstead, and a key never claimed is a 404.",
+        "properties": {
+          "claimed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Claimed At Ms",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "in_flight",
+              "not_committed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "submission_key": {
+            "title": "Submission Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "submission_key",
+          "strategy_instance_id",
+          "claimed_at_ms",
+          "message",
+          "explanation",
+          "next_action"
+        ],
+        "title": "DeploySubmissionUncommitted",
         "type": "object"
       },
       "DeploymentBudgetInput": {
@@ -55162,6 +55207,7 @@
     },
     "/api/brokers/{broker}/accounts/{account_id}/deploy-submissions/{submission_key}": {
       "get": {
+        "description": "Committed: its receipt. Claimed but not committed: the claimed name,\n``in_flight`` or ``not_committed``. Never claimed: 404.",
         "operationId": "read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get",
         "parameters": [
           {
@@ -55214,7 +55260,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DeploySubmissionUncommitted"
+                    }
+                  ],
+                  "title": "Response Read Deploy Submission Scoped Api Brokers  Broker  Accounts  Account Id  Deploy Submissions  Submission Key  Get"
                 }
               }
             },

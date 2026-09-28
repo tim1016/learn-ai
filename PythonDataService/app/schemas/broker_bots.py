@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
@@ -127,6 +128,12 @@ class AlpacaPaperEvidenceOverride(BaseModel):
         return reason
 
 
+#: An opaque key the browser mints when the Deploy form opens (#2551): 8-64
+#: letters, digits, ``-`` or ``_``. The ledger stores it as a directory name,
+#: so the wire rule is also its path-safety rule.
+SUBMISSION_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+
+
 class AlpacaPaperDeployRequest(BaseModel):
     """What one Deploy asks for: the settings a preview judges and consent binds to.
 
@@ -180,18 +187,20 @@ class AlpacaPaperDeployRequest(BaseModel):
             raise ValueError("dry_run requires carryover_policy=FORBID")
         return self
 
-    def content(self) -> dict[str, Any]:
-        """The settings alone, as every request fingerprint hashes them.
+    def fingerprint(self, **bound_to: str) -> str:
+        """The one hash of these settings, bound to what the caller names.
 
-        Only this model's own fields count -- never a subclass's submission
-        key or display lineage -- and never the budget's review token or typed
-        phrase, which prove the final click rather than describe the bot.
+        Hashes the settings alone: only this model's own fields -- never a
+        subclass's submission key or display lineage -- and never the budget's
+        review token or typed phrase, which prove the final click rather than
+        describe the bot. ``bound_to`` names what else the hash commits to
+        (the account; for consent, also the world).
         """
         payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields))
         if payload["budget"] is not None:
             payload["budget"].pop("review_token", None)
             payload["budget"].pop("live_confirmation", None)
-        return payload
+        return canonical_sha256({**bound_to, "request": payload})
 
 
 class AlpacaDeploySubmission(AlpacaPaperDeployRequest):
@@ -203,15 +212,8 @@ class AlpacaDeploySubmission(AlpacaPaperDeployRequest):
     lineage: it names the bot this one follows and grants it nothing.
     """
 
-    submission_key: str = Field(min_length=8, max_length=64)
+    submission_key: str = Field(pattern=SUBMISSION_KEY_PATTERN)
     replaces_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
-
-    @field_validator("submission_key")
-    @classmethod
-    def _validate_submission_key(cls, value: str) -> str:
-        from app.services.broker_v2_panel.deploy_submissions import require_submission_key
-
-        return require_submission_key(value)
 
     @field_validator("replaces_strategy_instance_id")
     @classmethod

@@ -471,13 +471,16 @@ async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_ap
 
 
 @pytest.mark.asyncio
-async def test_deploy_refuses_a_symbol_whose_bot_name_overflows_the_order_ref_cap(deploy_app) -> None:
+async def test_deploy_refuses_a_symbol_whose_bot_name_overflows_the_order_ref_cap(
+    deploy_app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Every order carries ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars)
     # under the order_ref cap (60), so a bot name longer than 25 would deploy
     # and then crash on its first order (ceremony-spy-strategy-c-0824,
     # 2026-08-24). The backend authors names now (#2551), so a symbol too long
     # to name within the cap is refused before anything is claimed or started.
     fast_app, registry = deploy_app
+    monkeypatch.setattr("app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS", _ALLOW_BODY_STRATEGY)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -490,7 +493,9 @@ async def test_deploy_refuses_a_symbol_whose_bot_name_overflows_the_order_ref_ca
 
     assert too_long.status_code == 409
     assert "order-reference limit" in too_long.json()["detail"]["why"]
+    assert too_long.json()["detail"]["next_action"] == "Choose a shorter symbol; a bot name is never truncated."
     assert registry.deploy_calls == []
+    assert not (registry.artifacts_root / "deploy_submissions" / "keys").exists()
 
 
 @pytest.mark.asyncio

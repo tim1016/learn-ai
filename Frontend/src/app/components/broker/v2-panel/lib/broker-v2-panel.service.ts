@@ -83,6 +83,19 @@ export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission
 export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
+/** The recovery read's answer for a key whose Deploy has not committed:
+ * `in_flight` while this clerk is still sending it, `not_committed` when
+ * nothing was set aside. Carries the name the key holds. */
+export type DeploySubmissionUncommitted = components['schemas']['DeploySubmissionUncommitted'];
+/** What the recovery read answers for a claimed key: the committed Deploy's
+ * receipt, or the uncommitted claim. A key never claimed is a 404. */
+export type DeploySubmissionStatus = BudgetDeployReceipt | DeploySubmissionUncommitted;
+
+/** The committed receipt inside a recovery answer, or `null` when the key's
+ * Deploy has not committed. */
+export function committedReceipt(status: DeploySubmissionStatus): BudgetDeployReceipt | null {
+  return 'receipt_id' in status ? status : null;
+}
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
 export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
@@ -173,10 +186,11 @@ export class BrokerV2PanelService {
     return this.polls.get<AccountMoneyView>(operationUrl('account_money_read', target));
   }
 
-  /** The recovery read: what one Deploy submission recorded, by its key. A 404
-   * means nothing was committed for it — nothing set aside, nothing started. */
-  getDeploySubmission(target: ResourceTarget, submissionKey: string): Promise<BudgetDeployReceipt> {
-    return firstValueFrom(this.http.get<BudgetDeployReceipt>(
+  /** The recovery read: what one Deploy submission did, by its key. A 404
+   * means the key was never claimed — nothing set aside, nothing started;
+   * a 503 means the clerk cannot read its ledger right now. */
+  getDeploySubmission(target: ResourceTarget, submissionKey: string): Promise<DeploySubmissionStatus> {
+    return firstValueFrom(this.http.get<DeploySubmissionStatus>(
       operationUrl('bot_deploy_submission_read', { ...target, submissionKey }),
     ));
   }

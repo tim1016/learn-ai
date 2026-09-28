@@ -1842,7 +1842,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Recover what one Deploy submission recorded, by its key */
+        /**
+         * Recover what one Deploy submission recorded, by its key
+         * @description Committed: its receipt. Claimed but not committed: the claimed name,
+         *     ``in_flight`` or ``not_committed``. Never claimed: 404.
+         */
         get: operations["read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get"];
         put?: never;
         post?: never;
@@ -10773,8 +10777,11 @@ export interface components {
             committed_usd: string;
             /** Explanation */
             explanation: string;
-            /** First Deployed At Ms */
-            first_deployed_at_ms?: number | null;
+            /**
+             * First Deployed At Ms
+             * Format: int64
+             */
+            first_deployed_at_ms: number;
             /** Message */
             message: string;
             /** Next Action */
@@ -14116,6 +14123,38 @@ export interface components {
              * @default false
              */
             valid?: boolean;
+        };
+        /**
+         * DeploySubmissionUncommitted
+         * @description The recovery read's answer for a key that named a bot whose Deploy has not committed.
+         *
+         *     ``status`` is what this clerk knows, never a guess: ``in_flight`` while
+         *     this process is sending that Deploy now; ``not_committed`` when nothing
+         *     is sending it and custody holds no commit for the name -- nothing was set
+         *     aside. A committed Deploy answers with its ``BudgetDeployCommandReceipt``
+         *     instead, and a key never claimed is a 404.
+         */
+        DeploySubmissionUncommitted: {
+            /**
+             * Claimed At Ms
+             * Format: int64
+             */
+            claimed_at_ms: number;
+            /** Explanation */
+            explanation: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_flight" | "not_committed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Submission Key */
+            submission_key: string;
         };
         /** DeploymentBudgetInput */
         DeploymentBudgetInput: {
@@ -32256,7 +32295,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"] | components["schemas"]["DeploySubmissionUncommitted"];
                 };
             };
             /** @description Validation Error */

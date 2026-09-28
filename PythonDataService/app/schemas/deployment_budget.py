@@ -269,11 +269,32 @@ class BudgetDeployCommandReceipt(BaseModel):
     message: str
     explanation: str
     next_action: str
-    # When the Deploy was first claimed; ``None`` for a bot deployed before
-    # names were backend-authored, which has no submission record.
-    first_deployed_at_ms: EpochMs | None = None
+    # The custody commit's own instant: when this bot was first deployed.
+    first_deployed_at_ms: EpochMs
     # Deploy again's display-only lineage: the bot this one follows.
     replaces_strategy_instance_id: str | None = None
+
+
+class DeploySubmissionUncommitted(BaseModel):
+    """The recovery read's answer for a key that named a bot whose Deploy has not committed.
+
+    ``status`` is what this clerk knows, never a guess: ``in_flight`` while
+    this process is sending that Deploy now; ``not_committed`` when nothing
+    is sending it and custody holds no commit for the name -- nothing was set
+    aside. A committed Deploy answers with its ``BudgetDeployCommandReceipt``
+    instead, and a key never claimed is a 404.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["in_flight", "not_committed"]
+    submission_key: str
+    # The name the key holds now. A not-committed name is never reused: the
+    # key's next Deploy is named from its own minute.
+    strategy_instance_id: str
+    claimed_at_ms: EpochMs
+    message: str
+    explanation: str
+    next_action: str
 
 
 class BudgetAuthorityState(BaseModel):

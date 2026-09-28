@@ -61,7 +61,7 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTerms
 from app.services.bot_runner import UnknownBotError, get_bot_task_registry
-from app.services.broker_v2_panel.deploy_submissions import DeploySubmissionLedger, bot_name_note
+from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.market_liveness import prepared_top_of_book
 
@@ -105,7 +105,7 @@ def request_fingerprint(request: AlpacaPaperDeployRequest, *, custody_account_id
     Dry Run included -- the Dry Run's private account does not exist until
     the bot is named, after the preview this fingerprint is issued from.
     """
-    return canonical_sha256({"account": custody_account_id, "world": world, "request": request.content()})
+    return request.fingerprint(account=custody_account_id, world=world)
 
 
 def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict) -> DeploymentBudgetPreview:
@@ -281,21 +281,10 @@ async def sealed_exit_terms(account_id: str, sid: str) -> ExitTerms | None:
         return repo.exit_terms(sid)
 
 
-async def command_receipt(account_id: str, sid: str) -> BudgetDeployCommandReceipt | None:
-    """The recorded outcome of ``sid``'s Deploy, or ``None`` when none was committed."""
-    async with _deployment_runtime(account_id, sid) as runtime:
-        return _command_receipt(runtime, account_id, sid)
-
-
-async def submission_receipt(account_id: str, submission_key: str) -> BudgetDeployCommandReceipt | None:
-    """The recovery read: what one Deploy submission recorded, by its key.
-
-    ``None`` when the key named no bot, or named one whose Deploy was never
-    committed -- nothing was set aside and nothing started.
-    """
-    registry = get_bot_task_registry()
-    submission = None if registry is None else DeploySubmissionLedger(registry.artifacts_root).by_key(submission_key)
-    return None if submission is None else await command_receipt(account_id, submission.strategy_instance_id)
+async def command_receipt(account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+    """The recorded outcome of this submission's Deploy, or ``None`` when its bot was never committed."""
+    async with _deployment_runtime(account_id, submission.strategy_instance_id) as runtime:
+        return _command_receipt(runtime, account_id, submission)
 
 
 #: The receipt's words per outcome. Honest on a first read and on every
@@ -308,7 +297,8 @@ _RECEIPT_COPY: dict[str, tuple[str, str]] = {
 }
 
 
-def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str) -> BudgetDeployCommandReceipt | None:
+def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+    sid = submission.strategy_instance_id
     repo = runtime.sqlite_repository
     assert repo is not None
     with repo.write_fence():
@@ -322,8 +312,6 @@ def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str) -> 
     committed = dollars(row["committed_cents"])
     money = f"${committed} of simulated cash" if row["world"] == "synthetic" else f"${committed}"
     message, explanation = _RECEIPT_COPY[state]
-    registry = get_bot_task_registry()
-    submission = None if registry is None else DeploySubmissionLedger(registry.artifacts_root).by_name(sid)
     return BudgetDeployCommandReceipt(
         status=state, outcome={"failed": "failure", "deployed": "success", "pending": "pending"}[state],
         receipt_id=command.command_id, command_id=command.command_id, recorded_at_ms=command.updated_at_ms,
@@ -331,8 +319,10 @@ def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str) -> 
         committed_usd=committed,
         message=message.format(sid=sid), explanation=explanation.format(money=money),
         next_action="Open the bot's page to watch it trade." if state != "failed" else "Deploy again when the cause is fixed.",
-        first_deployed_at_ms=None if submission is None else submission.first_deployed_at_ms,
-        replaces_strategy_instance_id=None if submission is None else submission.replaces_strategy_instance_id,
+        # The custody commit's own instant, immutable and written inside the
+        # write fence: the Deploy's first-deploy time is literally its commit.
+        first_deployed_at_ms=row["committed_at_ms"],
+        replaces_strategy_instance_id=submission.replaces_strategy_instance_id,
     )
 
 

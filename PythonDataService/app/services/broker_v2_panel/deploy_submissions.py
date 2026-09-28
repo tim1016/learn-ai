@@ -1,27 +1,32 @@
 """Backend-authored bot names and the Deploy submission ledger (#2551, PRD #2560).
 
-A bot is named when its Deploy is first claimed, never by the client:
+A bot is named when its Deploy is claimed, never by the client:
 ``<symbol>-<strategy code>-<YYYYMMDD>-<HHMM>``, lowercase, with the minute read
 on the New York exchange clock. A second bot claimed for the same symbol,
 strategy and minute is ``…-2``, then ``…-3``.
 
 The client sends an opaque per-submission key instead of a name. The ledger
-maps that key to the one name it was given, so a double-click, a reload or a
-lost response returns the same bot, while a second submission with identical
+maps that key to the name it was given, so a double-click, a reload or a lost
+response returns the same bot, while a second submission with identical
 settings (a new key) is a second bot.
+
+The name is claimed only once every check that can refuse the Deploy has
+passed, immediately before the custody commit, because everything the commit
+writes is keyed by it (the runner binding, the Dry Run's private ``sim:``
+authority). A claim whose Deploy never committed is renewed on the key's next
+attempt: that attempt is named from its own minute, and the abandoned name
+stays burned, never reused.
 
 Allocation is fenced twice. One process-wide lock serializes every claim in
 this clerk, and every record is published create-once (``link(2)`` fails if
-the name exists), so two submissions -- concurrent in one process, or in two
-processes sharing the volume -- can never hold one name or one key. The name
-is claimed before the Deploy's custody commit because everything the commit
-writes is keyed by it (the runner binding, the Dry Run's private ``sim:``
-authority); the commit then fails closed on its own identity fences if the
-name were ever reused.
+the file exists) -- a name once, and each attempt of a key once -- so two
+submissions, concurrent in one process or in two processes sharing the
+volume, can never hold one name or one attempt.
 
-The first-deploy instant is recorded beside the name as its own ``int64 ms
-UTC`` field. Nothing parses a name back into a time, and no existing bot is
-ever renamed: a legacy id simply has no ledger record.
+The canonical first-deploy instant is the custody commit's own
+``committed_at_ms``, never this ledger's. Nothing parses a name back into a
+time, and no existing bot is ever renamed: a legacy id simply has no ledger
+record.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,11 +48,10 @@ from app.engine.live.order_identity import (
     validate_broker_owned_instance_id,
 )
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.schemas.broker_bots import SUBMISSION_KEY_PATTERN
 from app.utils.timestamps import ny_datetime
 
-#: An opaque key the browser mints when the Deploy form opens. It is a file
-#: name here, so it is held to a path-safe shape.
-SUBMISSION_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+#: The key is a directory name here, so the wire rule is also the path rule.
 _SUBMISSION_KEY_RE = re.compile(SUBMISSION_KEY_PATTERN)
 
 #: Same-minute bots of one symbol and strategy beyond this are refused
@@ -59,7 +63,11 @@ _CLAIM_LOCK = threading.Lock()
 
 
 class BotNameUnavailable(ValueError):
-    """No valid bot name can be authored for this Deploy."""
+    """No valid bot name can be authored for this Deploy, and what would fix it."""
+
+    def __init__(self, message: str, *, next_action: str) -> None:
+        super().__init__(message)
+        self.next_action = next_action
 
 
 class DeploySubmissionConflict(ValueError):
@@ -73,11 +81,11 @@ class DeploySubmission(BaseModel):
 
     submission_key: str = Field(pattern=SUBMISSION_KEY_PATTERN)
     strategy_instance_id: str = Field(min_length=1, max_length=128)
-    # The instant the Deploy was first claimed: the canonical first-deploy
-    # time, and the instant the name's New York minute was read from.
-    first_deployed_at_ms: EpochMs
-    # Content only (``AlpacaPaperDeployRequest.content``): the settings the
-    # key was first sent with, so a resend with other settings is refused.
+    # The instant this name was claimed, which its New York minute was read
+    # from. Not the first-deploy instant: that is the custody commit's.
+    claimed_at_ms: EpochMs
+    # ``AlpacaPaperDeployRequest.fingerprint`` of the settings the key was
+    # first sent with, so a resend with other settings is refused.
     request_fingerprint: str = Field(min_length=1)
     # Display-only lineage from Deploy again. It grants nothing.
     replaces_strategy_instance_id: str | None = Field(default=None, max_length=128)
@@ -87,7 +95,10 @@ def bot_name_prefix(symbol: str, strategy_key: str) -> str:
     """``<symbol>-<strategy code>``, lowercase: every name's fixed part."""
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None or not registration.deploy_code:
-        raise BotNameUnavailable(f"Strategy {strategy_key!r} has no bot-name code.")
+        raise BotNameUnavailable(
+            f"Strategy {strategy_key!r} has no bot-name code.",
+            next_action="Choose another strategy; this one cannot be deployed until it has a bot-name code.",
+        )
     return f"{symbol.lower()}-{registration.deploy_code}"
 
 
@@ -106,7 +117,8 @@ def bot_name(symbol: str, strategy_key: str, *, at_ms: int, ordinal: int = 1) ->
         return validate_broker_owned_instance_id(validate_strategy_instance_id(name))
     except InstanceIdTooLongError as exc:
         raise BotNameUnavailable(
-            f"A bot for {symbol} cannot be named within the broker's order-reference limit ({name!r} is too long)."
+            f"A bot for {symbol} cannot be named within the broker's order-reference limit ({name!r} is too long).",
+            next_action="Choose a shorter symbol; a bot name is never truncated.",
         ) from exc
 
 
@@ -134,10 +146,11 @@ def _bot_exists(artifacts_root: Path, strategy_instance_id: str) -> bool:
 
 
 class DeploySubmissionLedger:
-    """Create-once ``key -> name`` and ``name -> submission`` records on the lane's volume.
+    """Create-once ``name -> submission`` and ``key -> attempt`` records on the lane's volume.
 
     Lives beside the lane's bot bindings (``<artifacts_root>/deploy_submissions``)
-    so it answers for exactly the bots this clerk deploys.
+    so it answers for exactly the bots this clerk deploys. A key's attempts are
+    ``keys/<key>/<n>.json``; the highest ``n`` is the name the key holds now.
     """
 
     def __init__(self, artifacts_root: Path, *, name_in_use: Callable[[str], bool] | None = None) -> None:
@@ -145,10 +158,14 @@ class DeploySubmissionLedger:
         self._name_in_use = name_in_use or (lambda sid: _bot_exists(Path(artifacts_root), sid))
 
     def by_key(self, submission_key: str) -> DeploySubmission | None:
-        return self._read(self._key_path(submission_key))
+        """The name this key holds now: its latest attempt's, or ``None`` for a key never claimed."""
+        attempt = self._latest_attempt(submission_key)
+        return None if attempt is None else self._read(self._attempt_path(submission_key, attempt))
 
-    def by_name(self, strategy_instance_id: str) -> DeploySubmission | None:
-        return self._read(self._name_path(strategy_instance_id))
+    def recorded(self, submission_key: str, *, request_fingerprint: str) -> DeploySubmission | None:
+        """``by_key``, refusing a key sent again with other settings."""
+        existing = self.by_key(submission_key)
+        return None if existing is None else _same_settings(existing, request_fingerprint)
 
     def provisional_name(self, *, symbol: str, strategy_key: str, now_ms: int) -> str:
         """The name a Deploy claimed now would get, reserving nothing.
@@ -167,19 +184,29 @@ class DeploySubmissionLedger:
         request_fingerprint: str,
         replaces_strategy_instance_id: str | None,
         now_ms: int,
+        renew: DeploySubmission | None = None,
     ) -> DeploySubmission:
-        """Return this key's bot, naming it now if the key is new.
+        """Name this key's bot now, or return the name it already holds.
 
-        A key already claimed returns its recorded bot unchanged when its
-        settings match, and is refused when they do not.
+        ``renew`` is the key's earlier claim whose Deploy the caller has
+        established never committed: that claim is superseded by a new
+        attempt named from ``now_ms``, and its name stays burned. Without it,
+        a key already claimed returns its recorded bot unchanged. Either way a
+        key sent again with other settings is refused.
         """
         with _CLAIM_LOCK:
-            existing = self.by_key(submission_key)
+            attempt = self._latest_attempt(submission_key)
+            existing = None if attempt is None else self._read(self._attempt_path(submission_key, attempt))
             if existing is not None:
-                return _same_settings(existing, request_fingerprint)
+                _same_settings(existing, request_fingerprint)
+                if renew is None or existing != renew:
+                    # Recorded -- or renewed by another claim since the
+                    # caller looked -- so that claim stands.
+                    return existing
+            next_attempt = 1 if attempt is None else attempt + 1
             for name in self._free_names(symbol=symbol, strategy_key=strategy_key, now_ms=now_ms):
                 record = DeploySubmission(
-                    submission_key=submission_key, strategy_instance_id=name, first_deployed_at_ms=now_ms,
+                    submission_key=submission_key, strategy_instance_id=name, claimed_at_ms=now_ms,
                     request_fingerprint=request_fingerprint,
                     replaces_strategy_instance_id=replaces_strategy_instance_id,
                 )
@@ -190,26 +217,41 @@ class DeploySubmissionLedger:
                     # the create: the create is the fence, so take the next.
                     continue
                 try:
-                    self._publish(self._key_path(submission_key), record)
+                    self._publish(self._attempt_path(submission_key, next_attempt), record)
                 except FileExistsError:
-                    # Another process claimed this key first. Its bot stands;
-                    # the name reserved above is abandoned, never reused.
+                    # Another process claimed this attempt of the key first.
+                    # Its bot stands; the name reserved above is abandoned,
+                    # never reused.
                     winner = self.by_key(submission_key)
                     assert winner is not None
                     return _same_settings(winner, request_fingerprint)
                 return record
         raise BotNameUnavailable(
-            f"More than {_MAX_ORDINAL} {symbol} bots of this strategy were deployed this minute. Try again in a minute."
+            f"More than {_MAX_ORDINAL} {symbol} bots of this strategy were deployed this minute.",
+            next_action="Try again in a minute.",
         )
 
-    def _free_names(self, *, symbol: str, strategy_key: str, now_ms: int):
+    def _free_names(self, *, symbol: str, strategy_key: str, now_ms: int) -> Iterator[str]:
         for ordinal in range(1, _MAX_ORDINAL + 1):
             name = bot_name(symbol, strategy_key, at_ms=now_ms, ordinal=ordinal)
             if not self._name_path(name).exists() and not self._name_in_use(name):
                 yield name
 
-    def _key_path(self, submission_key: str) -> Path:
-        return self._root / "keys" / f"{require_submission_key(submission_key)}.json"
+    def _latest_attempt(self, submission_key: str) -> int | None:
+        try:
+            attempts = [
+                int(path.stem) for path in self._key_dir(submission_key).iterdir()
+                if path.suffix == ".json" and path.stem.isdigit()
+            ]
+        except FileNotFoundError:
+            return None
+        return max(attempts, default=None)
+
+    def _key_dir(self, submission_key: str) -> Path:
+        return self._root / "keys" / require_submission_key(submission_key)
+
+    def _attempt_path(self, submission_key: str, attempt: int) -> Path:
+        return self._key_dir(submission_key) / f"{attempt}.json"
 
     def _name_path(self, strategy_instance_id: str) -> Path:
         return self._root / "names" / f"{validate_strategy_instance_id(strategy_instance_id)}.json"
@@ -236,7 +278,6 @@ def _same_settings(existing: DeploySubmission, request_fingerprint: str) -> Depl
 
 
 __all__ = [
-    "SUBMISSION_KEY_PATTERN",
     "BotNameUnavailable",
     "DeploySubmission",
     "DeploySubmissionConflict",

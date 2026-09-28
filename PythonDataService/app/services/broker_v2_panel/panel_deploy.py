@@ -10,6 +10,8 @@ independent of the panel's read projections.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import asyncpg
 
@@ -19,7 +21,6 @@ from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
 )
-from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
@@ -37,14 +38,20 @@ from app.schemas.broker_bots import (
     AlpacaPaperSizingSelection,
     BotDeployPrefill,
 )
-from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeploymentBudgetPreview
+from app.schemas.deployment_budget import (
+    BudgetDeployCommandReceipt,
+    DeploymentBudgetPreview,
+    DeploySubmissionUncommitted,
+)
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
+from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel import budget_deploy
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
+    DeploySubmission,
     DeploySubmissionConflict,
     DeploySubmissionLedger,
 )
@@ -57,6 +64,7 @@ from app.services.broker_v2_panel.panel_errors import (
 from app.services.broker_v2_panel.panel_scope import (
     clerk_status,
     resolve_account_snapshot,
+    validate_account_scope,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
     ResolvedDeployParams,
@@ -218,36 +226,83 @@ def _runner() -> BotTaskRegistry:
     return registry
 
 
-def _claim_bot_name(registry: BotTaskRegistry, account_id: str, request: AlpacaDeploySubmission) -> str:
-    """Name this submission's bot, or return the name its key already holds (#2551)."""
+#: The submission keys whose Deploy this process is sending right now. Each
+#: key is sent once at a time: a concurrent resend is refused rather than
+#: allowed to name or start a second bot, and the recovery read answers
+#: ``in_flight`` for exactly these.
+_SENDING: set[str] = set()
+
+
+@contextmanager
+def _sending(submission_key: str) -> Iterator[None]:
+    if submission_key in _SENDING:
+        raise PanelRunnerError(
+            "This Deploy is already being sent.",
+            detail="A second copy of it was not started.",
+            next_action="Check its status in a moment; checking never starts a second bot.",
+            http_status=409,
+        )
+    _SENDING.add(submission_key)
     try:
-        submission = DeploySubmissionLedger(registry.artifacts_root).claim(
+        yield
+    finally:
+        _SENDING.discard(submission_key)
+
+
+def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) -> str:
+    return request.fingerprint(account=canonical_alpaca_account_id(account_id))
+
+
+def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
+    return PanelRunnerError(
+        "This Deploy was already sent with other settings.",
+        detail=f"{exc} Nothing new was set aside or started.",
+        next_action="Start a new Deploy from the form.",
+        http_status=409,
+    )
+
+
+def _unnamed(exc: BotNameUnavailable) -> PanelRunnerError:
+    return PanelRunnerError("This bot cannot be named.", detail=str(exc), next_action=exc.next_action, http_status=409)
+
+
+def _earlier_claim(ledger: DeploySubmissionLedger, account_id: str, request: AlpacaDeploySubmission) -> DeploySubmission | None:
+    """What this key was claimed as before, read only; other settings under it are refused."""
+    try:
+        return ledger.recorded(request.submission_key, request_fingerprint=_submission_fingerprint(account_id, request))
+    except DeploySubmissionConflict as exc:
+        raise _settings_conflict(exc) from exc
+
+
+def _claim_bot_name(
+    ledger: DeploySubmissionLedger,
+    account_id: str,
+    request: AlpacaDeploySubmission,
+    *,
+    renew: DeploySubmission | None,
+) -> DeploySubmission:
+    """Name this submission's bot at this instant (#2551), renewing a claim that never committed."""
+    try:
+        return ledger.claim(
             submission_key=request.submission_key,
             symbol=request.symbol,
             strategy_key=request.strategy_key,
-            request_fingerprint=canonical_sha256(
-                {"account": canonical_alpaca_account_id(account_id), "request": request.content()}
-            ),
+            request_fingerprint=_submission_fingerprint(account_id, request),
             replaces_strategy_instance_id=request.replaces_strategy_instance_id,
             now_ms=now_ms_utc(),
+            renew=renew,
         )
     except DeploySubmissionConflict as exc:
-        raise PanelRunnerError(
-            "This Deploy was already sent with other settings.",
-            detail=f"{exc} Nothing new was set aside or started.",
-            next_action="Start a new Deploy from the form.",
-            http_status=409,
-            operation_attempted=False,
-        ) from exc
+        raise _settings_conflict(exc) from exc
     except BotNameUnavailable as exc:
-        raise PanelRunnerError(
-            "This bot cannot be named.",
-            detail=str(exc),
-            next_action="Choose a shorter symbol, or try again in a minute.",
-            http_status=409,
-            operation_attempted=False,
-        ) from exc
-    return submission.strategy_instance_id
+        raise _unnamed(exc) from exc
+
+
+async def _committed_receipt(account_id: str, claim: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+    try:
+        return await budget_deploy.command_receipt(account_id, claim)
+    except BudgetUnavailable as exc:
+        raise budget_deploy.budget_error(exc) from exc
 
 
 async def deploy_alpaca_paper_bot(
@@ -257,63 +312,70 @@ async def deploy_alpaca_paper_bot(
 ) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
     """Execute or recover one durable deployment through the runner seam.
 
-    The bot is named first, from the submission key: a resend of the same key
-    lands on the same bot, and a Deploy it already committed is returned
-    exactly as recorded instead of starting anything again.
+    A key whose Deploy already committed returns that receipt exactly as
+    recorded, and the same key with other settings is refused, before any
+    check runs. The bot is named only after every check that can refuse the
+    Deploy has passed, immediately before the commit: a Deploy refused and
+    retried later is named from the retry's minute (the refused attempt's
+    name stays burned).
     """
     registry = _runner()
-    sid = _claim_bot_name(registry, account_id, request)
-    if request.budget is not None:
-        try:
-            existing = await budget_deploy.command_receipt(account_id, sid)
+    ledger = DeploySubmissionLedger(registry.artifacts_root)
+    with _sending(request.submission_key):
+        earlier = _earlier_claim(ledger, account_id, request)
+        if earlier is not None and request.budget is not None:
+            existing = await _committed_receipt(account_id, earlier)
             if existing is not None:
                 return existing
+        view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+        resolved_params = _require_alpaca_deploy_request(view, request)
+        try:
+            consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         except BudgetUnavailable as exc:
             raise budget_deploy.budget_error(exc) from exc
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-    resolved_params = _require_alpaca_deploy_request(view, request)
-    try:
-        consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
-        started = await registry.deploy_with_admission(
-            broker=broker,
-            strategy_instance_id=sid,
-            strategy_key=request.strategy_key,
-            symbol=request.symbol,
-            use_rth=True,
-            mode="dry_run" if request.execution_mode == "dry_run" else "trade",
-            quantity=request.sizing.quantity,
-            carryover_policy=request.carryover_policy,
-            evidence_override=request.evidence_override,
-            strategy_params=resolved_params.effective,
-            exit_terms=request.exit_terms.seal(),
-            strategy_param_origins=resolved_params.origins,
-            **({"budget_consent": consent} if consent is not None else {}),
-        )
-    except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
-        if request.budget is not None:
-            try:
-                existing = await budget_deploy.command_receipt(account_id, sid)
+        # A budget-less (pre-budget) Deploy has no commit to read, so its
+        # key keeps the name it was first given and the runner's own
+        # identity fences judge a resend.
+        claim = _claim_bot_name(ledger, account_id, request, renew=earlier if consent is not None else None)
+        sid = claim.strategy_instance_id
+        try:
+            started = await registry.deploy_with_admission(
+                broker=broker,
+                strategy_instance_id=sid,
+                strategy_key=request.strategy_key,
+                symbol=request.symbol,
+                use_rth=True,
+                mode="dry_run" if request.execution_mode == "dry_run" else "trade",
+                quantity=request.sizing.quantity,
+                carryover_policy=request.carryover_policy,
+                evidence_override=request.evidence_override,
+                strategy_params=resolved_params.effective,
+                exit_terms=request.exit_terms.seal(),
+                strategy_param_origins=resolved_params.origins,
+                **({"budget_consent": consent} if consent is not None else {}),
+            )
+        except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
+            if consent is not None:
+                existing = await _committed_receipt(account_id, claim)
                 if existing is not None:
                     return existing
-            except BudgetUnavailable as conflict:
-                raise budget_deploy.budget_error(conflict) from conflict
-        if not isinstance(exc, BotRunnerError):
-            detail = exc.decision.why if isinstance(exc, AdmissionBlockedError) else str(exc)
-            raise budget_deploy.budget_error(BudgetUnavailable(detail)) from exc
-        raise PanelRunnerError(
-            str(exc),
-            detail=exc.detail,
-            next_action="Correct the deployment inputs or bot state, then submit a new command.",
-            http_status=exc.http_status,
-            operation_attempted=exc.admission_decision is None,
-            admission_decision=exc.admission_decision,
-            reason_code=exc.reason_code,
-        ) from exc
-    if request.budget is not None:
-        receipt = await budget_deploy.command_receipt(account_id, sid)
-        if receipt is None:
-            raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
-        return receipt
+            if not isinstance(exc, BotRunnerError):
+                detail = exc.decision.why if isinstance(exc, AdmissionBlockedError) else str(exc)
+                raise budget_deploy.budget_error(BudgetUnavailable(detail)) from exc
+            raise PanelRunnerError(
+                str(exc),
+                detail=exc.detail,
+                next_action="Correct the deployment inputs or bot state, then submit a new command.",
+                http_status=exc.http_status,
+                operation_attempted=exc.admission_decision is None,
+                admission_decision=exc.admission_decision,
+                reason_code=exc.reason_code,
+            ) from exc
+        if consent is not None:
+            receipt = await _committed_receipt(account_id, claim)
+            if receipt is None:
+                raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
+            return receipt
     return build_alpaca_paper_deploy_receipt(
         broker=broker,
         view=view,
@@ -322,6 +384,46 @@ async def deploy_alpaca_paper_bot(
         bot=started.bot,
         admission=started.admission,
         resolved_params=resolved_params,
+    )
+
+
+#: The recovery read's words for a key whose Deploy has not committed.
+_UNCOMMITTED_COPY: dict[str, tuple[str, str, str]] = {
+    "in_flight": (
+        "{sid} is being deployed now",
+        "Nothing is committed for it yet.",
+        "Check again in a moment; checking never starts a second bot.",
+    ),
+    "not_committed": (
+        "{sid} was not deployed",
+        "Its Deploy never committed, so nothing was set aside for it.",
+        "Deploy again when ready; the bot is named from the minute you do.",
+    ),
+}
+
+
+async def deploy_submission_status(
+    account_id: str, submission_key: str,
+) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted | None:
+    """The recovery read: what one Deploy submission did, by its key.
+
+    The committed Deploy's receipt; otherwise the name the key holds and
+    whether this process is still sending it; ``None`` for a key never
+    claimed. With no bot runner there is no ledger to read, so the read is
+    refused (503) rather than answered.
+    """
+    claim = DeploySubmissionLedger(_runner().artifacts_root).by_key(submission_key)
+    if claim is None:
+        return None
+    receipt = await _committed_receipt(account_id, claim)
+    if receipt is not None:
+        return receipt
+    status = "in_flight" if submission_key in _SENDING else "not_committed"
+    message, explanation, next_action = _UNCOMMITTED_COPY[status]
+    return DeploySubmissionUncommitted(
+        status=status, submission_key=submission_key, strategy_instance_id=claim.strategy_instance_id,
+        claimed_at_ms=claim.claimed_at_ms, message=message.format(sid=claim.strategy_instance_id),
+        explanation=explanation, next_action=next_action,
     )
 
 
@@ -343,10 +445,7 @@ async def preview_alpaca_paper_start_admission(
             symbol=request.symbol, strategy_key=request.strategy_key, now_ms=now_ms_utc(),
         )
     except BotNameUnavailable as exc:
-        raise PanelRunnerError(
-            "This bot cannot be named.", detail=str(exc),
-            next_action="Choose a shorter symbol, or try again in a minute.", http_status=409,
-        ) from exc
+        raise _unnamed(exc) from exc
     try:
         consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         return await registry.preview_start_admission(
@@ -377,14 +476,17 @@ async def preview_alpaca_paper_start_admission(
         ) from exc
 
 
-async def deploy_prefill(account_id: str, sid: str) -> BotDeployPrefill:
+async def deploy_prefill(broker: str, account_id: str, sid: str) -> BotDeployPrefill:
     """Deploy again: one earlier bot's sealed settings, never its money or consent.
 
-    Strategy, symbol, sizing and parameters come from the bot's immutable
-    runner binding; exit terms from the custody authority that sealed them.
+    Strategy, symbol and sizing come from the bot's immutable runner binding;
+    exit terms from the custody authority that sealed them. Parameters are
+    only the ones the owner set (see ``_owner_parameters``), so the new
+    Deploy's seal records the same origins the earlier one did.
     """
+    await validate_account_scope(broker, account_id, sid)
     try:
-        binding = _runner().binding_for_control("alpaca", sid)
+        binding = _runner().binding_for_control(broker, sid)
     except RunnerUnknownBotError as exc:
         raise UnknownBotError(str(exc), detail=exc.detail, next_action="Choose a bot this account deployed.") from exc
     try:
@@ -398,13 +500,30 @@ async def deploy_prefill(account_id: str, sid: str) -> BotDeployPrefill:
         sizing=AlpacaPaperSizingSelection(
             preset="safe_canary" if binding.quantity == 1 else "custom", quantity=binding.quantity,
         ),
-        # `symbol` is deploy-authoritative, carried on its own field.
-        parameters={name: value for name, value in (binding.strategy_params or {}).items() if name != "symbol"},
+        parameters=_owner_parameters(binding),
         exit_terms=(
             None if terms is None or terms.exit_allowance_bps is None
             else ExitTermsInput.model_validate(terms.model_dump(exclude={"provenance"}))
         ),
     )
+
+
+def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:
+    """The parameters the owner chose for ``binding``, as a Deploy request states them.
+
+    With a v2 seal these are exactly the ``deploy_override`` origins: a
+    registered default re-sent would be recorded as an override the owner
+    never made. Without a seal the origins are unknowable, so the public
+    schema's values stand in. Never ``symbol`` (the request's own field) or
+    a hidden parameter, which a Deploy refuses.
+    """
+    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
+    hidden = {"symbol", *(() if registration is None else registration.hidden_params)}
+    public = {name: value for name, value in (binding.strategy_params or {}).items() if name not in hidden}
+    origins = binding.strategy_param_origins
+    if origins is None:
+        return public
+    return {name: value for name, value in public.items() if origins.get(name) == "deploy_override"}
 
 
 def _require_alpaca_deploy_request(

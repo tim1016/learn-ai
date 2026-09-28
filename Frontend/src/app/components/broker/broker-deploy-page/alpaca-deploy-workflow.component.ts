@@ -28,6 +28,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import {
   BrokerV2PanelService,
+  committedReceipt,
   type BotDeployPrefill,
   type BudgetDeployReceipt,
   type DeployBotBody,
@@ -799,7 +800,7 @@ export class AlpacaDeployWorkflowComponent {
   });
   protected readonly shownReceipt = computed(() => {
     const own = this.receipt();
-    const recovered = this.recoveredCommand.hasValue() ? this.recoveredCommand.value() : null;
+    const recovered = this.recoveredCommand.hasValue() ? committedReceipt(this.recoveredCommand.value()) : null;
     const receipt = own?.status === 'pending' && recovered?.command_id === own.command_id ? recovered : (own ?? recovered);
     return receipt && sameAlpacaAccount(receipt.account_id, this.accountId()) ? receipt : null;
   });
