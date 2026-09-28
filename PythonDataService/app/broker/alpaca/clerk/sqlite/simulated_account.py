@@ -1,7 +1,8 @@
 """One simulated cash/marked-risk projection for Shadow and private Dry Runs.
 
 Formula: cash = reference capital - effective BUY costs + effective SELL
-  proceeds - modelled settled fees; unrealized delegates to canonical FIFO;
+  proceeds - modelled settled fees; equity = retained initial capital + own
+  realized + marked open P&L - all accrued modelled fees;
   baseline = retained initial capital + prior gross realized + prior open P&L
   - prior modelled fees, using the canonical previous-session close marks.
 Reference: PRD #2540 world isolation; ADR 0059 simulation-risk amendment.
@@ -162,10 +163,10 @@ class SimulatedAccountProjection:
             # The latest scheduled prior close is supplied by the one NYSE
             # calendar, including holidays, DST and early-close sessions.
             cutoff = previous_completed_session_close_ms(session_start)
-            prior = tuple(record for record in records if record.filled_at_ms < session_start)
+            prior = tuple(record for record in records if record.filled_at_ms <= cutoff)
             marks, refs, _ = self._marks(prior, at_ms=cutoff, exact_close=True)
             fifo = compute_fifo_pnl(prior, mark_prices=marks)
-            fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, to_ms=session_start)
+            fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=cutoff)
             if not fees.known or fifo.open_pnl is None:
                 raise SimulationEvidenceUnavailable("The prior simulation session cannot prove its equity baseline.")
             initial = rows[0].initial_capital_usd
@@ -194,7 +195,9 @@ class SimulatedAccountProjection:
             private = self.repo.account_id.startswith("sim:")
             capital, persist = self._private_cash() if private else (normalize_money(reference_cash), True)
             records = effective_fill_records(self.repo._conn, account_id=self.repo.account_id)
-            fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms)
+            if any(fill.filled_at_ms > now_ms for fill in records):
+                raise SimulationEvidenceUnavailable("Simulated execution evidence is ahead of the current observation.")
+            fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=now_ms)
             if not fees.known:
                 raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
             marks, _, valid_until = self._marks(records, at_ms=now_ms)
@@ -204,11 +207,12 @@ class SimulatedAccountProjection:
             baseline = self._baseline(records, capital=capital, now_ms=now_ms, persist=persist)
             spending = sum((notional(fill.quantity, fill.fill_price) * (1 if fill.side is OrderSide.BUY else -1) for fill in records), ZERO)
             settled = sum((share.amount for share in fees.shares if share.state == "modelled_settled"), ZERO)
+            accrued = sum((share.amount for share in fees.shares), ZERO)
             cash = capital - spending - settled
             return AccountObservation(
                 observed_at_ms=observed_at_ms, broker_cash_usd=float(capital), cash_available_usd=cash,
                 last_equity_usd=float(baseline.equity_usd), unrealized_pl_usd=fifo.open_pnl,
-                equity_usd=float(baseline.initial_capital_usd + normalize_money(fifo.realized_pnl) + normalize_money(fifo.open_pnl) - settled),
+                equity_usd=float(baseline.initial_capital_usd + normalize_money(fifo.realized_pnl) + normalize_money(fifo.open_pnl) - accrued),
                 risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=0, risk_equity_window_start_ms=baseline.session_start_ms,
                 position_count=len(fifo.open_lots), risk_fill_sequence=risk_fill_sequence(self.repo),
                 simulation_cash_seen_before_ms=now_ms + 1, modelled_fees_seen_before_ms=now_ms + 1,

@@ -16,6 +16,7 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, appen
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -104,7 +105,8 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     current = projection.observe(reference_cash=1200, observed_at_ms=clock(), now_ms=clock())
     assert current.cash_available_usd == Decimal("1120")
     assert current.last_equity_usd == 1000  # reference deposit never resets risk
-    assert current.equity_usd == pytest.approx(1050, abs=1e-9, rel=0)
+    assert current.equity_usd == pytest.approx(1049.97, abs=1e-9, rel=0)
+    assert observed_day_pnl(observation=current, now_ms=clock()).total_usd == pytest.approx(49.97, abs=1e-9, rel=0)
     assert current.unrealized_pl_usd == pytest.approx(30, abs=1e-9, rel=0)
     assert current.fills_seen_before_ms == clock() + 1
     assert repo.reserved_cash_decimal(seen_before_ms=current.fills_seen_before_ms) == 0
@@ -119,9 +121,66 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     assert tomorrow.cash_available_usd == Decimal("1419.97")
     assert tomorrow.last_equity_usd == pytest.approx(1049.97, abs=1e-9, rel=0)
     assert tomorrow.equity_usd == pytest.approx(1050.97, abs=1e-9, rel=0)
-    from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
-
     assert observed_day_pnl(observation=tomorrow, now_ms=clock()).total_usd == pytest.approx(1, abs=1e-9, rel=0)
+
+
+@pytest.mark.parametrize("entry_at_close", [False, True])
+def test_prior_close_baseline_uses_matching_fill_mark_and_fee_cutoffs(
+    shadow: ShadowContext, tmp_path: Path, entry_at_close: bool,
+) -> None:
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection), quantity=1)
+    close = previous_completed_session_close_ms(NOON + 86_400_000)
+    clock.advance(close - clock() + (0 if entry_at_close else 1))
+    repo.revive_execution_lease()
+    _fill(repo, accepted, key="boundary-buy", side="BUY", quantity=1, price=100)
+    evidence = shadow_evidence_account_id_for_strategy(DAY_PNL_SID)
+    if entry_at_close:
+        _mark(tmp_path, evidence, at_ms=close, price=110)
+    # The after-close case intentionally has no prior-close price: that lot
+    # did not exist at the baseline instant and must not require a fake mark.
+    clock.advance(NOON + 86_400_000 - clock())
+    repo.revive_execution_lease()
+    _mark(tmp_path, evidence, at_ms=clock(), price=120)
+    next_day = projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    assert next_day.cash_available_usd == Decimal("899.99")
+    assert next_day.equity_usd == pytest.approx(1019.99, abs=1e-9, rel=0)
+    expected_baseline = 1009.99 if entry_at_close else 1000
+    expected_pnl = 10 if entry_at_close else 19.99
+    assert next_day.last_equity_usd == pytest.approx(expected_baseline, abs=1e-9, rel=0)
+    assert observed_day_pnl(observation=next_day, now_ms=clock()).total_usd == pytest.approx(expected_pnl, abs=1e-9, rel=0)
+
+
+def test_after_close_sale_keeps_realized_change_and_fee_out_of_baseline(
+    shadow: ShadowContext, tmp_path: Path,
+) -> None:
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection), quantity=1)
+    _fill(repo, accepted, key="before-close-buy", side="BUY", quantity=1, price=100)
+    evidence = shadow_evidence_account_id_for_strategy(DAY_PNL_SID)
+    close = previous_completed_session_close_ms(NOON + 86_400_000)
+    _mark(tmp_path, evidence, at_ms=close, price=110)
+    clock.advance(close + 1 - clock())
+    repo.revive_execution_lease()
+    _fill(repo, accepted, key="after-close-sale", side="SELL", quantity=1, price=120)
+    clock.advance(NOON + 86_400_000 - clock())
+    repo.revive_execution_lease()
+    next_day = projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    # Close: open gain $10 less the buy's $.01 CAT accrual. Next day: realized
+    # gain $20 less $.03 total fees. Cash and equity each include fees once.
+    assert next_day.cash_available_usd == Decimal("1019.97")
+    assert next_day.last_equity_usd == pytest.approx(1009.99, abs=1e-9, rel=0)
+    assert next_day.equity_usd == pytest.approx(1019.97, abs=1e-9, rel=0)
+    assert observed_day_pnl(observation=next_day, now_ms=clock()).total_usd == pytest.approx(9.98, abs=1e-9, rel=0)
+
+
+def test_future_simulated_fill_cannot_enter_a_current_valuation(shadow: ShadowContext) -> None:
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection))
+    _append_day_pnl_slice(repo, accepted, execution_id="future", side="BUY", quantity=2,
+                         price=100, occurred_at_ms=clock() + 1)
+    with pytest.raises(SimulationEvidenceUnavailable, match="ahead"):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
 
 
 async def test_real_unrealized_is_never_shadow_profit_or_loss(shadow: ShadowContext, tmp_path: Path) -> None:
