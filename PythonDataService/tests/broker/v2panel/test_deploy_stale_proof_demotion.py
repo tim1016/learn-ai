@@ -224,8 +224,10 @@ def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
     assert row.blocked_explanation is not None
     # Both sentences render on a live account's deploy form as well as a
     # paper one, so neither names the Paper mode (slice 7 last mile).
-    assert "Review and enable broker access" in row.blocked_explanation
-    assert strategy_gate_recovery((row,)) == "Review and enable broker access for a strategy below."
+    # The grant is Deploy's first step, What, which sits above every place
+    # these sentences render (PRD #2560 D9): never "below".
+    assert row.blocked_explanation.endswith("Allow it in What.")
+    assert strategy_gate_recovery((row,)) == "Allow broker trading for a strategy in What."
 
 
 def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:

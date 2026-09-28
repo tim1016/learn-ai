@@ -357,6 +357,29 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(screen.getByText('Choose where this bot trades in How.')).toBeTruthy();
   });
 
+  it('keeps a strategy not yet allowed on this account open in What, with Allow one click away (D9, story 52)', async () => {
+    const notYetAllowed: DeployBotView['strategies'][number] = {
+      ...VALIDATION_STRATEGY,
+      paper_access_state: 'available',
+      selectable: false,
+      admissible_modes: ['dry_run'],
+      blocked_explanation: 'Broker trading is not enabled for this strategy on this account yet. Allow it in What.',
+    };
+    const { fixture } = await renderWorkflow(mockService({ ...DEPLOY_VIEW, strategies: [notYetAllowed] }));
+
+    const what = stepRegion('What');
+    expect(within(what).getByRole('button', { name: 'Allow on Paper' })).toBeTruthy();
+    const done = within(what).getByRole<HTMLButtonElement>('button', { name: 'Done with step 1, What' });
+    expect(done.disabled).toBe(true);
+    expect(within(what).getByText('Allow it on Paper first, or choose Dry Run in How.')).toBeTruthy();
+    expect(screen.getByText('Allow this strategy on Paper in What, or choose Dry Run in How.')).toBeTruthy();
+
+    // Dry Run needs no permission, so What may fold once it is chosen.
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Dry Run/ }));
+    await fixture.whenStable();
+    expect(done.disabled).toBe(false);
+  });
+
   it('shows no “Can’t deploy yet” while every check passes, and keeps every check behind Details', async () => {
     await renderWorkflow();
 

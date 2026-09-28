@@ -83,7 +83,7 @@ def strategy_gate_recovery(
             "strategy's live-decision runtime."
         )
     if any(strategy.paper_access_state == "available" for strategy in strategies):
-        return "Review and enable broker access for a strategy below."
+        return "Allow broker trading for a strategy in What."
     if any("dry_run" in strategy.admissible_modes for strategy in strategies):
         return "Repair the named proof, or re-validate the strategy in Strategy Validation."
     if strategies:

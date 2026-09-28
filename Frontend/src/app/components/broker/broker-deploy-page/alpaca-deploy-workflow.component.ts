@@ -539,12 +539,27 @@ export class AlpacaDeployWorkflowComponent {
 
   // ── Steps ─────────────────────────────────────────────────────────────────
 
-  /** What: a strategy, a valid symbol and parseable settings. */
+  /**
+   * The strategy is not yet allowed on this account's broker world, and the
+   * owner has not chosen Dry Run, which needs no permission. Its "Allow on
+   * {world}" line is step 1's (D9), so What stays open while it waits.
+   */
+  private readonly permissionPending = computed(() =>
+    this.selectedStrategy()?.paper_access_state === 'available' && this.ticket().executionMode !== 'dry_run',
+  );
+
+  /** What: a strategy, a valid symbol, parseable settings, and the
+   * permission its world needs. */
   protected readonly whatComplete = computed(() =>
     this.selectedStrategy() !== null
       && !this.ticketForm.symbol().invalid()
-      && this.invalidParameterFields().size === 0,
+      && this.invalidParameterFields().size === 0
+      && !this.permissionPending(),
   );
+
+  protected readonly whatFoldHint = computed(() => this.permissionPending()
+    ? `Allow it on ${this.brokerModeLabel()} first, or choose Dry Run in How.`
+    : 'Choose a strategy and a valid symbol first.');
 
   /** How: an offered world this strategy admits, a size and exit terms. */
   protected readonly howComplete = computed(() => {
@@ -636,7 +651,12 @@ export class AlpacaDeployWorkflowComponent {
     }
     const mode = this.ticket().executionMode;
     if (mode === null) {
-      return { canSubmit: false, guidance: 'Choose where this bot trades in How.' };
+      return {
+        canSubmit: false,
+        guidance: this.permissionPending()
+          ? `Allow this strategy on ${this.brokerModeLabel()} in What, or choose Dry Run in How.`
+          : 'Choose where this bot trades in How.',
+      };
     }
     if (this.exitTerms() === null) {
       return { canSubmit: false, guidance: 'Set this bot’s exit allowance, band multiple and spread cap in How.' };

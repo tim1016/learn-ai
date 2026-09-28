@@ -50,7 +50,7 @@
       <li>
         <app-deploy-step
           [number]="1" heading="What" [foldable]="true" [open]="whatOpen()" [summary]="whatSummary()"
-          [canFold]="whatComplete()" foldHint="Choose a strategy and a valid symbol first."
+          [canFold]="whatComplete()" [foldHint]="whatFoldHint()"
           (edit)="editStep('what')" (done)="foldStep('what')"
         >
           <app-deploy-binding-strip
