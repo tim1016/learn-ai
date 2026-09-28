@@ -11,7 +11,7 @@
     }
     <div>
       <dt>{{ dryRun() ? 'Simulated starting cash' : 'Set aside' }}</dt>
-      <dd>{{ receipt().committed_usd | currency: 'USD' }}</dd>
+      <dd>{{ receipt().committed_usd | authoredUsd }}</dd>
     </div>
     <div><dt>World</dt><dd>{{ worldWording() }}</dd></div>
     <div><dt>Account</dt><dd>{{ dryRun() ? 'The bot’s own Dry Run account' : receipt().account_id }}</dd></div>

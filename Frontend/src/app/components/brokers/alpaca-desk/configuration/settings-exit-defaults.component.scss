@@ -1,0 +1,46 @@
+@use './configuration-controls' as controls;
+
+.defaults {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.defaults h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.defaults p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.defaults__terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.defaults__terms dt {
+  font-size: var(--fs-xs);
+}
+
+.defaults__terms dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.defaults__change {
+  @include controls.secondary-button;
+  align-self: flex-start;
+}

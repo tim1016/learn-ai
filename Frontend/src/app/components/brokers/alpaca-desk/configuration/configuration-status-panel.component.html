@@ -1,9 +1,9 @@
 @let current = selection();
 <section class="status" aria-label="Broker configuration status">
-  <h2 class="status__heading">Installation selection</h2>
+  <h4 class="status__heading">Installation selection</h4>
   <div class="status__states">
     <div class="status__state">
-      <h3>Effective now</h3>
+      <h5>Effective now</h5>
       @if (effectiveLabel(); as label) {
         <p class="status__value">
           {{ label }}
@@ -33,7 +33,7 @@
     </div>
 
     <div class="status__state">
-      <h3>Staged</h3>
+      <h5>Staged</h5>
       @if (stagedLabel(); as label) {
         <p class="status__value">
           {{ label }}
@@ -67,13 +67,13 @@
 
     <p class="status__apply-scope">
       Applying a profile does not deploy a bot or change effective account loss limits.
-      Review a dollar budget in Deploy; use Apply risk limits for account loss limits.
+      Review a dollar budget in Deploy; set the account loss limit under Daily loss limit above.
     </p>
   </div>
 
   @if (current.last_apply_outcome; as outcome) {
     <div class="status__outcome" [class.status__outcome--refused]="outcome === 'refused'">
-      <h3>Last apply · {{ outcome | receiptLabel }}</h3>
+      <h5>Last apply · {{ outcome | receiptLabel }}</h5>
       @if (current.last_apply_refusal_reason; as reason) {
         <p class="status__refusal">{{ reason }}</p>
       }

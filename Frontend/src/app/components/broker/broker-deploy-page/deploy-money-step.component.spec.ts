@@ -119,6 +119,23 @@ describe('Deploy step 3, Money', () => {
     expect(within(legend()).queryByText('new bot')).toBeNull();
   });
 
+  it('draws a refused amount’s bar as today’s money, never as money after this Deploy', async () => {
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
+      body.budget
+        ? { ...FACTS, state: 'unavailable', review_token: null, budget_usd: null, money_after: MONEY_NOW,
+          detail: 'Only $98329.57 is unreserved. Choose a smaller budget or resolve existing claims.' } satisfies DeploymentBudgetPreview
+        : FACTS);
+    const { emitted } = await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '99999.00' } });
+
+    const alert = await screen.findByText('Only $98329.57 is unreserved. Choose a smaller budget or resolve existing claims.');
+    expect(alert.getAttribute('role')).toBe('alert');
+    expect(screen.getByRole('list', { name: 'Where the money is now' })).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Account money after this Deploy' })).toBeNull();
+    expect(emitted.every((review) => review === null)).toBe(true);
+  });
+
   it('never lets a late answer for an earlier amount stand for the amount on screen', async () => {
     const first = deferred<DeploymentBudgetPreview>();
     const previewBudget = vi.fn().mockImplementation((_target, body: DeployBotBody) => {

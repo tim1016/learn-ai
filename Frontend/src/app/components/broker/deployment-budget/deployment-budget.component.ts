@@ -1,13 +1,13 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { DEPLOYMENT_WORLD_LABELS, BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 
 @Component({
   selector: 'app-deployment-budget',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, TimestampDisplayComponent],
   templateUrl: './deployment-budget.component.html',
   styleUrl: './deployment-budget.component.scss',
 })

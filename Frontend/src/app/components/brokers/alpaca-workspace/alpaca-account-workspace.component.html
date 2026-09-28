@@ -15,24 +15,40 @@
       </span>
     } @else {
       @let header = money();
-      @switch (header.kind) {
-        @case ('ready') {
+      @if (header.kind === 'ready') {
+        <dl class="account-workspace__figures">
+          <div><dt>Free to deploy</dt><dd>{{ header.view.free_to_deploy_usd | authoredUsd }}</dd></div>
+          <div><dt>Cash</dt><dd>{{ header.view.cash_usd | authoredUsd }}</dd></div>
+          <div>
+            <dt>Equity</dt>
+            <dd>{{ header.view.equity_usd ? (header.view.equity_usd | authoredUsd) : 'Unavailable' }}</dd>
+          </div>
+          <div>
+            <dt>Today</dt>
+            <dd>{{ header.view.today_pnl_usd ? (header.view.today_pnl_usd | authoredUsd) : 'Unavailable' }}</dd>
+          </div>
+        </dl>
+      } @else {
+        @if (brokerReading(); as reading) {
           <dl class="account-workspace__figures">
-            <div><dt>Free to deploy</dt><dd>{{ header.view.free_to_deploy_usd | currency: 'USD' }}</dd></div>
-            <div><dt>Cash</dt><dd>{{ header.view.cash_usd | currency: 'USD' }}</dd></div>
             <div>
               <dt>Equity</dt>
-              <dd>{{ header.view.equity_usd ? (header.view.equity_usd | currency: 'USD') : 'Unavailable' }}</dd>
+              <dd>{{ reading.equity ? (reading.equity | authoredUsd) : 'Unavailable' }}</dd>
             </div>
             <div>
               <dt>Today</dt>
-              <dd>{{ header.view.today_pnl_usd ? (header.view.today_pnl_usd | currency: 'USD') : 'Unavailable' }}</dd>
+              <dd>{{ reading.today ? (reading.today | authoredUsd) : 'Unavailable' }}</dd>
+            </div>
+            <div>
+              <dt>Read at</dt>
+              <dd><app-timestamp-display [value]="reading.observedAtMs" mode="local" /></dd>
             </div>
           </dl>
         }
-        @case ('reason') {
-          <p class="account-workspace__money-reason">{{ header.text }}</p>
-        }
+        <p class="account-workspace__money-reason">
+          {{ header.text }}
+          @if (header.nextStep; as nextStep) { {{ nextStep }} }
+        </p>
       }
     }
 

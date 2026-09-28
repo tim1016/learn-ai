@@ -18,7 +18,7 @@
     <div>
       <dt>{{ dryRun() ? 'Simulated starting cash' : 'Budget' }}</dt>
       <dd>
-        @if (budgetUsd(); as budget) { {{ budget | currency: 'USD' }} } @else { Choose an amount in Money }
+        @if (budgetUsd(); as budget) { {{ budget | authoredUsd }} } @else { Choose an amount in Money }
       </dd>
     </div>
     <div><dt>Account loss limit</dt><dd>{{ lossLimit() ?? 'Shown once the amount is previewed.' }}</dd></div>
@@ -81,9 +81,9 @@
         Deploy bot
       } @else if (budgetUsd(); as budget) {
         @if (dryRun()) {
-          Deploy {{ buttonWorld() }} bot · {{ budget | currency: 'USD' }} of simulated cash
+          Deploy {{ buttonWorld() }} bot · {{ budget | authoredUsd }} of simulated cash
         } @else {
-          Deploy {{ buttonWorld() }} bot · set aside {{ budget | currency: 'USD' }}
+          Deploy {{ buttonWorld() }} bot · set aside {{ budget | authoredUsd }}
         }
       } @else {
         Deploy {{ buttonWorld() }} bot

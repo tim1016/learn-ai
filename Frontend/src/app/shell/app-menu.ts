@@ -126,7 +126,7 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
 
   // Every account-workspace URL is one account's place (ADR 0064), so every
   // tab of it highlights Accounts — the workspace's own tabs, not the menu,
-  // say which page of that account is open. Its Configuration and not-ready
+  // say which page of that account is open. Its Settings and not-ready
   // tabs and a bot's own page are inside it too (#2186). The workspace's URL
   // shape is owned by `accountWorkspaceLocation`, not re-expressed here, so
   // the menubar and the workspace shell cannot drift apart about what counts

@@ -25,13 +25,40 @@
         [style.--money-bar-hue]="slice.hue"
         aria-hidden="true"
       ></span>
-      <span class="money-bar__name">{{ slice.segment.label }}</span>&ngsp;<span class="money-bar__amount">{{ slice.segment.amount_usd | currency: 'USD' }}</span>
+      <span class="money-bar__name">{{ slice.segment.label }}</span>&ngsp;<span class="money-bar__amount">{{ slice.segment.amount_usd | authoredUsd }}</span>
       @if (slice.segment.parts; as parts) {
         &ngsp;<span class="money-bar__parts">
-          in shares {{ parts.in_shares_usd | currency: 'USD' }} · in entry orders
-          {{ parts.pending_usd | currency: 'USD' }} · free {{ parts.free_usd | currency: 'USD' }}
+          in shares {{ parts.in_shares_usd | authoredUsd }} · in entry orders
+          {{ parts.pending_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
+          @if (slice.segment.shortfall_usd; as shortfall) {
+            · short of next entry {{ shortfall | authoredUsd }}
+          }
+        </span>
+      }
+      @if (slice.segment.released_usd; as released) {
+        &ngsp;<span class="money-bar__parts">
+          released {{ released | authoredUsd }}
+          @if (slice.segment.still_claimed_usd; as stillClaimed) {
+            · still claimed {{ stillClaimed | authoredUsd }}
+          }
         </span>
       }
     </li>
   }
 </ul>
+@if (notes(); as account) {
+  @if (account.account_shortfall_usd || account.open_pnl_usd || account.open_pnl_detail) {
+    <p class="money-bar__notes" [class.money-bar__legend--hidden]="!legendVisible()">
+      @if (account.account_shortfall_usd; as shortfall) {
+        <span class="money-bar__note money-bar__note--shortfall">
+          Claims exceed the account by {{ shortfall | authoredUsd }}
+        </span>
+      }
+      @if (account.open_pnl_usd; as openPnl) {
+        <span class="money-bar__note">Open P&amp;L {{ openPnl | authoredUsd }}</span>
+      } @else if (account.open_pnl_detail; as why) {
+        <span class="money-bar__note">{{ why }}</span>
+      }
+    </p>
+  }
+}

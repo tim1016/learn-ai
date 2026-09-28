@@ -1053,8 +1053,14 @@ def _terminal_exposure_notices(
 
     notices: list[ExposureNoticeView] = []
     repository = facade.repository
+    # A retired registration with no live custody is the catalog's inert row
+    # (#1911): retirement settled its outcome, and nothing of it can need the
+    # bell. Skipping it keeps this walk from growing with retired history.
+    inert = roster_membership(repository).inert_terminal
     for registration in repository.strategy_instances():
         sid = str(registration["strategy_instance_id"])
+        if sid in inert:
+            continue
         try:
             status = build_roster_status("alpaca", registration, repository)
             outcome = status.duty_outcome

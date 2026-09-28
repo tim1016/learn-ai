@@ -125,7 +125,7 @@ def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(tmp_pat
     assert fact is not None
     assert fact.state == "NOT_ARMED"
     assert fact.reason_code == LIVE_ARMING_REQUIRED
-    assert fact.next_step is not None and "Budget authority upgrade" in fact.next_step
+    assert fact.next_step is not None and "switch this account to budgets" in fact.next_step
     assert fact.observed_at_ms == NOW
 
 

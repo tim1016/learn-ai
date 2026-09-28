@@ -408,7 +408,7 @@ async def read_account_money_scoped(broker: str, account_id: str) -> AccountMone
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Account money is available on Alpaca accounts.")
     try:
-        return budget_deploy.account_money_view(account_id)
+        return await budget_deploy.account_money_view(account_id)
     except BudgetUnavailable as error:
         _raise_alpaca_deploy_error(budget_deploy.money_error(error))
 

@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -11,6 +10,7 @@ import {
 } from '@angular/core';
 import { FormField, form, readonly as readOnly } from '@angular/forms/signals';
 
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { DeployReadinessCheck, RunAdmissionDecision } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
@@ -56,7 +56,7 @@ const BUTTON_WORLD: Readonly<Record<DeployWorld, string>> = {
   selector: 'app-deploy-confirm-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    CurrencyPipe,
+    AuthoredUsdPipe,
     FormField,
     DeployReadinessSectionComponent,
     DeployStartAdmissionComponent,

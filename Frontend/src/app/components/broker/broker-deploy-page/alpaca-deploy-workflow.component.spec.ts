@@ -420,7 +420,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(how).getByRole('button', { name: 'Done with step 2, How' })).toBeTruthy();
     expect(within(how).getByRole<HTMLInputElement>('spinbutton', { name: 'Exit allowance (bps)' }).value).toBe('');
     expect(within(how).getByRole('link', { name: 'Set defaults for new bots in Settings' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/configuration');
+      .toBe('/brokers/alpaca/clerks/clrk_spec/settings');
     expect(screen.getByText('Set this bot’s exit allowance, band multiple and spread cap in How.')).toBeTruthy();
   });
 

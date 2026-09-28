@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,7 @@ import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 
 const WORKSPACE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
-const CONFIGURATION_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/configuration`;
+const SETTINGS_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/settings`;
 const OFFLINE_ACCOUNT_ID = 'live-account';
 const OFFLINE_WORKSPACE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${OFFLINE_ACCOUNT_ID}`;
 
@@ -46,7 +47,7 @@ async function renderCard(
   deployIntent = false,
   siblings: LaneDescriptor[] = [],
 ) {
-  const getAccountMoney = vi.fn(doubles.getAccountMoney ?? (() => Promise.resolve(fakeAccountMoney())));
+  const getAccountMoney = vi.fn(doubles.getAccountMoney ?? (() => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))));
   const readDeskState = vi.fn(
     doubles.readDeskState
       ?? (() => Promise.resolve({ headline: 'Select an Alpaca account to activate this lane' })),
@@ -106,8 +107,7 @@ describe('AlpacaLaneCardComponent', () => {
 
   it('reads every count from one backend field and adds nothing up', async () => {
     await renderCard(countedLane({ running_count: 0, dry_run_count: 3, attention_count: 0 }), {
-      getAccountMoney: () =>
-        Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, segments: fakeAccountMoney().segments?.filter((segment) => segment.kind !== 'stopped') })),
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, stopped_holding_count: 0 })),
     });
 
     expect(await screen.findByText('0 running')).toBeTruthy();
@@ -115,6 +115,49 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.queryByText(/stopped, still holding/)).toBeNull();
     expect(screen.getByText('3 Dry Run')).toBeTruthy();
     expect(screen.getByText('All clear')).toBeTruthy();
+  });
+
+  it('takes the stopped-still-holding count from the money read, never from counting its slices', async () => {
+    // The bar carries one stopped slice; the backend's count is what is said.
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, stopped_holding_count: 3 })),
+    });
+
+    expect(await screen.findByText('3 stopped, still holding')).toBeTruthy();
+  });
+
+  it('says the stopped-still-holding count is unknown while the money cannot be read', async () => {
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve({ ...unavailableAccountMoney('Wait for a fresh reading.'), account_id: TEST_ACCOUNT_ID }),
+    });
+
+    expect(await screen.findByText('Stopped holdings unknown')).toBeTruthy();
+    expect(screen.queryByText(/stopped, still holding/)).toBeNull();
+  });
+
+  it('states an overdrawn account’s shortfall as the backend authored it', async () => {
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, account_shortfall_usd: '50.00' })),
+    });
+
+    const shortfall = await screen.findByText(/Claims exceed the account by/);
+    expect(shortfall.textContent?.replace(/\s+/g, ' ').trim()).toBe('Claims exceed the account by $50.00');
+  });
+
+  it('states no shortfall for an account that is not overdrawn', async () => {
+    await renderCard();
+
+    await screen.findByText(/Free to deploy/);
+    expect(screen.queryByText(/Claims exceed the account/)).toBeNull();
+  });
+
+  it('says an attention count the directory omitted is unknown, never zero', async () => {
+    const lane = countedLane();
+    const { attention_count: _omitted, ...summary } = lane.provider_summary ?? {};
+    await renderCard({ ...lane, provider_summary: summary });
+
+    expect(screen.getByText('Attention unknown')).toBeTruthy();
+    expect(screen.queryByText('All clear')).toBeNull();
   });
 
   it('says a count the lane did not report is unknown, never zero', async () => {
@@ -128,7 +171,10 @@ describe('AlpacaLaneCardComponent', () => {
   it('shows why an account has no money figures in the backend’s own words, never $0', async () => {
     await renderCard(countedLane(), {
       getAccountMoney: () =>
-        Promise.resolve(unavailableAccountMoney('No daily loss limit is set for this account, so new entries are refused. Set one in Settings.')),
+        Promise.resolve({
+          ...unavailableAccountMoney('No daily loss limit is set for this account, so new entries are refused. Set one in Settings.'),
+          account_id: TEST_ACCOUNT_ID,
+        }),
     });
 
     expect(await screen.findByText(/No daily loss limit is set for this account/)).toBeTruthy();
@@ -139,9 +185,68 @@ describe('AlpacaLaneCardComponent', () => {
   it('keeps a failed money read to itself and names the next step', async () => {
     await renderCard(countedLane(), { getAccountMoney: () => Promise.reject(new Error('money read failed')) });
 
-    expect(await screen.findByText('Account money could not be read. Open the account to see why.')).toBeTruthy();
+    const reason = await screen.findByText(/Account money could not be read\./);
+    expect(reason.textContent).toContain('It is read again automatically');
     // The counts still land: they are the directory's, not the failed read's.
     expect(screen.getByText('2 running')).toBeTruthy();
+  });
+
+  it('refuses money another account’s Clerk returned, never renders its figures', async () => {
+    await renderCard(countedLane(), { getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: '0XOTHERACCOUNT' })) });
+
+    expect(await screen.findByText(/Account money could not be read\./)).toBeTruthy();
+    expect(screen.queryByText(/Account money \$100,000\.00/)).toBeNull();
+    expect(screen.queryByRole('list', { name: /money is/ })).toBeNull();
+  });
+
+  it('says a refused money read in the backend’s words, with its next step', async () => {
+    const refusal = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          message: 'This account’s money cannot be read right now.',
+          why: 'The account’s records are still being opened.',
+          next_action: 'Open the account’s Settings to see why, then retry.',
+        },
+      },
+    });
+    await renderCard(countedLane(), { getAccountMoney: () => Promise.reject(refusal) });
+
+    const reason = await screen.findByText(/cannot be read right now/);
+    expect(reason.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'This account’s money cannot be read right now. The account’s records are still being opened. '
+        + 'Open the account’s Settings to see why, then retry.',
+    );
+  });
+
+  it('keeps its figures through a directory refresh instead of re-reading and blanking', async () => {
+    const lane = countedLane();
+    const { view, getAccountMoney } = await renderCard(lane);
+    await screen.findByText(/Free to deploy/);
+
+    // A directory refresh hands the card an identical lane as a new object.
+    await view.rerender({ inputs: { lane: structuredClone(lane) }, partialUpdate: true });
+    view.fixture.detectChanges();
+
+    expect(screen.getByText(/Free to deploy/)).toBeTruthy();
+    expect(screen.queryByText('Reading account money…')).toBeNull();
+    expect(getAccountMoney).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads its money every 30 seconds without blanking the figures', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { getAccountMoney } = await renderCard();
+      await vi.waitFor(() => expect(getAccountMoney).toHaveBeenCalledTimes(1));
+      await screen.findByText(/Free to deploy/);
+
+      vi.advanceTimersByTime(30_000);
+
+      await vi.waitFor(() => expect(getAccountMoney).toHaveBeenCalledTimes(2));
+      expect(screen.getByText(/Free to deploy/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is one click target into the account workspace, not a menu of links', async () => {
@@ -163,13 +268,13 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.queryByText('Real Paper')).toBeNull();
   });
 
-  it('opens a lane with no confirmed account on Configuration, with the readiness line the server authored', async () => {
+  it('opens a lane with no confirmed account on Settings, with the readiness line the server authored', async () => {
     await renderCard(UNBOUND_LANE);
 
     expect(
       await screen.findByText('Select an Alpaca account to activate this lane'),
     ).toBeTruthy();
-    expect(screen.getByRole('link').getAttribute('href')).toBe(CONFIGURATION_URL);
+    expect(screen.getByRole('link').getAttribute('href')).toBe(SETTINGS_URL);
     // Money and a bot count belong to an account; this lane has none to read
     // them from, so it states its readiness instead of reporting a failure.
     expect(screen.queryByText(/running/)).toBeNull();
@@ -181,7 +286,7 @@ describe('AlpacaLaneCardComponent', () => {
 
     // An account whose lane has gone unreachable is still that account, and
     // its workspace explains the outage in place (FR-096). Sending the card
-    // to Configuration instead would make one account two different places
+    // to Settings instead would make one account two different places
     // depending on whether it was opened from the list or from the top bar.
     expect(screen.getByRole('link').getAttribute('href')).toBe(OFFLINE_WORKSPACE_URL);
   });
@@ -234,7 +339,7 @@ describe('AlpacaLaneCardComponent', () => {
       testLane({ capabilities: ['account_read', 'configuration_manage'] }),
     );
 
-    expect(await screen.findByText('This lane does not report account money.')).toBeTruthy();
+    expect(await screen.findByText('This account does not report its money.')).toBeTruthy();
     expect(getAccountMoney).not.toHaveBeenCalled();
   });
 
@@ -266,6 +371,18 @@ describe('AlpacaLaneCardComponent', () => {
     // Decision 5) — and the accessible name of the card's one link carries
     // the disambiguator with it, because it is named from its own content.
     expect(screen.getByText('(Paper)')).toBeTruthy();
-    expect(screen.getByRole('link').textContent).toContain('(Paper)');
+    expect(screen.getByRole('link', { name: 'Strategy lab (Paper) PAPER · practice money' })).toBeTruthy();
+  });
+
+  it('names its link by the account and its mode, and describes it by the rest', async () => {
+    await renderCard();
+    await screen.findByText(/Free to deploy/);
+
+    // The name is what a screen reader announces for the choice; the hidden
+    // money-bar legend and the counts belong in the description, not the name.
+    const link = screen.getByRole('link', { name: 'Paper PAPER · practice money' });
+    const description = document.getElementById(link.getAttribute('aria-describedby') ?? '');
+    expect(description?.textContent).toContain('Free to deploy');
+    expect(description?.textContent).toContain('2 running');
   });
 });

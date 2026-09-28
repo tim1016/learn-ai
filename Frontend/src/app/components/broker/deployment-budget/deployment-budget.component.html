@@ -7,7 +7,7 @@
     <p>{{ worldLabels[report.world] }} · {{ report.entry_eligible ? 'Budget and account risk ready' : 'Budget or account risk unavailable' }}</p>
     <dl>
       @for (row of amounts(); track row.label) {
-        <dt>{{ row.label }}</dt><dd>{{ (row.amount === null || row.amount === undefined) ? 'Unknown' : (row.amount | currency:'USD') }}</dd>
+        <dt>{{ row.label }}</dt><dd>{{ (row.amount === null || row.amount === undefined) ? 'Unknown' : (row.amount | authoredUsd) }}</dd>
       }
     </dl>
     <p>Stopped does not mean flat or fully released. Use the position and order recovery controls to resolve remaining obligations.</p>

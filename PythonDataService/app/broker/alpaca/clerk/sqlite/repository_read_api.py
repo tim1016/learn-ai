@@ -770,13 +770,18 @@ class ClerkSqliteRepositoryReadApi:
             row = self._conn.execute("SELECT * FROM deployment_budgets WHERE strategy_instance_id=?", (strategy_instance_id,)).fetchone()
             return None if row is None else dict(row)
 
-    def fee_attribution(self: ClerkSqliteRepository, *, now_ms: int) -> FeeAttribution:
-        """The canonical custody fee projection, fresh only while this process's producer is."""
+    def fee_attribution(self: ClerkSqliteRepository, *, now_ms: int, from_ms: int | None = None) -> FeeAttribution:
+        """The canonical custody fee projection, fresh only while this process's producer is.
+
+        ``from_ms`` keeps only the fee days whose ET midnight is at or after it
+        (an Activity period); admission always reads the whole lifetime.
+        """
         from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
         with self._write_lock:
             return custody_fee_attribution(
-                self._conn, now_ms=now_ms, evidence_checked_at_ms=self._fee_evidence_checked_at_ms
+                self._conn, now_ms=now_ms, evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
+                from_ms=from_ms,
             )
 
     def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountBudget:

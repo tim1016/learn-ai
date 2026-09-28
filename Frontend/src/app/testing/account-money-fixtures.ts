@@ -4,7 +4,8 @@ import type { AccountMoneyView } from '../components/broker/v2-panel/lib/broker-
  * dollar string and width below was produced by
  * `app/broker/alpaca/clerk/account_money.py` for a $100,000 Paper account
  * with one running bot, one stopped bot still holding 1 SPY, and a $0.01
- * fee Alpaca has not taken yet). */
+ * fee Alpaca has not taken yet). The stopped bot registered first, so it has
+ * palette slot 0; nothing is short, so no shortfall is sent. */
 export function fakeAccountMoney(overrides: Partial<AccountMoneyView> = {}): AccountMoneyView {
   return {
     state: 'ready',
@@ -19,6 +20,8 @@ export function fakeAccountMoney(overrides: Partial<AccountMoneyView> = {}): Acc
     held_by_stopped_usd: '670.43',
     outside_bots_usd: '0.00',
     account_charges_usd: '0.01',
+    settling_usd: '0.00',
+    stopped_holding_count: 1,
     open_pnl_usd: '12.40',
     equity_usd: '100012.40',
     today_pnl_usd: '-3.20',
@@ -34,7 +37,7 @@ export function fakeAccountMoney(overrides: Partial<AccountMoneyView> = {}): Acc
           pending_usd: '0.00', pending_bps: 0,
           free_usd: '235.28', free_bps: 2353,
         },
-        shortfall_usd: '0.00',
+        palette_index: 1,
       },
       {
         kind: 'stopped',
@@ -44,6 +47,7 @@ export function fakeAccountMoney(overrides: Partial<AccountMoneyView> = {}): Acc
         share_bps: 67,
         released_usd: '0.00',
         still_claimed_usd: '0.00',
+        palette_index: 0,
       },
       { kind: 'charges', label: 'account charges', amount_usd: '0.01', share_bps: 1 },
       { kind: 'free', label: 'free to deploy', amount_usd: '98329.57', share_bps: 9832 },

@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -16,6 +15,7 @@ import {
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
 
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import {
@@ -68,7 +68,7 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
 @Component({
   selector: 'app-deploy-money-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, FormField, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent],
   templateUrl: './deploy-money-step.component.html',
   styleUrl: './deploy-money-step.component.scss',
 })
@@ -134,9 +134,10 @@ export class DeployMoneyStepComponent {
   );
 
   /** The bar the backend drew: with this amount's NEW slice once its preview
-   * has answered, otherwise the account as it stands. */
+   * has answered, otherwise the account as it stands. A refused amount's
+   * preview also carries a bar — today's, with no NEW slice — beside the
+   * backend's refusal sentence. */
   protected readonly bar = computed(() => this.amountView()?.money_after ?? this.factsView()?.money_after ?? null);
-  protected readonly barShowsNew = computed(() => (this.amountView()?.money_after ?? null) !== null);
 
   private readonly ready = computed<MoneyReview | null>(() => {
     const preview = this.amountView();
@@ -144,6 +145,8 @@ export class DeployMoneyStepComponent {
     if (preview === null || context === null || preview.state !== 'ready' || !preview.review_token) return null;
     return { context, amount: this.amount(), preview };
   });
+  /** Only an amount the backend accepted is drawn as "after this Deploy". */
+  protected readonly barShowsNew = computed(() => this.ready() !== null);
 
   private readonly priceRechecks = linkedSignal({ source: this.context, computation: () => 0 });
 

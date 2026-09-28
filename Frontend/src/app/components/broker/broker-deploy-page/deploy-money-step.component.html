@@ -24,11 +24,11 @@
       }
       <dl class="money-step__facts">
         @if (!dryRun()) {
-          <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | currency: 'USD' }}</dd></div>
+          <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | authoredUsd }}</dd></div>
         }
-        <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | currency: 'USD' }}</dd></div>
+        <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
         @if (view.estimated_price_usd) {
-          <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | currency: 'USD' }}</dd></div>
+          <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
         }
       </dl>
       @if (view.observed_at_ms) {
@@ -41,7 +41,7 @@
             [disabled]="disabled()"
             [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
             (click)="choose(shortcut.amount_usd)"
-          >{{ shortcut.label }} · {{ shortcut.amount_usd | currency: 'USD' }}</button>
+          >{{ shortcut.label }} · {{ shortcut.amount_usd | authoredUsd }}</button>
           <small [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
         }
       </div>
@@ -70,9 +70,9 @@
       @if (review.state === 'ready' && review.review_token) {
         <p role="status">
           @if (dryRun()) {
-            <strong>{{ review.budget_usd | currency: 'USD' }}</strong> of simulated starting cash for this bot.
+            <strong>{{ review.budget_usd | authoredUsd }}</strong> of simulated starting cash for this bot.
           } @else {
-            <strong>{{ review.budget_usd | currency: 'USD' }}</strong> would be set aside for this bot. Nothing is set aside until you Deploy.
+            <strong>{{ review.budget_usd | authoredUsd }}</strong> would be set aside for this bot. Nothing is set aside until you Deploy.
           }
         </p>
       } @else {

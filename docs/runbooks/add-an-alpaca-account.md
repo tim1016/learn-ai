@@ -34,7 +34,7 @@ close the brokerage account or erase its trading records.
 | Live Shadow | `live` / `live` | `shadow` | None; fills are simulated |
 | Real-money Live | `live` / `live` | `real_live` | Only after graduation and a confirmed budgeted Live Deploy |
 
-**Activate Shadow** on Configuration creates only simulated custody. If you
+**Activate Shadow** under **Account stage** in Settings creates only simulated custody. If you
 want Shadow, remain at `authority: shadow`. Real-money graduation is a separate
 procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md).
 
@@ -81,7 +81,7 @@ Open **Alpaca** in the top navigation bar and choose **Accounts** — the one
 Alpaca menu item (ADR 0064 Decision 2); it lists every registered account and
 does not automatically choose Paper or Live for you. Selecting an account card
 opens that account's workspace: one account header over **Overview**, **Bots**,
-**Gallery**, and **Configuration** tabs.
+**Gallery**, and **Settings** tabs.
 
 | What you want to see | Click path |
 |---|---|
@@ -93,7 +93,7 @@ opens that account's workspace: one account header over **Overview**, **Bots**,
 | Longer account history | On that account's **Overview** tab, **Trader**, choose **30D** or **60D** for the portfolio chart and **Transaction history** |
 | Connection or order-recovery evidence | On that account's **Overview** tab, switch to **Operator**, then expand **Broker connection** or **Order custody & recovery** |
 | Strategy gallery and deploy targets | **Alpaca → Accounts → intended account card → Gallery tab** |
-| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Configuration tab** |
+| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Settings tab → Broker connection** |
 
 The account workspace opens on **Overview**, whose **Trader / Operator** switch
 covers that account's own positions, activity, and transaction history. Each
@@ -156,7 +156,8 @@ new lane. Changing a saved profile does not transfer an account assignment.
 
 ### Verify, approve, stage, and apply
 
-1. In the account desk, open the selected lane's **Configuration** page.
+1. In the account desk, open the selected lane's **Settings** page and expand
+   **Broker connection**.
 2. Create/select the profile with the correct mode and credential slot.
 3. Click **Verify account**. Compare the returned account number and Paper/Live
    mode with the account you intended. This is a read-only broker check.
@@ -426,8 +427,9 @@ previously refused, reissue it after fixing the stated cause. Never treat
    **Live** afterward. Use the instrument picker and review the exact strategy
    parameters. An uncovered configuration offers **Use qualified configuration**
    or **Try in Dry Run**; these choices remain explicit.
-5. For an existing authority still using old grants, open Configuration and
-   review **Stop bots and use budgets**. Apply account risk limits there. This
+5. For an existing authority still using old grants, open Settings and use
+   **Switch to budgets** (it asks you to confirm, because it cannot be undone).
+   Apply a **Daily loss limit** there. This
    stops old runners while retaining positions, working orders and recovery.
 6. In Deploy, enter exact dollars or select a server-priced shortcut. Review the
    account/world, sizing estimate, immutable exit terms, risk limits and cash
@@ -469,7 +471,7 @@ an already-running bot through its own controls before treating it as stopped.
 
 ### Remove a saved profile
 
-On the lane's **Configuration** page, archive the unused profile. If the app
+On the lane's **Settings** page, under **Broker connection**, archive the unused profile. If the app
 refuses because it is selected, effective, or bound to a bot, follow that
 refusal; do not edit the profiles database. Archiving a profile does not remove
 the lane, its account assignment, its custody records, or its brokerage account.

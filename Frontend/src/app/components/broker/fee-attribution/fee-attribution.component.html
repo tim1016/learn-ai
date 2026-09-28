@@ -1,34 +1,53 @@
 @if (target()) {
-  <section class="fee-evidence" aria-label="Deployment fees" aria-live="polite">
-    <h3>Fees</h3>
+  <section class="fee-evidence" [attr.aria-labelledby]="headingId" aria-live="polite">
+    <header class="fee-evidence__header">
+      @if (headingLevel() === 2) {
+        <h2 [id]="headingId">Fees</h2>
+      } @else {
+        <h3 [id]="headingId">Fees</h3>
+      }
+      @if (scope(); as scope) {
+        <span class="fee-evidence__scope">
+          {{ scope }}
+          @if (view()?.period_start_ms; as since) {
+            · since <app-timestamp-display [value]="since" mode="date-et" />
+          }
+        </span>
+      }
+    </header>
     @if (fees.isLoading()) {
-      <p>Reading account fee evidence…</p>
+      <p role="status">Reading fees…</p>
     } @else if (fees.error()) {
-      <p role="alert">Fee evidence is unavailable. Refresh to retry.</p>
+      <p role="alert">Fees could not be read. Refresh to retry.</p>
     } @else if (view(); as report) {
       @for (message of report.messages; track message) {
         <p role="status">{{ message }}</p>
       }
       @if (report.account_unattributed_usd !== null && !report.known) {
-        <p>Account charges awaiting attribution: {{ report.account_unattributed_usd | currency:'USD' }}</p>
+        <p>Account charges not yet matched to a bot: {{ report.account_unattributed_usd | authoredUsd }}</p>
       }
-      @for (row of rows(); track row.subject_id) {
-        <div class="fee-row">
-          <strong>{{ row.label }}</strong>
-          <dl>
-            <dt>Estimated, awaiting settlement</dt><dd>{{ row.estimated_usd | currency:'USD' }}</dd>
-            <dt>Modelled settled</dt><dd>{{ row.modelled_settled_usd | currency:'USD' }}</dd>
-            <dt>Observed broker charges</dt><dd>{{ row.observed_usd | currency:'USD' }}</dd>
-            <dt>Total attributed fees</dt><dd>{{ row.total_usd | currency:'USD' }}</dd>
-          </dl>
-        </div>
-      } @empty {
-        @if (report.available && report.known) {
-          <p>No fee-bearing activity has been recorded.</p>
+      <div class="fee-rows">
+        @for (row of rows(); track row.subject_id) {
+          <div class="fee-row">
+            <strong>{{ row.label }}</strong>
+            @if (row.order_id) {
+              <code class="fee-row__ref">{{ row.order_id }}</code>
+            }
+            <dl>
+              <dt>Estimated</dt><dd>{{ row.estimated_usd | authoredUsd }}</dd>
+              <dt>Settled</dt><dd>{{ row.modelled_settled_usd | authoredUsd }}</dd>
+              <dt>Charged by Alpaca</dt><dd>{{ row.observed_usd | authoredUsd }}</dd>
+              <dt>Total</dt><dd>{{ row.total_usd | authoredUsd }}</dd>
+            </dl>
+          </div>
+        } @empty {
+          @if (report.available && report.known) {
+            <p>{{ period() === null ? 'No fees have been recorded.' : 'No fees were charged in this period.' }}</p>
+          }
         }
-      }
-      <p>Observed settlement replaces estimates. Stopped deployments retain their fee history.</p>
+      </div>
+      <p>Fees stay estimated until the day settles; Alpaca's charge replaces the estimate once it posts. A stopped bot keeps its fee history.</p>
     }
-    <button type="button" (click)="fees.reload()" [disabled]="fees.isLoading()">Refresh fee evidence</button>
+    <button type="button" (click)="fees.reload()" [disabled]="fees.isLoading()">Refresh fees</button>
   </section>
 }

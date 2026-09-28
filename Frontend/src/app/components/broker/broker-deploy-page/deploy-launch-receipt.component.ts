@@ -1,8 +1,8 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import type { AccountWorkspaceLink } from '../../../fleet/account-workspace';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
@@ -16,7 +16,7 @@ import { DEPLOY_WORLD_WORDING, deployWorldOf } from './deploy-world';
 @Component({
   selector: 'app-deploy-launch-receipt',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, ReceiptLabelPipe, RouterLink, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, ReceiptLabelPipe, RouterLink, TimestampDisplayComponent],
   templateUrl: './deploy-launch-receipt.component.html',
   styleUrl: './deploy-launch-receipt.component.scss',
 })

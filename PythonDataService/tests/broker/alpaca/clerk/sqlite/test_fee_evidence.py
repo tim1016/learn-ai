@@ -149,6 +149,9 @@ def test_truncated_and_stale_reads_fail_closed_instead_of_zero(day_pnl_repo) -> 
     assert repo.fee_attribution(now_ms=NOON).known
     stale = repo.fee_attribution(now_ms=NOON + FEE_EVIDENCE_MAX_AGE_MS + 1)
     assert not stale.known and any("stale" in reason for reason in stale.unresolved)
+    # No control performs "Refresh account evidence"; the reason names the cause only.
+    assert "Account fee evidence is missing or stale." in stale.unresolved
+    assert not any("Refresh" in reason for reason in stale.unresolved)
 
 
 def test_fee_projection_is_rebuilt_from_original_evidence(tmp_path) -> None:
@@ -466,6 +469,25 @@ async def test_guard_refuses_to_answer_a_continuation_with_the_newest_rows() -> 
     assert not (await guarded.read_activity_evidence()).history_complete
     with pytest.raises(BrokerEvidenceUnavailable):
         await guarded.read_activity_evidence(page_token="older")
+
+
+async def test_guard_passes_a_windowed_evidence_read_through_unchanged() -> None:
+    from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.contract.models import BrokerActivityEvidence
+
+    class Paged:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str | None, int | None]] = []
+
+        async def read_activity_evidence(self, *, page_token: str | None = None, after_ms: int | None = None):
+            self.calls.append((page_token, after_ms))
+            return BrokerActivityEvidence(activities=[], history_complete=True)
+
+    inner = Paged()
+    guarded = guard_broker_read_port(inner, intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+    await guarded.read_activity_evidence(page_token="older", after_ms=NOON)
+    assert inner.calls == [("older", NOON)]
 
 
 def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:

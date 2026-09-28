@@ -1,37 +1,30 @@
 <section class="graduation" aria-labelledby="live-graduation-title">
   <header class="graduation__header">
-    <div>
-      <p class="graduation__eyebrow">Account authority</p>
-      <h2 id="live-graduation-title">Activate Shadow and graduate to Live</h2>
-      <p>
-        Shadow uses simulated cash and fills. Graduation changes the account authority.
-        It does not deploy a strategy, commit a deployment budget or submit an order.
-      </p>
-    </div>
-    <span class="graduation__account">Account {{ accountId() }}</span>
+    <h3 id="live-graduation-title">Account stage</h3>
+    <p>
+      A live account reaches real money in three stages: Shadow trades it with simulated fills,
+      Review checks fresh evidence, and Live places real orders. Moving a stage does not deploy a
+      strategy, set aside a budget or submit an order.
+    </p>
   </header>
 
-  <ol class="authority-rail" aria-label="Graduation sequence">
-    <li class="authority-rail__step"
-      [class.authority-rail__step--complete]="status.hasValue() && status.value().authority !== 'unavailable'">
-      <span class="authority-rail__number">1</span>
-      <span><strong>Shadow</strong><small>Isolated custody</small></span>
-    </li>
-    <li class="authority-rail__line" aria-hidden="true"></li>
-    <li
-      class="authority-rail__step"
-      [class.authority-rail__step--current]="status.hasValue() && status.value().state === 'review_available'"
-      [class.authority-rail__step--complete]="status.hasValue() && status.value().state === 'graduated'">
-      <span class="authority-rail__number">2</span>
-      <span><strong>Review</strong><small>Fresh, sealed evidence</small></span>
-    </li>
-    <li class="authority-rail__line" aria-hidden="true"></li>
-    <li
-      class="authority-rail__step"
-      [class.authority-rail__step--complete]="status.hasValue() && status.value().state === 'graduated'">
-      <span class="authority-rail__number">3</span>
-      <span><strong>Live</strong><small>Boot-selected authority</small></span>
-    </li>
+  <ol class="authority-rail" aria-label="Account stages">
+    @for (stage of stages(); track stage.key; let first = $first) {
+      @if (!first) {
+        <li class="authority-rail__line" aria-hidden="true"></li>
+      }
+      <li
+        class="authority-rail__step"
+        [class.authority-rail__step--complete]="stage.progress === 'done'"
+        [class.authority-rail__step--current]="stage.progress === 'current'"
+        [attr.aria-current]="stage.progress === 'current' ? 'step' : null">
+        <span class="authority-rail__number" aria-hidden="true">{{ stage.number }}</span>
+        <span>
+          <strong>{{ stage.name }}</strong>
+          <small>{{ stage.note }}@if (stage.progress !== 'todo') { · {{ PROGRESS_LABEL[stage.progress] }}}</small>
+        </span>
+      </li>
+    }
   </ol>
 
   @if (refusal(); as message) {

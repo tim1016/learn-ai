@@ -59,7 +59,7 @@ describe('app menu projections', () => {
     // A bot's own page and the lane-scoped tabs are inside the workspace too
     // (#2186), so the menubar names the account list for them as well.
     '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1',
-    '/brokers/alpaca/clerks/clrk_spec/configuration',
+    '/brokers/alpaca/clerks/clrk_spec/settings',
     '/brokers/alpaca/clerks/clrk_spec/bots',
     '/brokers/alpaca/clerks/clrk_spec/gallery',
   ])('highlights Accounts on the workspace URL %s', (url) => {

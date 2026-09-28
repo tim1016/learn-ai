@@ -817,7 +817,7 @@ export class AlpacaDeployWorkflowComponent {
   /** Where this account's defaults for new bots are set (H3). */
   protected readonly settingsRoute = computed(() => {
     const target = this.target();
-    return accountWorkspaceTabRoute({ broker: target.broker, clerkId: target.clerkId, accountId: this.accountId() }, 'configuration');
+    return accountWorkspaceTabRoute({ broker: target.broker, clerkId: target.clerkId, accountId: this.accountId() }, 'settings');
   });
 
   protected async newDeployment(): Promise<void> {

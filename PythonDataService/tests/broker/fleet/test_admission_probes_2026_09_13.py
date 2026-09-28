@@ -404,6 +404,38 @@ def test_lane_summaries_are_bounded_typed_observations(
     assert parsed.authority_state == "real_paper"
 
 
+def test_an_unknown_summary_key_is_dropped_and_counted_never_refused(
+    control_dir: Path, fleet_service, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2561 review B1: a summary field a newer agent sends must not refuse an
+    older coordinator's liveness -- a refused beat re-registers and bumps the
+    routing epoch on every beat. The key is dropped (never stored or
+    projected), counted and logged; the beat lands on the same session."""
+    from uuid import uuid4
+
+    from app.broker.fleet.records import DROPPED_SUMMARY_KEYS
+
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="unknown-key", tmp_path=control_dir.parent)
+    session = fleet_service.register_agent_session(
+        fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key
+    )
+    key = f"future_field_{uuid4().hex[:8]}"  # first sight in this process: logged once
+
+    for _beat in range(2):
+        assert fleet_service.observe_session(
+            clerk_id=lane.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            reported_summary={"endpoint_mode": "paper", "authority_state": "real_paper", key: {"nested": True}},
+        )
+
+    stored = fleet_service._store.read_session(lane.clerk_id)
+    assert stored is not None and key not in stored.reported_summary_json
+    assert stored.routing_epoch == session.routing_epoch
+    assert DROPPED_SUMMARY_KEYS[key] == 2
+    logged = [record for record in caplog.records if getattr(record, "action", None) == "lane_summary_unknown_keys_dropped"]
+    assert len(logged) == 1 and logged[0].keys == [key]
+
+
 def test_lane_summary_account_nickname_is_bounded_the_same_way_detail_is(
     control_dir: Path, fleet_service
 ) -> None:
