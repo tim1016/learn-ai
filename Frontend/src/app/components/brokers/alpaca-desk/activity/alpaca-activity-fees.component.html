@@ -1,0 +1,67 @@
+<section class="activity-card" aria-labelledby="activity-fees-heading">
+  <header class="activity-card__header">
+    <h3 id="activity-fees-heading">Fees</h3>
+    <span class="activity-card__scope">
+      {{ scope() }}
+      @if (view()?.period_start_ms; as since) {
+        · since <app-timestamp-display [value]="since" mode="date-et" />
+      }
+    </span>
+  </header>
+
+  @if (loading()) {
+    <p class="activity-card__state" role="status">Reading fees…</p>
+  } @else if (unavailable(); as reason) {
+    <div class="activity-card__state" role="alert">
+      <p>{{ reason }}</p>
+      <button type="button" class="activity-button" (click)="retry.emit()">Retry</button>
+    </div>
+  } @else if (view(); as fees) {
+    @for (message of fees.messages; track message) {
+      <p class="activity-card__note" role="status">{{ message }}</p>
+    }
+    @if (fees.rows.length === 0) {
+      <p class="activity-card__state">No fees were charged in this period.</p>
+    } @else {
+      <div class="activity-table-scroll">
+        <table class="activity-table">
+          <caption class="activity-sr-only">Fees per bot, {{ scope() }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Bot or order</th>
+              <th scope="col" class="numeric">Estimated</th>
+              <th scope="col" class="numeric">Settled</th>
+              <th scope="col" class="numeric">Charged</th>
+              <th scope="col" class="numeric">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of fees.rows; track row.subject_id) {
+              <tr>
+                <th scope="row">
+                  <span class="activity-table__owner">{{ row.label }}</span>
+                  @if (row.order_id) {
+                    <code class="activity-table__ref">{{ row.order_id }}</code>
+                  }
+                </th>
+                <td class="numeric">{{ row.estimated_usd | currency: 'USD' }}</td>
+                <td class="numeric">{{ row.modelled_settled_usd | currency: 'USD' }}</td>
+                <td class="numeric">{{ row.observed_usd | currency: 'USD' }}</td>
+                <td class="numeric">{{ row.total_usd | currency: 'USD' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+    @if (!fees.known && fees.account_unattributed_usd !== null) {
+      <p class="activity-card__note">
+        Account charges not yet matched to a bot: {{ fees.account_unattributed_usd | currency: 'USD' }}
+      </p>
+    }
+    <p class="activity-card__note">
+      Fees stay estimated until Alpaca settles the day; Alpaca's charge replaces the estimate once it posts.
+    </p>
+    <button type="button" class="activity-button" (click)="retry.emit()">Refresh fees</button>
+  }
+</section>

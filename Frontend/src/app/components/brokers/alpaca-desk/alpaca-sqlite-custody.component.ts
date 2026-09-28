@@ -345,7 +345,7 @@ export class AlpacaSqliteCustodyComponent {
       }
     } catch {
       if (this.isCurrentProvenance(provenance)) {
-        this.actionNotice.set('The custody timeline is temporarily unavailable.');
+        this.actionNotice.set('The order timeline is temporarily unavailable.');
       }
     } finally {
       if (this.isCurrentProvenance(provenance)) {
@@ -388,7 +388,7 @@ export class AlpacaSqliteCustodyComponent {
       }
     } catch {
       if (this.isCurrentProvenance(provenance)) {
-        this.actionNotice.set('The custody timeline is temporarily unavailable.');
+        this.actionNotice.set('The order timeline is temporarily unavailable.');
       }
     } finally {
       if (this.isCurrentProvenance(provenance)) {

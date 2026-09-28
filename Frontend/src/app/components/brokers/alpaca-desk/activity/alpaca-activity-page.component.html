@@ -1,0 +1,70 @@
+<main class="activity" aria-labelledby="activity-heading">
+  <header class="activity__header">
+    <h2 id="activity-heading">Activity</h2>
+    <div class="activity__periods" role="radiogroup" aria-label="Activity period">
+      @for (option of periods; track option.id) {
+        <button
+          #periodRadio
+          type="button"
+          role="radio"
+          class="activity__period"
+          [class.activity__period--active]="option.id === period()"
+          [attr.aria-checked]="option.id === period()"
+          [attr.tabindex]="option.id === period() ? 0 : -1"
+          (click)="select(option.id)"
+          (keydown)="onPeriodKeydown($event, $index)"
+        >{{ option.label }}</button>
+      }
+    </div>
+  </header>
+
+  <p class="activity__sync">
+    <span>Sync check</span>
+    @if (syncCheck(); as sync) {
+      <strong>{{ sync.verdict | receiptLabel }}</strong>
+      <span>· last checked <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" /></span>
+    } @else {
+      <strong>{{ syncMissing() }}</strong>
+    }
+  </p>
+
+  @if (selected().curve === null) {
+    <app-alpaca-activity-statement
+      [statement]="feeView()?.statement ?? null"
+      [loading]="fees.isLoading()"
+      [failed]="feesFailed()"
+      (retry)="fees.reload()"
+    />
+  } @else {
+    <app-alpaca-portfolio-history-chart
+      [history]="proofView()?.history"
+      [scopeLabel]="selected().label"
+      [unavailable]="proofFailed()"
+    />
+    <app-alpaca-portfolio-reconciliation-proof [proof]="proofView()" [unavailable]="proofFailed()" />
+  }
+
+  <app-alpaca-activity-fees
+    [period]="period()"
+    [view]="feeView()"
+    [loading]="fees.isLoading()"
+    [failed]="feesFailed()"
+    (retry)="fees.reload()"
+  />
+
+  <app-alpaca-trader-activity-table [activities]="activityRows()" [unavailable]="activitiesFailed()" />
+
+  @if (target(); as account) {
+    @if (accountId(); as id) {
+      <app-alpaca-activity-records
+        [target]="account"
+        [fence]="fence()"
+        [accountId]="id"
+        [window]="recordsWindow()"
+        [windowReading]="fees.isLoading()"
+        [timelineQuery]="timelineQuery()"
+        (retry)="fees.reload()"
+      />
+    }
+  }
+</main>

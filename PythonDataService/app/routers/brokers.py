@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
 from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.et_day import ActivityPeriod, activity_period_start_ms
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
@@ -351,17 +352,25 @@ async def list_activities(
     limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
     after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
     current_session: bool = Query(default=False),
+    period: ActivityPeriod | None = Query(default=None),
 ) -> list[BrokerActivity]:
-    if current_session and after_ms is not None:
+    """Broker-reported account activity, newest first.
+
+    ``period`` reads one account Activity period, opened by the same
+    calendar anchor as that period's fees.
+    """
+    if sum((current_session, after_ms is not None, period is not None)) > 1:
         raise HTTPException(
             status_code=422,
-            detail="current_session and after_ms are mutually exclusive",
+            detail="current_session, after_ms and period are mutually exclusive",
         )
     if current_session:
         session = current_trading_session_window(now_ms_utc())
         if session is None:
             return []
         after_ms = session.open_ms_utc
+    if period is not None:
+        after_ms = activity_period_start_ms(period, now_ms_utc())
     return await _run(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
@@ -369,11 +378,27 @@ async def list_activities(
 
 
 @router.get("/{broker}/fees/attribution", response_model=DeploymentFeeAttribution)
-async def get_deployment_fee_attribution(broker: str, strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=96)) -> DeploymentFeeAttribution:
-    """Canonical lifetime fee evidence, including stopped deployment ownership."""
+async def get_deployment_fee_attribution(
+    broker: str,
+    strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=96),
+    period: ActivityPeriod | None = Query(default=None),
+) -> DeploymentFeeAttribution:
+    """Canonical fee evidence, including stopped deployment ownership.
+
+    Lifetime by default; ``period`` reads one account Activity period's fees
+    and its money statement.
+    """
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Fee attribution is available for Alpaca accounts.")
-    return await _run(broker, lambda _port: deployment_fee_attribution(strategy_instance_id))
+    if strategy_instance_id is not None and period is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="A fee period applies to the account's fees, not to one bot's.",
+        )
+    return await _run(
+        broker,
+        lambda port: deployment_fee_attribution(strategy_instance_id, period=period, port=port),
+    )
 
 
 @router.get(
@@ -464,19 +489,19 @@ async def get_portfolio_history_proof(
     if isinstance(positions_result, BaseException):
         return _history_without_proof(
             history,
-            "Current positions were unavailable, so local FIFO proof could not be built.",
+            "Current positions could not be read, so this period cannot be checked against the recorded trades.",
         )
     positions = positions_result
     sqlite = active_sqlite_facade(broker)
     if sqlite is None:
         return _history_without_proof(
             history,
-            "SQLite Clerk authority is not active for this broker.",
+            "The Clerk's order records are not available on this account right now.",
         )
     if not history.timestamps:
         return _history_without_proof(
             history,
-            "Broker portfolio history has no timestamps for the requested range.",
+            "Alpaca reported no account values for this period.",
         )
     try:
         attribution = await asyncio.to_thread(
@@ -497,12 +522,12 @@ async def get_portfolio_history_proof(
     except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
         return _history_without_proof(
             history,
-            "SQLite FIFO attribution is unavailable for this broker.",
+            "The Clerk's trade records could not be read for this period.",
         )
     if attribution is None:
         return _history_without_proof(
             history,
-            "SQLite Clerk authority changed while loading portfolio history proof.",
+            "The Clerk's records changed while this period was checked. Refresh to retry.",
         )
     reconciliation = reconcile_broker_curve_to_local_pnl(history, attribution)
     return PortfolioHistoryProofResponse(

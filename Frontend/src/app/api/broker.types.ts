@@ -1910,7 +1910,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Activities */
+        /**
+         * List Activities
+         * @description Broker-reported account activity, newest first.
+         *
+         *     ``period`` reads one account Activity period, opened by the same
+         *     calendar anchor as that period's fees.
+         */
         get: operations["list_activities_api_brokers__broker__activities_get"];
         put?: never;
         post?: never;
@@ -4071,7 +4077,10 @@ export interface paths {
         };
         /**
          * Get Deployment Fee Attribution
-         * @description Canonical lifetime fee evidence, including stopped deployment ownership.
+         * @description Canonical fee evidence, including stopped deployment ownership.
+         *
+         *     Lifetime by default; ``period`` reads one account Activity period's fees
+         *     and its money statement.
          */
         get: operations["get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get"];
         put?: never;
@@ -8128,6 +8137,32 @@ export interface components {
             on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
             /** On Exit */
             on_exit?: components["schemas"]["CloseLegExit"][];
+        };
+        /**
+         * ActivityPeriodStatement
+         * @description One Activity period's money statement, every amount authored here.
+         *
+         *     Covers the orders the bots and this app placed. ``net_usd`` is exactly
+         *     ``realized_usd - fees_usd + open_usd`` in cents. An amount the backend
+         *     cannot know is ``None`` with ``detail`` saying why -- never zero -- and
+         *     ``state`` is ``ready`` only when all four are known.
+         */
+        ActivityPeriodStatement: {
+            /** Detail */
+            detail: string | null;
+            /** Fees Usd */
+            fees_usd: string | null;
+            /** Net Usd */
+            net_usd: string | null;
+            /** Open Usd */
+            open_usd: string | null;
+            /** Realized Usd */
+            realized_usd: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable";
         };
         /**
          * AdjustmentNotCoveredDetail
@@ -13894,7 +13929,14 @@ export interface components {
              */
             world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
-        /** DeploymentFeeAttribution */
+        /**
+         * DeploymentFeeAttribution
+         * @description Custody fee ownership, over a deployment's lifetime or one Activity period.
+         *
+         *     ``period`` and ``period_start_ms`` echo the account read's Activity
+         *     period (the ET midnight it opens at); ``statement`` is that period's
+         *     money statement. All three are ``None`` on a lifetime read.
+         */
         DeploymentFeeAttribution: {
             /** Account Id */
             account_id: string | null;
@@ -13913,12 +13955,21 @@ export interface components {
              * Format: int64
              */
             observed_at_ms: number;
+            /** Period */
+            period?: ("today" | "30d" | "60d") | null;
+            /** Period Start Ms */
+            period_start_ms?: number | null;
             /** Rows */
             rows: components["schemas"]["DeploymentFeeRow"][];
+            statement?: components["schemas"]["ActivityPeriodStatement"] | null;
         };
         /**
          * DeploymentFeeRow
          * @description Server-owned fee totals; decimal USD is preserved on the wire.
+         *
+         *     ``label`` names who owns the fees: the bot's own name, or an outside
+         *     order's symbol. ``order_id`` is the broker order an outside row belongs
+         *     to, so two outside rows are never indistinguishable.
          */
         DeploymentFeeRow: {
             /** Estimated Usd */
@@ -13929,6 +13980,8 @@ export interface components {
             modelled_settled_usd: string;
             /** Observed Usd */
             observed_usd: string;
+            /** Order Id */
+            order_id?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id: string | null;
             /** Subject Id */
@@ -31929,6 +31982,7 @@ export interface operations {
                 limit?: number;
                 after_ms?: number | null;
                 current_session?: boolean;
+                period?: ("today" | "30d" | "60d") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -36171,6 +36225,7 @@ export interface operations {
         parameters: {
             query?: {
                 strategy_instance_id?: string | null;
+                period?: ("today" | "30d" | "60d") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

@@ -438,9 +438,10 @@ async def test_portfolio_history_proof_preserves_one_broker_snapshot_when_local_
     assert response.json()["history"] == history.model_dump(mode="json")
     assert response.json()["attribution"] is None
     assert response.json()["reconciliation"] is None
-    assert "SQLite Clerk authority is not active" in response.json()[
-        "proof_unavailable_reason"
-    ]
+    # Trader copy: the reason names the records, never the storage engine.
+    assert response.json()["proof_unavailable_reason"] == (
+        "The Clerk's order records are not available on this account right now."
+    )
     assert port.portfolio_history_calls == 1
     assert port.position_calls == 1
 
@@ -467,12 +468,37 @@ async def test_activities_current_session_uses_canonical_calendar_window(
     assert port.activities_call == {"after_ms": 1_786_540_200_000, "limit": 5}
 
 
-async def test_activities_rejects_mixed_explicit_and_session_windows() -> None:
+@pytest.mark.parametrize(
+    ("period", "opens_on"),
+    [("today", date(2026, 9, 8)), ("30d", date(2026, 7, 28)), ("60d", date(2026, 6, 12))],
+)
+async def test_activities_period_opens_at_the_same_anchor_as_its_fees(
+    monkeypatch: pytest.MonkeyPatch, period: str, opens_on: date,
+) -> None:
+    from app.services.session_authority import et_minute_of_day_ms
+    from app.utils.session_anchors import et_midnight_ms
+
+    port = _FakePort(activities=[_activity(activity_id="act-period")])
+    get_broker_registry().register(port)
+    monkeypatch.setattr(
+        "app.routers.brokers.now_ms_utc",
+        lambda: et_minute_of_day_ms(date(2026, 9, 8), 12 * 60),
+    )
+
+    response = await _get(f"/api/brokers/alpaca/activities?period={period}&limit=5")
+
+    assert response.status_code == 200
+    assert port.activities_call == {"after_ms": et_midnight_ms(opens_on), "limit": 5}
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["current_session=true&after_ms=1", "period=today&after_ms=1", "period=30d&current_session=true"],
+)
+async def test_activities_rejects_mixed_explicit_and_session_windows(query: str) -> None:
     get_broker_registry().register(_FakePort())
 
-    response = await _get(
-        "/api/brokers/alpaca/activities?current_session=true&after_ms=1"
-    )
+    response = await _get(f"/api/brokers/alpaca/activities?{query}")
 
     assert response.status_code == 422
 

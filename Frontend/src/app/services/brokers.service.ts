@@ -14,6 +14,7 @@ import { firstValueFrom } from 'rxjs';
 import { PolledReadScheduler } from './polled-read-scheduler';
 
 import type {
+  ActivityPeriod,
   AlpacaLiveVerdict,
   BrokerAccountSnapshot,
   BrokerActivity,
@@ -30,6 +31,7 @@ import type {
   ManualOrderPreviewRequest,
   ManualOrderSubmitRequest,
   ManualOrderTicket,
+  PeriodFees,
   PortfolioHistoryRange,
   SqliteClerkProjection,
   SqliteRecoveryAction,
@@ -56,6 +58,32 @@ export interface SqliteTimelineQuery {
   readonly sequence?: number;
   readonly cursor?: string;
   readonly pageSize?: number;
+}
+
+/**
+ * The Clerk timeline a page's URL addresses (`?timelineBot=…&timelineOrderRef=…`),
+ * or `null` when it names none. A bot's recovery link opens an account's order
+ * records at exactly this query; every page that hosts those records reads it
+ * back through this one parser.
+ */
+export function sqliteTimelineQueryFromParams(
+  params: { get(name: string): string | null },
+): SqliteTimelineQuery | null {
+  const rawSequence = params.get('timelineSequence');
+  const sequence = rawSequence === null ? undefined : Number(rawSequence);
+  const query: SqliteTimelineQuery = {
+    strategyInstanceId: params.get('timelineBot') ?? undefined,
+    orderRef: params.get('timelineOrderRef') ?? undefined,
+    effectOperationId: params.get('timelineOperationRef') ?? undefined,
+    uncertaintyId: params.get('timelineUncertaintyId') ?? undefined,
+    executionId: params.get('timelineExecutionId') ?? undefined,
+    transitionKind: params.get('timelineTransitionKind') ?? undefined,
+    sequence:
+      typeof sequence === 'number' && Number.isInteger(sequence) && sequence > 0
+        ? sequence
+        : undefined,
+  };
+  return Object.values(query).some((value) => value !== undefined) ? query : null;
 }
 
 /**
@@ -151,13 +179,23 @@ export class BrokersService {
 
   /**
    * Account-wide Alpaca activity, bounded by the data plane. `afterMs` is an
-   * int64 UTC cursor owned by the caller's selected activity window.
+   * int64 UTC cursor owned by the caller's selected activity window; `period`
+   * asks the data plane to open the window at an Activity period's own
+   * calendar anchor instead.
    */
   listActivities(
     target: ResourceTarget,
-    options: { afterMs?: number; currentSession?: boolean; limit?: number } = {},
+    options: {
+      afterMs?: number;
+      currentSession?: boolean;
+      period?: ActivityPeriod;
+      limit?: number;
+    } = {},
   ): Promise<BrokerActivity[]> {
     let params = new HttpParams();
+    if (options.period != null) {
+      params = params.set('period', options.period);
+    }
     if (options.afterMs != null) {
       params = params.set('after_ms', options.afterMs);
     }
@@ -176,6 +214,15 @@ export class BrokersService {
     return firstValueFrom(this.http.get<components['schemas']['DeploymentFeeAttribution']>(
       operationUrl('fee_attribution_read', target),
       { params: strategyInstanceId === null ? {} : { strategy_instance_id: strategyInstanceId } },
+    ));
+  }
+
+  /** One Activity period's account fees with that period's money statement;
+   * every amount in it is authored by the data plane. */
+  getPeriodFees(target: ResourceTarget, period: ActivityPeriod): Promise<PeriodFees> {
+    return firstValueFrom(this.http.get<PeriodFees>(
+      operationUrl('fee_attribution_read', target),
+      { params: { period } },
     ));
   }
 

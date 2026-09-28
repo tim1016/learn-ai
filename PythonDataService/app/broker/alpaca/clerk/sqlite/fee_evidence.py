@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
+from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -422,7 +423,7 @@ def custody_fee_attribution(
             witnessed_external.add(row.native_order_id)
             external = FeeFill(
                 fill_id=row.activity_id,
-                subject_id=f"external:{row.native_order_id}",
+                subject_id=outside_order_subject_id(row.native_order_id),
                 side=OrderSide(row.side),
                 quantity=normalize_money(row.quantity),
                 price=normalize_money(row.price),
