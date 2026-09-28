@@ -85,6 +85,17 @@ async def test_draft_is_inert_stale_configuration_and_fractional_cents_refuse(ri
     assert (await client.get(f"{routes.PREFIX}/risk-limits")).json()["risk_revision"] == 0
 
 
+async def test_canonical_binary_noise_loss_cap_is_accepted_at_the_boundary(risk_client: RiskClient) -> None:
+    """#2550: the schema's whole-cent check must agree with require_whole_cent_loss_cap,
+    which tolerates up to 4 ULPs of binary noise around a whole-cent amount."""
+    client, _read, _profile_id = risk_client
+    state = (await client.get(f"{routes.PREFIX}/risk-limits")).json()
+    body = {"expected_risk_revision": 0, "expected_selection_generation": state["selection_generation"],
+        "loss_fraction": .1, "loss_usd": 99.89999999999999}
+    result = await client.post(f"{routes.PREFIX}/risk-limits/apply", json=body)
+    assert result.status_code == 200, result.text
+
+
 async def test_failed_observation_reports_effective_but_unknown(risk_client: RiskClient) -> None:
     client, read, _profile_id = risk_client
     response = await client.get(f"{routes.PREFIX}/risk-limits")

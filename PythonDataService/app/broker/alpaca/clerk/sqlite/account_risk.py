@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker_configuration.envelope import require_whole_cent_loss_cap
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -43,6 +44,7 @@ class AccountRiskPolicy:
             raise ValueError("Loss fraction must be between zero and one")
         if not math.isfinite(self.loss_usd) or self.loss_usd <= 0:
             raise ValueError("Loss cap must be positive and finite")
+        require_whole_cent_loss_cap(self.loss_usd)
         if not self.profile_id or not self.actor or self.profile_revision < 1:
             raise ValueError("Risk policy requires its effective profile and operator")
         if type(self.applied_at_ms) is not int or self.applied_at_ms < 0:

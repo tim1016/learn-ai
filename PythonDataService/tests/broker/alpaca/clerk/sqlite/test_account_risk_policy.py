@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker_configuration.envelope import InvalidLiveEnvelope
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, complete_fee_evidence
 from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
 
@@ -22,6 +23,17 @@ RiskContext = tuple[ClerkSqliteRepository, LiveEnvelopeSync, _Read, _TestClock]
 
 def _policy(revision: int = 1, cap: float = 100.0) -> AccountRiskPolicy:
     return AccountRiskPolicy(revision, .1, cap, "profile", 1, "owner", NOON)
+
+
+def test_policy_rejects_a_loss_cap_that_is_not_whole_cents() -> None:
+    """#2550: the domain object, not just the request schema, owns this invariant."""
+    with pytest.raises(InvalidLiveEnvelope):
+        _policy(cap=100.001)
+
+
+def test_policy_accepts_the_canonical_helper_s_binary_noise_tolerance() -> None:
+    """99.89999999999999 is whole-cent under require_whole_cent_loss_cap's ULP tolerance."""
+    assert _policy(cap=99.89999999999999).loss_usd == 99.89999999999999
 
 
 def _hold(repo: ClerkSqliteRepository) -> dict | None:
