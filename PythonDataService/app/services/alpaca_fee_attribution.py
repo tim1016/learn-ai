@@ -89,6 +89,9 @@ class FeeAttribution:
     unresolved: tuple[str, ...]
     observed_total: Decimal | None
     predicted_total: Decimal | None
+    # Normalized account-unattributed execution evidence, shared with the
+    # cash projection. Its notional is never charged to a bot's fee or P&L.
+    external_fills: tuple[FeeFill, ...] = ()
 
     @property
     def known(self) -> bool:

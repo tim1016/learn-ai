@@ -234,6 +234,7 @@ def custody_fee_attribution(
         )
     }
     witnessed_external: set[str] = set()
+    external_fills: list[FeeFill] = []
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
     from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
 
@@ -258,17 +259,17 @@ def custody_fee_attribution(
                 population_complete = False
                 continue
             witnessed_external.add(row.native_order_id)
-            grouped[day].append(
-                FeeFill(
-                    row.activity_id,
-                    f"external:{row.native_order_id}",
-                    OrderSide(row.side),
-                    Decimal(str(row.quantity)),
-                    Decimal(str(row.price)),
-                    row.native_order_id,
-                    observed_at_ms=row.observed_at_ms,
-                )
+            external = FeeFill(
+                row.activity_id,
+                f"external:{row.native_order_id}",
+                OrderSide(row.side),
+                Decimal(str(row.quantity)),
+                Decimal(str(row.price)),
+                row.native_order_id,
+                observed_at_ms=row.observed_at_ms,
             )
+            grouped[day].append(external)
+            external_fills.append(external)
     population_complete = population_complete and external_orders <= witnessed_external
     shares = []
     unresolved = []
@@ -329,4 +330,5 @@ def custody_fee_attribution(
         tuple(dict.fromkeys(unresolved)),
         observed if observed_known else None,
         predicted if predicted_known else None,
+        external_fills=tuple(external_fills),
     )

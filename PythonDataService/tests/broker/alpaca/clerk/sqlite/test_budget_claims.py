@@ -16,7 +16,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _accept_day_pnl_enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_correction, _append_slice
@@ -193,5 +193,125 @@ def test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_
         stopped = repo.account_budget(cash=770, seen_before_ms=NOON + 1)
         assert stopped.available == 460
         assert {row.strategy_instance_id: row.position_cost for row in stopped.deployments} == {"a": 50, "b": 200}
+    finally:
+        repo.close()
+
+
+def _external_order(*, state: str = "accepted", filled: float = 0, observed_at: int = NOON - 86_400_000) -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca", order_id="external-budget-order", client_order_id="console-order",
+        symbol="SPY", asset_class="us_equity", side="buy", order_type="limit", time_in_force="gtc",
+        quantity=6, filled_quantity=filled, limit_price=100, stop_price=None,
+        filled_avg_price=100 if filled else None, status=state, submitted_at_ms=observed_at,
+        created_at_ms=observed_at, updated_at_ms=observed_at, filled_at_ms=None,
+        canceled_at_ms=None, expired_at_ms=None, observed_at_ms=observed_at,
+    )
+
+
+def _external_fill(*, quantity: float = 6, observed_at: int = NOON) -> BrokerActivity:
+    return BrokerActivity(
+        broker="alpaca", activity_id="external-budget-fill", native_order_id="external-budget-order",
+        activity_type="FILL", category="trade_activity", symbol="SPY", side="buy",
+        quantity=quantity, price=100, net_amount=None, occurred_at_ms=NOON, observed_at_ms=observed_at,
+    )
+
+
+def test_reviewing_prior_day_external_gtc_order_does_not_release_its_money(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        external = observe_external_order(repo, order=_external_order())
+        acknowledge_external_order(repo, external_order_id=external.external_order_id, operator="owner")
+        with pytest.raises(BudgetUnavailable, match="external order"):
+            _deploy(repo)
+        observe_external_order(repo, order=_external_order(state="canceled", observed_at=NOON))
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).available == 1000
+    finally:
+        repo.close()
+
+
+def test_external_fill_before_order_observation_keeps_its_unseen_debit(tmp_path: Path) -> None:
+    repo = _new_budget_repo(tmp_path)
+    try:
+        record_fee_evidence(repo, [_external_fill()], checked_at_ms=NOON, history_complete=True)
+        unseen = repo.account_budget(cash=1000, seen_before_ms=NOON)
+        assert unseen.order_claims == 600
+        assert unseen.fee_claims == Decimal("0.01")
+        assert unseen.available == Decimal("399.99")
+        # Duplicate polling cannot move an already recognized debit's cutoff.
+        record_fee_evidence(repo, [_external_fill(observed_at=NOON + 1)], checked_at_ms=NOON + 1, history_complete=True)
+        seen = repo.account_budget(cash=400, seen_before_ms=NOON + 1)
+        assert seen.order_claims == 0 and seen.available == unseen.available
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON) == unseen
+    finally:
+        repo.close()
+
+
+def test_terminal_external_order_needs_all_its_exact_executions_then_replays(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    external = observe_external_order(repo, order=_external_order(state="canceled", filled=3))
+    acknowledge_external_order(repo, external_order_id=external.external_order_id, operator="owner")
+    record_fee_evidence(repo, [_external_fill(quantity=2)], checked_at_ms=NOON, history_complete=True)
+    with pytest.raises(BudgetUnavailable, match="external order"):
+        repo.account_budget(cash=1000, seen_before_ms=NOON)
+    # The exact missing execution is a separate activity, never a made-up cumulative fill.
+    remainder = _external_fill(quantity=1).model_copy(update={"activity_id": "external-remainder"})
+    record_fee_evidence(repo, [_external_fill(quantity=2), remainder], checked_at_ms=NOON, history_complete=True)
+    expected = repo.account_budget(cash=1000, seen_before_ms=NOON)
+    assert expected.order_claims == 300
+    database = repo.db_path
+    repo.close()
+    database.rename(database.with_suffix(".saved"))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=lambda: NOON)
+    try:
+        assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
+    finally:
+        rebuilt.close()
+
+
+def test_legacy_external_observation_stays_hash_compatible_and_unknown_until_refreshed(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+    from app.broker.alpaca.clerk.sqlite.facts import ExternalOrderObservedFacts
+    from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        legacy = canonicalize({
+            "external_order_id": "external-budget-order", "broker_order_id": "external-budget-order",
+            "client_order_id": "console-order", "symbol": "SPY", "side": "BUY", "qty": 6.0,
+            "order_type": "limit", "limit_price": 100.0, "stop_price": None, "filled_avg_price": None,
+            "observed_at_ms": NOON - 86_400_000, "evidence_refs": ["external-budget-order"],
+        })
+        assert ExternalOrderObservedFacts.from_facts_json(legacy).to_facts_json() == legacy
+        repo.append_transition(TransitionInput(
+            broker_order_id="external-budget-order", transition_kind="EXTERNAL_ORDER_OBSERVED",
+            custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK", operation_state="succeeded",
+            clerk_observed_at_ms=NOON, summary_code="EXTERNAL_ORDER_OBSERVED", facts_json=legacy,
+        ))
+        acknowledge_external_order(repo, external_order_id="external-budget-order", operator="owner")
+        history = tuple(repo.custody_transitions())
+        with pytest.raises(BudgetUnavailable, match="unknown cash obligation"):
+            repo.account_budget(cash=1000, seen_before_ms=NOON)
+        # Same original fields, now with explicit cancellation proof: not a duplicate.
+        observe_external_order(repo, order=_external_order(state="canceled"))
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).available == 1000
+        assert tuple(repo.custody_transitions())[:len(history)] == history
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("recorded", [2.9999999999, 3.0000000001])
+def test_external_fill_coverage_has_no_quantity_epsilon(tmp_path: Path, recorded: float) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        observe_external_order(repo, order=_external_order(state="canceled", filled=3))
+        record_fee_evidence(repo, [_external_fill(quantity=recorded)], checked_at_ms=NOON, history_complete=True)
+        with pytest.raises(BudgetUnavailable, match="complete execution population"):
+            repo.account_budget(cash=1000, seen_before_ms=NOON)
     finally:
         repo.close()

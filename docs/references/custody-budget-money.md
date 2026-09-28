@@ -41,6 +41,22 @@ New order acknowledgements retain every positive reported cumulative quantity
 and every changed finite quantity exactly after normalization, including
 same-state/time corrections. Existing custody hashes are never rewritten.
 
+External orders keep their current broker state and cumulative filled quantity
+in the existing observation transition, read through the external-order
+projection. Older facts omit those fields and retain their original bytes;
+their cash obligation is unknown until refreshed. Operator acknowledgement is
+review evidence, never cancellation or a cash release. A working or unknown
+external order refuses new spending until the broker proves its outcome.
+A terminal observation also requires an exactly matching retained execution
+population, including partially canceled orders; no quantity epsilon applies.
+The fee evidence boundary supplies normalized external FILL activities to the
+same cash projection, so even a fill that arrives before order reconciliation
+retains its unseen BUY debit. Its first observation controls recognition;
+duplicate polling cannot renew that claim. External sale proceeds are not
+advanced before the cash observation recognizes them. These facts never enter
+a bot's FIFO or commitment. `sqlite/test_budget_claims.py` covers those cases,
+historical serialization, and mirror rebuild with exact Decimal assertions.
+
 Pending entry fee quotes price only the unfilled remainder at the original
 reference price and quote date, through the canonical regulatory model. Filled
 shares belong exclusively to the canonical fee attribution. A remaining order

@@ -95,6 +95,8 @@ def observe_external_order(
         filled_avg_price=expected.filled_avg_price,
         observed_at_ms=expected.observed_at_ms,
         evidence_refs=list(expected.evidence_refs),
+        broker_state=expected.broker_state,
+        filled_quantity=expected.filled_quantity,
     )
     return repo.append_external_order_observation_if_changed(
         expected=expected,
@@ -558,6 +560,8 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         raise ExternalOrderObservationError("external order side must be buy or sell")
     if not math.isfinite(qty) or qty < 0:
         raise ExternalOrderObservationError("external order quantity must be finite and non-negative")
+    if not math.isfinite(order.filled_quantity) or order.filled_quantity < 0:
+        raise ExternalOrderObservationError("external filled quantity must be finite and non-negative")
     if not order_type:
         raise ExternalOrderObservationError("external order type must be non-empty")
     for price_name, price in (
@@ -590,6 +594,8 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         acknowledged_at_ms=None,
         ack_operator=None,
         evidence_refs=(broker_order_id,),
+        broker_state=order.status.strip().lower() or None,
+        filled_quantity=order.filled_quantity,
     )
 
 

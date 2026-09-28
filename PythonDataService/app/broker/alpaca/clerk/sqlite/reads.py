@@ -97,6 +97,10 @@ _EXTERNAL_ORDER_SELECT = (
     "WHERE ct.broker_order_id = eo.broker_order_id "
     "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' "
     "ORDER BY ct.sequence DESC LIMIT 1) AS acknowledgement_recorded_at_ms"
+    + ", (SELECT ct.facts_json FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+    "ORDER BY ct.sequence DESC LIMIT 1) AS latest_observation_facts"
 )
 
 
@@ -325,6 +329,7 @@ def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
     evidence_refs = json.loads(values.pop("evidence_refs_json"))
     if not isinstance(evidence_refs, list) or not all(isinstance(item, str) for item in evidence_refs):
         raise ValueError("external order evidence_refs_json must be a string list")
+    latest = json.loads(row["latest_observation_facts"]) if row["latest_observation_facts"] else {}
     return ExternalOrderResource(
         **values,
         evidence_refs=tuple(evidence_refs),
@@ -332,6 +337,8 @@ def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
         acknowledgement_sequence=row["acknowledgement_sequence"],
         observation_recorded_at_ms=row["observation_recorded_at_ms"],
         acknowledgement_recorded_at_ms=row["acknowledgement_recorded_at_ms"],
+        broker_state=latest.get("broker_state"),
+        filled_quantity=latest.get("filled_quantity"),
     )
 
 

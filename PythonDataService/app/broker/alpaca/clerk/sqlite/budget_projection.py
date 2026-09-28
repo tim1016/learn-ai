@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import sqlite3
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.envelope_reservations import entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+from app.broker.alpaca.clerk.sqlite.reads import external_orders
 from app.broker.contract.models import OrderSide
+
+if TYPE_CHECKING:
+    from app.services.alpaca_fee_attribution import FeeFill
 
 
 class BudgetUnavailable(ValueError):
@@ -31,9 +36,44 @@ class BudgetFees(Protocol):
     @property
     def unresolved(self) -> tuple[str, ...]: ...
 
+    @property
+    def external_fills(self) -> tuple[FeeFill, ...]: ...
+
     def total_for(self, subject_id: str) -> Decimal: ...
 
     def unobserved_cash_claim(self, *, cash_seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None, subject_id: str | None = None) -> Decimal: ...
+
+
+@money_context()
+def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_before_ms: int) -> Decimal:
+    """Price normalized external BUY facts once, retaining unknown obligations.
+
+    Formula: sum(qty * price for external BUYs not yet inside observed cash).
+    Reference: PRD #2540 all-disjoint-claims contract; observation #2441/#2442.
+    Canonical implementation: this composition over the fee evidence's exact
+      activity population; no external balance or second execution ledger.
+    Validated against: sqlite/test_budget_claims.py external cases (exact).
+    """
+    quantities: dict[str, Decimal] = {}
+    unseen = ZERO
+    for fill in fees.external_fills:
+        key = fill.native_order_id
+        assert key is not None  # The fee evidence boundary proves identity.
+        quantities[key] = quantities.get(key, ZERO) + fill.quantity
+        if fill.side is OrderSide.BUY and fill.observed_at_ms >= seen_before_ms:
+            unseen += fill.quantity * fill.price
+    for order in external_orders(conn):
+        if order.broker_state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES or order.filled_quantity is None:
+            raise BudgetUnavailable(
+                "A reviewed external order still has a working or unknown cash obligation. "
+                "Resolve it at Alpaca and refresh account order evidence before assigning or spending a budget."
+            )
+        if quantities.get(order.broker_order_id, ZERO) != normalize_money(order.filled_quantity):
+            raise BudgetUnavailable(
+                "The external order's complete execution population is unavailable. "
+                "Reconcile account activities before assigning or spending a budget."
+            )
+    return unseen
 
 
 def project_account_budget(
@@ -76,6 +116,7 @@ def project_account_budget(
     claims = entry_cash_claims(conn, seen_before_ms=seen_before_ms)
     records = effective_fill_records(conn, account_id=account_id)
     with money_context():
+        external_claim = _external_cash_claim(conn, fees, seen_before_ms=seen_before_ms)
         # A terminal manual effect ends the working-order uncertainty, not
         # the debit's overlap with cash. Effective fill lineage supplies both
         # corrected economics and the original observation boundary.
@@ -109,6 +150,6 @@ def project_account_budget(
             ))
         return account_budget(
             cash=cash, deployments=budgets,
-            order_claims=manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
+            order_claims=external_claim + manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
             fee_claims=fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms),
         )

@@ -546,9 +546,17 @@ class ExternalOrderObservedFacts:
     filled_avg_price: float | None
     observed_at_ms: int
     evidence_refs: list[str]
+    # Earlier observations did not retain this proof. Missing means unknown,
+    # never that an acknowledged external order stopped claiming cash.
+    broker_state: str | None = None
+    filled_quantity: float | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        for key in ("broker_state", "filled_quantity"):
+            if payload[key] is None:
+                payload.pop(key)
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExternalOrderObservedFacts:
