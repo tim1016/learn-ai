@@ -592,6 +592,16 @@ async def test_a_refusal_before_the_key_names_a_bot_settles_the_key(
     assert recovered.status_code == 404
 
 
+async def test_the_bot_that_cannot_be_named_carries_its_own_reason_code(budgeted, monkeypatch: pytest.MonkeyPatch) -> None:
+    _cannot_name(monkeypatch)
+
+    async with _client(budgeted.app) as client:
+        refused = await client.post(_BOTS, json=_BUDGETED)
+
+    assert refused.json()["detail"]["message"] == "This bot cannot be named."
+    assert refused.json()["detail"]["reason_code"] == "deploy_bot_name_unavailable"
+
+
 async def test_a_refusal_before_renaming_a_key_whose_bot_never_committed_settles_the_key(
     budgeted, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

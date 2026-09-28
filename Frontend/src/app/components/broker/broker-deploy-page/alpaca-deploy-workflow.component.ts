@@ -105,6 +105,12 @@ function settlesSubmission(error: unknown): boolean {
   return error instanceof HttpErrorResponse && error.error?.detail?.submission_settled === true;
 }
 
+/** Deploy refusals the backend words as a 409 `conflict` that are no account
+ * change, retyped by their reason code so Confirm titles them truthfully. */
+const REFUSAL_OUTCOMES: Readonly<Record<string, DeployError['outcome']>> = {
+  deploy_bot_name_unavailable: 'blocked',
+};
+
 /** What Confirm says about a Deploy that no receipt answered for. */
 function deployNotice(
   outcome: DeployError['outcome'],
@@ -1671,11 +1677,12 @@ export class AlpacaDeployWorkflowComponent {
         message?: string;
         why?: string | null;
         next_action?: string | null;
+        reason_code?: string | null;
       } | undefined;
       if (detail?.message) {
         const outcome = unsettled
           ? 'unknown'
-          : detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
+          : REFUSAL_OUTCOMES[detail.reason_code ?? ''] ?? detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
         return {
           outcome,
           title: this.errorTitle(outcome),

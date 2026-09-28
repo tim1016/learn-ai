@@ -240,6 +240,8 @@ _SENDING: dict[str, DeploySubmission | None] = {}
 #: leaves the key's first Deploy to its recovery read.
 SUBMISSION_IN_FLIGHT = "deploy_submission_in_flight"
 SUBMISSION_SETTINGS_CONFLICT = "deploy_submission_settings_conflict"
+#: No valid name can be authored for the bot: a refusal, not an account change.
+BOT_NAME_UNAVAILABLE = "deploy_bot_name_unavailable"
 
 
 def _settled(error: PanelDataError) -> PanelDataError:
@@ -291,7 +293,10 @@ def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
 
 
 def _unnamed(exc: BotNameUnavailable) -> PanelRunnerError:
-    return PanelRunnerError("This bot cannot be named.", detail=str(exc), next_action=exc.next_action, http_status=409)
+    return PanelRunnerError(
+        "This bot cannot be named.", detail=str(exc), next_action=exc.next_action, http_status=409,
+        reason_code=BOT_NAME_UNAVAILABLE,
+    )
 
 
 def _earlier_claim(ledger: DeploySubmissionLedger, account_id: str, request: AlpacaDeploySubmission) -> DeploySubmission | None:

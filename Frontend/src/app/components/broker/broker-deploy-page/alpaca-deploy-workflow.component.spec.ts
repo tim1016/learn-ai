@@ -571,6 +571,26 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(service.getDeploySubmission).not.toHaveBeenCalled();
   });
 
+  it('titles a bot that cannot be named as a refused Deploy, not an account change', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({
+      status: 409,
+      error: { detail: {
+        outcome: 'conflict', receipt_id: null, recorded_at_ms: 1_700_000_000_002, message: 'This bot cannot be named.',
+        why: 'More than 99 SPY bots of this strategy were deployed this minute.', next_action: 'Try again in a minute.',
+        admission: null, reason_code: 'deploy_bot_name_unavailable', submission_settled: true,
+      } },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Deploy refused' });
+    expect(within(refusal).getByText('This bot cannot be named.')).toBeTruthy();
+    expect(within(refusal).getByText('More than 99 SPY bots of this strategy were deployed this minute.')).toBeTruthy();
+    expect(within(refusal).getByText('Next: Try again in a minute.')).toBeTruthy();
+    expect(within(refusal).queryByRole('button', { name: 'Check deployment status' })).toBeNull();
+  });
+
   // Each of these is a refusal the backend leaves unsettled: the first bot
   // may have started, or the key's earlier Deploy could not be read. The
   // page keeps the key, says the outcome is unknown in the backend's words,
