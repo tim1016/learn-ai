@@ -494,19 +494,8 @@ is the durable index, the issue is the working brief.
 Evidence and proposed sequencing are in the
 [Paper / Live workflow audit](audits/alpaca-paper-live-workflow-2026-09-09.md).
 The audit distinguishes defects from deliberately deferred capabilities; it
-does not change the accepted arming or custody policy.
+is historical; current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
-- **Guarded daily-loss-hold release has no frontend control (medium, F5).**
-  The authenticated `live-envelope/loss-hold/clear` endpoint and its guarded
-  re-observation exist, but only the generated contract references the
-  endpoint in Angular. The banner reports the hold without a recovery
-  control. Expose the existing operation without bypassing its refusal
-  while loss or unknown evidence remains.
-- **Current mode explanations disagree (medium, F6).** The operator manual
-  still calls Live unreachable and misstates the evidence-only override;
-  the Paper deploy card calls Live unimplemented; ADR 0059 and `CONTEXT.md`
-  retain mandatory-Shadow wording beside the September 9 optional-rehearsal
-  amendment. Current authority and operator copy need reconciliation.
 
 ## 13. Data Lab workspace redesign residuals (2026-09-12)
 
