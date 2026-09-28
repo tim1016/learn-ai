@@ -47,31 +47,26 @@
   gap: var(--space-3);
 }
 
-.settings__connection {
+.settings__connection-card {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
 }
 
-.settings__connection > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-}
-
 .settings__connection-title {
-  display: inline;
   margin: 0;
+  padding: var(--space-2) var(--space-3) 0;
   color: var(--text-primary);
   font-size: var(--fs-md);
 }
 
-.settings__connection-hint {
+// The summary keeps its default display: its native marker is the fold's
+// open/closed cue, and a flex summary drops it.
+.settings__connection > summary {
+  padding: var(--space-1) var(--space-3) var(--space-2);
   color: var(--text-secondary);
   font-size: var(--fs-sm);
+  cursor: pointer;
 }
 
 .settings__connection-body {

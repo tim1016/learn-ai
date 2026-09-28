@@ -42,6 +42,7 @@ type Outcome = keyof typeof OUTCOME_COPY;
 
 type AccountRiskState = components['schemas']['AccountRiskStateResponse'];
 type ReviewedRisk = components['schemas']['AccountRiskClearRequest'];
+type LossHold = components['schemas']['AlpacaLiveVerdict']['loss_hold'];
 
 let nextFieldId = 0;
 
@@ -51,7 +52,8 @@ let nextFieldId = 0;
  *
  * The section re-reads itself when the lane's loss-hold state changes — the
  * shell's live verdict, polled for every lane, carries it — so a hold raised
- * while Settings is open appears without a reload (#2552).
+ * while Settings is open appears without a reload (#2552). A change that lands
+ * while an action is in flight is kept and re-read once the action settles.
  */
 @Component({
   selector: 'app-configuration-risk-limits',
@@ -99,37 +101,53 @@ export class ConfigurationRiskLimitsComponent {
   protected readonly fields = form(this.draft);
   protected readonly busy = linkedSignal(() => { this.clerkId(); return false; });
   protected readonly refusal = linkedSignal<string, ConfigurationRefusal | null>({ source: this.clerkId, computation: () => null });
-  protected readonly outcome = linkedSignal<string, Outcome | null>({ source: this.clerkId, computation: () => null });
+  /** The hold status this section shows, per lane. */
+  private readonly shownEntryState = computed(
+    () => ({ clerkId: this.clerkId(), entryState: this.state.hasValue() ? this.state.value().entry_state : null }),
+    { equal: (a, b) => a.clerkId === b.clerkId && a.entryState === b.entryState },
+  );
+  /** What the last action changed. A later read that finds another hold status
+   * retires it, so "Applied…" never sits beside a hold raised since; a re-read
+   * that confirms the same status (the verdict catching up with Clear hold)
+   * keeps it. */
+  protected readonly outcome = linkedSignal({ source: this.shownEntryState, computation: (): Outcome | null => null });
   protected readonly valid = computed(() => {
     const draft = this.draft();
     return draft.loss_fraction !== null && draft.loss_fraction > 0 && draft.loss_fraction < 1
       && draft.loss_usd !== null && draft.loss_usd > 0;
   });
-  /** A limit is in force, so an undecided state is about the account's evidence
-   * and re-reading can settle it; without one, setting a limit is the fix. */
-  protected readonly limitInForce = computed(() =>
-    this.state.hasValue() && this.state.value().loss_fraction !== null && this.state.value().loss_usd !== null,
-  );
 
   /** This lane's loss-hold state from the shell's live verdict, or `null`
-   * before it has been read. */
+   * while it is unread — not read yet, or its last read failed. */
   private readonly lossHold = computed(
     () => this.liveVerdicts.stateFor(this.clerkId()).verdict?.loss_hold ?? null,
   );
+  /** A loss-hold change this section's read has not caught up with yet. */
+  private readonly holdChanged = linkedSignal({ source: this.clerkId, computation: () => false });
 
   constructor() {
-    let seen: { readonly clerkId: string; readonly hold: string | null } | null = null;
+    let seen: { readonly clerkId: string; readonly hold: LossHold } | null = null;
     effect(() => {
-      const next = { clerkId: this.clerkId(), hold: this.lossHold() };
+      const clerkId = this.clerkId();
+      const hold = this.lossHold();
+      // An unread verdict says nothing about the hold, so the last known state
+      // stands: clear, then a failed read, then held is still a change.
+      if (hold === null) return;
       const previous = seen;
-      seen = next;
-      // Only a change on the same lane, between two known states, is news:
-      // a new lane re-reads through `state` itself, and the verdict's first
-      // arrival says nothing this section's own read did not.
-      if (previous === null || previous.clerkId !== next.clerkId) return;
-      if (previous.hold === null || next.hold === null || previous.hold === next.hold) return;
+      seen = { clerkId, hold };
+      // Only a change on the same lane is news: a new lane re-reads through
+      // `state` itself, and the verdict's first arrival says nothing this
+      // section's own read did not.
+      if (previous === null || previous.clerkId !== clerkId || previous.hold === hold) return;
+      untracked(() => this.holdChanged.set(true));
+    });
+    // Re-read once no action is in flight: a change that lands mid-action waits
+    // for it instead of being dropped.
+    effect(() => {
+      if (!this.holdChanged() || this.busy()) return;
       untracked(() => {
-        if (!this.busy()) this.state.reload();
+        this.holdChanged.set(false);
+        this.state.reload();
       });
     });
   }

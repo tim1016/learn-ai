@@ -55,6 +55,20 @@ interface ClerkRevisionRef extends RevisionRef {
   readonly clerkId: string;
 }
 
+/** The effective revision as this page read it — the one read both the lane's
+ * mode and the defaults for new bots come from. `none`: no profile is in use. */
+type EffectiveRead =
+  | { readonly kind: 'reading' | 'failed' | 'none' }
+  | { readonly kind: 'read'; readonly revision: BrokerProfileRevision };
+
+/**
+ * Whether this lane's account is Live. `unknown` is a failed read, said out
+ * loud; while `reading` or `unknown`, neither the Live-only account stage nor
+ * the Paper-only handoff script is offered, so a failed read never quietly
+ * shows the other lane's content.
+ */
+type LaneMode = 'live' | 'not_live' | 'unknown' | 'reading';
+
 function reviewRef(params: { get(name: string): string | null }): RevisionRef | null {
   const profileId = params.get('profileId');
   const revision = Number(params.get('revision'));
@@ -317,21 +331,38 @@ export class AlpacaSettingsPageComponent {
     () => this.currentSelection()?.effective_account_id ?? null,
   );
 
-  /** The account stage (Shadow → Review → Live) belongs to a Live account only. */
-  protected readonly isLiveLane = computed(() => this.effectiveEndpointMode() === 'live');
+  private readonly effectiveRead = computed((): EffectiveRead => {
+    const selection = this.currentSelection();
+    if (selection === null) return { kind: this.selection.error() ? 'failed' : 'reading' };
+    if (selection.effective_profile_id === null) return { kind: 'none' };
+    if (this.effectiveRevision.error()) return { kind: 'failed' };
+    if (!this.effectiveRevision.hasValue()) return { kind: 'reading' };
+    return { kind: 'read', revision: this.effectiveRevision.value() };
+  });
+
+  /** The account stage (Shadow → Review → Live) belongs to a Live account only;
+   * the Paper → Live handoff script to one that is not Live. */
+  protected readonly laneMode = computed((): LaneMode => {
+    const read = this.effectiveRead();
+    switch (read.kind) {
+      case 'read': return read.revision.endpoint_mode === 'live' ? 'live' : 'not_live';
+      case 'none': return 'not_live';
+      case 'failed': return 'unknown';
+      case 'reading': return 'reading';
+    }
+  });
 
   /** The defaults Deploy starts a new bot's exit terms from: the effective
    * revision's own `default_exit_terms`, the same values the Deploy read
    * (`bots_deploy_read` → `default_exit_terms`) serves from the bound worker. */
   protected readonly exitDefaults = computed<ExitDefaultsView>(() => {
-    const selection = this.currentSelection();
-    if (selection === null) {
-      return this.selection.error() ? { kind: 'unavailable' } : { kind: 'loading' };
+    const read = this.effectiveRead();
+    switch (read.kind) {
+      case 'failed': return { kind: 'unavailable' };
+      case 'reading': return { kind: 'loading' };
+      case 'none': return { kind: 'none' };
     }
-    if (selection.effective_profile_id === null) return { kind: 'none' };
-    if (this.effectiveRevision.error()) return { kind: 'unavailable' };
-    if (!this.effectiveRevision.hasValue()) return { kind: 'loading' };
-    const revision = this.effectiveRevision.value();
+    const revision = read.revision;
     const profile = this.profiles.hasValue()
       ? this.profiles.value().find((entry) => entry.profile_id === revision.profile_id)
       : undefined;

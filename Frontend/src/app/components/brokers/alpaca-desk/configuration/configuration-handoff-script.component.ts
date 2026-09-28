@@ -102,7 +102,7 @@ export function withWorkerExports(script: string, restartCommand: string): strin
  * in this lane's own worker-restart export lines (see `withWorkerExports`)
  * before the operator ever copies or reads it. Those exports come from the
  * same desk read the switch guide's restart command does
- * (`AlpacaConfigurationPageComponent.restartCommand`, sourced from
+ * (`AlpacaSettingsPageComponent.restartCommand`, sourced from
  * `deskState.value().restart_command`) — the process where compose actually
  * injected `FLEET_WORKER_SERVICE`, never composed here.
  *

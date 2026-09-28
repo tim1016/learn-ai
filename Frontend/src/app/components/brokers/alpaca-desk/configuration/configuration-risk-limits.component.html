@@ -15,7 +15,7 @@
           under, so changing the limit does not clear it. Clearing checks fresh account evidence
           against that limit and the current one.</p>
         <button type="button" [disabled]="busy()" (click)="clearHold()">Clear hold</button>
-      } @else if (current.entry_state === 'unknown' && limitInForce()) {
+      } @else if (current.entry_state === 'unknown' && !current.limit_missing) {
         <button type="button" [disabled]="busy() || state.isLoading()" (click)="checkAgain()">Check again</button>
       }
     </div>

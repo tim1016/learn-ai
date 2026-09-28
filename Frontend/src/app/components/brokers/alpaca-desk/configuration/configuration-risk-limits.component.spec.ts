@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
@@ -16,7 +17,7 @@ type LossHold = components['schemas']['AlpacaLiveVerdict']['loss_hold'];
 const state: State = {
   account_id: 'PA-RISK', risk_revision: 3, selection_generation: 7,
   loss_fraction: .02, loss_usd: 100, applied_at_ms: 1788876060000,
-  entry_state: 'ready', detail: 'These limits apply to new entries immediately.',
+  entry_state: 'ready', detail: 'These limits apply to new entries immediately.', limit_missing: false,
   hold_loss_limit_usd: null, hold_session_start_ms: null, hold_policy_revision: null,
 };
 const HELD: State = { ...state, entry_state: 'held', detail: 'A standing loss hold still blocks new entries.',
@@ -29,9 +30,10 @@ const REFUSAL = new HttpErrorResponse({ status: 409, error: {
   detail: { reason: 'revision_conflict', message: 'Risk limits changed since review.', next_step: 'Reload and review again.' },
 } });
 
-async function setup(initial: State = state) {
-  // The lane's loss-hold state as the shell's live verdict carries it.
-  const lossHold = signal<LossHold | null>('clear');
+async function setup(initial: State = state, initialHold: LossHold | null = 'clear') {
+  // The lane's loss-hold state as the shell's live verdict carries it; `null`
+  // is a verdict that has not been read, or whose read failed.
+  const lossHold = signal<LossHold | null>(initialHold);
   const service = {
     // A fresh object per call, like a real HTTP round-trip: reusing the same
     // reference would hide a re-seeding bug behind the resource's own
@@ -133,6 +135,54 @@ describe('ConfigurationRiskLimitsComponent (Daily loss limit)', () => {
     expect(service.readRiskLimits).toHaveBeenCalledTimes(2);
   });
 
+  it('still shows a hold raised after a failed verdict read (clear, unread, held)', async () => {
+    // A failed verdict read reports no hold state at all. It says nothing about
+    // the hold, so the next known state is still compared with the last one.
+    const { service, lossHold } = await setup();
+    service.readRiskLimits.mockImplementation(async () => ({ ...HELD }));
+
+    lossHold.set(null);
+    TestBed.tick();
+    lossHold.set('held');
+
+    expect(await screen.findByRole('button', { name: 'Clear hold' })).toBeTruthy();
+    expect(screen.getByText('On hold.')).toBeTruthy();
+    expect(service.readRiskLimits).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a hold raised while Apply is in flight, re-reads once it settles, and retires "Applied."', async () => {
+    const { service, lossHold } = await setup();
+    let settle: (value: State) => void = () => undefined;
+    service.applyRiskLimits.mockImplementation(() => new Promise<State>((resolve) => { settle = resolve; }));
+    await userEvent.click(screen.getByRole('button', { name: APPLY }));
+    await waitFor(() => expect(service.applyRiskLimits).toHaveBeenCalledOnce());
+
+    service.readRiskLimits.mockImplementation(async () => ({ ...HELD }));
+    lossHold.set('held');
+    TestBed.tick();
+    expect(service.readRiskLimits).toHaveBeenCalledOnce();
+    settle({ ...state, risk_revision: 4 });
+
+    expect(await screen.findByRole('button', { name: 'Clear hold' })).toBeTruthy();
+    expect(service.readRiskLimits).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('On hold.')).toBeTruthy();
+    expect(screen.queryByText(/^Applied\./)).toBeNull();
+  });
+
+  it('keeps "Hold cleared." when the next verdict confirms the clear', async () => {
+    const { service, lossHold } = await setup(HELD, 'held');
+    await userEvent.click(screen.getByRole('button', { name: 'Clear hold' }));
+    const outcome = await screen.findByText(/^Hold cleared\./);
+    await waitFor(() => expect(document.activeElement).toBe(outcome));
+    service.readRiskLimits.mockImplementation(async () => ({ ...state }));
+
+    lossHold.set('clear');
+
+    await waitFor(() => expect(service.readRiskLimits).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('No hold.')).toBeTruthy();
+    expect(screen.getByText(/^Hold cleared\./)).toBe(outcome);
+  });
+
   it('offers Check again when a limit is in force but the account is not judged yet', async () => {
     const { service } = await setup({ ...state, entry_state: 'unknown',
       detail: 'Alpaca has not confirmed this account’s cash and equity recently, so new entries wait.' });
@@ -145,12 +195,25 @@ describe('ConfigurationRiskLimitsComponent (Daily loss limit)', () => {
 
   it('names the missing limit as the cause, with the form as its fix, when none is set', async () => {
     await setup({ ...state, entry_state: 'unknown', risk_revision: 0, loss_fraction: null, loss_usd: null,
-      applied_at_ms: null, detail: 'No daily loss limit is set for this account, so new entries are refused. Set one below and apply it.' });
+      applied_at_ms: null, limit_missing: true,
+      detail: 'No daily loss limit is set for this account, so new entries are refused. Set one below and apply it.' });
 
     expect(screen.getByText(/Set one below and apply it\./)).toBeTruthy();
     expect(screen.getByText('No limit is in force yet.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
     expect(screen.queryByText(/Refresh account evidence/)).toBeNull();
+  });
+
+  it('takes whether a re-read can settle the state from the backend, not from the limit fields', async () => {
+    // A simulated account keeps no limit of its own, yet what it waits on is
+    // account evidence: the backend says the limit is not what is missing.
+    const { service } = await setup({ ...state, entry_state: 'unknown', risk_revision: 0, loss_fraction: null,
+      loss_usd: null, applied_at_ms: null, limit_missing: false,
+      detail: 'Alpaca has not confirmed this account’s cash and equity recently, so new entries wait.' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    await waitFor(() => expect(service.readRiskLimits).toHaveBeenCalledTimes(2));
   });
 
   it('has no detectable accessibility violations while on hold', async () => {

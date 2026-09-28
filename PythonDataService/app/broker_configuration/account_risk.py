@@ -51,7 +51,7 @@ def read_account_risk_state(
             loss_fraction=None if limits is None else limits.loss_fraction,
             loss_usd=None if limits is None else limits.loss_usd,
             applied_at_ms=None if policy is None else policy.applied_at_ms,
-            entry_state=state, detail=detail,
+            entry_state=state, detail=detail, limit_missing=readiness.limit_missing,
             hold_loss_limit_usd=None if cause is None else cause.loss_limit_usd,
             hold_session_start_ms=None if cause is None else cause.day_start_ms,
             hold_policy_revision=None if cause is None else cause.policy_revision,

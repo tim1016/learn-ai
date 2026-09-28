@@ -947,8 +947,11 @@ describe('Settings sections (PRD #2560)', () => {
     expect(await screen.findByRole('heading', { name: 'Daily loss limit' })).toBeTruthy();
     expect(document.querySelector('.settings__account')?.textContent?.trim()).toBe('Account PA000PAPER');
     expect(connectionFold().open).toBe(false);
-    expect(within(connectionFold().querySelector('summary') as HTMLElement)
-      .getByRole('heading', { name: 'Broker connection' })).toBeTruthy();
+    // The heading sits outside the summary, which keeps its native marker: a
+    // heading inside a summary loses its role.
+    const heading = screen.getByRole('heading', { name: 'Broker connection' });
+    expect(heading.closest('summary')).toBeNull();
+    expect(connectionFold().querySelector('summary [role="heading"], summary h1, summary h2, summary h3, summary h4')).toBeNull();
     // The two meanings of "going Live" are told apart in the fold itself.
     expect(screen.getByText(/It is not the account stage/)).toBeTruthy();
   });
@@ -983,6 +986,39 @@ describe('Settings sections (PRD #2560)', () => {
     await rendered.fixture.whenStable();
 
     expect(screen.queryByRole('heading', { name: 'Account stage' })).toBeNull();
+  });
+
+  it('says a failed mode read on the Live lane out loud, at page level, and offers no Paper-only script', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'live');
+    service.readRevision.mockRejectedValue(new Error('Revision read unavailable'));
+    await renderPage(service);
+
+    const alert = await screen.findByText(/Some configuration details could not be read/);
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(alert.closest('details')).toBeNull();
+    expect(await screen.findByText(/Couldn.t read whether this account is Paper or Live/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Account stage' })).toBeNull();
+
+    service.readRevision.mockImplementation(async () => service.revisions[0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Read the mode again' }));
+
+    expect(await screen.findByRole('heading', { name: 'Account stage' })).toBeTruthy();
+    expect(screen.queryByText(/Couldn.t read whether this account is Paper or Live/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+  });
+
+  it('says a failed selection read at page level, outside the folded Broker connection', async () => {
+    const service = new FakeConfigurationService();
+    service.readSelection.mockRejectedValue(new Error('Selection unavailable'));
+    await renderPage(service);
+
+    const alert = await screen.findByText(/could not read which account this lane is connected to/);
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(alert.closest('details')).toBeNull();
+    expect(connectionFold().open).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
   });
 
   it('keeps the handoff script behind Show script until asked for', async () => {
@@ -1052,7 +1088,7 @@ describe('Settings sections (PRD #2560)', () => {
     await renderPage(service);
     await screen.findByRole('heading', { name: 'Account stage' });
     await screen.findByRole('button', { name: 'Apply daily loss limit' });
-    await userEvent.click(within(connectionFold()).getByText('Broker connection'));
+    await userEvent.click(connectionFold().querySelector('summary') as HTMLElement);
     expect(connectionFold().open).toBe(true);
 
     const results = await axe.run(document.body, {

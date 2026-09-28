@@ -107,6 +107,8 @@ async def test_failed_observation_reports_effective_but_unknown(risk_client: Ris
     assert result.status_code == 200, result.text
     assert result.json()["risk_revision"] == 1
     assert result.json()["entry_state"] == "unknown"
+    # A limit now exists, so the wait is on account evidence a re-read can settle.
+    assert result.json()["limit_missing"] is False
 
 
 async def test_risk_read_rejudges_new_fee_evidence_without_writing_a_hold(risk_client: RiskClient) -> None:
@@ -142,6 +144,7 @@ async def test_an_unapplied_limit_is_named_as_the_cause_not_stale_evidence(risk_
     assert response.status_code == 200, response.text
     state = response.json()
     assert state["entry_state"] == "unknown"
+    assert state["limit_missing"] is True
     assert state["detail"] == (
         "No daily loss limit is set for this account, so new entries are refused. Set one below and apply it."
     )
