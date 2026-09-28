@@ -1598,12 +1598,13 @@ async def _submit_reducing_order(
         if _is_recovery_exit(repo, effect_operation_id) and not broker.bind_latest_recovery_bar(
             reducing.client_order_id,
             symbol=facts.symbol,
+            side=leg.side,
         ):
             _fold_submit_refused(
                 repo,
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
-                why="Shadow recovery has no retained source bar in its send session; no order was sent.",
+                why="The simulation had no current price to fill this recovery at; no order was sent.",
             )
             return None
         _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")

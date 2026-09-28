@@ -43,6 +43,7 @@ from app.services.bot_binding_repository import (
     BotRunOutcomeRecord,
 )
 from app.services.broker_v2_panel import (
+    bot_custody,
     panel_data_source,
     sqlite_panel_source,
     sqlite_roster_status,
@@ -496,7 +497,7 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
 
     monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "SqliteAlpacaClerkFacade", _SyntheticFacade)
+    monkeypatch.setattr(bot_custody, "SqliteAlpacaClerkFacade", _SyntheticFacade)
     monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", real_catalog)
     monkeypatch.setattr(panel_data_source, "read_sqlite_catalog_from_facade", synthetic_catalog)
 

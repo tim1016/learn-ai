@@ -27,7 +27,6 @@ describe('TradesTodayListComponent', () => {
       inputs: {
         fills: [],
         fillCount: 0,
-        feeFidelity: 'none',
         tradingDateMs: null,
       },
     });
@@ -41,7 +40,6 @@ describe('TradesTodayListComponent', () => {
       inputs: {
         fills: [],
         fillCount: null,
-        feeFidelity: 'none',
         tradingDateMs: null,
       },
     });
@@ -57,7 +55,6 @@ describe('TradesTodayListComponent', () => {
       inputs: {
         fills: [],
         fillCount: 2,
-        feeFidelity: 'none',
         tradingDateMs: null,
       },
     });
@@ -71,7 +68,6 @@ describe('TradesTodayListComponent', () => {
     await render(TradesTodayListComponent, {
       inputs: {
         fills: [BUY_FILL, SELL_FILL],
-        feeFidelity: 'per_fill',
         tradingDateMs: null,
       },
     });
@@ -81,16 +77,16 @@ describe('TradesTodayListComponent', () => {
     expect(rows.length).toBe(3);
   });
 
-  it('shows "Fees not reported" when feeFidelity is none', async () => {
+  it('never claims fees are unreported under the fills (H26)', async () => {
     await render(TradesTodayListComponent, {
       inputs: {
         fills: [BUY_FILL, SELL_FILL],
-        feeFidelity: 'none',
         tradingDateMs: null,
       },
     });
 
-    expect(screen.getByText('Fees not reported')).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Fills today' })).toBeTruthy();
+    expect(screen.queryByText(/Fees not reported/i)).toBeNull();
   });
 
   it('bounds the inline rail and opens every fill in the slide-over', async () => {
@@ -101,7 +97,7 @@ describe('TradesTodayListComponent', () => {
       order_ref: `ord-${index}`,
     }));
     await render(TradesTodayListComponent, {
-      inputs: { fills, feeFidelity: 'per_fill', tradingDateMs: null },
+      inputs: { fills, tradingDateMs: null },
     });
 
     const inlineTable = screen.getByRole('table', { name: 'Fills today' });

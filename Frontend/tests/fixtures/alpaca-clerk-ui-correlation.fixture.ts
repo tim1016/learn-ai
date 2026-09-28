@@ -178,7 +178,8 @@ export function panelAtRevision(revision: number): BotPanelView {
       `/api/brokers/alpaca/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}/journal`,
     journal_tail_seq: null,
     actions: [],
-    primary_action_by_lens: { trader: null, operator: null },
+    primary_action: null,
+    exit_terms: null,
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,
@@ -189,6 +190,8 @@ export function panelAtRevision(revision: number): BotPanelView {
     fills_today: 0,
     realized_pnl_today: 0,
     open_pnl: null,
+    open_pnl_usd: null,
+    open_pnl_direction: null,
   };
 }
 

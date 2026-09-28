@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import NoReturn
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
-from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
@@ -86,7 +86,6 @@ from app.services.broker_v2_panel.sqlite_roster_status import (
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     sqlite_clerk_status,
-    sqlite_projection,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -95,6 +94,11 @@ logger = logging.getLogger(__name__)
 
 class SqlitePanelBotNotFound(ValueError):
     """The process registry has a bot absent from active SQLite custody."""
+
+    @classmethod
+    def for_bot(cls, strategy_instance_id: str) -> SqlitePanelBotNotFound:
+        """The owner's words: the storage engine is not the problem, the missing record is."""
+        return cls(f"No custody record exists for bot '{strategy_instance_id}'.")
 
 
 # ── Coherence-retry policy ───────────────────────────────────────────────
@@ -327,21 +331,50 @@ async def read_sqlite_clerk_status(
     broker: str = "alpaca",
     *,
     symbol: str | None = None,
+    facade: SqliteAlpacaClerkFacade | None = None,
 ) -> ClerkStatus | None:
-    facade = active_sqlite_facade(broker)
+    """One authority's Clerk card facts: the account's, or a Dry Run's own ``sim:`` Clerk.
+
+    A Dry Run's card names its simulated account, never the real one it is
+    listed under (hurdle H33).
+    """
+    facade = facade or active_sqlite_facade(broker)
     if facade is None:
         return None
-    projection = await asyncio.to_thread(
-        sqlite_projection,
-        account_id=facade.account_id,
-        strategy_instance_id=None,
-    )
-    if projection is None:
-        raise RuntimeError("The active SQLite Clerk projection is unavailable.")
+    projection = await asyncio.to_thread(_account_projection, facade)
     return sqlite_clerk_status(
         projection,
-        channel_healths=facade.channel_health_snapshot(symbol),
+        channel_healths=_channel_healths(broker, facade, symbol),
     )
+
+
+def _account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProjection:
+    reader = SqliteClerkProjectionReader.from_facade(facade)
+    try:
+        return reader.account_snapshot()
+    finally:
+        reader.close()
+
+
+def _channel_healths(
+    broker: str,
+    facade: SqliteAlpacaClerkFacade,
+    symbol: str | None,
+) -> tuple[ChannelHealth, ...] | None:
+    """The submission channels an authority depends on.
+
+    A Dry Run's simulator gates no channel of its own. It decides on the
+    process's IBKR market data and never opens Alpaca's execution channel, so
+    its card carries that one shared channel and nothing about Alpaca.
+    """
+    own = facade.channel_health_snapshot(symbol)
+    if own is not None or facade.authority_kind != "synthetic":
+        return own
+    account = active_sqlite_facade(broker)
+    shared = None if account is None else account.channel_health_snapshot(symbol)
+    if shared is None:
+        return None
+    return tuple(health for health in shared if health.stream == "market_data")
 
 
 async def read_sqlite_panel_evidence(
@@ -386,10 +419,7 @@ async def read_sqlite_panel_evidence(
                 custody_reader.close()
                 economic_reader.close()
             if projection is None or economics is None:
-                raise SqlitePanelBotNotFound(
-                    f"No SQLite custody projection exists for bot "
-                    f"'{strategy_instance_id}'."
-                )
+                raise SqlitePanelBotNotFound.for_bot(strategy_instance_id)
             snapshot = economics.snapshot
             if (
                 projection.account_id == snapshot.account_id
@@ -409,10 +439,7 @@ async def read_sqlite_panel_evidence(
                 except SqliteCatalogRevisionMismatch:
                     continue
                 if status is None:
-                    raise SqlitePanelBotNotFound(
-                        f"No SQLite bot status exists for bot "
-                        f"'{strategy_instance_id}'."
-                    )
+                    raise SqlitePanelBotNotFound.for_bot(strategy_instance_id)
                 return SqlitePanelEvidence(
                     status=status,
                     projection=projection,
@@ -862,10 +889,18 @@ async def execute_sqlite_panel_action(
     panel: BotPanelView,
     action: PanelAction,
     availability_error: ActionNotAvailableError | None,
+    facade: SqliteAlpacaClerkFacade | None,
     store: IdempotencyStore | None = None,
 ) -> PanelActionResult | None:
-    """Execute through the same policy that authored the presented action."""
-    facade = active_sqlite_facade(broker)
+    """Execute through the same policy that authored the presented action.
+
+    ``facade`` is the authority the bot's panel was read from
+    (``bot_custody``'s one selection): a Dry Run's own
+    ``sim:`` Clerk, whose ports are its simulator, or the account's. Acting
+    anywhere else is how a Dry Run's recovery used to ask the real account
+    about a bot it has never held (hurdle H33). ``None`` means no SQLite
+    authority is selected, and the caller's legacy performers apply.
+    """
     if facade is None:
         return None
     if request.action_id in SQLITE_PANEL_LIFECYCLE_ACTION_IDS:
@@ -923,7 +958,7 @@ async def execute_sqlite_panel_action(
         # commitment.
         if request.concurrency_token != action.concurrency_token:
             raise StaleRevisionError(
-                "The SQLite Clerk projection changed after this action was presented.",
+                "This bot's custody changed after this action was presented.",
                 detail="Refresh the panel and review the current evidence-bound action.",
             )
         if availability_error is not None:
@@ -951,9 +986,7 @@ async def execute_sqlite_panel_action(
 
         context = await asyncio.to_thread(read_context)
         if context is None:
-            raise SqlitePanelBotNotFound(
-                f"No SQLite custody projection exists for bot '{strategy_instance_id}'."
-            )
+            raise SqlitePanelBotNotFound.for_bot(strategy_instance_id)
         return context
 
     try:
@@ -1044,16 +1077,42 @@ async def execute_sqlite_panel_action(
         applied=result.applied,
         revision=panel.revision,
         concurrency_token=action.concurrency_token,
-        message=(
-            f"{action.label} completed."
-            if result.applied
-            else f"{action.label} was already durably recorded."
+        message=_outcome_message(
+            action,
+            applied=result.applied,
+            simulated=facade.authority_kind == "synthetic",
         ),
     )
     await ledger.complete(
         strategy_instance_id, request.action_id, request.idempotency_key, outcome
     )
     return outcome
+
+
+# A Dry Run's recovery happens inside its own simulation, and its receipt says
+# so: a reconciliation there compares the Clerk with the simulator's own
+# records, and a flatten is a simulated sale. Neither ever reaches Alpaca.
+_SIMULATED_OUTCOMES = {
+    "reconcile_now": (
+        "Reconciled against this Dry Run's own simulated records, the only truth a "
+        "simulation has; nothing was checked with Alpaca."
+    ),
+    "execute_safe_flatten": (
+        "Simulated sale recorded at the last price this Dry Run received; "
+        "nothing was sent to Alpaca."
+    ),
+}
+
+
+def _outcome_message(action: PanelAction, *, applied: bool, simulated: bool) -> str:
+    if not applied:
+        return f"{action.label} was already durably recorded."
+    if simulated:
+        return _SIMULATED_OUTCOMES.get(
+            action.action_id,
+            f"{action.label} completed in this Dry Run's simulation; nothing was sent to Alpaca.",
+        )
+    return f"{action.label} completed."
 
 
 __all__ = [

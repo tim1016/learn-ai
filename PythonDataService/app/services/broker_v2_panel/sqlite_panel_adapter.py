@@ -64,7 +64,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
-from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
+from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
 logger = logging.getLogger(__name__)
@@ -137,10 +137,12 @@ def adapt_sqlite_panel(
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
-    recovery_primary_action_id = next(
-        (item.action_id for item in projection.recovery_actions if item.primary),
-        None,
-    )
+    recovery_cure = _recovery_cure(projection, bot_owns_problem=_has_bot_scoped_custody_problem(projection))
+    exposure = {
+        position.symbol: position.attributed_qty
+        for position in projection.positions
+        if position_quantity_is_nonzero(position.attributed_qty)
+    }
     return panel.model_copy(
         update={
             "health": _with_terminal_exposure_notices(panel, projection),
@@ -158,19 +160,17 @@ def adapt_sqlite_panel(
             ),
             "journal_tail_seq": projection.control_revision,
             "actions": actions,
-            "primary_action_by_lens": select_primary_action_by_lens(
+            "primary_action": select_primary_action(
                 actions,
                 panel.health,
-                recovery_primary_action_id=recovery_primary_action_id,
+                holds_position=bool(exposure),
+                recovery_primary_action_id=None if recovery_cure is None else recovery_cure.action_id,
             ),
+            "exit_terms": None if repository is None else repository.exit_terms(projection.strategy_instance_id),
             "readiness_checks": checks,
             "readiness_ready_count": ready_count,
             "readiness_blocked_count": len(checks) - ready_count,
-            "exposure": {
-                position.symbol: position.attributed_qty
-                for position in projection.positions
-                if position_quantity_is_nonzero(position.attributed_qty)
-            },
+            "exposure": exposure,
             "working_orders": _working_orders(
                 panel,
                 projection,
@@ -194,7 +194,7 @@ def adapt_sqlite_panel(
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
             ),
-            "open_pnl": None if economics is None else economics.open_pnl,
+            **open_pnl_fields(None if economics is None else economics.open_pnl),
         }
     )
 
@@ -271,18 +271,29 @@ def _catalog_row_action(
     so renaming one cannot leave a stale literal here silently re-surfacing the
     button.
     """
-    bot_scoped_custody_problem = _has_bot_scoped_custody_problem(projection)
-    if not row_needs_attention and not bot_scoped_custody_problem:
+    bot_owns_problem = _has_bot_scoped_custody_problem(projection)
+    if not row_needs_attention and not bot_owns_problem:
         return None
-    primary = next(
-        (item for item in projection.recovery_actions if item.primary),
-        None,
-    )
+    cure = _recovery_cure(projection, bot_owns_problem=bot_owns_problem)
+    return None if cure is None else _panel_action(cure, projection.control_revision)
+
+
+def _recovery_cure(projection: ClerkProjection, *, bot_owns_problem: bool) -> RecoveryCapability | None:
+    """This bot's recovery cure -- the policy's primary capability -- or ``None``.
+
+    The one answer to "what is this bot's cure?", shared by the roster row and
+    the bot page's primary command. An ``UNCONDITIONAL_RECOVERY_ACTION_IDS``
+    primary is available without reading any custody state, so being primary
+    proves nothing on its own: it is this bot's cure only while the bot owns a
+    custody problem (see ``_catalog_row_action``). Otherwise it stays an
+    ordinary command on the page, never its primary one.
+    """
+    primary = next((item for item in projection.recovery_actions if item.primary), None)
     if primary is None:
         return None
-    if primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS and not bot_scoped_custody_problem:
+    if primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS and not bot_owns_problem:
         return None
-    return _panel_action(primary, projection.control_revision)
+    return primary
 
 
 def adapt_sqlite_catalog(
@@ -833,13 +844,16 @@ def terminal_exposure_notices(
     }) for notice in notices]
 
 
+# Every fix it names is on the bot's own page (hurdle H29): it never sends
+# the owner to the broker outside the app.
 _POSITION_UNVERIFIED = ExposureNoticeView(
     kind="position_unverified",
-    label="Position could not be verified; check the broker",
+    label="Position could not be verified",
     explanation=(
-        "The Clerk cannot currently vouch for what this bot holds -- its authority is not "
-        "healthy or an account or order state is uncertain. The ended run manages nothing, "
-        "so check the position and any working orders at the broker."
+        "The app cannot currently vouch for what this bot holds: its custody record is not "
+        "healthy, or an account or order state is uncertain. The ended run manages nothing. "
+        "Reconcile now re-reads the account at Alpaca; Flatten becomes available once the "
+        "position is proven."
     ),
 )
 _ENTRY_ORDER_WORKING = ExposureNoticeView(

@@ -1,26 +1,29 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { ChannelState } from '../lib/broker-v2-panel.types';
 
 /**
  * Tiny dot indicator for channel health (market_data, execution streams).
  * Green = healthy, amber = unknown, red = unhealthy.
+ *
+ * Decorative only: every host renders the channel's state as visible text
+ * beside the dot, so the dot is hidden from assistive technology rather than
+ * announcing the same state twice (status is never carried by colour alone).
  */
 @Component({
   selector: 'app-channel-health-dot',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { 'aria-hidden': 'true' },
   template: `
     <span
       class="channel-dot"
       [class.channel-dot--healthy]="state() === 'healthy'"
       [class.channel-dot--unhealthy]="state() === 'unhealthy'"
       [class.channel-dot--unknown]="state() === 'unknown'"
-      [attr.aria-label]="label()"
-      role="img"
-      [title]="label()"
     ></span>
   `,
   styles: `
+    :host { display: inline-flex; }
     .channel-dot {
       display: inline-block;
       width: 0.5rem;
@@ -35,9 +38,4 @@ import type { ChannelState } from '../lib/broker-v2-panel.types';
 })
 export class ChannelHealthDotComponent {
   readonly state = input<ChannelState>('unknown');
-  readonly name = input('');
-
-  protected readonly label = computed(
-    () => `${this.name()} channel: ${this.state()}`,
-  );
 }

@@ -24,9 +24,10 @@ export interface InstrumentQuoteView {
 /**
  * Dense, reusable instrument context for a bot detail chart or operator banner.
  *
- * The displayed quote and its source label travel together. Bot-feed health is
- * intentionally presented elsewhere because it does not establish the
- * freshness of this Polygon-backed price snapshot.
+ * The displayed price and its source label travel together: every caller names
+ * where its price came from, so the label can never outlive a change of source.
+ * Bot-feed health is presented elsewhere because it does not establish the
+ * freshness of this price.
  */
 @Component({
   selector: 'app-instrument-quote',
@@ -37,7 +38,7 @@ export interface InstrumentQuoteView {
 })
 export class InstrumentQuoteComponent {
   readonly quote = input.required<InstrumentQuoteView>();
-  readonly sourceLabel = input('Polygon snapshot');
+  readonly sourceLabel = input.required<string>();
 
   protected readonly tickerQuote = computed<TickerQuoteView | null>(() => {
     const quote = this.quote();

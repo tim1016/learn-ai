@@ -2,70 +2,61 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   output,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { accountWorkspaceTabRoute } from '../../../../fleet/account-workspace';
 
+import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
+import {
+  AlpacaLiveVerdictService,
+  verdictModeChip,
+  type LaneModeChip,
+} from '../../../../services/alpaca-live-verdict.service';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
-import type { DeskLens } from '../../../../shared/lens/lens';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type {
   ActionId,
   BotPanelView,
   CurrentRunState,
-  PanelAction,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { MissionVerdictStatusComponent } from '../bot-detail-banner/mission-verdict-status.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
-import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
 import { BotBannerRunTimingComponent } from './bot-banner-run-timing.component';
-import {
-  actionTone,
-  primaryActionForLens,
-} from '../bot-detail-banner/lifecycle-action';
+import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action';
+
+/** The registration exits, offered from the More menu only when armed. */
+const MORE_MENU_ACTION_IDS: readonly ActionId[] = ['retire', 'archive'];
 
 /**
- * The safe-flatten two-step, most-advanced first. `execute_safe_flatten` is
- * only presented once a reducing-order plan exists, so when the backend
- * offers both, the execute step is the one the operator actually wants.
- */
-const SAFE_FLATTEN_ACTION_IDS: readonly ActionId[] = [
-  'execute_safe_flatten',
-  'prepare_safe_flatten',
-];
-
-const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
-  'retire',
-  'archive',
-  ...SAFE_FLATTEN_ACTION_IDS,
-];
-
-/**
- * The one bot-detail banner (ADR 0064 Decision 1 + the Trader/Operator
- * lifecycle-action banners it replaces): which bot this is, the way back,
- * its latest run's Started/Ended times, and its live status/actions, all in
- * one card. Both lenses render the same instance; only `lens` differs which
- * extra content (a live quote, the promoted safe-flatten action, and the
- * richer overflow) appears. The Trader/Operator switch itself lives in the
- * global top bar (`ActiveLensBridgeService`), not here.
+ * The bot page's header (PRD #2560 D2): which bot this is, the way back, its
+ * world, state, strategy and symbol, its run timing, and one primary action.
+ *
+ * WHICH action is primary is the backend's (`BotPanelView.primary_action`):
+ * a recovery cure, Stop for a running bot, or none for a stopped one. A
+ * stopped bot also offers Deploy again, which starts a new bot and never
+ * takes over what this one still holds. The More menu carries the manual
+ * order ticket and the armed registration exits.
+ *
+ * A Dry Run bot is marked as simulated cash, never with the lane's colour
+ * (hurdle H23): its money is not the account's.
  */
 @Component({
   selector: 'app-bot-banner',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AlpacaLaneModeChipComponent,
     AssetIdentityComponent,
     TimestampDisplayComponent,
     RouterLink,
     PanelActionButtonComponent,
     MissionVerdictStatusComponent,
     BotBannerOverflowComponent,
-    PanelInstrumentQuoteComponent,
     BotBannerRunTimingComponent,
   ],
   templateUrl: './bot-banner.component.html',
@@ -77,24 +68,31 @@ export class BotBannerComponent {
   readonly backRoute = input.required<readonly string[]>();
   readonly backLabel = input.required<string>();
   readonly clerkId = input.required<string>();
-  readonly tickerQuote = input<TickerQuoteView | null>(null);
+  /** The account as this workspace routes it; every link the header builds uses it. */
+  readonly routeAccountId = input.required<string>();
   readonly actionPending = input(false);
-  readonly lens = input.required<DeskLens>();
 
   readonly actionRequested = output<PanelActionTrigger>();
   readonly retryRequested = output();
 
+  private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
+
+  protected readonly dryRun = computed(() => this.panel().mode === 'dry_run');
+
+  /** The lane's world, worded once, for a bot that trades the lane's money. */
+  protected readonly worldChip = computed<LaneModeChip | null>(() =>
+    this.dryRun() ? null : verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
+  );
+
   protected readonly deployAgainRoute = computed(() => accountWorkspaceTabRoute({
     broker: this.panel().broker,
     clerkId: this.clerkId(),
-    accountId: this.panel().account_id,
+    accountId: this.routeAccountId(),
   }, 'deploy'));
 
-  protected readonly operator = computed(() => this.lens() === 'operator');
+  protected readonly deployAgainQuery = computed(() => ({ from: this.panel().strategy_instance_id }));
 
-  protected readonly primaryAction = computed(() =>
-    primaryActionForLens(this.panel(), this.operator() ? 'operator' : 'trader'),
-  );
+  protected readonly primaryAction = computed(() => primaryAction(this.panel()));
   protected readonly primaryActionTone = computed(() => actionTone(this.primaryAction()));
 
   /** Screen-reader summary of the latest panel revision, without visual header noise. */
@@ -102,49 +100,19 @@ export class BotBannerComponent {
     () => `Revision ${this.panel().revision}${this.panel().health.running ? ' running' : ' stopped'}`,
   );
 
-  protected readonly manualOrderNavigation = computed(() =>
-    buildManualOrderTicketNavigation(
-      this.panel().broker,
-      this.clerkId(),
-      this.panel().account_id,
-      this.panel().symbol,
+  /** A Dry Run bot trades no account money, so it has no manual ticket to open. */
+  protected readonly manualOrderNavigation = computed(() => this.dryRun() ? null
+    : buildManualOrderTicketNavigation({
+      broker: this.panel().broker,
+      clerkId: this.clerkId(),
+      routeAccountId: this.routeAccountId(),
+      accountId: this.panel().account_id,
+      symbol: this.panel().symbol,
+    }));
+
+  protected readonly moreActions = computed(() =>
+    this.panel().actions.filter(
+      (action) => MORE_MENU_ACTION_IDS.includes(action.action_id) && action.enabled,
     ),
   );
-
-  /**
-   * Exposure stranded by a stop is the state that most needs flatten (#1778,
-   * S6). Operator-only: a running bot's exposure belongs to the strategy,
-   * and the banner must not invite the trader to fight it, and the trader
-   * lens has no flatten action to promote in the first place.
-   *
-   * An armed flatten wins over a blocked one: outside the regular session the
-   * unpriced Execute is disabled and Prepare — where the limit is priced — is
-   * the way to flatten (#2007), so promoting the dead button would hide the
-   * live one in the overflow. With neither armed, the first presented shows
-   * its blocker.
-   */
-  protected readonly promotedFlattenAction = computed<PanelAction | null>(() => {
-    if (!this.operator()) return null;
-    const panel = this.panel();
-    if (panel.health.running) return null;
-    if (!Object.values(panel.exposure).some((quantity) => quantity !== 0)) return null;
-    const presented = SAFE_FLATTEN_ACTION_IDS.flatMap((actionId) =>
-      panel.actions.filter((item) => item.action_id === actionId),
-    );
-    return presented.find((action) => action.enabled) ?? presented[0] ?? null;
-  });
-
-  protected readonly promotedFlattenTone = computed(() =>
-    actionTone(this.promotedFlattenAction()),
-  );
-
-  /** A promoted action is already first-class; listing it twice is noise. */
-  protected readonly overflowActions = computed(() => {
-    if (!this.operator()) return [];
-    const promotedId = this.promotedFlattenAction()?.action_id ?? null;
-    return this.panel().actions.filter(
-      (action) =>
-        OVERFLOW_ACTION_IDS.includes(action.action_id) && action.action_id !== promotedId,
-    );
-  });
 }

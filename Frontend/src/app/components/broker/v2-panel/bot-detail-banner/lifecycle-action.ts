@@ -11,9 +11,9 @@ import type {
 import type { PanelActionTone } from '../panel-action-button/panel-action-button.component';
 
 /**
- * Canonical action-id -> visual tone, shared by both banners and the
- * Operator readiness accordion. WHICH action is primary is backend-owned
- * (`BotPanelView.primary_action_by_lens`, issue #1665); this map only
+ * Canonical action-id -> visual tone, shared by the bot header and the
+ * Checks fold. WHICH action is primary is backend-owned
+ * (`BotPanelView.primary_action`, issues #1665 and #2563); this map only
  * controls presentation tone, which stays frontend-owned per the issue's
  * scope ("Keep visual tone and component layout frontend-owned after the
  * backend has selected the action").
@@ -38,22 +38,19 @@ export function actionTone(action: PanelAction | null): PanelActionTone {
   return ACTION_TONES[action.action_id] ?? 'primary';
 }
 
-type LensPanel = Pick<BotPanelView, 'actions' | 'primary_action_by_lens'>;
-
 /**
- * Resolve one lens's backend-selected banner action (issue #1665).
+ * Resolve the backend-selected primary action (issues #1665, #2563).
  *
- * The backend authors `primary_action_by_lens`; this only looks up the
+ * The backend authors `primary_action`; this only looks up the
  * `PanelAction` object the id names. A missing or dangling reference (an id
  * that does not match any presented action) fails closed to `null` — the
- * banner renders no primary action rather than falling back to a
+ * header renders no primary action rather than falling back to a
  * health-derived guess.
  */
-export function primaryActionForLens(
-  panel: LensPanel,
-  lens: keyof BotPanelView['primary_action_by_lens'],
+export function primaryAction(
+  panel: Pick<BotPanelView, 'actions' | 'primary_action'>,
 ): PanelAction | null {
-  const actionId = panel.primary_action_by_lens[lens];
+  const actionId = panel.primary_action;
   if (actionId === null) return null;
   return panel.actions.find((action) => action.action_id === actionId) ?? null;
 }

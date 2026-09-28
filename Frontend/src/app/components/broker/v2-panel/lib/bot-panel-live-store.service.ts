@@ -141,13 +141,6 @@ export class BotPanelLiveStore {
     }
   }
 
-  clearSelectedTransaction(): void {
-    if (this.selectedRail === null) return;
-    this.transactionRequest += 1;
-    this.selectedRail = null;
-    void this.refresh();
-  }
-
   stop(): void {
     this.generation += 1;
     this.transactionRequest += 1;

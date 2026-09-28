@@ -4784,6 +4784,16 @@
             "title": "Execution Policy",
             "type": "string"
           },
+          "exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "exposure": {
             "additionalProperties": {
               "type": "number"
@@ -4849,8 +4859,60 @@
             ],
             "title": "Open Pnl"
           },
-          "primary_action_by_lens": {
-            "$ref": "#/components/schemas/PrimaryActionByLens"
+          "open_pnl_direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gain",
+                  "loss",
+                  "flat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Direction"
+          },
+          "open_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Usd"
+          },
+          "primary_action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "deploy",
+                  "stop",
+                  "flatten_stop",
+                  "retire",
+                  "archive",
+                  "cancel_order",
+                  "reconcile_now",
+                  "recover_exact_execution_evidence",
+                  "resolve_execution_coverage",
+                  "cancel_verified_working_orders",
+                  "prepare_safe_flatten",
+                  "execute_safe_flatten",
+                  "discharge_attributed_residue",
+                  "stop_bot_decisions",
+                  "open_custody_timeline"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Action"
           },
           "program_build": {
             "$ref": "#/components/schemas/ProgramBuildAdmissionFact"
@@ -4982,7 +5044,7 @@
           "journal_tail_ref",
           "journal_tail_seq",
           "actions",
-          "primary_action_by_lens",
+          "primary_action",
           "readiness_checks",
           "readiness_ready_count",
           "readiness_blocked_count",
@@ -4992,7 +5054,9 @@
           "recent_fills",
           "fills_today",
           "realized_pnl_today",
-          "open_pnl"
+          "open_pnl",
+          "open_pnl_usd",
+          "open_pnl_direction"
         ],
         "title": "BotPanelView",
         "type": "object"
@@ -6841,6 +6905,31 @@
           "panel_path"
         ],
         "title": "BudgetDeployCommandReceipt",
+        "type": "object"
+      },
+      "BudgetStatementLine": {
+        "additionalProperties": false,
+        "description": "One line of a bot's money statement, worded and valued by Python.",
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "total": {
+            "default": false,
+            "title": "Total",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "amount_usd"
+        ],
+        "title": "BudgetStatementLine",
         "type": "object"
       },
       "BuildFromCsvRequest": {
@@ -14111,7 +14200,7 @@
       },
       "DeploymentBudgetView": {
         "additionalProperties": false,
-        "description": "All dollars are authored by Python, including display rounding.",
+        "description": "All dollars are authored by Python, including display rounding.\n\n``headline`` and ``detail`` say where this bot's money stands in the\nowner's words -- holding a position is a normal state, never worded as a\nfault (hurdle H25). ``statement`` is the bot's money as the owner reads\nit, in order: a running bot's budget, results, balance and where the\nbalance is; a stopped bot's balance and what was released and what is\nstill held, which add up to that balance. It is empty unless ``state``\nis ``ready``.\n``segment`` is this bot's slice exactly as the account's money bar draws\nit (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of\nits own; ``None`` when the bot is finished and holds no money any more.",
         "properties": {
           "committed_usd": {
             "anyOf": [
@@ -14133,18 +14222,11 @@
             "title": "Entry Eligible",
             "type": "boolean"
           },
-          "fees_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fees Usd"
+          "headline": {
+            "title": "Headline",
+            "type": "string"
           },
-          "free_usd": {
+          "note": {
             "anyOf": [
               {
                 "type": "string"
@@ -14153,7 +14235,7 @@
                 "type": "null"
               }
             ],
-            "title": "Free Usd"
+            "title": "Note"
           },
           "observed_at_ms": {
             "anyOf": [
@@ -14169,81 +14251,15 @@
             ],
             "title": "Observed At Ms"
           },
-          "outstanding_cash_usd": {
+          "segment": {
             "anyOf": [
               {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outstanding Cash Usd"
-          },
-          "parts": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MoneyParts"
+                "$ref": "#/components/schemas/MoneySegment"
               },
               {
                 "type": "null"
               }
             ]
-          },
-          "pending_orders_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pending Orders Usd"
-          },
-          "position_cost_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Position Cost Usd"
-          },
-          "realized_gross_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Realized Gross Usd"
-          },
-          "released_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Released Usd"
-          },
-          "shortfall_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Shortfall Usd"
           },
           "state": {
             "enum": [
@@ -14253,6 +14269,14 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "statement": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BudgetStatementLine"
+            },
+            "title": "Statement",
+            "type": "array"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -14271,6 +14295,7 @@
         },
         "required": [
           "state",
+          "headline",
           "detail",
           "strategy_instance_id",
           "world"
@@ -16965,6 +16990,53 @@
           "countdown_state_persistable"
         ],
         "title": "ExitEligibilityContract",
+        "type": "object"
+      },
+      "ExitTerms": {
+        "additionalProperties": false,
+        "description": "Immutable stored terms; an upgraded registration may retain an unset allowance.",
+        "properties": {
+          "band_multiple": {
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Band Multiple",
+            "type": "number"
+          },
+          "exit_allowance_bps": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 10000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Allowance Bps"
+          },
+          "provenance": {
+            "enum": [
+              "deployed",
+              "backfilled"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "spread_cap_bps": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Spread Cap Bps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "band_multiple",
+          "spread_cap_bps",
+          "exit_allowance_bps",
+          "provenance"
+        ],
+        "title": "ExitTerms",
         "type": "object"
       },
       "ExitTermsInput": {
@@ -30516,73 +30588,6 @@
           "rho"
         ],
         "title": "PricingPointResult",
-        "type": "object"
-      },
-      "PrimaryActionByLens": {
-        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
-        "properties": {
-          "operator": {
-            "anyOf": [
-              {
-                "enum": [
-                  "deploy",
-                  "stop",
-                  "flatten_stop",
-                  "retire",
-                  "archive",
-                  "cancel_order",
-                  "reconcile_now",
-                  "recover_exact_execution_evidence",
-                  "resolve_execution_coverage",
-                  "cancel_verified_working_orders",
-                  "prepare_safe_flatten",
-                  "execute_safe_flatten",
-                  "discharge_attributed_residue",
-                  "stop_bot_decisions",
-                  "open_custody_timeline"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Operator"
-          },
-          "trader": {
-            "anyOf": [
-              {
-                "enum": [
-                  "deploy",
-                  "stop",
-                  "flatten_stop",
-                  "retire",
-                  "archive",
-                  "cancel_order",
-                  "reconcile_now",
-                  "recover_exact_execution_evidence",
-                  "resolve_execution_coverage",
-                  "cancel_verified_working_orders",
-                  "prepare_safe_flatten",
-                  "execute_safe_flatten",
-                  "discharge_attributed_residue",
-                  "stop_bot_decisions",
-                  "open_custody_timeline"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trader"
-          }
-        },
-        "required": [
-          "trader",
-          "operator"
-        ],
-        "title": "PrimaryActionByLens",
         "type": "object"
       },
       "ProfileCloneRequest": {

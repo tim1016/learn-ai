@@ -29,8 +29,6 @@ export class TradesTodayListComponent {
   readonly fills = input<readonly ChartFillMarker[]>([]);
   /** Backend count; null means the active custody fold cannot provide history. */
   readonly fillCount = input<number | null>(0);
-  /** fee_fidelity from PanelProfile — "none" → "Fees not reported". */
-  readonly feeFidelity = input<'per_fill' | 'aggregate' | 'none'>('none');
   /** Today trading date as int64 ms UTC for display. */
   readonly tradingDateMs = input<number | null>(null);
 
@@ -49,10 +47,6 @@ export class TradesTodayListComponent {
     }
     return 'Fill details are outside the current chart window.';
   });
-
-  protected readonly feesLabel = computed(() =>
-    this.feeFidelity() === 'none' ? 'Fees not reported' : null,
-  );
 
   protected openAllFills(): void {
     this.allFillsOpen.set(true);

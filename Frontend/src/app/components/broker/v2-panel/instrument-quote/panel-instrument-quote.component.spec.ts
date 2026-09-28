@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PanelInstrumentQuoteComponent } from './panel-instrument-quote.component';
 
 describe('PanelInstrumentQuoteComponent', () => {
-  it('labels the displayed Polygon snapshot without borrowing bot-feed freshness', async () => {
+  it('labels the displayed price as the last IBKR bar without borrowing bot-feed freshness', async () => {
     await render(PanelInstrumentQuoteComponent, {
       inputs: {
         symbol: 'NVDA',
@@ -18,7 +18,8 @@ describe('PanelInstrumentQuoteComponent', () => {
 
     expect(await screen.findByText('$181.42')).toBeTruthy();
     expect(screen.getByText('+1.35%')).toBeTruthy();
-    expect(screen.getByText('Polygon snapshot')).toBeTruthy();
+    expect(screen.getByText('IBKR · last bar')).toBeTruthy();
+    expect(screen.queryByText(/Polygon/i)).toBeNull();
     expect(screen.queryByText(/Price data live/i)).toBeNull();
   });
 });

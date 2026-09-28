@@ -45,6 +45,9 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 logger = logging.getLogger(__name__)
 
 SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
+# A no-submit world's recovery fill price: the live IBKR quote it sold (or
+# bought) at, retained as its own stream so it never mixes with a run's bars.
+RECOVERY_QUOTE_PROVIDER = "ibkr.recovery_quote"
 """Indexed durable authority store for retained source observations."""
 
 SOURCE_BAR_STREAM_CAPACITY = 200_000
@@ -438,6 +441,17 @@ class SourceBarLedger:
         for the rows a pre-journal ledger is migrated with.
         """
         return self._append(bar, delivery="live", run_id=run_id)
+
+    def retain_recovery_quote(self, bar: MarketDataBar) -> RetainedSourceBar:
+        """Retain the live quote a stopped Dry Run's recovery EXIT fills at.
+
+        It is evidence for no run -- the bot is stopped -- so it is journaled
+        without one, on its own ``RECOVERY_QUOTE_PROVIDER`` stream. Retaining
+        the same quote twice returns the first retention, as any redelivery.
+        """
+        if bar.feed_id != RECOVERY_QUOTE_PROVIDER:
+            raise ValueError(f"a recovery quote is retained only as {RECOVERY_QUOTE_PROVIDER!r}")
+        return self._append(bar, delivery="live", run_id=None)
 
     def append_history(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
         """Persist one ordered warmup observation before live delivery begins."""
@@ -1170,6 +1184,7 @@ def _same_market_payload(existing: RetainedSourceBar, candidate: RetainedSourceB
 
 
 __all__ = [
+    "RECOVERY_QUOTE_PROVIDER",
     "SOURCE_BAR_LEDGER_FILENAME",
     "SOURCE_BAR_STREAM_CAPACITY",
     "RetainedContinuityEvent",

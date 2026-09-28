@@ -15,7 +15,8 @@ FastAPI event loop").
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from enum import StrEnum
 from typing import TypeVar
 
@@ -86,6 +87,8 @@ from app.schemas.alpaca_clerk_sqlite import (
     safe_flatten_pricing_response,
 )
 from app.schemas.paper_live_experiments import ClerkDecisionEvidencePage
+from app.services.broker_v2_panel.bot_custody import bot_custody_facade
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
@@ -149,6 +152,36 @@ def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
             detail={"reason": "sqlite_account_not_active"},
         )
     return runtime.clerk
+
+
+@asynccontextmanager
+async def _bot_facade(
+    account_id: str,
+    strategy_instance_id: str,
+) -> AsyncIterator[SqliteAlpacaClerkFacade]:
+    """The authority one bot is custodied in, for every per-bot route.
+
+    The route's account is authorized against the account's own authority
+    first; the request then reads and acts where that bot is custodied -- a
+    Dry Run in its own ``sim:`` simulator, whose ports never reach Alpaca --
+    through the same selection its panel and money are read from (hurdle
+    H33). Only entering the selection can be refused as the bot's authority
+    being unavailable; a fault inside the request stays its own.
+    """
+    account = _active_sqlite_facade(account_id)
+    async with AsyncExitStack() as stack:
+        try:
+            facade = await stack.enter_async_context(bot_custody_facade("alpaca", strategy_instance_id))
+        except PanelUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "reason": "bot_custody_authority_unavailable",
+                    "message": str(exc),
+                    "next_step": exc.detail,
+                },
+            ) from exc
+        yield account if facade is None else facade
 
 
 def _conflict_response(exc: DurableConflictError) -> HTTPException:
@@ -224,7 +257,15 @@ async def decision_evidence(
     through_seq: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=500),
 ) -> ClerkDecisionEvidencePage:
-    facade = _active_sqlite_facade(account_id)
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _decision_evidence_page(
+            facade, strategy_instance_id=strategy_instance_id, after_seq=after_seq, through_seq=through_seq, limit=limit,
+        )
+
+
+async def _decision_evidence_page(
+    facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str, after_seq: int, through_seq: int | None, limit: int,
+) -> ClerkDecisionEvidencePage:
     try:
         page = await asyncio.to_thread(
             facade.repository.decision_receipt_page,
@@ -266,7 +307,10 @@ async def start_run(
     # A run started here has no in-process runner holding it, so the
     # reconciliation sweep retires it, fail closed, after one pass's grace
     # (#2369, ``run_ownership``). A bot run is admitted through the bot
-    # registry, which registers the run's owner.
+    # registry, which registers the run's owner. This raw lifecycle route acts
+    # on the account's own authority only, unlike the per-bot reads and
+    # recovery: a Dry Run's runs start and stop inside its simulator through
+    # the registry, and here its identity is unknown, so it is refused.
     repo = await _repo(account_id)
     try:
         submission = await asyncio.to_thread(
@@ -300,6 +344,8 @@ async def stop_run(
 ) -> CommandResponse:
     """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
     caller-supplied, exactly like Start (corrective foundation slice)."""
+    # The account's own authority only, exactly like Start: a Dry Run's run
+    # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
     try:
         submission = await asyncio.to_thread(
@@ -375,15 +421,15 @@ async def get_bot_snapshot(
     )
     if failed is not None:
         return ClerkProjectionResponse.from_projection(failed)
-    facade = _active_sqlite_facade(account_id)
-    try:
-        projection = await asyncio.to_thread(
-            _read_projection,
-            facade,
-            lambda reader: reader.bot_snapshot(strategy_instance_id),
-        )
-    except ProjectionReadError as exc:
-        raise _projection_read_error(exc) from exc
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        try:
+            projection = await asyncio.to_thread(
+                _read_projection,
+                facade,
+                lambda reader: reader.bot_snapshot(strategy_instance_id),
+            )
+        except ProjectionReadError as exc:
+            raise _projection_read_error(exc) from exc
     if projection is None:
         raise HTTPException(
             status_code=404,
@@ -393,7 +439,7 @@ async def get_bot_snapshot(
 
 
 async def _timeline(
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     *,
     strategy_instance_id: str | None,
     order_ref: str | None,
@@ -405,7 +451,6 @@ async def _timeline(
     cursor: str | None,
     page_size: int,
 ) -> TimelinePageResponse:
-    facade = _active_sqlite_facade(account_id)
     try:
         page = await asyncio.to_thread(
             _read_projection,
@@ -449,7 +494,7 @@ async def get_account_timeline(
     sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
     return await _timeline(
-        account_id,
+        _active_sqlite_facade(account_id),
         strategy_instance_id=strategy_instance_id,
         order_ref=order_ref,
         effect_operation_id=effect_operation_id,
@@ -478,22 +523,23 @@ async def get_bot_timeline(
     transition_kind: TimelineTransitionKind | None = None,
     sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
-    return await _timeline(
-        account_id,
-        strategy_instance_id=strategy_instance_id,
-        order_ref=order_ref,
-        effect_operation_id=effect_operation_id,
-        uncertainty_id=uncertainty_id,
-        execution_id=execution_id,
-        transition_kind=transition_kind,
-        sequence=sequence,
-        cursor=cursor,
-        page_size=page_size,
-    )
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _timeline(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            order_ref=order_ref,
+            effect_operation_id=effect_operation_id,
+            uncertainty_id=uncertainty_id,
+            execution_id=execution_id,
+            transition_kind=transition_kind,
+            sequence=sequence,
+            cursor=cursor,
+            page_size=page_size,
+        )
 
 
 async def _check_recovery_action(
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     *,
     strategy_instance_id: str | None,
     body: RecoveryActionCheckRequest,
@@ -508,7 +554,6 @@ async def _check_recovery_action(
     (#2007): market inside the regular session, the live IBKR quote and a
     suggested limit in PRE/POST, or why nothing can be sent.
     """
-    facade = _active_sqlite_facade(account_id)
     try:
         context = await asyncio.to_thread(
             _read_projection,
@@ -571,7 +616,7 @@ async def check_account_recovery_action(
     body: RecoveryActionCheckRequest,
 ) -> RecoveryActionCheckResponse:
     return await _check_recovery_action(
-        account_id,
+        _active_sqlite_facade(account_id),
         strategy_instance_id=None,
         body=body,
     )
@@ -586,11 +631,12 @@ async def check_bot_recovery_action(
     strategy_instance_id: str,
     body: RecoveryActionCheckRequest,
 ) -> RecoveryActionCheckResponse:
-    return await _check_recovery_action(
-        account_id,
-        strategy_instance_id=strategy_instance_id,
-        body=body,
-    )
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _check_recovery_action(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            body=body,
+        )
 
 
 @router.post(
@@ -604,7 +650,13 @@ async def prepare_bot_historical_execution_recovery(
     body: HistoricalExecutionRecoveryPrepareRequest,
 ) -> HistoricalExecutionRecoveryPlanResponse:
     """Read one exact Alpaca paper activity and bind it into a no-write plan."""
-    facade = _active_sqlite_facade(account_id)
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _prepare_historical_execution_recovery(facade, strategy_instance_id=strategy_instance_id, body=body)
+
+
+async def _prepare_historical_execution_recovery(
+    facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str, body: HistoricalExecutionRecoveryPrepareRequest,
+) -> HistoricalExecutionRecoveryPlanResponse:
     try:
         context = await asyncio.to_thread(
             _read_projection,
@@ -665,7 +717,13 @@ async def confirm_bot_historical_execution_recovery(
     body: HistoricalExecutionRecoveryConfirmRequest,
 ) -> HistoricalExecutionRecoveryReceiptResponse:
     """Append only the signed plan's exact evidence and its existing proof result."""
-    facade = _active_sqlite_facade(account_id)
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _confirm_historical_execution_recovery(facade, strategy_instance_id=strategy_instance_id, body=body)
+
+
+async def _confirm_historical_execution_recovery(
+    facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str, body: HistoricalExecutionRecoveryConfirmRequest,
+) -> HistoricalExecutionRecoveryReceiptResponse:
     if (
         body.plan.account_id != facade.account_id
         or body.plan.strategy_instance_id != strategy_instance_id
@@ -691,13 +749,11 @@ async def confirm_bot_historical_execution_recovery(
 
 
 async def _execute_presented_recovery_action(
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     *,
     strategy_instance_id: str | None,
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
-    facade = _active_sqlite_facade(account_id)
-
     async def current_context():
         context = await asyncio.to_thread(
             _read_projection,
@@ -775,7 +831,7 @@ async def execute_account_recovery_action(
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
     return await _execute_presented_recovery_action(
-        account_id,
+        _active_sqlite_facade(account_id),
         strategy_instance_id=None,
         body=body,
     )
@@ -790,11 +846,12 @@ async def execute_bot_recovery_action(
     strategy_instance_id: str,
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
-    return await _execute_presented_recovery_action(
-        account_id,
-        strategy_instance_id=strategy_instance_id,
-        body=body,
-    )
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        return await _execute_presented_recovery_action(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            body=body,
+        )
 
 
 @router.post(

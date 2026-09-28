@@ -323,8 +323,9 @@ async def test_dead_run_reaches_account_desk_and_bell_without_selling(
             "out_of_sync", None, "activity",
         )
         assert desk.status_code == 200
-        # The desk still names the bot's own unverified custody.
-        assert desk.json()["exposure_notices"][0]["label"] == "Position could not be verified; check the broker"
+        # The desk still names the bot's own unverified custody, in the words
+        # that send the owner to the bot's own page, never to the broker (H29).
+        assert desk.json()["exposure_notices"][0]["label"] == "Position could not be verified"
     finally:
         repo.close()
 

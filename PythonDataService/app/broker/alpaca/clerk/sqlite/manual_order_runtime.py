@@ -381,7 +381,8 @@ async def manual_order_capability(
             False,
             ManualOrderUnavailable(
                 "MANUAL_TRADING_NOT_QUALIFIED",
-                "Manual SQLite trading remains disabled until paper qualification is complete.",
+                "Manual orders are switched off for this account. Bots trade normally; manual "
+                "orders are switched on in the server's settings, not from this page.",
             ),
         )
     key = _preview_key(
@@ -393,7 +394,7 @@ async def manual_order_capability(
             False,
             ManualOrderUnavailable(
                 "CONTROL_AUTHENTICATION_UNAVAILABLE",
-                "Manual SQLite trading requires the configured control-plane credential.",
+                "Manual orders need the server's control credential, which is not configured.",
             ),
         )
     account = await read.get_account()

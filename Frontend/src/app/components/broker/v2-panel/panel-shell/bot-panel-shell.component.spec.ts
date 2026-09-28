@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
+import axe from 'axe-core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
-import { of } from 'rxjs';
 import type {
   HistoricalExecutionRecoveryPlan,
   SqliteRecoveryAction,
@@ -12,10 +12,8 @@ import type {
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
-import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
-import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import { BrokersService } from '../../../../services/brokers.service';
-import { MarketDataService } from '../../../../services/market-data.service';
+import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
+import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
@@ -70,7 +68,6 @@ beforeEach(() => {
         clerks: [testLane({ clerk_id: 'clrk_spec' })],
       }),
       { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
-      { provide: MarketDataService, useValue: marketDataMock },
     ],
   });
   chartMocks.createChart.mockClear();
@@ -178,7 +175,8 @@ const PANEL: BotPanelView = {
   journal_tail_ref: '/api/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
-  primary_action_by_lens: { trader: null, operator: null },
+  primary_action: null,
+  exit_terms: null,
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,
@@ -189,6 +187,8 @@ const PANEL: BotPanelView = {
   fills_today: 0,
   realized_pnl_today: 0.0,
   open_pnl: null,
+  open_pnl_usd: null,
+  open_pnl_direction: null,
 };
 
 const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
@@ -331,7 +331,7 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [PREPARE_SAFE_FLATTEN_ACTION],
-    primary_action_by_lens: { trader: null, operator: 'prepare_safe_flatten' },
+    primary_action: 'prepare_safe_flatten',
     readiness_checks: [{
       operation: PREPARE_SAFE_FLATTEN_ACTION.action_id,
       label: PREPARE_SAFE_FLATTEN_ACTION.label,
@@ -359,18 +359,48 @@ const EXECUTE_SAFE_FLATTEN_ACTION = {
   confirmation: null,
 } satisfies PanelAction;
 
-function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
-  const snapshot = safeFlattenSnapshot();
+const ENABLED_EXECUTE = { ...EXECUTE_SAFE_FLATTEN_ACTION, enabled: true, concurrency_token: 'execute-token-18' };
+
+const RECONCILE_ACTION = {
+  action_id: 'reconcile_now', revision: 17, concurrency_token: 'reconcile-token-17', enabled: true,
+  label: 'Reconcile now', explanation: 'Reconcile this bot now.', blockers: [], confirmation: null,
+} satisfies PanelAction;
+
+/** A crashed bot still holding 2.5 QQQ, with no header action (the backend's
+ * rule): the stranded-position warning is where it is flattened (H30–H31). */
+function strandedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
   return {
-    ...snapshot,
-    panel: {
-      ...snapshot.panel,
-      actions: [
-        { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
-        EXECUTE_SAFE_FLATTEN_ACTION,
-      ],
+    ...PANEL,
+    mode: 'trade',
+    revision: 17,
+    exposure: { QQQ: 2.5 },
+    health: {
+      ...PANEL.health,
+      running: false,
+      desired_state: 'STOPPED',
+      desired_state_label: 'Stopped',
+      duty_outcome: {
+        kind: 'CRASHED', reason_code: 'FEED_DEATH', label: 'Crashed: market data stopped',
+        explanation: 'The market-data feed stopped delivering bars.',
+        recorded_at_ms: 1_753_800_000_000, run_id: 'run-current', exposure_notices: [],
+      },
     },
+    actions: [RECONCILE_ACTION],
+    primary_action: null,
+    ...overrides,
   };
+}
+
+/** The stranded bot as the extended-hours flatten sees it: Prepare re-mints
+ * each pass, and Execute waits unpriced until the owner sets a limit (#2007). */
+function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
+  return liveSnapshot(strandedPanel({
+    actions: [
+      RECONCILE_ACTION,
+      { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
+      EXECUTE_SAFE_FLATTEN_ACTION,
+    ],
+  }));
 }
 
 function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
@@ -378,7 +408,7 @@ function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [HISTORICAL_RECOVERY_ACTION],
-    primary_action_by_lens: { trader: null, operator: 'recover_exact_execution_evidence' },
+    primary_action: 'recover_exact_execution_evidence',
     readiness_checks: [{
       operation: HISTORICAL_RECOVERY_ACTION.action_id,
       label: HISTORICAL_RECOVERY_ACTION.label,
@@ -399,7 +429,7 @@ function custodyTimelineSnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [OPEN_CUSTODY_TIMELINE_ACTION],
-    primary_action_by_lens: { trader: null, operator: 'open_custody_timeline' },
+    primary_action: 'open_custody_timeline',
     readiness_checks: [{
       operation: OPEN_CUSTODY_TIMELINE_ACTION.action_id,
       label: OPEN_CUSTODY_TIMELINE_ACTION.label,
@@ -471,7 +501,56 @@ function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
   };
 }
 
+const BUDGET_RESULTS = [
+  { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+  { label: 'Realized gains and losses', amount_usd: '0.00' },
+  { label: 'Fees', amount_usd: '-0.01' },
+  { label: 'Balance', amount_usd: '999.99', total: true },
+];
+
+const RUNNING_BUDGET: DeploymentBudgetView = {
+  state: 'ready',
+  headline: 'Holding its position',
+  detail: 'Its next entry waits until this position is sold.',
+  strategy_instance_id: 'sid-001',
+  world: 'real_paper',
+  observed_at_ms: 1_753_800_000_000,
+  segment: {
+    kind: 'bot', strategy_instance_id: 'sid-001', label: 'sid-001', amount_usd: '999.99', share_bps: 10000, palette_index: 0,
+    parts: {
+      in_shares_usd: '764.71', in_shares_bps: 7647,
+      pending_usd: '0.00', pending_bps: 0,
+      free_usd: '235.28', free_bps: 2353,
+    },
+  },
+  statement: [
+    ...BUDGET_RESULTS,
+    { label: 'In shares, at cost', amount_usd: '764.71' },
+    { label: 'Waiting in entry orders', amount_usd: '0.00' },
+    { label: 'Free to trade', amount_usd: '235.28' },
+  ],
+  note: 'The budget limits new entries. Market fills and losses can go past it.',
+};
+
+const STOPPED_BUDGET: DeploymentBudgetView = {
+  ...RUNNING_BUDGET,
+  headline: 'Stopped · still holds shares',
+  detail: 'Its free budget was released when it stopped. The money in its shares comes back when they are sold.',
+  segment: {
+    kind: 'stopped', strategy_instance_id: 'sid-001', label: 'held by stopped bot sid-001', amount_usd: '764.71',
+    share_bps: 10000, released_usd: '235.28', still_claimed_usd: '0.00', palette_index: 0,
+  },
+  statement: [
+    ...BUDGET_RESULTS,
+    { label: 'Released at stop', amount_usd: '235.28' },
+    { label: 'Still in shares, at cost', amount_usd: '764.71' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+  ],
+  note: null,
+};
+
 const mockService = {
+  getBudget: vi.fn().mockResolvedValue(RUNNING_BUDGET),
   getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
   getPanel: vi.fn().mockResolvedValue(PANEL),
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
@@ -586,38 +665,6 @@ const brokersMock = {
   } satisfies SqliteRecoveryActionCheck),
 };
 
-const marketDataMock = {
-  getStockSnapshot: vi.fn().mockReturnValue(of({
-    success: true,
-    snapshot: {
-      ticker: 'QQQ',
-      day: { open: 480, high: 482, low: 478, close: 481.42, volume: 1, vwap: 480 },
-      prevDay: null,
-      min: null,
-      todaysChange: 2.42,
-      todaysChangePercent: 0.51,
-      updated: 1_753_800_001_000,
-    },
-    error: null,
-  })),
-};
-
-// The switch itself now lives in the global top bar, outside this
-// component's own render tree (ActiveLensBridgeService); this mirrors what
-// it does — call the registered host's own select() — rather than driving
-// the query param through `Router.navigate` directly, which a test that
-// spies on `Router.navigate` for an unrelated assertion would neuter.
-async function switchLens(
-  fixture: ComponentFixture<BotPanelShellComponent>,
-  lens: 'trader' | 'operator',
-): Promise<void> {
-  const bridge = TestBed.inject(ActiveLensBridgeService);
-  await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
-  bridge.host()?.select(lens);
-  await fixture.whenStable();
-  fixture.detectChanges();
-}
-
 function openDisclosure(label: string): void {
   const details = screen.getByText(label).closest('details');
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
@@ -639,8 +686,8 @@ function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActi
   };
 }
 
-/** Renders the shell with a single "Stop" action available on the trader
- * lens, so the fence tests only need to click one button. */
+/** Renders the shell with a single "Stop" action in its header, so the fence
+ * tests only need to click one button. */
 async function renderShell(
   overrides: {
     directory?: FleetDirectoryDouble;
@@ -658,7 +705,7 @@ async function renderShell(
     getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
       ...PANEL,
       actions: [STOP_ACTION],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
   };
@@ -682,8 +729,6 @@ async function renderShell(
 describe('BotPanelShellComponent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // The panel now shares the desk's stored lens preference; a test that
-    // switched lenses must not leak that choice into the next render.
     localStorage.clear();
   });
 
@@ -719,14 +764,11 @@ describe('BotPanelShellComponent', () => {
       expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968');
     });
 
-    it('names the bot in its banner and registers as the global lens toggle host', async () => {
+    it('names the bot in its header', async () => {
       const { container } = await renderShellWithStamp('?from=bots');
 
-      expect(screen.getByRole('heading', { name: /Ema Crossover/ })).toBeTruthy();
+      expect(screen.getByRole('heading', { level: 2, name: 'sid-001' })).toBeTruthy();
       expect(container.querySelector('app-bot-banner')).not.toBeNull();
-      // The choice of view onto this bot is the global top bar's toggle now
-      // (ActiveLensBridgeService), not a nav row this page renders itself.
-      expect(TestBed.inject(ActiveLensBridgeService).host()).not.toBeNull();
     });
   });
 
@@ -756,7 +798,7 @@ describe('BotPanelShellComponent', () => {
             concurrency_token: 'start-token',
           },
         ],
-        primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+        primary_action: 'stop',
       });
     }
 
@@ -855,7 +897,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('shows loading state initially then renders the trader lens', async () => {
+  it('shows loading state initially then renders the one view', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -883,59 +925,94 @@ describe('BotPanelShellComponent', () => {
       formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
     )).toBeTruthy();
 
-    await switchLens(fixture, 'operator');
 
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.getByText('run-current')).toBeTruthy();
   });
 
-  it('refreshes and renders the safe-flatten plan without posting a panel mutation', async () => {
-    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [
-        provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
-        { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService },
-      ],
+  describe('every safe-flatten trigger routes into the warning (H30)', () => {
+    /** The panel with one flatten command presented in its Checks fold. */
+    function checksSnapshot(panel: BotPanelView, action: PanelAction): BotPanelLiveSnapshot {
+      return liveSnapshot({
+        ...panel,
+        actions: [...panel.actions, action],
+        readiness_checks: [{
+          operation: action.action_id,
+          label: action.label,
+          ready: true,
+          scope: 'bot',
+          authority: 'Alpaca SQLite Clerk',
+          explanation: action.explanation,
+          evidence: { primary: true },
+          evaluated_at_ms: 1_753_800_000_000,
+          cure: null,
+        }],
+        readiness_ready_count: 1,
+      });
+    }
+
+    async function renderWith(snapshot: BotPanelLiveSnapshot) {
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(snapshot) } },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return view;
+    }
+
+    async function clickChecksAction(fixture: ComponentFixture<BotPanelShellComponent>, label: string): Promise<void> {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`Ready ${label}`, 'i') }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      fireEvent.click(await screen.findByRole('button', { name: label }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it.each([
+      ['Prepare safe flatten', PREPARE_SAFE_FLATTEN_ACTION],
+      ['Execute safe flatten', ENABLED_EXECUTE],
+    ])('opens the warning’s confirmation from the Checks fold (%s) and sends nothing', async (label, action) => {
+      const { fixture } = await renderWith(checksSnapshot(strandedPanel(), action));
+
+      await clickChecksAction(fixture, label);
+
+      await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
+      expect(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).toBeTruthy();
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
-    await fixture.whenStable();
-    fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
-    fireEvent.click(screen.getByRole('button', {
-      name: /Ready Prepare safe flatten/i,
-    }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+    it('refuses a safe flatten of a running bot and sends nothing', async () => {
+      const { fixture } = await renderWith(safeFlattenSnapshot());
 
-    const planRegion = await screen.findByRole('region', {
-      name: 'Prepared safe-flatten reduction plan',
+      await clickChecksAction(fixture, 'Prepare safe flatten');
+
+      const outcome = await screen.findByRole('alert', { name: 'Action outcome' });
+      expect(outcome.textContent).toContain(
+        'Flatten is offered for a stopped bot holding one position, from the warning at the top of its page.',
+      );
+      expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' })).toBeNull();
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
-    expect(within(planRegion).getByText('Qqq')).toBeTruthy();
-    expect(within(planRegion).getByText('2.5')).toBeTruthy();
-    expect(within(planRegion).getByText(/Inside the regular session this flatten is a market order/))
-      .toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
-    expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledWith(
-      'clrk_spec',
-      'DUM284968',
-      { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
-      'sid-001',
-    );
-    expect(mockService.runBotAction).not.toHaveBeenCalled();
 
-    fixture.componentRef.setInput('sid', 'sid-002');
-    fixture.detectChanges();
+    it('gives a stopped bot still holding shares no header action; its Flatten is the warning’s', async () => {
+      const { container } = await renderWith(liveSnapshot(strandedPanel()));
 
-    expect(screen.queryByRole('region', {
-      name: 'Prepared safe-flatten reduction plan',
-    })).toBeNull();
+      expect(container.querySelector('.bot-banner__actions app-panel-action-button')).toBeNull();
+      const warning = screen.getByRole('region', { name: /No bot is managing 2.5 QQQ/ });
+      expect(within(warning).getByRole('button', { name: 'Flatten…' }).hasAttribute('disabled')).toBe(false);
+    });
   });
 
   it('prepares and explicitly confirms historical exact-execution recovery', async () => {
@@ -952,7 +1029,6 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
     // The backend policy folds RecoveryCapability.primary into the Operator
     // reference (ADR 0027 precedence, #1665): the banner renders it once,
     // and the readiness accordion suppresses its own would-be duplicate row.
@@ -1002,7 +1078,7 @@ describe('BotPanelShellComponent', () => {
     );
   });
 
-  it('deep-links the Account Desk with one exact, non-cross-correlated evidence identity', async () => {
+  it('opens this bot’s order records on Activity with one exact, non-cross-correlated evidence identity', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(custodyTimelineSnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1017,18 +1093,15 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
+    const queryParams = { timelineBot: 'sid-001', timelineUncertaintyId: 'uncertainty:17' };
     expect(navigate).toHaveBeenLastCalledWith(
-      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'DUM284968'], {
-      queryParams: {
-        lens: 'operator',
-        timelineBot: 'sid-001',
-        timelineUncertaintyId: 'uncertainty:17',
-      },
-      },
+      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'DUM284968', 'activity'], { queryParams },
     );
+    // Exactly the query Activity reads to open its records fold on this bot.
+    expect(sqliteTimelineQueryFromParams(new URLSearchParams(queryParams)))
+      .toEqual(expect.objectContaining({ strategyInstanceId: 'sid-001', uncertaintyId: 'uncertainty:17' }));
   });
 
   it('renders the server-authored stale-plan refusal and refreshes without confirmation', async () => {
@@ -1056,7 +1129,6 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -1066,17 +1138,20 @@ describe('BotPanelShellComponent', () => {
     expect(screen.queryByRole('heading', { name: 'Confirm exact execution recovery' })).toBeNull();
   });
 
-  it('discards a safe-flatten response after route identity changes', async () => {
+  it('discards a flatten’s checked plan after route identity changes', async () => {
     const pendingCapability = deferred<SqliteRecoveryActionCheck>();
-    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(
-      pendingCapability.promise,
-    );
+    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(pendingCapability.promise);
+    const getPanel = vi.fn()
+      .mockResolvedValueOnce(strandedPanel())
+      .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
+        {
+          provide: BrokerV2PanelService,
+          useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(extendedFlattenSnapshot()), getPanel },
+        },
         { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService },
       ],
@@ -1084,23 +1159,29 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
-    fireEvent.click(screen.getByRole('button', {
-      name: /Ready Prepare safe flatten/i,
-    }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+    await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
-    pendingCapability.resolve({ capability: SAFE_FLATTEN_CAPABILITY, reduction_pricing: null });
+    pendingCapability.resolve({
+      capability: SAFE_FLATTEN_CAPABILITY,
+      reduction_pricing: {
+        kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+        bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+        quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
+        exit_allowance_bps: 20, suggested_limit_price: 479.13, band_limit_price: 478.17,
+        spread: 0.1, spread_bps: 2.08, wide_spread: false, spread_warning_bps: 50, proposal: null,
+      },
+    });
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.queryByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
   });
 
   describe('action outcome ownership (#2471)', () => {
@@ -1198,7 +1279,23 @@ describe('BotPanelShellComponent', () => {
       }
     }
 
+    afterEach(() => {
+      // These specs point the shared doubles at a stranded bot; every later
+      // spec reads the defaults.
+      mockService.getLiveSnapshot.mockReset().mockResolvedValue(liveSnapshot());
+      mockService.getPanel.mockReset().mockResolvedValue(PANEL);
+      brokersMock.checkSqliteSafeFlatten.mockReset().mockResolvedValue({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: { kind: 'regular_session' },
+      });
+    });
+
+    /** Flatten the stranded bot from its warning, the one way a flatten
+     * starts: reconcile, a fresh panel, then the checked plan (H30). */
     async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
+      mockService.getPanel
+        .mockResolvedValueOnce(strandedPanel())
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const { fixture } = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
         providers: [
@@ -1210,14 +1307,25 @@ describe('BotPanelShellComponent', () => {
       });
       await fixture.whenStable();
       fixture.detectChanges();
-      await switchLens(fixture, 'operator');
-      fireEvent.click(screen.getByRole('button', { name: /Ready Prepare safe flatten/i }));
-      await fixture.whenStable();
-      fixture.detectChanges();
-      fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
-      await fixture.whenStable();
-      fixture.detectChanges();
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+      await settle(fixture);
       return fixture;
+    }
+
+    /** Each step's label and state, then the backend's words for it, as read aloud. */
+    function progress(): string {
+      const list = screen.getByRole('list', { name: 'Flatten progress' });
+      return [...list.querySelectorAll('li > *')].map((part) => part.textContent?.trim()).join(' ');
+    }
+
+    function outcomeText(role: 'alert' | 'status'): string {
+      return screen.getByRole(role, { name: 'Action outcome' }).textContent?.replace(/\s+/g, ' ') ?? '';
+    }
+
+    function flattenButton(): HTMLButtonElement {
+      return screen.getByRole('button', { name: 'Flatten…' });
     }
 
     /** The Clerk's pricing, carrying its reading of the suggested price. */
@@ -1297,6 +1405,9 @@ describe('BotPanelShellComponent', () => {
       const fixture = await prepareFlatten();
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      // The Sell step waits on the ticket, and no second flatten can start over it.
+      expect(progress()).toContain('Sell: In progress');
+      expect(flattenButton().disabled).toBe(true);
       expect(within(ticket).getByText('Pre-market')).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
@@ -1318,10 +1429,65 @@ describe('BotPanelShellComponent', () => {
         'execute-token-17',
         { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
       );
-      expect(mockService.runBotAction).not.toHaveBeenCalled();
+      // Only the reconcile went through a plain action: the sale went through the ticket.
+      expect(mockService.runBotAction.mock.calls.map((call: unknown[]) => (call[2] as PanelAction).action_id))
+        .toEqual(['reconcile_now']);
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
         .toBeNull();
-      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/Limit order sent at \$479\.13/);
+      // The ticket's outcome settles the Sell step, and Flatten is offered again.
+      expect(progress()).toContain('Sell: Done Limit order sent at $479.13');
+      await vi.waitFor(() => expect(flattenButton().disabled).toBe(false));
+    });
+
+    it('fails the Sell step when the limit order is refused', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      mockService.executeExtendedSafeFlatten.mockRejectedValueOnce(new HttpErrorResponse({
+        status: 409,
+        error: { detail: { reason: 'stale_action_token', message: 'The flatten changed before it was sent.' } },
+      }));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(progress()).toContain('Sell: Failed The flatten changed before it was sent.');
+      expect(outcomeText('alert')).toContain('The flatten changed before it was sent.');
+      await vi.waitFor(() => expect(flattenButton().disabled).toBe(false));
+    });
+
+    it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
+      const fixture = await prepareFlatten();
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: {
+          ...SAFE_FLATTEN_CAPABILITY,
+          available: false,
+          reduction_plan: null,
+          unavailable_reason_code: 'NO_ATTRIBUTED_POSITION',
+          unavailable_reason: 'This bot no longer holds a position to sell.',
+          next_step: 'Nothing is left to flatten.',
+        },
+        reduction_pricing: null,
+      } satisfies SqliteRecoveryActionCheck);
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
+      await settle(fixture);
+
+      expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+      expect(progress()).toContain('Sell: Failed This bot no longer holds a position to sell.');
+      const outcome = outcomeText('alert');
+      expect(outcome).toContain('No Attributed Position');
+      expect(outcome).toContain('Nothing is left to flatten.');
+      expect(document.activeElement?.classList.contains('action-receipt')).toBe(true);
+      expect(flattenButton().disabled).toBe(false);
     });
 
     it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
@@ -1364,7 +1530,7 @@ describe('BotPanelShellComponent', () => {
         'execute-token-live',
         { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
       );
-      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/Limit order sent at \$479\.13/);
     });
 
     it('never says an order was sent when none reached the broker', async () => {
@@ -1393,7 +1559,8 @@ describe('BotPanelShellComponent', () => {
       fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
       await settle(fixture);
 
-      expect(screen.getByText(/no order has reached the broker yet/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/no order has reached the broker yet/);
+      expect(progress()).toMatch(/Sell: Done Flatten accepted at \$479\.13, but no order has reached the broker yet/);
       expect(screen.queryByText(/Limit order sent/)).toBeNull();
     });
 
@@ -1445,30 +1612,67 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();
     });
 
-    it('names when the next session opens instead of offering a ticket', async () => {
-      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+    it.each([
+      ['NO_SESSION_OPEN', 1_753_862_400_000, 'No Session Open'],
+      ['SIMULATED_RECOVERY_PRICE_UNAVAILABLE', null, 'Simulated Recovery Price Unavailable'],
+    ] as const)('names a refused sale’s code (%s) and when the next session opens, instead of a ticket', async (code, opensAt, label) => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'refused',
-          reason_code: 'NO_SESSION_OPEN',
-          explanation: 'No trading session would be open when an order sent now reaches the broker, so no reduction can be sent.',
-          next_step: 'Flatten again once the next session opens.',
-          available_at_ms: 1_753_862_400_000,
+          reason_code: code,
+          explanation: 'No sale can be priced now, so nothing was sent.',
+          next_step: 'Flatten again later.',
+          available_at_ms: opensAt,
         },
       } satisfies SqliteRecoveryActionCheck);
       await prepareFlatten();
 
-      const plan = await screen.findByRole('region', { name: 'Prepared safe-flatten reduction plan' });
-      expect(within(plan).getByText(/No trading session would be open/)).toBeTruthy();
-      expect(within(plan).getByText(
-        formatTimestampDisplay(1_753_862_400_000, { mode: 'et' }),
-      )).toBeTruthy();
+      await screen.findByRole('alert', { name: 'Action outcome' });
+      const outcome = outcomeText('alert');
+      expect(outcome).toContain(label);
+      expect(outcome).toContain('No sale can be priced now, so nothing was sent.');
+      if (opensAt === null) {
+        expect(outcome).not.toContain('Next session opens');
+      } else {
+        expect(outcome).toContain(`Next session opens ${formatTimestampDisplay(opensAt, { mode: 'local' })}`);
+      }
+      expect(progress()).toContain('Sell: Failed');
       expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    });
+
+    it('fails the check step, with the backend’s words, when Reconcile is refused', async () => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      mockService.getPanel.mockResolvedValueOnce(strandedPanel());
+      mockService.runBotAction.mockRejectedValueOnce(new HttpErrorResponse({
+        status: 409,
+        error: { detail: { reason: 'stale_action_token', message: 'The custody state changed.', why: 'Try again.' } },
+      }));
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
+      expect(document.activeElement?.textContent).toContain('Stale Action Token');
+      expect(document.activeElement?.textContent).toContain('The custody state changed.');
+      expect(progress()).toContain('Check the position with Alpaca: Failed The custody state changed.');
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
     });
   });
 
-  it('renders the bot banner once, not re-mounted inside a lens, registers one lens-toggle host, and keeps run evidence out of Trader', async () => {
+  it('renders one view: the header once, no Trader/Operator switch, and the audit folded away', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1481,28 +1685,31 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const banners = container.querySelectorAll('app-bot-banner');
-    const nestedInLens = container.querySelector('app-trader-lens app-bot-banner, app-operator-lens app-bot-banner');
-    expect(banners).toHaveLength(1);
-    expect(nestedInLens).toBeNull();
-    // No local Trader/Operator tab UI renders here any more — the global top
-    // bar owns it, and this page is registered as its one host
-    // (ActiveLensBridgeService). (The market-data source switcher is a
-    // different, unrelated tablist the trader lens itself still owns.)
+    expect(container.querySelectorAll('app-bot-banner')).toHaveLength(1);
     expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    expect(TestBed.inject(ActiveLensBridgeService).host()).not.toBeNull();
-    expect(screen.queryByText('Run evidence')).toBeNull();
-    expect(screen.queryByText('Strategy evidence')).toBeNull();
-    expect(screen.queryByText('Clerk evidence')).toBeNull();
+    const folds = [...container.querySelectorAll<HTMLDetailsElement>('app-bot-details details.fold')];
+    expect(folds.length).toBeGreaterThan(0);
+    expect(folds.every((fold) => !fold.open)).toBe(true);
   });
 
-  it('keeps the market snapshot mounted while switching lenses', async () => {
+  it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
+    const bar = (startMs: number, close: string) => ({
+      start_ms: startMs, end_ms: startMs + 5_000, open: close, high: close, low: close, close,
+      volume: 10, source: 'ibkr' as const,
+    });
+    const service = {
+      ...mockService,
+      getLiveSnapshot: vi.fn().mockResolvedValue({
+        ...liveSnapshot(),
+        live_chart: { ...LIVE_CHART, bars: [bar(1_753_800_000_000, '511.10'), bar(1_753_800_005_000, '512.34')] },
+      }),
+    };
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokerV2PanelService, useValue: service },
         { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService },
       ],
@@ -1510,95 +1717,13 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
-
-    await switchLens(fixture, 'operator');
-    await switchLens(fixture, 'trader');
-
-    expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
+    const tape = screen.getByRole('article', { name: 'Market tape for QQQ' });
+    expect(within(tape).getByText('$512.34')).toBeTruthy();
+    expect(within(tape).getByText('IBKR · last bar')).toBeTruthy();
+    expect(within(tape).queryByText(/Polygon snapshot/)).toBeNull();
   });
 
-  describe('market tape price (#2407)', () => {
-    function tapeSnapshot(day: number, min: number | null) {
-      const bar = (close: number) => ({ open: close, high: close, low: close, close, volume: 0, vwap: close });
-      return of({
-        success: true,
-        snapshot: {
-          ticker: 'QQQ',
-          day: bar(day),
-          prevDay: bar(515),
-          min: min === null ? null : { ...bar(min), accumulatedVolume: 0, timestamp: null },
-          todaysChange: -2.06,
-          todaysChangePercent: -0.4,
-          updated: 1_753_800_001_000,
-        },
-        error: null,
-      });
-    }
-
-    async function renderTape() {
-      const { fixture } = await render(BotPanelShellComponent, {
-        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-        providers: [
-          provideRouter([]),
-          { provide: BrokerV2PanelService, useValue: mockService },
-          { provide: BrokersService, useValue: brokersMock },
-          { provide: MessageService, useValue: messageService },
-        ],
-      });
-      await fixture.whenStable();
-      fixture.detectChanges();
-      return fixture;
-    }
-
-    const tapePrices = () =>
-      [...document.querySelectorAll('.ticker-quote__price')].map((el) => el.textContent?.trim());
-
-    beforeEach(() => marketDataMock.getStockSnapshot.mockClear());
-
-    it('does not render a zero day bar as a $0.00 price', async () => {
-      marketDataMock.getStockSnapshot.mockReturnValueOnce(tapeSnapshot(0, 0));
-
-      await renderTape();
-
-      expect(tapePrices()).toEqual([]);
-      expect(screen.queryByText('-0.40%')).toBeNull();
-    });
-
-    it('falls back to the minute bar while the day bar is still zero', async () => {
-      marketDataMock.getStockSnapshot.mockReturnValueOnce(tapeSnapshot(0, 512.34));
-
-      await renderTape();
-
-      expect(tapePrices()).toContain('$512.34');
-    });
-
-    it('re-reads the snapshot so an empty read at the open heals', async () => {
-      // The panel's live store does not load under fake timers, so the test
-      // fires the shell's own snapshot cadence directly.
-      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
-      try {
-        marketDataMock.getStockSnapshot
-          .mockReturnValueOnce(tapeSnapshot(0, 0))
-          .mockReturnValueOnce(tapeSnapshot(513.21, 513.1));
-        const fixture = await renderTape();
-        expect(tapePrices()).toEqual([]);
-        const refresh = setIntervalSpy.mock.calls.find(([, ms]) => ms === 60_000)?.[0];
-        if (typeof refresh !== 'function') throw new Error('Expected a 60 s snapshot refresh.');
-
-        refresh();
-        await fixture.whenStable();
-        fixture.detectChanges();
-
-        expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(2);
-        expect(tapePrices()).toContain('$513.21');
-      } finally {
-        setIntervalSpy.mockRestore();
-      }
-    });
-  });
-
-  it('loads previous runs only while the operator lens is mounted', async () => {
+  it('loads previous runs only once the owner opens Runs', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1612,8 +1737,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
-    await switchLens(fixture, 'operator');
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
@@ -1639,28 +1763,6 @@ describe('BotPanelShellComponent', () => {
       formatTimestampDisplay(1_753_700_000_000, { granularity: 'time' }),
     )).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
-    await fixture.whenStable();
-    expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
-
-    await switchLens(fixture, 'trader');
-
-    expect(screen.queryByText('run-previous')).toBeNull();
-
-    await switchLens(fixture, 'operator');
-
-    expect(screen.queryByText('run-previous')).toBeNull();
-    expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
-
-    openDisclosure('Run evidence');
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(mockService.getRunHistory).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('run-previous')).toBeTruthy();
   });
 
   it('requests one older run at a time with the server-issued cursor', async () => {
@@ -1698,8 +1800,7 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    await switchLens(fixture, 'operator');
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
@@ -1736,7 +1837,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1748,15 +1849,13 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    await switchLens(fixture, 'operator');
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'trader');
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
 
@@ -1825,8 +1924,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
@@ -1863,10 +1961,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await switchLens(fixture, 'operator');
 
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    openDisclosure('Run evidence');
+    openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
@@ -1905,32 +2002,6 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByRole('alert').textContent).toBe('Network error');
   });
 
-  it('registers with the global lens toggle while loaded, and its choice updates the query string', async () => {
-    // The tab UI itself moved to the global top bar (ActiveLensBridgeService);
-    // keyboard/roving-tabindex behavior is covered by lens-tabs.component.spec.
-    // What this shell still owns: registering while it has content to switch,
-    // and persisting the toggle's choice into `?lens=`.
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService }],
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const bridge = TestBed.inject(ActiveLensBridgeService);
-    const host = bridge.host();
-    if (host === null) throw new Error('Expected the shell to register as the active lens host.');
-    expect(host.lens()).toBe('trader');
-
-    host.select('operator');
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(bridge.host()?.lens()).toBe('operator');
-    expect(fixture.debugElement.injector.get(Router).url).toContain('lens=operator');
-  });
-
   it('fetches a new server projection for a selected transaction', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1938,7 +2009,6 @@ describe('BotPanelShellComponent', () => {
         { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
-    await switchLens(fixture, 'operator');
 
     openDisclosure('Audit trail');
     await fixture.whenStable();
@@ -1972,7 +2042,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -2009,7 +2079,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -2074,7 +2144,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -2127,7 +2197,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+      primary_action: 'stop',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -2286,5 +2356,230 @@ describe('BotPanelShellComponent', () => {
       expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
       expect.anything(), expect.anything(), null,
     );
+  });
+
+  describe('the one view (#2563)', () => {
+    beforeEach(() => {
+      brokersMock.checkSqliteSafeFlatten.mockReset();
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: { kind: 'regular_session' },
+      });
+    });
+
+    async function renderPage(panel: BotPanelView, service: Partial<typeof mockService> = {}) {
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          {
+            provide: BrokerV2PanelService,
+            useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot(panel)), ...service },
+          },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return view;
+    }
+
+    function statement(): string[] {
+      const list = screen.getByRole('region', { name: "This bot's money" }).querySelector('dl');
+      return [...(list?.querySelectorAll('dt') ?? [])].map((term) =>
+        `${term.textContent?.trim()} ${term.nextElementSibling?.textContent?.trim()}`);
+    }
+
+    it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
+      await renderPage({
+        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop',
+        open_pnl: -3.254, open_pnl_usd: '-3.25', open_pnl_direction: 'loss',
+      });
+      await screen.findByText('Holding its position');
+
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+      expect(statement()).toEqual([
+        'Budget set aside at deploy $1,000.00',
+        'Realized gains and losses $0.00',
+        'Fees -$0.01',
+        'Balance $999.99',
+        'In shares, at cost $764.71',
+        'Waiting in entry orders $0.00',
+        'Free to trade $235.28',
+      ]);
+      // The panel's own authored dollars, never a browser-formatted number.
+      expect(screen.getByText(/Open gain or loss on shares:/).textContent?.replace(/\s+/g, ' ').trim())
+        .toBe('Open gain or loss on shares: -$3.25, counted when sold.');
+      expect(screen.queryByRole('heading', { name: /No bot is managing/ })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Deploy again' })).toBeNull();
+    });
+
+    it('warns about a stopped bot still holding shares, with Flatten and Deploy again beside it', async () => {
+      await renderPage(strandedPanel(), { getBudget: vi.fn().mockResolvedValue(STOPPED_BUDGET) });
+      await screen.findByText('Stopped · still holds shares');
+
+      const warning = screen.getByRole('region', { name: /No bot is managing 2.5 QQQ/ });
+      expect(within(warning).getByText('Crashed: market data stopped')).toBeTruthy();
+      expect(within(warning).getByRole('button', { name: 'Flatten…' })).toBeTruthy();
+      expect(within(warning).getByText(
+        'Deploy again starts a new bot with its own budget. It never takes over these shares.',
+      )).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Deploy again' }).getAttribute('href'))
+        .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/deploy?from=sid-001');
+      expect(statement().slice(3)).toEqual([
+        'Balance $999.99',
+        'Released at stop $235.28',
+        'Still in shares, at cost $764.71',
+        'Still in entry orders $0.00',
+      ]);
+    });
+
+    it('marks a Dry Run bot as simulated cash', async () => {
+      await renderPage({ ...PANEL, mode: 'dry_run' });
+
+      expect(screen.getByText('DRY RUN · simulated cash')).toBeTruthy();
+    });
+
+    it('moves the keyboard to the outcome after Stop (story 48)', async () => {
+      await renderPage({ ...PANEL, mode: 'trade', actions: [STOP_ACTION], primary_action: 'stop' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
+      expect(document.activeElement?.textContent).toContain('Bot start requested.');
+    });
+
+    it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (H30)', async () => {
+      const getPanel = vi.fn()
+        .mockResolvedValueOnce(strandedPanel())
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }))
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, ENABLED_EXECUTE] }));
+      const runBotAction = vi.fn()
+        .mockResolvedValueOnce(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled with Alpaca.' }))
+        .mockResolvedValueOnce(fakeActionResult({ action_id: 'execute_safe_flatten', message: 'Sale of 2.5 QQQ sent.' }));
+      await renderPage(strandedPanel(), { getPanel, runBotAction, getBudget: vi.fn().mockResolvedValue(STOPPED_BUDGET) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      const confirm = screen.getByRole('group', { name: 'Sell 2.5 QQQ?' });
+      await userEvent.click(within(confirm).getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(2));
+      expect(runBotAction.mock.calls.map(([, , action]) => action.action_id))
+        .toEqual(['reconcile_now', 'execute_safe_flatten']);
+      expect(runBotAction.mock.calls[1][2].concurrency_token).toBe('execute-token-18');
+      const check = brokersMock.checkSqliteSafeFlatten;
+      expect(check).toHaveBeenCalledWith(
+        'clrk_spec', 'DUM284968',
+        { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
+        'sid-001',
+      );
+      const order = [
+        getPanel.mock.invocationCallOrder[0],
+        runBotAction.mock.invocationCallOrder[0],
+        getPanel.mock.invocationCallOrder[1],
+        check.mock.invocationCallOrder[0],
+        getPanel.mock.invocationCallOrder[2],
+        runBotAction.mock.invocationCallOrder[1],
+      ];
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
+      expect(document.activeElement?.textContent).toContain('Sale of 2.5 QQQ sent.');
+      expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent).toContain('Sell: Done');
+    });
+
+    it('sends nothing when the prepared sale does not match what the owner confirmed', async () => {
+      const getPanel = vi.fn()
+        .mockResolvedValueOnce(strandedPanel())
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
+      const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: {
+          ...SAFE_FLATTEN_CAPABILITY,
+          reduction_plan: { ...SAFE_FLATTEN_PLAN, legs: [{ ...SAFE_FLATTEN_PLAN.legs[0], quantity: 3 }] },
+        },
+        reduction_pricing: { kind: 'regular_session' },
+      });
+      await renderPage(strandedPanel(), { getPanel, runBotAction });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+      expect(document.activeElement?.textContent).toContain('does not match the 2.5 QQQ you confirmed. Nothing was sent.');
+      expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent).toContain('Prepare the sale: Failed');
+    });
+
+    it('stops at the checked plan outside regular hours and hands the keyboard to the limit ticket', async () => {
+      const getPanel = vi.fn()
+        .mockResolvedValueOnce(strandedPanel())
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
+      const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+          bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+          quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20, suggested_limit_price: 479.13, band_limit_price: 478.17,
+          spread: 0.1, spread_bps: 2.08, wide_spread: false, spread_warning_bps: 50, proposal: null,
+        },
+      });
+      await renderPage(strandedPanel(), { getPanel, runBotAction });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('flatten-ticket')).toBe(true));
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent)
+        .toContain('Outside regular hours this sale needs a limit price. Set it below.');
+      expect(screen.getByRole('button', { name: 'Flatten…' }).hasAttribute('disabled')).toBe(true);
+    });
+
+    it('checks and sells a Dry Run’s shares in its simulated account, never at Alpaca', async () => {
+      const dryRun = (overrides: Partial<BotPanelView> = {}) => strandedPanel({ mode: 'dry_run', ...overrides });
+      const getPanel = vi.fn()
+        .mockResolvedValueOnce(dryRun())
+        .mockResolvedValueOnce(dryRun({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }))
+        .mockResolvedValueOnce(dryRun({ actions: [RECONCILE_ACTION, ENABLED_EXECUTE] }));
+      const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ message: 'Done.' }));
+      await renderPage(dryRun(), { getPanel, runBotAction });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      const confirm = screen.getByRole('group', { name: 'Sell 2.5 QQQ?' });
+      expect(confirm.textContent).toContain('The sale is simulated at the live IBKR price; nothing is sent to Alpaca.');
+      expect(confirm.textContent).not.toContain('checked with Alpaca');
+      expect(confirm.textContent).not.toContain('free to deploy');
+      await userEvent.click(within(confirm).getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(2));
+      const steps = screen.getByRole('list', { name: 'Flatten progress' }).textContent ?? '';
+      expect(steps).toContain('Check the position in its simulated account: Done');
+      expect(steps).not.toContain('Alpaca');
+    });
+
+    it('returns the keyboard to Flatten when the confirmation is cancelled', async () => {
+      await renderPage(strandedPanel());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Flatten…'));
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['running', { ...PANEL, mode: 'trade' as const, actions: [STOP_ACTION], primary_action: 'stop' as const }],
+      ['stopped and holding', strandedPanel()],
+    ])('has no detectable accessibility violations (%s)', async (_name, panel) => {
+      await renderPage(panel);
+      await screen.findByText('Holding its position');
+
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+    });
   });
 });

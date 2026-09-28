@@ -259,15 +259,8 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
   });
 
-  it('lets a SQLite ticket preview a SELL reduction even when new exposure is unavailable', async () => {
-    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
-      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
-      preview_token: 'b'.repeat(64),
-      authority_generation: 1,
-      db_identity_token: 'db-token',
-      control_revision: 1,
-      subject_id: 'manual-operator:operator',
-    });
+  it('keeps an all-sell ticket closed when the backend says manual orders are unavailable (story 81)', async () => {
+    const previewSqliteManualOrder = vi.fn();
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
@@ -294,19 +287,15 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await fillFirstLeg(view, 'spy', '2');
     selectOption('Leg 1 side', 'sell');
-    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    view.fixture.detectChanges();
 
-    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('clrk_spec', 'PA1', {
-      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
-      legs: [
-        {
-          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
-          instruction: {
-            symbol: 'SPY', side: 'sell', quantity: 2, order_type: 'market', time_in_force: 'day',
-          },
-        },
-      ],
-    }));
+    const preview = screen.getByRole('button', { name: /Preview order/i });
+    expect(preview).toHaveProperty('disabled', true);
+    expect(screen.getByText('A manual order is unresolved.')).toBeTruthy();
+    fireEvent.click(preview);
+    await view.fixture.whenStable();
+    expect(previewSqliteManualOrder).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Confirm & submit/i })).toBeNull();
   });
 
   it('continues exactly one reserved ticket leg only after a refreshed preview', async () => {

@@ -8,6 +8,7 @@ points. Free to deploy is always the Deploy preview's own unreserved cents.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
@@ -20,6 +21,7 @@ from app.broker.alpaca.clerk.account_money import (
     MoneyConservationError,
     account_money,
     bot_parts,
+    bot_segment,
     money_bar,
     share_bps,
 )
@@ -100,6 +102,37 @@ def test_stopped_bot_still_holding_keeps_its_shares_and_releases_its_free_budget
     assert bar.segments[0].released_cents == 23_528
     assert bar.segments[0].still_claimed_cents == 0
     assert bar.total_cents == 10_000_000
+
+
+def test_a_stopped_bots_released_money_is_the_remainder_of_its_balance() -> None:
+    # A fractional fee: rounded on its own, released money (399.9901 floors to
+    # $399.99) and shares ($600.005 half-evens to $600.00) would be a cent
+    # short of the $1,000.00 balance (999.9951) the bot page states.
+    stopped = _bot("old", cents=100_000, position="600.005", fees="0.0049", active=False)
+    budget = account_budget(cash="399.9951", deployments=[stopped], order_claims=D(0), fee_claims=D(0))
+
+    bar = _drawn(_money(budget))
+
+    segment = bar.segments[0]
+    assert (segment.cents, segment.released_cents, segment.still_claimed_cents) == (60_000, 40_000, 0)
+    assert segment.cents + segment.released_cents == 100_000
+
+
+def test_bot_segment_is_the_account_bars_own_slice_filling_a_bar_of_its_own() -> None:
+    running = _bot("run", cents=100_000, position="764.71", fees="0.01")
+    stopped = _bot("old", cents=100_000, position="600.005", fees="0.0049", active=False)
+    finished = _bot("done", cents=50_000, realized="1", active=False)
+    budget = account_budget(cash="100000", deployments=[running, stopped, finished], order_claims=D(0), fee_claims=D(0))
+    money = _money(budget)
+
+    bar = _drawn(money)
+
+    by_bot = {segment.strategy_instance_id: segment for segment in bar.segments}
+    assert bot_segment(money, "run") == replace(by_bot["run"], bps=FULL_BAR_BPS)
+    assert bot_segment(money, "old") == replace(by_bot["old"], bps=FULL_BAR_BPS)
+    # A flat stopped bot with nothing claimed is finished: it has no slice.
+    assert bot_segment(money, "done") is None
+    assert bot_segment(money, "never-deployed") is None
 
 
 def test_pre_budget_stopped_bot_and_its_working_order_stay_held() -> None:
