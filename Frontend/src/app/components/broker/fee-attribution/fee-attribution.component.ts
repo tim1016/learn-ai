@@ -1,14 +1,14 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { BrokersService } from '../../../services/brokers.service';
 
 /** Render the custody authority's totals; the browser does not apportion fees. */
 @Component({
   selector: 'app-fee-attribution',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe],
+  imports: [AuthoredUsdPipe],
   templateUrl: './fee-attribution.component.html',
   styleUrl: './fee-attribution.component.scss',
 })

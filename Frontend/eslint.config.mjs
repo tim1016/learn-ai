@@ -2,6 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import angular from "angular-eslint";
 import unusedImports from "eslint-plugin-unused-imports";
+import noMoneyAliasArithmetic from "./eslint-rules/no-money-alias-arithmetic.mjs";
 
 // ---------------------------------------------------------------------------
 // No money arithmetic in the browser (PRD #2560 D12).
@@ -22,8 +23,15 @@ import unusedImports from "eslint-plugin-unused-imports";
 //    (`const f = view.free_to_deploy_usd; +f`), so on the files that render
 //    money any numeric coercion at all is banned — `Number`, `parseFloat`,
 //    `parseInt`, `BigInt`, `Math`, unary `+`/`-` on a non-literal and
-//    implicit coercion (`no-implicit-coercion`) — and their templates may do
-//    no arithmetic whatever. A money surface is, by convention:
+//    implicit coercion (`no-implicit-coercion`) — the scope-aware
+//    `learn-ai/no-money-alias-arithmetic` rule refuses arithmetic on an
+//    alias of a money value, and their templates may do no arithmetic
+//    whatever and may not hand any value to a pipe that formats numbers
+//    (`currency`, `number`, `percent`): Angular's numeric pipes parse their
+//    input before formatting it, so `segment.amount_usd | currency` re-formats
+//    — and can re-round or reject — the string Python authored. Render
+//    authored money strings with `authoredUsd` (a pure string formatter) or
+//    as given. A money surface is, by convention:
 //      - any file or directory whose name contains `money` or `budget` (the
 //        money bar, `account-money-state.ts`, the bot page's budget card,
 //        Deploy's budget/Money step — name a new money component that way);
@@ -91,6 +99,14 @@ const MONEY_SURFACE_COERCION = [
 const TEMPLATE_MONEY_SURFACE_ARITHMETIC = [
   { selector: `Binary[operation=${TEMPLATE_ARITHMETIC_OPERATOR}]`, message: COERCION_MESSAGE },
   { selector: "Unary:not([expr.value])", message: COERCION_MESSAGE },
+  // Angular's numeric pipes parse before they format: on a money surface
+  // nothing is ever handed to one. Authored strings render through
+  // `authoredUsd` (pure string formatting) or as given.
+  {
+    selector: "BindingPipe[name=/^(currency|number|percent)$/]",
+    message:
+      "PRD #2560 D12: a money surface never hands a value to a pipe that formats numbers — it parses before it formats. Render the Python-authored string with `authoredUsd` or as given.",
+  },
 ];
 
 const moneySurfaces = (extension) => [
@@ -196,6 +212,7 @@ export default tseslint.config(
   {
     files: moneySurfaces("ts"),
     ignores: ["**/*.spec.ts"],
+    plugins: { "learn-ai": { rules: { "no-money-alias-arithmetic": noMoneyAliasArithmetic } } },
     rules: {
       "no-implicit-coercion": ["error", { boolean: false }],
       "no-restricted-globals": [
@@ -203,6 +220,7 @@ export default tseslint.config(
         ...["Number", "parseFloat", "parseInt", "BigInt", "Math"].map((name) => ({ name, message: COERCION_MESSAGE })),
       ],
       "no-restricted-syntax": ["error", ...TS_MONEY_ARITHMETIC, ...MONEY_SURFACE_COERCION],
+      "learn-ai/no-money-alias-arithmetic": "error",
     },
   },
   {

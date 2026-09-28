@@ -10,16 +10,16 @@
         <p role="status">{{ message }}</p>
       }
       @if (report.account_unattributed_usd !== null && !report.known) {
-        <p>Account charges awaiting attribution: {{ report.account_unattributed_usd | currency:'USD' }}</p>
+        <p>Account charges awaiting attribution: {{ report.account_unattributed_usd | authoredUsd }}</p>
       }
       @for (row of rows(); track row.subject_id) {
         <div class="fee-row">
           <strong>{{ row.label }}</strong>
           <dl>
-            <dt>Estimated, awaiting settlement</dt><dd>{{ row.estimated_usd | currency:'USD' }}</dd>
-            <dt>Modelled settled</dt><dd>{{ row.modelled_settled_usd | currency:'USD' }}</dd>
-            <dt>Observed broker charges</dt><dd>{{ row.observed_usd | currency:'USD' }}</dd>
-            <dt>Total attributed fees</dt><dd>{{ row.total_usd | currency:'USD' }}</dd>
+            <dt>Estimated, awaiting settlement</dt><dd>{{ row.estimated_usd | authoredUsd }}</dd>
+            <dt>Modelled settled</dt><dd>{{ row.modelled_settled_usd | authoredUsd }}</dd>
+            <dt>Observed broker charges</dt><dd>{{ row.observed_usd | authoredUsd }}</dd>
+            <dt>Total attributed fees</dt><dd>{{ row.total_usd | authoredUsd }}</dd>
           </dl>
         </div>
       } @empty {

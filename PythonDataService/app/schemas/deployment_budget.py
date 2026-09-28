@@ -47,7 +47,14 @@ class DeploymentBudgetShortcut(BaseModel):
 
 
 def _cents(amount_usd: str) -> int:
-    return int(Decimal(amount_usd) * 100)
+    """Exact whole cents; a stated figure is never silently truncated."""
+    try:
+        scaled = Decimal(amount_usd) * 100
+    except ArithmeticError as exc:
+        raise ValueError(f"not a dollar amount: {amount_usd!r}") from exc
+    if not scaled.is_finite() or scaled != scaled.to_integral_value():
+        raise ValueError(f"dollar amount is not whole cents: {amount_usd!r}")
+    return int(scaled)
 
 
 class MoneyParts(BaseModel):
