@@ -542,6 +542,43 @@ async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_before_it
     assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID]
 
 
+async def test_the_recovery_read_never_settles_a_claim_a_resend_renewed_and_committed_while_it_read_custody(
+    budgeted, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resend can begin, rename the key's bot and commit while the read awaits custody.
+
+    Answering ``not_committed`` for the claim the read began with would free
+    the key, and a second Deploy could start beside the bot that did.
+    """
+    budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
+    reading, release = asyncio.Event(), asyncio.Event()
+    paused: list[DeploySubmission] = []
+    command_receipt = budget_deploy.command_receipt
+
+    async def read_paused_once(account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+        receipt = await command_receipt(account_id, submission)
+        if not paused:
+            paused.append(submission)
+            reading.set()
+            await release.wait()
+        return receipt
+
+    async with _client(budgeted.app) as client:
+        await client.post(_BOTS, json=_BUDGETED)
+        monkeypatch.setattr(budget_deploy, "command_receipt", read_paused_once)
+        read = asyncio.create_task(client.get(f"{_RECOVERY}/{_BODY['submission_key']}"))
+        await asyncio.wait_for(reading.wait(), timeout=5)
+        resent = await asyncio.wait_for(client.post(_BOTS, json=_BUDGETED), timeout=5)
+        release.set()
+        recovered = await read
+
+    assert paused[0].strategy_instance_id == DEPLOYED_SID
+    assert resent.status_code == 201 and resent.json()["strategy_instance_id"] == f"{DEPLOYED_SID}-2"
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json() == resent.json()
+    assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID, f"{DEPLOYED_SID}-2"]
+
+
 # ── Which refusals settle the key ───────────────────────────────────────────
 #
 # A refusal raised before the key names a bot settles it: nothing was claimed

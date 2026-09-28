@@ -474,21 +474,24 @@ async def deploy_submission_status(
     A key this process is sending is ``in_flight`` before anything else is
     read -- from the moment its Deploy arrives, named or not, so no read ever
     tells a client that a Deploy still running started nothing. Otherwise the
-    committed Deploy's receipt, or the name the key claimed and never
-    committed; ``None`` only for a key never claimed and not being sent. With
+    committed Deploy's receipt, or the name the key still holds after
+    custody is read and never committed; ``None`` only for a key never
+    claimed and not being sent. With
     no bot runner there is no ledger to read, so the read is refused (503)
     rather than answered.
     """
     ledger = DeploySubmissionLedger(_runner().artifacts_root)
-    if submission_key not in _SENDING:
+    while submission_key not in _SENDING:
         claim = ledger.by_key(submission_key)
         if claim is None:
             return None
         receipt = await _committed_receipt(account_id, claim)
         if receipt is not None:
             return receipt
-        # A resend of the key may have begun while custody was read.
-        if submission_key not in _SENDING:
+        # A resend of the key may have begun while custody was read -- or
+        # begun, renamed the key's bot and finished. Only the claim the key
+        # still holds is answered ``not_committed``; a renamed one is read again.
+        if submission_key not in _SENDING and ledger.by_key(submission_key) == claim:
             return _uncommitted("not_committed", submission_key, claim)
     return _uncommitted("in_flight", submission_key, _SENDING[submission_key])
 
