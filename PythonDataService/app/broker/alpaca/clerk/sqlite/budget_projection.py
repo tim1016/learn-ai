@@ -58,7 +58,11 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
     unseen = ZERO
     for fill in fees.external_fills:
         key = fill.native_order_id
-        assert key is not None  # The fee evidence boundary proves identity.
+        if key is None:
+            raise BudgetUnavailable(
+                "An external fill has no order identity. "
+                "Reconcile account activities before assigning or spending a budget."
+            )
         quantities[key] = quantities.get(key, ZERO) + fill.quantity
         if fill.side is OrderSide.BUY and fill.observed_at_ms >= seen_before_ms:
             unseen += fill.quantity * fill.price
