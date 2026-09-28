@@ -28,11 +28,22 @@ describe('MoneyBarComponent', () => {
     const legend = screen.getByRole('list', { name: 'Where this account’s money is' });
     const entries = within(legend).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
     expect(entries).toEqual([
-      'spy-ema-20260929-0931 $999.99 in shares $764.71 · in entry orders $0.00 · free $235.28',
-      'held by stopped bot spy-ema-20260925-1402 $670.43',
+      'spy-ema-20260929-0931 $999.99 in shares $764.71 · in entry orders $0.00 · free $235.28 · short of next entry $0.00',
+      'held by stopped bot spy-ema-20260925-1402 $670.43 released $0.00 · still claimed $0.00',
       'account charges $0.01',
       'free to deploy $98,329.57',
     ]);
+  });
+
+  it('states a bot’s shortfall and what a stopped bot released and still claims', async () => {
+    const [bot, stopped] = SEGMENTS;
+    await renderBar('detail', [
+      { ...bot, shortfall_usd: '41.37' },
+      { ...stopped, released_usd: '329.57', still_claimed_usd: '12.05' },
+    ]);
+
+    expect(screen.getByText(/short of next entry \$41\.37/)).toBeTruthy();
+    expect(screen.getByText(/released \$329\.57 · still claimed \$12\.05/)).toBeTruthy();
   });
 
   it('draws each slice at the backend’s basis points, with no arithmetic of its own', async () => {

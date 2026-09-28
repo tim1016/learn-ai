@@ -30,6 +30,17 @@
         &ngsp;<span class="money-bar__parts">
           in shares {{ parts.in_shares_usd | currency: 'USD' }} · in entry orders
           {{ parts.pending_usd | currency: 'USD' }} · free {{ parts.free_usd | currency: 'USD' }}
+          @if (slice.segment.shortfall_usd; as shortfall) {
+            · short of next entry {{ shortfall | currency: 'USD' }}
+          }
+        </span>
+      }
+      @if (slice.segment.released_usd; as released) {
+        &ngsp;<span class="money-bar__parts">
+          released {{ released | currency: 'USD' }}
+          @if (slice.segment.still_claimed_usd; as stillClaimed) {
+            · still claimed {{ stillClaimed | currency: 'USD' }}
+          }
         </span>
       }
     </li>

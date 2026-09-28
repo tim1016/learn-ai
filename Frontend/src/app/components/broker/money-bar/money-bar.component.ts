@@ -7,8 +7,8 @@ import type { MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
  * row's budget strip, or an Accounts card / Wall tile. */
 export type MoneyBarSize = 'home' | 'detail' | 'row' | 'mini';
 
-/** Bot slices take their hue by their place among the bot slices. Colour is
- * never the only carrier: the legend names every slice with its amount. */
+/** The bot hues, in palette order. Colour is never the only carrier: the
+ * legend names every slice with its amount. */
 const BOT_HUES = [
   'var(--chart-series-blue)',
   'var(--chart-series-amber)',
@@ -17,6 +17,16 @@ const BOT_HUES = [
   'var(--chart-series-purple)',
   'var(--chart-series-orange)',
 ] as const;
+
+/** Which of `BOT_HUES` a bot slice takes.
+ *
+ * The backend's per-bot palette slot, when the segment carries one, so a bot
+ * keeps its hue on every bar it appears in (Home, its row, its page) however
+ * the other bots come and go. Until it does, the slice's place among this
+ * bar's bot slices — stable within one bar, not across bars. */
+function botPaletteSlot(_segment: MoneySegment, botOrdinal: number): number {
+  return botOrdinal;
+}
 
 interface DrawnSlice {
   readonly key: string;
@@ -58,7 +68,7 @@ export class MoneyBarComponent {
     return this.segments().map((segment) => ({
       key: `${segment.kind}:${segment.strategy_instance_id ?? ''}`,
       segment,
-      hue: segment.kind === 'bot' ? BOT_HUES[bots++ % BOT_HUES.length] : null,
+      hue: segment.kind === 'bot' ? BOT_HUES[botPaletteSlot(segment, bots++) % BOT_HUES.length] : null,
     }));
   });
 }

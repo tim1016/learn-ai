@@ -177,13 +177,15 @@ describe('AlpacaAccountListPageComponent', () => {
     });
 
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('fleet directory is unavailable');
+    expect(alert.textContent).toContain('Your accounts could not be loaded');
+    // Plain words: the owner is not told about the fleet machinery behind it.
+    expect(alert.textContent).not.toMatch(/fleet|directory/i);
     expect(screen.getByRole('link', { name: 'How to bring the account list back' }).getAttribute('href')).toBe(
       DIRECTORY_RUNBOOK_URL,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/It is still unavailable\./)).toBeTruthy();
+    expect(await screen.findByText(/They still could not be loaded\./)).toBeTruthy();
   });
 
   it('names the next step when no account is registered yet', async () => {
@@ -206,7 +208,7 @@ describe('AlpacaAccountListPageComponent', () => {
     );
     await renderList({}, twoAccounts(), { getAccountMoney });
 
-    expect(await screen.findByText('Account money could not be read. Open the account to see why.')).toBeTruthy();
+    expect(await screen.findByText(/Account money could not be read\./)).toBeTruthy();
     // The healthy account is untouched by its sibling's outage.
     expect((await screen.findByText(/Account money/, { selector: '.lane-card__figure' })).textContent).toContain('$100,000.00');
     expect(screen.getAllByRole('link')).toHaveLength(2);

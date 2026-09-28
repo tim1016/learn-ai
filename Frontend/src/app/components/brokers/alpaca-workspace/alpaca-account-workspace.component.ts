@@ -17,7 +17,6 @@ import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chi
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
 import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
-import type { AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import {
   ACCOUNT_WORKSPACE_TABS,
   accountWorkspaceLocation,
@@ -37,13 +36,6 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
  * equity and the reconciliation verdict all move while an operator sits on
  * one tab, and none is pushed. */
 const ACCOUNT_POLL_MS = 15_000;
-
-/** The header's money figures, or why there are none. Every figure is a
- * backend-authored string from the account-money read; the header adds
- * nothing up and never shows an unknown as $0. */
-type HeaderMoney =
-  | { readonly kind: 'ready'; readonly view: AccountMoneyView }
-  | { readonly kind: 'reason'; readonly text: string };
 
 /** Why the Overview tab is not offered on a lane with no confirmed account:
  * it is that account's own page, and there is no account. */
@@ -197,17 +189,11 @@ export class AlpacaAccountWorkspaceComponent {
     return laneIsReady(lane) ? { kind: 'unbound' } : { kind: 'lifecycle', state: lane.lifecycle_state };
   });
 
-  protected readonly money = computed<HeaderMoney>(() => {
-    const money = this.accountData.money;
-    if (money.hasValue()) {
-      const view = money.value();
-      return view.state === 'ready' ? { kind: 'ready', view } : { kind: 'reason', text: view.detail };
-    }
-    if (money.error() !== undefined) return { kind: 'reason', text: 'Account money could not be read.' };
-    return money.status() === 'idle'
-      ? { kind: 'reason', text: 'This lane does not report account money.' }
-      : { kind: 'reason', text: 'Reading account money…' };
-  });
+  /** The header's money figures, or why there are none — the account data
+   * service's one money state, which every other money surface on these
+   * pages renders too. Every figure is a backend-authored string; the header
+   * adds nothing up and never shows an unknown as $0. */
+  protected readonly money = this.accountData.moneyState;
 
   private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
 

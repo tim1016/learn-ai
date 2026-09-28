@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import {
   Router,
@@ -393,7 +394,27 @@ describe('AlpacaAccountWorkspaceComponent', () => {
   it('says a failed money read failed rather than showing nothing', async () => {
     await renderWorkspace({ money: () => Promise.reject(new Error('money read failed')) });
 
-    expect(await screen.findByText('Account money could not be read.')).toBeTruthy();
+    expect(await screen.findByText(/Account money could not be read\./)).toBeTruthy();
+  });
+
+  it('names the next step a refused money read authored, instead of discarding it', async () => {
+    const refusal = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          message: 'This account’s money cannot be read right now.',
+          why: 'The account’s records are still being opened.',
+          next_action: 'Open the account’s Settings to see why, then retry.',
+        },
+      },
+    });
+    await renderWorkspace({ money: () => Promise.reject(refusal) });
+
+    const reason = await screen.findByText(/cannot be read right now/);
+    expect(reason.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'This account’s money cannot be read right now. The account’s records are still being opened. '
+        + 'Open the account’s Settings to see why, then retry.',
+    );
   });
 
   it.each([

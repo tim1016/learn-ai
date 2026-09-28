@@ -96,6 +96,30 @@ export function resourceTarget(
   });
 }
 
+/** Whether two targets address the same resource under the same provenance.
+ *
+ * The `equal` a `computed()` target needs: a directory refresh re-derives an
+ * identical address as a new object, and without this every `resource()`
+ * reading it would restart — dropping the value it was showing — on each
+ * refresh. */
+export function sameResourceTarget(
+  left: ResourceTarget | null | undefined,
+  right: ResourceTarget | null | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.broker === right.broker &&
+    left.clerkId === right.clerkId &&
+    left.accountId === right.accountId &&
+    left.entityId === right.entityId &&
+    left.capability === right.capability &&
+    left.idempotencyKey === right.idempotencyKey &&
+    left.bindingGeneration === right.bindingGeneration &&
+    left.routingEpoch === right.routingEpoch
+  );
+}
+
 /** Derive the same resource with one dimension replaced — the result is a
  * new frozen target, never an in-place mutation. */
 export function withAccount(target: ResourceTarget, accountId: string | null): ResourceTarget {

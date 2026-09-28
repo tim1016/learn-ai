@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
@@ -139,9 +140,60 @@ describe('AlpacaLaneCardComponent', () => {
   it('keeps a failed money read to itself and names the next step', async () => {
     await renderCard(countedLane(), { getAccountMoney: () => Promise.reject(new Error('money read failed')) });
 
-    expect(await screen.findByText('Account money could not be read. Open the account to see why.')).toBeTruthy();
+    const reason = await screen.findByText(/Account money could not be read\./);
+    expect(reason.textContent).toContain('It is read again automatically');
     // The counts still land: they are the directory's, not the failed read's.
     expect(screen.getByText('2 running')).toBeTruthy();
+  });
+
+  it('says a refused money read in the backend’s words, with its next step', async () => {
+    const refusal = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          message: 'This account’s money cannot be read right now.',
+          why: 'The account’s records are still being opened.',
+          next_action: 'Open the account’s Settings to see why, then retry.',
+        },
+      },
+    });
+    await renderCard(countedLane(), { getAccountMoney: () => Promise.reject(refusal) });
+
+    const reason = await screen.findByText(/cannot be read right now/);
+    expect(reason.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'This account’s money cannot be read right now. The account’s records are still being opened. '
+        + 'Open the account’s Settings to see why, then retry.',
+    );
+  });
+
+  it('keeps its figures through a directory refresh instead of re-reading and blanking', async () => {
+    const lane = countedLane();
+    const { view, getAccountMoney } = await renderCard(lane);
+    await screen.findByText(/Free to deploy/);
+
+    // A directory refresh hands the card an identical lane as a new object.
+    await view.rerender({ inputs: { lane: structuredClone(lane) }, partialUpdate: true });
+    view.fixture.detectChanges();
+
+    expect(screen.getByText(/Free to deploy/)).toBeTruthy();
+    expect(screen.queryByText('Reading account money…')).toBeNull();
+    expect(getAccountMoney).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads its money every 30 seconds without blanking the figures', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { getAccountMoney } = await renderCard();
+      await vi.waitFor(() => expect(getAccountMoney).toHaveBeenCalledTimes(1));
+      await screen.findByText(/Free to deploy/);
+
+      vi.advanceTimersByTime(30_000);
+
+      await vi.waitFor(() => expect(getAccountMoney).toHaveBeenCalledTimes(2));
+      expect(screen.getByText(/Free to deploy/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is one click target into the account workspace, not a menu of links', async () => {
@@ -234,7 +286,7 @@ describe('AlpacaLaneCardComponent', () => {
       testLane({ capabilities: ['account_read', 'configuration_manage'] }),
     );
 
-    expect(await screen.findByText('This lane does not report account money.')).toBeTruthy();
+    expect(await screen.findByText('This account does not report its money.')).toBeTruthy();
     expect(getAccountMoney).not.toHaveBeenCalled();
   });
 
@@ -266,6 +318,18 @@ describe('AlpacaLaneCardComponent', () => {
     // Decision 5) — and the accessible name of the card's one link carries
     // the disambiguator with it, because it is named from its own content.
     expect(screen.getByText('(Paper)')).toBeTruthy();
-    expect(screen.getByRole('link').textContent).toContain('(Paper)');
+    expect(screen.getByRole('link', { name: 'Strategy lab (Paper) PAPER · practice money' })).toBeTruthy();
+  });
+
+  it('names its link by the account and its mode, and describes it by the rest', async () => {
+    await renderCard();
+    await screen.findByText(/Free to deploy/);
+
+    // The name is what a screen reader announces for the choice; the hidden
+    // money-bar legend and the counts belong in the description, not the name.
+    const link = screen.getByRole('link', { name: 'Paper PAPER · practice money' });
+    const description = document.getElementById(link.getAttribute('aria-describedby') ?? '');
+    expect(description?.textContent).toContain('Free to deploy');
+    expect(description?.textContent).toContain('2 running');
   });
 });
