@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.broker.alpaca.clerk.money import cash_admits, notional
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
@@ -70,7 +71,6 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # observation longer than it otherwise would. Pinned below the interval by
 # ``tests/broker/alpaca/clerk/test_live_envelope.py``.
 FILL_VISIBILITY_GRACE_MS = 5_000
-_CASH_EPSILON_USD = 1e-9
 
 EnvelopeAgreement = Literal["unsealed", "agreed", "disagreed"]
 
@@ -211,7 +211,7 @@ class EnvelopeReservation:
 
     @property
     def notional_usd(self) -> float:
-        return self.quantity * self.reference_price
+        return float(notional(self.quantity, self.reference_price))
 
 
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:
@@ -225,7 +225,7 @@ def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:
 def cash_bound_admits(
     *, cash_available_usd: float, reserved_usd: float, notional_usd: float
 ) -> bool:
-    return notional_usd + reserved_usd <= cash_available_usd + _CASH_EPSILON_USD
+    return cash_admits(cash=cash_available_usd, claims=reserved_usd, required=notional_usd)
 
 
 class LiveEnvelopeGate:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
@@ -743,3 +744,8 @@ class ClerkSqliteRepositoryReadApi:
             return envelope_reservations.reserved_cash_usd(
                 self._conn, seen_before_ms=seen_before_ms
             )
+
+    def reserved_cash_decimal(self: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
+        """Canonical exact claim total for cash admission, under the write fence."""
+        with self._write_lock:
+            return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)

@@ -81,6 +81,8 @@ class FillRecord:
     # SQLite sets this to the custody transition that materialized the fill.
     # Legacy, non-SQLite callers retain the neutral default.
     ledger_sequence: int = 0
+    native_order_id: str | None = None
+    recorded_at_ms: int | None = None
 
 
 def normalize_fill_event(

@@ -17,6 +17,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 ## Registry
 
+### Custody money admission (#2545)
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Exact cash claims, affordability and whole-cent consent | `PythonDataService/app/broker/alpaca/clerk/money.py` and `sqlite/envelope_reservations.py` | `live_envelope.cash_bound_admits` delegates; float reservation reads are display compatibility only | PRD #2540 Money contract; observation overlap #2441/#2442; [conversion policy](references/custody-budget-money.md) | `test_money.py` independent Fraction assertions; `sqlite/test_envelope_admission.py`; `sqlite/test_envelope_reservations.py` | canonical |
+
 > **No-new-concept note — broker clerk fleet control plane (ADR 0062, Phase 1).**
 > `PythonDataService/app/broker/fleet/` introduces **no new math concept** and
 > therefore gains **no registry row**. It mints opaque identities, fences

@@ -19,8 +19,8 @@ from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_UNOBSERVED,
     EnvelopeReservation,
     LiveEnvelopeGate,
-    cash_bound_admits,
 )
+from app.broker.alpaca.clerk.money import MoneyInputError, cash_admits, notional
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
@@ -73,18 +73,19 @@ def require_envelope_admission(
             LIVE_ENVELOPE_UNOBSERVED,
             "A market ENTER has no decision-bar price to bound it against cash.",
         )
-    reserved = repo.reserved_cash_usd(seen_before_ms=observation.fills_seen_before_ms)
     # Built before the bound is asked, so the notional the refusal names and
     # the notional the reservation will claim are the same one property.
     reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=price)
-    if not cash_bound_admits(
-        cash_available_usd=observation.cash_available_usd,
-        reserved_usd=reserved,
-        notional_usd=reservation.notional_usd,
-    ):
+    try:
+        reserved = repo.reserved_cash_decimal(seen_before_ms=observation.fills_seen_before_ms)
+        required = notional(leg.quantity, price)
+        affordable = cash_admits(cash=observation.cash_available_usd, claims=reserved, required=required)
+    except MoneyInputError as exc:
+        raise _refuse(LIVE_ENVELOPE_UNOBSERVED, str(exc)) from exc
+    if not affordable:
         raise _refuse(
             LIVE_ENVELOPE_CASH_EXCEEDED,
-            f"ENTER needs {reservation.notional_usd:.2f} USD; "
+            f"ENTER needs {required:.2f} USD; "
             f"{observation.cash_available_usd:.2f} USD cash "
             f"with {reserved:.2f} USD reserved by working entries.",
         )

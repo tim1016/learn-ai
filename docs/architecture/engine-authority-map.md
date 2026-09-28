@@ -12,6 +12,14 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 
 ## The map
 
+**Custody cash admission (#2545).** `clerk/money.py` owns decimal normalization,
+exact comparisons and the final cents boundary. `sqlite/envelope_reservations.py`
+uses the shared effective-fill lineage and prices individual recorded facts
+before summing; SQLite REAL arithmetic and tolerance-based cash verdicts are
+retired. Its float adapter is display compatibility only. The canonical FIFO
+and stored historical floats remain unchanged. See
+[the conversion and validation policy](../references/custody-budget-money.md).
+
 Adjusted lake admission (#2454) is owned by
 `PythonDataService/app/data_lake/adjustment_versions.py` and `ensure_data`.
 Python readers pin the recorded basis; LEAN holds the symbol's capture lock

@@ -110,6 +110,18 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
 
 
+def test_fractional_cent_shortage_is_refused_without_float_tolerance(
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+) -> None:
+    sid, run_id = active_instance
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        _accept(
+            envelope_repo, sid, run_id, decision_id="exact-cash",
+            leg=_leg(quantity=1), envelope=_gate(cash=100), reference_price=100.0000000001,
+        )
+    assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
+
+
 def test_two_instances_cannot_spend_the_same_cash(
     envelope_repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
