@@ -15,6 +15,7 @@ from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerActivityEvidence,
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
@@ -81,6 +82,18 @@ class BrokerReadPort(Protocol):
     async def get_portfolio_history(
         self, history_range: PortfolioHistoryRange
     ) -> BrokerPortfolioHistory: ...
+
+
+@runtime_checkable
+class BrokerActivityEvidencePort(Protocol):
+    """Optional read capability: the bounded, cross-date activity evidence walk.
+
+    Adapters that implement it let the fee-evidence sync claim provable
+    ``history_complete``; a plain ``BrokerReadPort`` without it falls back to
+    the bounded ``list_activities`` read, which never claims completeness.
+    """
+
+    async def read_activity_evidence(self) -> BrokerActivityEvidence: ...
 
 
 @runtime_checkable

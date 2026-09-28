@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.ports import BrokerReadPort
+from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -29,9 +29,10 @@ class FeeEvidenceSync:
 
         # The bounded read reaches across dates, including late historical FEE
         # activities. A truncated read never proves the missing fee population.
-        reader = getattr(self._read, "read_activity_evidence", None)
-        if callable(reader):
-            evidence = await asyncio.wait_for(reader(), timeout=20)
+        # The declared capability port replaces a getattr capability probe:
+        # adapters without the cross-date walk fall back to the bounded read.
+        if isinstance(self._read, BrokerActivityEvidencePort):
+            evidence = await asyncio.wait_for(self._read.read_activity_evidence(), timeout=20)
             activities, complete = evidence.activities, evidence.history_complete
         else:
             activities = await asyncio.wait_for(self._read.list_activities(after_ms=0, limit=100), timeout=20)

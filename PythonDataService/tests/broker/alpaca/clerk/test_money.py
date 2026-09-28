@@ -82,3 +82,12 @@ def test_extreme_finite_float_inputs_are_normalized_without_precision_loss() -> 
 def test_extreme_wire_exponents_are_named_refusals(value: str) -> None:
     with pytest.raises(MoneyInputError, match="supported"):
         normalize_money(value)
+
+
+def test_dollars_renders_signed_cents_with_two_decimals() -> None:
+    from app.broker.alpaca.clerk.money import dollars
+
+    assert dollars(0) == "0.00"
+    assert dollars(5) == "0.05"
+    assert dollars(125) == "1.25"
+    assert dollars(-125) == "-1.25"

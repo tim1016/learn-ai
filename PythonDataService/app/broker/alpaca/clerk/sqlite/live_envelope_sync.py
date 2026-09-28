@@ -487,6 +487,7 @@ class LiveEnvelopeSync:
             try:
                 cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
             except (ValueError, TypeError, KeyError):
+                logger.debug("Loss-hold cause facts could not be decoded; the hold stands.", exc_info=True)
                 return "unknown", "The original loss-hold evidence is incomplete. The hold stands."
             retained = observed_day_pnl(observation=reading.observation,
                 now_ms=self._repo.clock(), retained_start_ms=self._held_period_start(cause),

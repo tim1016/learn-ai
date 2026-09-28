@@ -301,26 +301,25 @@ describe("GoldenValidationWorkbenchComponent", () => {
     })));
     expect(review.mock.calls[0]?.[1]).not.toHaveProperty("authorized_program_version");
   });
-});
 
-
-it("presents provenance honestly and requires a deliberate Manual override acknowledgement", async () => {
-  const affected: GoldenValidation = { ...CASE, evidence_applicability: {
-    status: "affected", affected_issues: ["#2448"],
-    explanation: "Recorded returns omit the first session. Rerun, compare and review new evidence.",
-    requires_manual_override: true,
-  } };
-  const service = fakeService({ list: vi.fn(() => of([affected])) });
-  await render(GoldenValidationWorkbenchComponent, {
-    providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
+  it("presents provenance honestly and requires a deliberate Manual override acknowledgement", async () => {
+    const affected: GoldenValidation = { ...CASE, evidence_applicability: {
+      status: "affected", affected_issues: ["#2448"],
+      explanation: "Recorded returns omit the first session. Rerun, compare and review new evidence.",
+      requires_manual_override: true,
+    } };
+    const service = fakeService({ list: vi.fn(() => of([affected])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
+    });
+    const user = userEvent.setup();
+    expect(await screen.findByText(affected.evidence_applicability?.explanation ?? "Missing evidence disposition")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/strategy-lab?run=44");
+    await user.type(screen.getByRole("textbox", { name: "Review note" }), "I accept the recorded limitation.");
+    await user.click(screen.getByRole("button", { name: "Save review" }));
+    expect(service.review).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /Manual override:/ }));
+    await user.click(screen.getByRole("button", { name: "Save review" }));
+    await waitFor(() => expect(service.review).toHaveBeenCalledWith(7, expect.objectContaining({ acknowledge_provenance_risk: true })));
   });
-  const user = userEvent.setup();
-  expect(await screen.findByText(affected.evidence_applicability?.explanation ?? "Missing evidence disposition")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/strategy-lab?run=44");
-  await user.type(screen.getByRole("textbox", { name: "Review note" }), "I accept the recorded limitation.");
-  await user.click(screen.getByRole("button", { name: "Save review" }));
-  expect(service.review).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("checkbox", { name: /Manual override:/ }));
-  await user.click(screen.getByRole("button", { name: "Save review" }));
-  await waitFor(() => expect(service.review).toHaveBeenCalledWith(7, expect.objectContaining({ acknowledge_provenance_risk: true })));
 });

@@ -290,7 +290,7 @@ _RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
             "The deployment binding is durable; the shadow Clerk synthesizes every fill "
             "against this live account's real reads and submits nothing (ADR 0059 D2)."
         ),
-        next_action="Open the bot panel and verify the first synthesized shadow receipt.",
+        next_action="Open the bot panel and verify the first synthesized fill.",
     ),
     "live": _ReceiptCopy(
         duty="Alpaca live",

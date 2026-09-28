@@ -197,8 +197,8 @@ no profile — so the worker's refusal cannot reach it.
 
 ### Cutting over
 
-Run in the data-plane image against the Clerk volume, the way the arming and
-shadow CLIs are run. `/app/artifacts` is host-bind-mounted; a plan written to
+Run in the data-plane image against the Clerk volume, the way the shadow
+CLI is run. `/app/artifacts` is host-bind-mounted; a plan written to
 `/tmp` inside a `--rm` container disappears before it can be applied.
 
 ```

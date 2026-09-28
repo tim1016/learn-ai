@@ -25,12 +25,12 @@ def read_budget_authority(runtime: ActiveClerkRuntime | None) -> BudgetAuthority
     runtime = _require_runtime(runtime)
     repo = runtime.sqlite_repository
     assert repo is not None
-    with repo._write_lock:
+    with repo.write_fence() as conn:
         version = repo.budget_authority_version()
         return BudgetAuthorityState(
             state="budget" if version == 2 else "legacy", account_id=repo.account_id,
             authorization_version=version, review_token=authority_review_token(repo),
-            active_run_count=repo._conn.execute("SELECT COUNT(*) FROM runs WHERE state='ACTIVE'").fetchone()[0],
+            active_run_count=conn.execute("SELECT COUNT(*) FROM runs WHERE state='ACTIVE'").fetchone()[0],
             detail=("Fresh Deploys require dollar budgets and current consent. Historical grants cannot authorize trading." if version == 2 else
                     "Switching to budgets stops the lane's bots and reconciles custody. Existing positions, orders and fees remain recoverable. Then review fresh dollars and terms in Deploy."),
         )

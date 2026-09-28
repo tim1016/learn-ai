@@ -103,6 +103,13 @@ def consent_cents(value: object) -> int:
     return cents
 
 
+def dollars(cents: int) -> str:
+    """Render whole cents as a signed two-decimal dollar string (display only)."""
+    sign = "-" if cents < 0 else ""
+    value = abs(cents)
+    return f"{sign}{value // 100}.{value % 100:02d}"
+
+
 def cash_admits(*, cash: object, claims: object, required: object) -> bool:
     """Compare exact normalized money with no tolerance or display rounding."""
     with money_context():

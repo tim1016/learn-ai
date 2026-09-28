@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict
@@ -10,6 +11,8 @@ from app.broker.contract.errors import BrokerError
 from app.broker_configuration.errors import BrokerConfigurationError, RevisionConflict
 from app.broker_configuration.service import BrokerConfigurationService
 from app.schemas.broker_configuration import AccountRiskApplyRequest, AccountRiskClearRequest, AccountRiskStateResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _require_runtime(runtime: ActiveClerkRuntime | None) -> ActiveClerkRuntime:
@@ -27,7 +30,7 @@ def read_account_risk_state(
     runtime = _require_runtime(runtime)
     repo, sync = runtime.sqlite_repository, runtime.envelope_sync
     selection = service.selection()
-    with repo._write_lock:
+    with repo.write_fence():
         snapshot = sync.risk_snapshot()
         readiness = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
         policy, cause = snapshot.policy, snapshot.hold
@@ -60,8 +63,9 @@ async def apply_account_risk_limits(
     # A failed observation cannot be described as a successful clearance.
     try:
         await sync.observe()
-    except BrokerError:
+    except BrokerError as error:
         sync.discard_observation()
+        logger.warning("Account risk apply discarded a failed cash/risk observation.", exc_info=error)
 
     def commit() -> AccountRiskStateResponse:
         with service.selection_handover():

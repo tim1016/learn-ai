@@ -355,7 +355,7 @@ class AlpacaLiveGraduationService:
                     or binding is None or binding.profile_id != selection.effective_profile_id
                     or binding.revision != selection.effective_revision):
                 raise CutoverRefused("The effective Shadow account or profile changed. Refresh Configuration.")
-            with repo._write_lock:
+            with repo.write_fence():
                 policy = repo.account_risk_policy()
                 if policy is None:
                     raise CutoverRefused("Apply account risk limits in Configuration before reviewing graduation.")

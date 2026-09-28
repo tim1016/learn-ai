@@ -100,10 +100,10 @@ async def _activate_shadow_from_configuration(account_id: str) -> ShadowActivati
             record = await activate_shadow_clerk_authority(live_account_id=served, artifacts_root=root)
             repo = ClerkSqliteRepository.open(account_id=record.account_id, artifacts_root=root)
             try:
-                with repo._write_lock:
+                with repo.write_fence() as conn:
                     # Existing history needs the visible guarded budget upgrade.
                     # A fresh empty account can adopt budgets as part of this act.
-                    history = any(repo._conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() for table in ("runs", "orders", "fills", "deployment_budgets"))
+                    history = any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() for table in ("runs", "orders", "fills", "deployment_budgets"))
                     if not history:
                         SimulatedAccountProjection(repo=repo, artifacts_root=root).observe(reference_cash=initial_reference,
                             observed_at_ms=repo.clock(), now_ms=repo.clock())

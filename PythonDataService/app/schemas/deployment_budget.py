@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.broker.alpaca.clerk.models import EpochMs
-from app.broker.alpaca.clerk.money import consent_cents
+from app.broker.alpaca.clerk.money import consent_cents, dollars
 from app.schemas.account_authority import AuthorityKind
 
 
@@ -21,8 +21,7 @@ class DeploymentBudgetInput(BaseModel):
     @field_validator("amount_usd")
     @classmethod
     def validate_amount(cls, value: str) -> str:
-        cents = consent_cents(value)
-        return f"{cents // 100}.{cents % 100:02d}"
+        return dollars(consent_cents(value))
 
 
 class DeployBudgetConsent(BaseModel):

@@ -51,6 +51,11 @@ export class DeployParametersSectionComponent {
   readonly qualifiedConfigurationSelected = output<QualifiedDeployConfiguration>();
   readonly dryRunRequested = output();
   protected readonly qualifiedPicker = viewChild<InstrumentCardComponent>('qualifiedPicker');
+  // The raw `app-instrument-card` rather than `app-symbol-picker`: this host
+  // needs the card's `tickerPool()` lookup and coverage-gate controls, which
+  // the picker wrapper does not expose. Membership and backfill gating stay
+  // inside the shared card (ADR 0066); this value is only the picker's
+  // required shape and never a hand-rolled symbol suggestion.
   protected readonly qualifiedPickerValue: TickerRange = { symbol: '', from: '', to: '', resolution: 'daily' };
   protected readonly coverageDetailsOpen = signal(false);
   private pendingQualified: QualifiedDeployConfiguration | null = null;

@@ -1,18 +1,18 @@
 <div class="alpaca-deploy">
   @if (shownReceipt(); as deployReceipt) {
-      <app-deploy-launch-receipt [receipt]="deployReceipt" />
-      @if (deployReceipt.status === 'pending') {
-        <button type="button" (click)="recoveredCommand.reload()">Check deployment status</button>
-      }
+    <app-deploy-launch-receipt [receipt]="deployReceipt" />
+    @if (deployReceipt.status === 'pending') {
+      <button type="button" (click)="recoveredCommand.reload()">Check deployment status</button>
+    }
+    <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
+  } @else if (recoverySid() && !submitting() && !hasFrozenCommand()) {
+    <section role="status" aria-label="Recover deployment result">
+      <h3>Checking the recorded deployment</h3>
+      <p>A refresh never starts a second bot. The recorded result will show whether money was committed and the bot launched.</p>
+      @if (recoveredCommand.error()) { <p role="alert">The deployment result could not be read. Check again before preparing a fresh deployment.</p> }
+      <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
       <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
-    } @else if (recoverySid() && !submitting() && !hasFrozenCommand()) {
-      <section role="status" aria-label="Recover deployment result">
-        <h3>Checking the recorded deployment</h3>
-        <p>A refresh never starts a second bot. The recorded result will show whether money was committed and the bot launched.</p>
-        @if (recoveredCommand.error()) { <p role="alert">The deployment result could not be read. Check again before preparing a fresh deployment.</p> }
-        <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
-        <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
-      </section>
+    </section>
   } @else if (currentView(); as view) {
     @if (stalenessNotice(); as notice) {
       <section class="deploy-stale" role="alert" aria-label="Deployment readiness is stale">

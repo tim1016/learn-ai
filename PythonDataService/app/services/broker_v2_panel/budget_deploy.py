@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.money import (
     cents_required,
     cents_spendable,
     consent_cents,
+    dollars,
     money_context,
     normalize_money,
 )
@@ -43,12 +44,6 @@ from app.schemas.deployment_budget import (
 from app.services.bot_runner import UnknownBotError, get_bot_task_registry
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.market_liveness import get_market_liveness_store
-
-
-def dollars(cents: int) -> str:
-    sign = "-" if cents < 0 else ""
-    value = abs(cents)
-    return f"{sign}{value // 100}.{value % 100:02d}"
 
 
 def display_dollars(amount: Decimal) -> str:
@@ -108,7 +103,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             risk_revision = 0
             risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         else:
-            with repo._write_lock:
+            with repo.write_fence():
                 if repo.budget_authority_version() < 2:
                     raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
                 sync = runtime.envelope_sync
@@ -215,7 +210,7 @@ async def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployR
 def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str, request: AlpacaPaperDeployRequest | None) -> BudgetDeployCommandReceipt | None:
     repo = runtime.sqlite_repository
     assert repo is not None
-    with repo._write_lock:
+    with repo.write_fence():
         row = repo.deployment_budget(sid)
         if row is None:
             return None
@@ -253,7 +248,7 @@ class _EntryConfiguration(BaseModel):
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
     repo = runtime.sqlite_repository
     assert repo is not None
-    with repo._write_lock:
+    with repo.write_fence():
         return _fenced_budget_view(runtime, sid)
 
 

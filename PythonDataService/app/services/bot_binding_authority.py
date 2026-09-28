@@ -314,8 +314,8 @@ class SyntheticBindingAuthority(BindingAuthority):
         if consent is None or repo is None:
             return
         if repo.budget_authority_version() < 2:
-            with repo._write_lock:
-                if repo._conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
+            with repo.write_fence() as conn:
+                if conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
                     raise StartAdmissionUnavailable("This earlier Dry Run cannot be restarted.", detail="Review a fresh deployment identity and simulated starting cash.")
                 commit_budget_authority_cutover(repo, actor=consent.actor,
                     reviewed_token=authority_review_token(repo), stop_receipt="fresh-private-authority-with-no-runs")

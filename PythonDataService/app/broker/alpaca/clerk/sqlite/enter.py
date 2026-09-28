@@ -78,6 +78,7 @@ from decimal import Decimal
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.arming_admission import require_arming_admission
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_COMMITMENT_MISSING
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.envelope_admission import require_envelope_admission
@@ -226,7 +227,7 @@ def accept_enter(
         budget = repo.deployment_budget(strategy_instance_id)
         if repo.budget_authority_version() >= 2 and budget is None:
             raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
+                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
                 why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
             ))
         if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:

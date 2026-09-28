@@ -281,7 +281,7 @@ def test_shadow_receipt_names_the_shadow_world_not_paper(monkeypatch: pytest.Mon
         "The deployment binding is durable; the shadow Clerk synthesizes every fill "
         "against this live account's real reads and submits nothing (ADR 0059 D2)."
     )
-    assert receipt.next_action == "Open the bot panel and verify the first synthesized shadow receipt."
+    assert receipt.next_action == "Open the bot panel and verify the first synthesized fill."
     prose = (receipt.message, receipt.explanation, receipt.next_action)
     assert not any("paper" in sentence.lower() for sentence in prose)
 

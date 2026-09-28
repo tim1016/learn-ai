@@ -66,7 +66,7 @@ def require_envelope_admission(
         raise _refuse(
             LIVE_ENVELOPE_DISAGREEMENT,
             "The ALPACA_LIVE_* environment values differ from the envelope sealed "
-            "at arming; re-arm to change them.",
+            "for this deployment; review a fresh Deploy to change them.",
         )
     observation = require_current_risk_admission(repo, envelope=envelope, now_ms=now_ms)
     price = leg.limit_price if leg.order_type is OrderType.LIMIT else reference_price
@@ -79,6 +79,11 @@ def require_envelope_admission(
     # the notional the reservation will claim are the same one property.
     # Preserve the historical sibling-row shape before budget cutover. The
     # budget branch below additionally seals the exact price for replay.
+    # Transition seam (PRD #2540): the legacy composition above is the v1
+    # affordability verdict — no fee provision, no budget claims. It is
+    # unreachable once budget authority is version 2 (enter.py refuses a
+    # budgetless deployment first) and dies out with the cutover; do not
+    # extend it. New admission facts belong in budget_entry_decision.
     reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=float(price))
     try:
         reserved = repo.reserved_cash_decimal(seen_before_ms=observation.fills_seen_before_ms)

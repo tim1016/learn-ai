@@ -31,7 +31,8 @@ import logging
 import secrets
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -253,6 +254,20 @@ class ClerkSqliteRepository(
         """The effective, replayable policy; call inside admission's writer fence."""
         with self._write_lock:
             return read_account_risk_policy(self._conn)
+
+    @contextmanager
+    def write_fence(self) -> Iterator[sqlite3.Connection]:
+        """The one public custody write fence for callers outside this package.
+
+        Yields the repository's connection under the same reentrant write
+        coordinator every custody transition takes, so a fenced read/write
+        block serializes with commit/append/recovery the same way internal
+        callers already do. Cross-package code must use this seam rather
+        than the private lock/connection, keeping the composite free to
+        change its internals.
+        """
+        with self._write_lock:
+            yield self._conn
 
     @property
     def account_id(self) -> str:

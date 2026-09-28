@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 
 LEGACY_AUTHORIZATION = 1
 BUDGET_AUTHORIZATION = 2
+# Post-cutover admission refusal that names the budget commitment itself, so
+# consumers keying on reason codes do not misclassify a budget fact as an
+# envelope-evidence fact. Transient like the envelope set: the refused ENTER
+# is retried on the next decision clock until the operator resolves it with a
+# fresh Deploy.
+BUDGET_COMMITMENT_MISSING = "BUDGET_COMMITMENT_MISSING"
+BUDGET_ADMISSION_REASON_CODES: frozenset[str] = frozenset({BUDGET_COMMITMENT_MISSING})
 SCHEMA_V21_STATEMENTS = (
     "ALTER TABLE control_meta ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1 CHECK(authorization_version IN (1,2))",
     "CREATE TRIGGER trg_budget_authority_monotonic BEFORE UPDATE OF authorization_version ON control_meta "

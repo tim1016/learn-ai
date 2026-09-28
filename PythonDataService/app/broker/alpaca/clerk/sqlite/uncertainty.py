@@ -20,6 +20,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.live_arming import ARMING_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
     LossHoldClearBasis,
@@ -1151,6 +1152,7 @@ TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
     )
     | ENVELOPE_ADMISSION_REASON_CODES
     | ARMING_ADMISSION_REASON_CODES
+    | BUDGET_ADMISSION_REASON_CODES
 )
 
 

@@ -20657,12 +20657,12 @@ export interface components {
          *     or the send-time re-price of an exit sent after its session. A
          *     regular-hours run's EXIT on the day's last bar goes out after the close
          *     as such a limit, so Start of a regular-hours run refuses
-         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-         *     Resume. A held position must pass the carry-over and checkpoint gates;
-         *     unsupported carry-over requires Flatten before Resume (#2504).
+         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
+         *     never carried into a new deployment; resolving it requires Flatten before
+         *     a fresh Deploy (#2504).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
-         *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+         *     ``live_envelope``, sealed at Deploy. ``extra="forbid"`` refuses a live-only
          *     value (``loss_usd``, a session count) offered here rather than dropping it,
          *     and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
          *     ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
