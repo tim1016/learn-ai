@@ -189,3 +189,24 @@ def test_corrected_fill_reprices_original_fee_day(day_pnl_repo) -> None:
 
     today = custody_fee_attribution(repo._conn, now_ms=NOON, from_ms=et_midnight_ms(date(2026, 9, 8)), to_ms=NOON)
     assert today.known and not today.shares
+
+
+def test_one_observed_order_fee_keeps_other_order_provision_through_custody(tmp_path) -> None:
+    now = NOON + 86_400_000
+    repo = ClerkSqliteRepository.initialize(account_id="PA-partial-fees", artifacts_root=tmp_path, clock=_clock_at(now))
+    try:
+        fills = [_activity(key, "FILL", NOON).model_copy(update={
+            "native_order_id": f"order-{key}", "symbol": "SPY", "side": "sell",
+            "quantity": 1000, "price": 100, "net_amount": None,
+        }) for key in ("a", "b")]
+        fee = _activity("fee-a", "FEE", NOON, -2).model_copy(update={"native_order_id": "order-a"})
+        record_fee_evidence(repo, [*fills, fee], checked_at_ms=now, history_complete=True)
+        observed = custody_fee_attribution(repo._conn, now_ms=now)
+        assert observed.known
+        assert observed.total_for("external:order-a") == Decimal("2.00")
+        assert observed.total_for("external:order-b") == Decimal("2.25")
+        assert observed.unobserved_cash_claim(cash_seen_before_ms=now) == Decimal("2.25")
+        # A newer cash read cannot release this still-unmatched obligation.
+        assert repo.account_budget(cash=1000, seen_before_ms=now).fee_claims == Decimal("2.25")
+    finally:
+        repo.close()

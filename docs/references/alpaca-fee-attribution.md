@@ -13,3 +13,15 @@ Broker payloads currently provide order IDs but no reliable structured component
 `custody_fee_attribution(connection, now_ms=...)` projects under the caller's SQLite fence. `total_for(subject_id)` includes attributed fees once. `unobserved_cash_claim(cash_seen_before_ms=...)` excludes reported fees already owned by the unseen-fill claim and only reserves activity charges not yet proven in cash. Simulation consumers pass `modelled_fees_seen_before_ms` once modelled settlement is already deducted from their cash projection. Unknown attribution must fail new admission closed. This does not revoke reducing recovery.
 
 Provider pagination reference: [Alpaca Trading API account activities](https://docs.alpaca.markets/us/reference/getaccountactivities-2), checked 2026-09-27, limits page size to 100. The read adapter retains explicit short-final-page proof, preserves malformed/duplicate evidence for attribution, and applies its existing three-page bound. An unfinished window remains unproven; UI does not pretend a bounded read exhausted history.
+
+Partial settlement replaces only the proven fill/order and component scope.
+The full-day model is settled once and apportioned to subjects as before; each
+subject's component cents are then partitioned among its fill IDs with the same
+exact remainder rule. This internal partition only identifies which pending
+cents a corresponding charge replaces. It does not round another fee total or
+reallocate unrelated subjects when one order settles. Unmatched scopes retain
+estimated provisions, including after a refund or a later account-cash read.
+An invalid coverage link cannot remove a reported fill fee. A component charge
+cannot replace an undifferentiated reported total without component-overlap
+proof. Regression cases cover partial orders, components, fills of one subject,
+refunds, reported fees, and the persisted custody-to-budget consumer.

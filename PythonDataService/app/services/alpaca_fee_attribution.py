@@ -29,6 +29,7 @@ from app.broker.alpaca.regulatory_fees import (
     FeeComponent,
     FillFees,
     RateNotPinnedError,
+    SessionFees,
     fees_for_fill,
     settle_session,
 )
@@ -37,6 +38,7 @@ from app.broker.contract.models import OrderSide
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
 FeeState = Literal["estimated", "modelled_settled", "observed"]
+COMPONENTS: tuple[FeeComponent, ...] = ("sec", "taf", "cat")
 
 
 @dataclass(frozen=True)
@@ -152,12 +154,52 @@ def _weights(
 ) -> dict[str, Decimal]:
     weights: dict[str, Decimal] = {}
     for fill, price in zip(fills, priced, strict=True):
-        components = (component,) if component else ("sec", "taf", "cat")
+        components = (component,) if component else COMPONENTS
         values = [getattr(price, name) for name in components]
         if any(value is None for value in values):
             raise ValueError("the fee component has no pinned rate")
         weights[fill.subject_id] = weights.get(fill.subject_id, ZERO) + sum(values, ZERO)
     return weights
+
+
+def _provisions_by_fill(
+    fills: Sequence[FeeFill], priced: Sequence[FillFees], modelled: SessionFees,
+) -> dict[tuple[str, FeeComponent], Decimal]:
+    """Partition existing subject cents for replacement, never re-round a scope.
+
+    First preserve the canonical full-population subject allocation. Within
+    each subject only, the same Hamilton rule partitions those cents by fill
+    identity so settling one order cannot erase another order's provision.
+    """
+    provisions: dict[tuple[str, FeeComponent], Decimal] = {}
+    grouped: dict[str, list[tuple[FeeFill, FillFees]]] = {}
+    for fill, price in zip(fills, priced, strict=True):
+        grouped.setdefault(fill.subject_id, []).append((fill, price))
+    for component in COMPONENTS:
+        subjects = apportion_cents(getattr(modelled, component), _weights(fills, priced, component))
+        for subject, amount in subjects.items():
+            weights = {fill.fill_id: getattr(price, component)
+                       for fill, price in grouped[subject]}
+            for fill_id, value in apportion_cents(amount, weights).items():
+                provisions[fill_id, component] = value
+    return provisions
+
+
+def _charge_scope(charge: FeeCharge, fills: Sequence[FeeFill]) -> list[FeeFill]:
+    """Only explicit fill/order identity narrows an otherwise daily charge."""
+    selected = list(fills)
+    if charge.covers_fill_ids:
+        wanted = set(charge.covers_fill_ids)
+        selected = [fill for fill in selected if fill.fill_id in wanted]
+        if {fill.fill_id for fill in selected} != wanted:
+            raise ValueError("its explicit fill coverage is unavailable")
+    if charge.native_order_id:
+        if charge.covers_fill_ids and any(fill.native_order_id != charge.native_order_id for fill in selected):
+            raise ValueError("its fill and order linkage disagree")
+        selected = [fill for fill in selected if fill.native_order_id == charge.native_order_id]
+        if len({fill.subject_id for fill in selected}) != 1:
+            raise ValueError("the order does not have one proven custody owner")
+    return selected
 
 
 @money_context()
@@ -176,7 +218,8 @@ def attribute_session_fees(
 
     The input is a canonical effective fill window: corrections replace their
     superseded fills upstream. Duplicate activity identities collapse; conflicting
-    copies fail closed. Real settlements replace provisions for the entire day.
+    copies fail closed. Real settlements replace only the corresponding
+    fill/order and component provisions; unmatched obligations remain estimated.
     """
     shares: list[FeeShare] = []
     unresolved: list[str] = []
@@ -210,33 +253,11 @@ def attribute_session_fees(
         if not activities_complete:
             unresolved.append("The broker activity read does not cover this fee day. Refresh account evidence.")
     reported = {fill.fill_id: fill for fill in fills if fill.reported_fee is not None and not simulated}
-    covered_ids = {key for charge in unique.values() for key in charge.covers_fill_ids}
-    for key, fill in sorted(reported.items()):
-        if key not in covered_ids:
-            shares.append(
-                FeeShare(f"fill:{key}", fill.subject_id, fill.reported_fee, "observed", fill.observed_at_ms, True)
-            )
-    if not unique:
-        if reported:
-            if len(reported) != len(fills):
-                unresolved.append(
-                    "Some fill fees are reported but the remaining fee coverage is unknown. Reconcile fees."
-                )
-        elif predicted is None:
-            unresolved.append("Fee rates are not pinned for this day. Review the fee model before deploying.")
-        elif population_complete:
-            state: FeeState = "modelled_settled" if simulated and session_ended else "estimated"
-            for component in ("sec", "taf", "cat"):
-                amount = getattr(modelled, component)
-                portions = apportion_cents(amount, _weights(fills, priced, component))
-                shares.extend(
-                    FeeShare(f"model:{trade_date}:{component}", key, value, state, settlement_at_ms)
-                    for key, value in portions.items()
-                    if value
-                )
-        return FeeAttribution(tuple(shares), unattributed, tuple(dict.fromkeys(unresolved)), None, predicted)
+    settled = {(key, component) for key in reported for component in COMPONENTS}
+    replaced_reported: set[str] = set()
+    price_by_id = {fill.fill_id: price for fill, price in zip(fills, priced, strict=True)}
     observed = sum((charge.amount for charge in unique.values() if charge.amount is not None), ZERO)
-    if any(charge.amount is None for charge in unique.values()):
+    if not unique or any(charge.amount is None for charge in unique.values()):
         observed = None
     original: dict[str, dict[str, Decimal]] = {}
     refunded: dict[str, Decimal] = {}
@@ -263,21 +284,23 @@ def attribute_session_fees(
             reason = "the settlement is not in whole cents"
         elif amount < 0:
             reason = "the refund has no original-charge linkage"
-        elif any(fill.reported_fee for fill in reported.values()) and not charge.covers_fill_ids:
-            reason = "overlap with reported fill fees is unproven"
         elif not session_ended:
             reason = "the fee day is still open and settlement completeness is not proven"
         elif not population_complete or not activities_complete:
             reason = "the fee population or activity window is incomplete"
-        elif charge.native_order_id:
-            subjects = {fill.subject_id for fill in fills if fill.native_order_id == charge.native_order_id}
-            if len(subjects) == 1:
-                portions = {subjects.pop(): amount}
-            else:
-                reason = "the order does not have one proven custody owner"
         else:
             try:
-                portions = apportion_cents(amount, _weights(fills, priced, charge.component))
+                selected = _charge_scope(charge, fills)
+                reported_overlap = {fill.fill_id for fill in selected} & reported.keys()
+                if reported_overlap and (not reported_overlap <= set(charge.covers_fill_ids) or charge.component is not None):
+                    raise ValueError("overlap with reported fill fees is unproven")
+                if charge.native_order_id:
+                    portions = {selected[0].subject_id: amount}
+                else:
+                    portions = apportion_cents(amount, _weights(selected, [price_by_id[fill.fill_id] for fill in selected], charge.component))
+                settled.update((fill.fill_id, component) for fill in selected
+                               for component in ((charge.component,) if charge.component else COMPONENTS))
+                replaced_reported.update(reported_overlap)
             except ValueError as exc:
                 reason = str(exc)
         if reason is not None:
@@ -294,4 +317,20 @@ def attribute_session_fees(
             for key, value in sorted(portions.items())
             if value
         )
+    for key, fill in sorted(reported.items()):
+        if key not in replaced_reported:
+            shares.append(FeeShare(f"fill:{key}", fill.subject_id, fill.reported_fee, "observed", fill.observed_at_ms, True))
+    pending = {(fill.fill_id, component) for fill in fills for component in COMPONENTS} - settled
+    if pending and predicted is None:
+        unresolved.append("Fee rates are not pinned for this day. Review the fee model before deploying.")
+    elif pending and population_complete:
+        provisions = _provisions_by_fill(fills, priced, modelled)
+        state: FeeState = "modelled_settled" if simulated and session_ended else "estimated"
+        for component in COMPONENTS:
+            portions: dict[str, Decimal] = {}
+            for fill in fills:
+                if (fill.fill_id, component) in pending:
+                    portions[fill.subject_id] = portions.get(fill.subject_id, ZERO) + provisions[fill.fill_id, component]
+            shares.extend(FeeShare(f"model:{trade_date}:{component}", subject, amount, state, settlement_at_ms)
+                          for subject, amount in sorted(portions.items()) if amount)
     return FeeAttribution(tuple(shares), unattributed, tuple(dict.fromkeys(unresolved)), observed, predicted)

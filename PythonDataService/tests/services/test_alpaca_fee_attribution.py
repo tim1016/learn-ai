@@ -57,8 +57,10 @@ def test_component_weights_use_sells_only_for_sec_and_both_sides_for_cat() -> No
     fills = [_fill("buyer", side=OrderSide.BUY, quantity="100"), _fill("seller", quantity="1", price="100")]
     sec = _attribute(fills, [FeeCharge("sec", D("0.10"), 100, component="sec")])
     cat = _attribute(fills, [FeeCharge("cat", D("0.10"), 100, component="cat")])
-    assert sec.total_for("seller") == D("0.10") and sec.total_for("buyer") == 0
-    assert cat.total_for("buyer") == D("0.10") and cat.total_for("seller") == 0
+    assert {share.subject_id: share.amount for share in sec.shares if share.state == "observed"} == {"seller": D("0.10")}
+    assert {share.subject_id: share.amount for share in cat.shares if share.state == "observed"} == {"buyer": D("0.10")}
+    assert sec.total_for("seller") == D("0.11") and sec.total_for("buyer") == D("0.01")
+    assert cat.total_for("buyer") == D("0.10") and cat.total_for("seller") == D("0.02")
 
 
 def test_same_symbol_bot_and_manual_population_get_separate_exact_shares() -> None:
@@ -85,10 +87,55 @@ def test_observed_settlement_replaces_pending_not_added_to_it() -> None:
     assert observed.unobserved_cash_claim(cash_seen_before_ms=101) == 0
 
 
+def test_order_settlement_preserves_other_orders_pending_component_shares() -> None:
+    fills = [_fill(key, quantity="1000", price="100") for key in ("bot:a", "bot:b")]
+    result = _attribute(fills, [FeeCharge("only-a", D("2.00"), 100, native_order_id="order-bot:a")])
+    assert result.known
+    assert result.predicted_total == D("4.52")
+    assert result.total_for("bot:a") == D("2.00")
+    assert result.total_for("bot:b") == D("2.25")
+    assert {share.state for share in result.shares if share.subject_id == "bot:b"} == {"estimated"}
+    # A later cash observation covers only the actual fee. The unmatched
+    # order's provision remains until its own settlement is evidenced.
+    assert result.unobserved_cash_claim(cash_seen_before_ms=101) == D("2.25")
+
+
+def test_component_settlement_preserves_other_component_provisions() -> None:
+    fills = [_fill("a", quantity="1000", price="100")]
+    pending = _attribute(fills)
+    result = _attribute(fills, [FeeCharge("sec-a", D("2.00"), 100, native_order_id="order-a", component="sec")])
+    assert result.known
+    remaining = {share.charge_id: share.amount for share in result.shares if share.state == "estimated"}
+    assert remaining == {share.charge_id: share.amount for share in pending.shares if not share.charge_id.endswith(":sec")}
+    assert result.total_for("a") == D("2.21")
+
+
+def test_explicit_fill_scope_does_not_settle_sibling_fill_of_same_owner() -> None:
+    fills = [FeeFill(key, "bot:a", OrderSide.SELL, D("1000"), D("100"), "order-a") for key in ("a", "b")]
+    result = _attribute(fills, [FeeCharge("only-a", D("2.00"), 100, covers_fill_ids=("a",))])
+    assert result.known and result.total_for("bot:a") == D("4.25")
+    assert result.unobserved_cash_claim(cash_seen_before_ms=101) == D("2.25")
+
+
+def test_refund_does_not_release_unrelated_pending_provision() -> None:
+    fills = [_fill(key, quantity="1000", price="100") for key in ("a", "b")]
+    result = _attribute(fills, [FeeCharge("only-a", D("2.00"), 100, native_order_id="order-a"),
+                                FeeCharge("refund", D("-2.00"), 200, refund_of="only-a")])
+    assert result.known and result.total_for("a") == 0 and result.total_for("b") == D("2.25")
+
+
+def test_reported_fill_preserves_unreported_sibling_provisions() -> None:
+    fills = [_fill("a", quantity="1000", price="100", fee=D("2.00")), _fill("b", quantity="1000", price="100")]
+    result = _attribute(fills)
+    assert result.known and result.total_for("a") == D("2.00") and result.total_for("b") == D("2.25")
+    assert result.unobserved_cash_claim(cash_seen_before_ms=0) == D("2.25")
+
+
 def test_unknown_population_and_zero_weights_remain_account_unattributed() -> None:
     for kwargs in ({"population_complete": False}, {"activities_complete": False}):
         result = _attribute([_fill("a")], [FeeCharge("c", D("0.05"), 100)], **kwargs)
-        assert not result.known and result.unattributed == D("0.05") and not result.shares
+        assert not result.known and result.unattributed == D("0.05")
+        assert all(share.state == "estimated" for share in result.shares)
     result = _attribute([_fill("a", side=OrderSide.BUY)], [FeeCharge("sec", D("0.05"), 100, component="sec")])
     assert not result.known and result.unattributed == D("0.05")
 
@@ -131,7 +178,23 @@ def test_linked_refund_reverses_original_shares() -> None:
 
 def test_unlinked_refund_is_not_guessed_as_new_bot_cash() -> None:
     result = _attribute([_fill("a")], [FeeCharge("refund", D("-0.05"), 200)])
-    assert not result.known and not result.shares and result.unattributed == D("-0.05")
+    assert not result.known and result.unattributed == D("-0.05")
+    assert result.total_for("a") == D("0.03")
+    assert all(share.state == "estimated" for share in result.shares)
+
+
+def test_invalid_fill_coverage_never_discards_reported_fee() -> None:
+    fills = [_fill("a", fee=D("0.05"))]
+    result = _attribute(fills, [FeeCharge("wrong", D("0.06"), 100, native_order_id="missing-order", covers_fill_ids=("a",))])
+    assert not result.known and result.unattributed == D("0.06")
+    assert result.total_for("a") == D("0.05")
+    assert result.shares[0].included_in_fill
+
+
+def test_unlinked_order_charge_can_coexist_with_unrelated_reported_fill() -> None:
+    result = _attribute([_fill("a", fee=D("0.05")), _fill("b")],
+                        [FeeCharge("order-b", D("0.02"), 100, native_order_id="order-b")])
+    assert result.known and result.total_for("a") == D("0.05") and result.total_for("b") == D("0.02")
 
 
 def test_simulation_ignores_real_fee_activities_and_reported_real_fee() -> None:
