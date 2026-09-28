@@ -147,6 +147,16 @@
       "path_template": "/configuration/profiles/{profile_id}/revisions/{revision}/account-pin",
       "requires_account": false
     },
+    "configuration_budget_authority_apply": {
+      "method": "POST",
+      "path_template": "/configuration/budget-authority/apply",
+      "requires_account": false
+    },
+    "configuration_budget_authority_read": {
+      "method": "GET",
+      "path_template": "/configuration/budget-authority",
+      "requires_account": false
+    },
     "configuration_credential_slots": {
       "method": "GET",
       "path_template": "/configuration/credential-slots",

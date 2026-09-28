@@ -101,3 +101,20 @@ class BudgetDeployCommandReceipt(BaseModel):
     explanation: str
     next_action: str
     panel_path: str
+
+
+class BudgetAuthorityState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["legacy", "budget"]
+    account_id: str
+    authorization_version: int
+    active_run_count: int
+    review_token: str
+    detail: str
+
+
+class BudgetAuthorityApplyRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    review_token: str = Field(min_length=1, max_length=128)

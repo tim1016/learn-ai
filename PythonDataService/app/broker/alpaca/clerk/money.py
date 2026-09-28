@@ -55,12 +55,20 @@ def normalize_money(value: object) -> Decimal:
         raise MoneyInputError("Money evidence is not a decimal number.") from exc
     if not amount.is_finite():
         raise MoneyInputError("Money evidence is not finite.")
-    # Strip insignificant zeros without ambient-context rounding.
-    with money_context():
-        canonical = amount.normalize()
-    if canonical.as_tuple().exponent < -324 or canonical.copy_abs() >= Decimal("1e309"):
+    # Reject unsupported exponents before any context arithmetic. Otherwise
+    # a short wire value such as 1e1000000 raises Decimal.Overflow instead of
+    # the named input refusal. Insignificant trailing zeros do not add scale.
+    if amount.is_zero():
+        return ZERO
+    parts = amount.as_tuple()
+    significant = len(parts.digits)
+    while significant and parts.digits[significant - 1] == 0:
+        significant -= 1
+    scale = parts.exponent + len(parts.digits) - significant
+    if amount.adjusted() >= 309 or scale < -324:
         raise MoneyInputError("Money evidence exceeds the supported magnitude or decimal scale.")
-    return amount
+    with money_context():
+        return amount.normalize()
 
 
 def notional(quantity: object, price: object) -> Decimal:

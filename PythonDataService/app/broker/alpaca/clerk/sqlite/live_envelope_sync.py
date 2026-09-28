@@ -451,6 +451,9 @@ class LiveEnvelopeSync:
         of that method -- the cadence and the guarded operator clear alike --
         judges against the seal the ledger holds right now.
         """
+        if self._repo.budget_authority_version() >= 2:
+            self.envelope.sealed = None
+            return
         if self._arming is None or self.envelope.values is None:
             return
         self._assign_sealed(self._arming.refresh(self._repo.clock(), self.envelope.values))

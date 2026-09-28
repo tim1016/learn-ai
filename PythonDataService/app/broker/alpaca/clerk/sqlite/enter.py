@@ -223,12 +223,18 @@ def accept_enter(
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         require_admission(repo, strategy_instance_id=strategy_instance_id)
+        budget = repo.deployment_budget(strategy_instance_id)
+        if repo.budget_authority_version() >= 2 and budget is None:
+            raise AdmissionBlockedError(CapabilityDecision(
+                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
+                why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
+            ))
         if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
             raise AdmissionBlockedError(CapabilityDecision(
                 allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
                 why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
             ))
-        if arming is not None:
+        if arming is not None and repo.budget_authority_version() < 2:
             require_arming_admission(arming, strategy_instance_id=strategy_instance_id, now_ms=repo.clock())
         reservation = (
             None

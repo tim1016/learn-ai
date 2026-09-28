@@ -6473,6 +6473,65 @@
         "title": "BrokerPosition",
         "type": "object"
       },
+      "BudgetAuthorityApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "review_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Review Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_token"
+        ],
+        "title": "BudgetAuthorityApplyRequest",
+        "type": "object"
+      },
+      "BudgetAuthorityState": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "active_run_count": {
+            "title": "Active Run Count",
+            "type": "integer"
+          },
+          "authorization_version": {
+            "title": "Authorization Version",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "review_token": {
+            "title": "Review Token",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "legacy",
+              "budget"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "account_id",
+          "authorization_version",
+          "active_run_count",
+          "review_token",
+          "detail"
+        ],
+        "title": "BudgetAuthorityState",
+        "type": "object"
+      },
       "BudgetDeployCommandReceipt": {
         "additionalProperties": false,
         "description": "Recoverable durable result; process absence never fabricates launch.",
@@ -13918,6 +13977,11 @@
             ],
             "title": "Review Token"
           },
+          "risk_limits_summary": {
+            "default": "Account risk evidence is unavailable.",
+            "title": "Risk Limits Summary",
+            "type": "string"
+          },
           "risk_revision": {
             "default": 0,
             "minimum": 0.0,
@@ -14063,6 +14127,17 @@
               }
             ],
             "title": "Observed At Ms"
+          },
+          "outstanding_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outstanding Cash Usd"
           },
           "pending_orders_usd": {
             "anyOf": [
@@ -43155,6 +43230,7 @@
           "ACCOUNT_HOLD_RESOLVED",
           "ACCOUNT_RISK_LIMITS_APPLIED",
           "ATTRIBUTED_RESIDUE_DISCHARGED",
+          "BUDGET_AUTHORITY_CUTOVER",
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
           "DEPLOY_COMMITTED",
@@ -51098,6 +51174,114 @@
           }
         },
         "summary": "Put Nickname",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/budget-authority": {
+      "get": {
+        "operationId": "read_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAuthorityState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Budget Authority State",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/budget-authority/apply": {
+      "post": {
+        "operationId": "apply_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAuthorityApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAuthorityState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Budget Authority State",
         "tags": [
           "broker-configuration"
         ]
@@ -61912,6 +62096,155 @@
           }
         },
         "summary": "Fleet Configuration Nicknames Set",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/budget-authority (configuration_manage).",
+        "operationId": "fleet_configuration_budget_authority_read_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Budget Authority Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority/apply": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/budget-authority/apply (configuration_manage).",
+        "operationId": "fleet_configuration_budget_authority_apply_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Budget Authority Apply",
         "tags": [
           "broker-clerks"
         ]

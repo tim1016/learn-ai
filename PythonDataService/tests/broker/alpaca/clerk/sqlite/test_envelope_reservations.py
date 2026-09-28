@@ -163,6 +163,8 @@ def _rewind_to_v12(db_path: Path) -> None:
             "DROP TABLE deployment_budgets;\n"
             "DROP TABLE account_risk_policy;\n"
             "DROP TABLE envelope_reservations;\n"
+            "DROP TRIGGER trg_budget_authority_monotonic;\n"
+            "ALTER TABLE control_meta DROP COLUMN authorization_version;\n"
             "DROP VIEW holds;\n"
             f"{_V12_HOLDS_VIEW_DDL}"
             "UPDATE control_meta SET schema_version = 12 WHERE id = 1;\n"

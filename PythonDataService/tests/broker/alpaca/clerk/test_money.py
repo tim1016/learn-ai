@@ -76,3 +76,9 @@ def test_extreme_finite_float_inputs_are_normalized_without_precision_loss() -> 
     with money_context():
         actual = notional(smallest, smallest) + notional(largest, largest)
     assert Fraction(actual) == Fraction(str(smallest)) ** 2 + Fraction(str(largest)) ** 2
+
+
+@pytest.mark.parametrize("value", ["1e1000000", "1e-1000000", "1." + "1" * 1500])
+def test_extreme_wire_exponents_are_named_refusals(value: str) -> None:
+    with pytest.raises(MoneyInputError, match="supported"):
+        normalize_money(value)

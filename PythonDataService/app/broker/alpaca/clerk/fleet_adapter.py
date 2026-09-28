@@ -378,6 +378,8 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "configuration_risk_hold_clear", "POST", "/configuration/risk-limits/clear-hold",
             capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION,
         ),
+        _op("configuration_budget_authority_read", "GET", "/configuration/budget-authority", capability=Capability.CONFIGURATION_MANAGE, readiness=_CONFIGURATION),
+        _op("configuration_budget_authority_apply", "POST", "/configuration/budget-authority/apply", capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION),
         _op(
             "configuration_events",
             "GET",

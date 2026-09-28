@@ -21,6 +21,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_risk import fold_account_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version, fold_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_folds import fold_deploy_committed, fold_deploy_launched
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -301,6 +302,8 @@ def _attach_command_receipt(
 
 
 def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    if authorization_version(conn) >= 2:
+        raise ValueError("Legacy Start cannot grant spending authority after budget cutover")
     facts = RunStartedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
@@ -1547,6 +1550,7 @@ def _fold_fee_evidence(conn: sqlite3.Connection, payload: dict[str, Any]) -> Non
 
 
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
+DEFAULT_FOLD_REGISTRY.register("BUDGET_AUTHORITY_CUTOVER", fold_budget_authority_cutover)
 DEFAULT_FOLD_REGISTRY.register("FEE_EVIDENCE_OBSERVED", _fold_fee_evidence)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_RETIRED", _fold_strategy_instance_retired)

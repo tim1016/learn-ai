@@ -57,6 +57,12 @@ class SqliteLifecycleRecoveryCandidate:
 class ClerkSqliteRepositoryReadApi:
     """Read-only public methods mixed into :class:`ClerkSqliteRepository`."""
 
+    def budget_authority_version(self: ClerkSqliteRepository) -> int:
+        from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version
+
+        with self._write_lock:
+            return authorization_version(self._conn)
+
     def get_command(self: ClerkSqliteRepository, command_id: str) -> CommandResource | None:
         """Return one command through the shared committed-read coordinator."""
         with self._write_lock:

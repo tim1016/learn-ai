@@ -46,6 +46,11 @@ def live_arming_admission_fact(
     The keyword seams exist for tests and for callers that already hold the
     values; production resolves each from its one owner.
     """
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+
+    runtime = get_clerk_runtime(custody.account_id)
+    if runtime is not None and runtime.sqlite_repository is not None and runtime.sqlite_repository.budget_authority_version() >= 2:
+        return None  # Consent/money are checked by the durable Deploy command.
     world = primary_custody_world() if custody_world is None else custody_world
     # ``world != "real_live"`` is the world question; the mode question is the
     # closed table's answer for that world, not a second ``"live"`` literal

@@ -101,6 +101,8 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             risk_revision = 0
             risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         else:
+            if repo.budget_authority_version() < 2:
+                raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
             sync = runtime.envelope_sync
             if sync is None:
                 raise BudgetUnavailable("Wait for account cash and risk observations in Configuration.")

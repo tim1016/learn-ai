@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
@@ -34,6 +35,7 @@ def _request(**updates) -> AlpacaPaperDeployRequest:
 def authority(tmp_path, monkeypatch):
     repo = ClerkSqliteRepository.initialize(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
     policy = AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON)
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
     append_risk_policy(repo, policy=policy, expected_revision=0)
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
     observation = AccountObservation(observed_at_ms=NOON, broker_cash_usd=1000, cash_available_usd=1000, last_equity_usd=1000, unrealized_pl_usd=0, position_count=0, risk_revision=1)

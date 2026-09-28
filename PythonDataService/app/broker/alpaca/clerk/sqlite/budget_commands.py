@@ -63,6 +63,8 @@ def submit_budgeted_deploy(
     command_id = deployment_command_id(repo.account_id, strategy_instance_id)
 
     def build_transition() -> TransitionInput:
+        if repo.budget_authority_version() != 2:
+            raise BudgetUnavailable("Switch this account to budgets in Configuration before Deploy.")
         require_strategy_instance(repo, strategy_instance_id)
         instance = repo.strategy_instance(strategy_instance_id)
         assert instance is not None
