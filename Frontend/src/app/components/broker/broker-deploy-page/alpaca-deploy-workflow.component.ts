@@ -410,6 +410,9 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly canCheckStatus = computed(() => this.outcomeUnknown() && !this.submitting());
   /** The `?submission=` this page last wrote, just before sending it. */
   private readonly writtenKey = signal<string | null>(null);
+  /** A `?submission=` this page opened on and did not send, now held as the
+   * form's own key until its read settles it (see the adoption effect). */
+  private readonly adoptedKey = signal<string | null>(null);
   protected readonly editing = signal<DeployStepEditing>({ what: false, how: false });
   /** Deploy again's display-only lineage: the bot this one follows. */
   protected readonly replaces = signal<string | null>(null);
@@ -849,13 +852,15 @@ export class AlpacaDeployWorkflowComponent {
 
   // ── Recovery and receipt ──────────────────────────────────────────────────
 
-  /** A submission this page does not hold — a reload, or a return by the
-   * browser's history — whose recorded outcome is read, never re-sent. The
-   * page's own Deploy is read only while its receipt is still pending; one
-   * whose answer was lost is read when the owner asks (`checkSubmission`). */
+  /** A submission this page did not send — a reload, or a return by the
+   * browser's history — whose recorded outcome is read, never re-sent (the
+   * form holds its key meanwhile). The page's own Deploy is read only while
+   * its receipt is still pending; one whose answer was lost is read when the
+   * owner asks (`checkSubmission`). */
   protected readonly recoveryKey = computed(() => {
     const key = this.queryParams().get(SUBMISSION_PARAM);
     if (key === null || !SUBMISSION_KEY_RE.test(key) || this.restoredDraftKey() !== this.draftKey()) return null;
+    if (key === this.adoptedKey()) return key;
     const own = key === this.submissionKey() || key === this.writtenKey();
     return !own || this.receipt()?.status === 'pending' ? key : null;
   });
@@ -876,6 +881,20 @@ export class AlpacaDeployWorkflowComponent {
   /** The recovery read found the key claimed but not committed. */
   protected readonly recoveryClaim = computed(() =>
     this.recoveredCommand.hasValue() ? uncommittedClaim(this.recoveredCommand.value()) : null,
+  );
+  /** The recovery read settled its key: a receipt, or nothing started under
+   * it (`not_committed`, or no record). Loading, unreadable and `in_flight`
+   * settle nothing. */
+  private readonly recoverySettled = computed(() => {
+    if (this.recoveredCommand.isLoading()) return false;
+    if (this.recoveryNotCommitted() !== null) return true;
+    const answer = this.recoveredCommand.hasValue() ? this.recoveredCommand.value() : null;
+    return answer !== null && (committedReceipt(answer) !== null || uncommittedClaim(answer)?.status === 'not_committed');
+  });
+  /** Leaving the recovery read for a fresh form cannot lose its key: the
+   * read settled it, or this form holds it. */
+  protected readonly canLeaveRecovery = computed(() =>
+    this.recoverySettled() || (this.recoveryKey() === this.submissionKey() && this.outcomeUnknown()),
   );
 
   /** What Confirm says went wrong: the last answer, or — back on a form
@@ -945,6 +964,29 @@ export class AlpacaDeployWorkflowComponent {
         return;
       }
       this.drafts.write(key, draft);
+    });
+
+    // A Deploy this page did not send — a reload, or a return by the
+    // browser's history — may have started a bot, and its key is all the page
+    // knows of it. The form holds that key until its read settles it, so no
+    // way back to the form (Prepare, the header's Deploy, leaving and coming
+    // back) sends a new one beside it (B2-1). A form already holding another
+    // unsettled key keeps it, and `canLeaveRecovery` waits for this read.
+    effect(() => {
+      const key = this.recoveryKey();
+      untracked(() => {
+        if (key === null || key === this.adoptedKey() || key === this.writtenKey() || this.outcomeUnknown()) return;
+        this.adoptedKey.set(key);
+        this.submissionKey.set(key);
+        this.outcomeUnknown.set(true);
+      });
+    });
+    effect(() => {
+      if (!this.recoverySettled()) return;
+      const key = this.recoveryKey();
+      untracked(() => {
+        if (key !== null && key === this.adoptedKey() && key === this.submissionKey()) this.releaseSubmission();
+      });
     });
 
     effect(() => {
@@ -1401,19 +1443,17 @@ export class AlpacaDeployWorkflowComponent {
   /** A Deploy's receipt, from its own answer or from its status read. */
   private acceptReceipt(receipt: BudgetDeployReceipt): void {
     this.receipt.set(receipt);
-    this.frozenCommand.set(null);
     this.submitError.set(null);
-    this.outcomeUnknown.set(false);
     // The next Deploy from this form is a new bot: a new key, and fresh
     // money and consent. Its settings stay for a twin.
-    this.submissionKey.set(crypto.randomUUID());
+    this.releaseSubmission();
     this.amount.set('');
     this.replaces.set(null);
     this.focusAfterRender(() => this.receiptPanel()?.focus());
   }
 
-  /** The backend said nothing started under the sent key, so nothing was
-   * set aside: the next Deploy is a new submission under a new key. */
+  /** The backend settled the sent key — it committed, or nothing started
+   * under it — so the next Deploy is a new submission under a new key. */
   private releaseSubmission(): void {
     this.outcomeUnknown.set(false);
     this.submissionKey.set(crypto.randomUUID());

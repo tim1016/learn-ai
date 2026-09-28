@@ -876,6 +876,129 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
+  /** A reload onto `?submission=reloaded-submission-1`, whose URL the router double rewrites. */
+  async function reloadOnto(service: ServiceDouble) {
+    const rendered = await renderWithQuery(service, { submission: 'reloaded-submission-1' });
+    vi.spyOn(rendered.fixture.debugElement.injector.get(Router), 'navigate').mockImplementation(async (_commands, extras) => {
+      const submission = extras?.queryParams?.['submission'];
+      rendered.queryParamMap.next(convertToParamMap(typeof submission === 'string' ? { submission } : {}));
+      return true;
+    });
+    return rendered;
+  }
+
+  /** Deploy from the form. No `whenStable`: a read left unanswered keeps the
+   * page's pending task open for good. */
+  async function deployFromTheForm(service: ServiceDouble) {
+    await screen.findByRole('heading', { name: 'What' });
+    await chooseMoney('1000.00');
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+  }
+
+  // B2-1: the reload's key is the only memory of a Deploy the page may have
+  // started. Until its read settles it, every way back to the form resends it.
+  it.each([
+    {
+      kind: 'in_flight',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockResolvedValue(IN_FLIGHT),
+      shows: IN_FLIGHT.message,
+    },
+    {
+      kind: 'unreadable (503)',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({
+        status: 503, error: { detail: { outcome: 'blocked', message: 'The bot runner is not available.' } },
+      })),
+      shows: 'The deployment result could not be read. Check again before preparing a fresh deployment.',
+    },
+    {
+      kind: 'unanswered',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockReturnValue(new Promise(() => undefined)),
+      shows: 'Checking never starts a second bot. The recorded result shows whether money was set aside and the bot started.',
+    },
+  ])('prepares a new deployment on the reloaded key while its read is $kind', async ({ read, shows }) => {
+    const service = mockService();
+    read(service);
+    await reloadOnto(service);
+
+    const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    await within(recovery).findByText(shows);
+    fireEvent.click(within(recovery).getByRole('button', { name: 'Prepare a new deployment' }));
+    // The fresh form holds the reloaded Deploy's key, with its status read.
+    await screen.findByRole('heading', { name: 'What' });
+    expect(within(await screen.findByRole('alert', { name: 'Outcome unknown' }))
+      .getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    await deployFromTheForm(service);
+
+    expect(submittedBody(service).submission_key).toBe('reloaded-submission-1');
+  });
+
+  it('keeps the reloaded key when the owner leaves the recovery by the header’s Deploy link', async () => {
+    const service = mockService();
+    service.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    const { queryParamMap } = await reloadOnto(service);
+    const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    await within(recovery).findByText(IN_FLIGHT.message);
+
+    queryParamMap.next(convertToParamMap({}));
+    await deployFromTheForm(service);
+
+    expect(submittedBody(service).submission_key).toBe('reloaded-submission-1');
+  });
+
+  it.each([
+    {
+      kind: 'no record (404)',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({
+        status: 404, error: { detail: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.' },
+      })),
+      shows: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.',
+    },
+    {
+      kind: 'not_committed',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockResolvedValue(NOT_COMMITTED),
+      shows: NOT_COMMITTED.message,
+    },
+    {
+      kind: 'a committed receipt',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockResolvedValue(RECEIPT),
+      shows: RECEIPT.message,
+    },
+  ])('prepares a new deployment on a new key once the reloaded read is settled as $kind', async ({ read, shows }) => {
+    const service = mockService();
+    read(service);
+    await reloadOnto(service);
+
+    await screen.findByText(shows);
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare a new deployment' }));
+    await deployFromTheForm(service);
+
+    expect(submittedBody(service).submission_key).not.toBe('reloaded-submission-1');
+  });
+
+  it('offers no fresh form for another unsettled Deploy while this form holds its own', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    service.getDeploySubmission.mockResolvedValue({ ...IN_FLIGHT, submission_key: 'older-submission-1' });
+    const { fixture, queryParamMap } = await renderWithQuery(service, {});
+    await screen.findByRole('heading', { name: 'What' });
+    await fixture.whenStable();
+    await chooseMoney('1000.00');
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+    // A changed ticket drops the sent command, as any edit would.
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Custom shares/ }));
+    await fixture.whenStable();
+
+    queryParamMap.next(convertToParamMap({ submission: 'older-submission-1' }));
+    const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    await within(recovery).findByText(IN_FLIGHT.message);
+
+    expect(within(recovery).queryByRole('button', { name: 'Prepare a new deployment' })).toBeNull();
+    expect(within(recovery).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+  });
+
   it('says nothing was committed when the recovery read finds no Deploy for the key', async () => {
     const service = mockService();
     await renderWithQuery(service, { submission: 'never-committed-1' });
