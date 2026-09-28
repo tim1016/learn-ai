@@ -76,6 +76,20 @@ def project_account_budget(
     claims = entry_cash_claims(conn, seen_before_ms=seen_before_ms)
     records = effective_fill_records(conn, account_id=account_id)
     with money_context():
+        # A terminal manual effect ends the working-order uncertainty, not
+        # the debit's overlap with cash. Effective fill lineage supplies both
+        # corrected economics and the original observation boundary.
+        manual_refs = {row[0] for row in conn.execute("SELECT order_ref FROM orders WHERE role='MANUAL'")}
+        manual_claim = ZERO
+        for fill in records:
+            if fill.order_ref not in manual_refs or fill.side != OrderSide.BUY:
+                continue
+            if fill.recorded_at_ms is None:
+                raise BudgetUnavailable("A manual fill has no observation boundary. Reconcile account executions.")
+            if fill.recorded_at_ms >= seen_before_ms:
+                manual_claim += normalize_money(fill.quantity) * normalize_money(fill.fill_price)
+                if fill.fee is not None:
+                    manual_claim += normalize_money(fill.fee)
         budgets = []
         for commitment in commitments:
             sid = commitment["strategy_instance_id"]
@@ -95,6 +109,6 @@ def project_account_budget(
             ))
         return account_budget(
             cash=cash, deployments=budgets,
-            order_claims=sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
+            order_claims=manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
             fee_claims=fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms),
         )

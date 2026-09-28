@@ -30,6 +30,22 @@ lineage (#2441/#2442). Exact decimal results use equality (zero tolerance).
 Compatibility float assertions retain the existing tests' tolerance; these
 adapters never determine admission.
 
+Completed manual BUY executions retain their exact corrected debit (including
+reported fill fees) until the trusted cash observation passes the original
+execution-recording boundary. A terminal effect is not proof that cash already
+contains its debit. Broker acknowledgements with missing execution quantity
+make fee population and new spending unknown, including tiny fractional-share
+gaps; zero-fill cancellations remain complete. The governing acknowledgement
+and effective correction lineage are reused, with no admission epsilon.
+
+Pending entry fee quotes price only the unfilled remainder at the original
+reference price and quote date, through the canonical regulatory model. Filled
+shares belong exclusively to the canonical fee attribution. A remaining order
+quote rounds its prospective component settlement upward independently, so it
+can retain conservative cent headroom relative to a final combined day charge;
+it is not an exact forecast of that later settlement. Original zero-provision
+legacy reservations are preserved rather than silently rewritten.
+
 The deployment projection is `clerk/budgets.py`, composed over canonical
 FIFO, effective fills and fee attribution by `sqlite/budget_projection.py`.
 An active deployment claims only its positive free balance. Working orders,
@@ -43,3 +59,6 @@ deficits. Real repository tests in `sqlite/test_budget_commands.py` prove
 concurrent commitment exclusion, response-loss idempotency, startup-failure
 release and mirror rebuild retaining stopped order claims. Exact decimal
 assertions use zero tolerance. These tests do not claim complete UI delivery.
+`sqlite/test_budget_claims.py` additionally proves manual cash overlap,
+missing terminal executions, partial-fill fee replacement and same-symbol
+interleaved deployment FIFO through correction and Stop.

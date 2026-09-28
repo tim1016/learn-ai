@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.money import money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.reads import governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
@@ -103,6 +104,25 @@ def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]
         ).fetchone()
         is None
     )
+    # A terminal acknowledgement may arrive before its exact execution. Its
+    # missing population cannot become a zero-fee day just because no fill
+    # row (or separately raised uncertainty) exists yet. Reuse the existing
+    # governing acknowledgement, including partially canceled orders. Compare
+    # normalized recorded facts exactly: an execution-coverage epsilon cannot
+    # forgive an unpriced debit at the money-admission boundary.
+    witnessed_refs = {record.order_ref for record in records}
+    with money_context():
+        quantities: dict[str, Decimal] = defaultdict(Decimal)
+        for record in records:
+            quantities[record.order_ref] += normalize_money(record.quantity)
+        for order in conn.execute("SELECT order_ref, broker_state FROM orders"):
+            acknowledgement = governing_acknowledgement(conn, order["order_ref"])
+            reported = None if acknowledgement is None else acknowledgement[1]
+            if (
+                (order["broker_state"] or "").lower() == "filled"
+                and order["order_ref"] not in witnessed_refs
+            ) or (reported is not None and normalize_money(reported) > quantities[order["order_ref"]]):
+                complete = False
     orders = {row[0] for row in conn.execute("SELECT broker_order_id FROM orders WHERE broker_order_id IS NOT NULL")}
     for record in records:
         if record.quantity == 0:

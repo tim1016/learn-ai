@@ -43,6 +43,7 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 
@@ -111,7 +112,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         "SELECT r.quantity AS quantity, COALESCE(r.exact_reference_price,r.reference_price) AS reference_price, "
-        "r.fee_provision_cents, "
+        "r.fee_provision_cents, r.reserved_at_ms, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
         "LOWER(o.broker_state) AS state, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
@@ -141,16 +142,26 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                     fee = ZERO if fill["fee"] is None else normalize_money(fill["fee"])
                     unseen_cost += qty * normalize_money(fill["price"]) + fee
                     unseen_fees += fee
-            unfilled = (
+            remaining_quantity = (
                 ZERO if first["state"] in _DEAD_ORDER_STATES else
                 max(ZERO, normalize_money(first["quantity"]) - filled)
-                * normalize_money(first["reference_price"])
             )
+            unfilled = remaining_quantity * normalize_money(first["reference_price"])
+            fee = ZERO
+            if remaining_quantity > ZERO and first["fee_provision_cents"]:
+                # Filled shares already belong to the canonical fee projection.
+                # Quote only the remainder, using the original reference/date.
+                # Its own prospective settlement rounds upward, deliberately
+                # retaining conservative per-order rounding headroom.
+                _, fee_cents = entry_requirement(
+                    quantity=remaining_quantity, price=first["reference_price"], at_ms=first["reserved_at_ms"],
+                )
+                fee = Decimal(fee_cents) / 100
             claims.append(EntryCashClaim(
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,
                 unfilled_cost=unfilled, unseen_fill_cost=unseen_cost,
                 unseen_reported_fees=unseen_fees,
-                unfilled_fee=Decimal(first["fee_provision_cents"]) / 100 if unfilled > ZERO else ZERO,
+                unfilled_fee=fee,
             ))
     return tuple(claims)
 
