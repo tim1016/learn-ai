@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -19,7 +22,7 @@ import {
   type DeploySubmissionUncommitted,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
-import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
+import { AlpacaDeployWorkflowComponent, SUBMISSION_KEY_RE } from './alpaca-deploy-workflow.component';
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
@@ -560,7 +563,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       execution_mode: 'paper',
       carryover_policy: 'FORBID',
       parameters: {},
-      submission_key: expect.stringMatching(/^[A-Za-z0-9_-]{8,64}$/),
+      submission_key: expect.stringMatching(SUBMISSION_KEY_RE),
     });
     expect(body).not.toHaveProperty('strategy_instance_id');
     expect(router.url).toContain(`submission=${body.submission_key}`);
@@ -1149,7 +1152,54 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(screen.queryByRole('button', { name: 'Check deployment status' })).toBeNull();
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
+
+  // A key the backend refuses (422) can never be read or settled: adopted, it
+  // would hold the form on "Outcome unknown" for the rest of the session.
+  it.each(['_abcdefgh', '-abcdefgh'])('ignores ?submission=%s, a key the backend refuses, and deploys on a fresh key', async key => {
+    const service = mockService();
+    service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({
+      status: 422, error: { detail: [{ loc: ['path', 'submission_key'], msg: 'String should match pattern' }] },
+    }));
+    const { fixture } = await openAt(service, { submission: key });
+    await fixture.whenStable();
+
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status', { name: 'Checking the recorded deployment' })).toBeNull();
+    expect(screen.queryByRole('alert', { name: 'Outcome unknown' })).toBeNull();
+    await deployFromTheForm(service);
+
+    expect(submittedBody(service).submission_key).not.toBe(key);
+    expect(submittedBody(service).submission_key).toMatch(SUBMISSION_KEY_RE);
+  });
+
+  it('admits exactly the submission keys the backend admits (the OpenAPI contract’s pattern)', () => {
+    const patterns = contractSubmissionKeyPatterns();
+
+    // The Deploy body's field and the recovery read's path parameter.
+    expect(patterns.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(patterns)).toEqual(new Set([SUBMISSION_KEY_RE.source]));
+  });
 });
+
+/** Every `pattern` the committed OpenAPI contract declares for a `submission_key`. */
+function contractSubmissionKeyPatterns(): string[] {
+  const contract = join(__dirname, '..', '..', '..', '..', '..', '..', 'contracts', 'openapi', 'python-data-service.openapi.json');
+  const found: string[] = [];
+  const patternOf = (schema: unknown): unknown =>
+    typeof schema === 'object' && schema !== null ? new Map(Object.entries(schema)).get('pattern') : undefined;
+  const visit = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return;
+    const fields = new Map(Object.entries(node));
+    // A schema property named `submission_key`, and a parameter named so.
+    const declared = [fields.get('submission_key'), fields.get('name') === 'submission_key' ? fields.get('schema') : undefined];
+    for (const pattern of declared.map(patternOf)) {
+      if (typeof pattern === 'string') found.push(pattern);
+    }
+    fields.forEach(visit);
+  };
+  visit(JSON.parse(readFileSync(contract, 'utf8')));
+  return found;
+}
 
 describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
   const PREFILL: BotDeployPrefill = {

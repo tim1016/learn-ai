@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 
+import { SUBMISSION_KEY_RE } from './alpaca-deploy-workflow.component';
 import { DeployDraftStore, canonicalJson, freshDeployDraft } from './deploy-draft.store';
 
 describe('the Deploy draft', () => {
@@ -18,7 +19,7 @@ describe('the Deploy draft', () => {
     const second = freshDeployDraft();
 
     expect(first.submissionKey).not.toBe(second.submissionKey);
-    expect(first.submissionKey).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(first.submissionKey).toMatch(SUBMISSION_KEY_RE);
     expect(first).toMatchObject({ amount: '', outcomeUnknown: false, replaces: null, editing: { what: false, how: false } });
     expect(first.settings.executionMode).toBeNull();
   });

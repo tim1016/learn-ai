@@ -90,8 +90,10 @@ import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 
 /** A bot id as the backend's path-safe validator admits it (Deploy again's `?from=`). */
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-/** A submission key as the backend admits it (`?submission=`). */
-const SUBMISSION_KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
+/** A submission key exactly as the backend admits it (`SUBMISSION_KEY_PATTERN`,
+ * pinned to the OpenAPI contract by the spec). A `?submission=` outside it is
+ * ignored: the backend would refuse every read and Deploy under it (422). */
+export const SUBMISSION_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 
 /** The recovery hint a Deploy writes before it is sent, so a reload can read
