@@ -94,7 +94,9 @@ def record_fee_evidence(
     return True
 
 
-def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]], set[str], bool]:
+def _effective_fills(
+    conn: sqlite3.Connection, *, simulated_fill_cutoff_ms: int | None = None
+) -> tuple[dict[date, list[FeeFill]], set[str], bool]:
     account = conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0]
     records = effective_fill_records(conn, account_id=account)
     grouped: dict[date, list[FeeFill]] = defaultdict(list)
@@ -125,7 +127,9 @@ def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]
                 complete = False
     orders = {row[0] for row in conn.execute("SELECT broker_order_id FROM orders WHERE broker_order_id IS NOT NULL")}
     for record in records:
-        if record.quantity == 0:
+        if record.quantity == 0 or (
+            simulated_fill_cutoff_ms is not None and record.filled_at_ms > simulated_fill_cutoff_ms
+        ):
             continue
         grouped[et_date_at_ms(record.filled_at_ms)].append(
             FeeFill(
@@ -150,7 +154,8 @@ def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]
 
 @money_context()
 def custody_fee_attribution(
-    conn: sqlite3.Connection, *, now_ms: int, from_ms: int | None = None, to_ms: int | None = None
+    conn: sqlite3.Connection, *, now_ms: int, from_ms: int | None = None, to_ms: int | None = None,
+    simulated_fill_cutoff_ms: int | None = None,
 ) -> FeeAttribution:
     """Lifetime fee projection in the caller's custody snapshot (no network).
 
@@ -158,10 +163,26 @@ def custody_fee_attribution(
     once; ``unobserved_cash_claim`` excludes those fees because the existing
     unseen-fill cash claim owns them. The observation cutoff is a consumer
     argument to that method and MUST come from the canonical cash observation.
+
+    Simulated historical equity may select effective fills through an inclusive
+    economic-time cutoff before applying the existing fee model. Corrections
+    retain their root execution time. This is not a broker activity window:
+    real accounts must retain their trade-date settlement/coverage semantics.
+    Coverage is still checked against all current execution evidence; selecting
+    a historical population never grants permission to ignore missing facts.
+
+    Formula: existing session fee model/apportionment over selected effective fills.
+    Reference: docs/references/alpaca-fee-attribution.md; PRD #2540.
+    Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py.
     """
     account = conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0]
     simulated = account.startswith(("sim:", "shadow:"))
-    grouped, owned_orders, population_complete = _effective_fills(conn)
+    if simulated_fill_cutoff_ms is not None and not simulated:
+        raise ValueError("an economic fill cutoff requires simulated custody")
+    grouped, owned_orders, population_complete = _effective_fills(
+        conn, simulated_fill_cutoff_ms=simulated_fill_cutoff_ms
+    )
     snapshots = (
         []
         if simulated

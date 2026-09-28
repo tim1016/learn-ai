@@ -25,3 +25,12 @@ An invalid coverage link cannot remove a reported fill fee. A component charge
 cannot replace an undifferentiated reported total without component-overlap
 proof. Regression cases cover partial orders, components, fills of one subject,
 refunds, reported fees, and the persisted custody-to-budget consumer.
+
+A simulated prior-close equity baseline passes `simulated_fill_cutoff_ms` to
+select effective fills at or before the canonical calendar close, before the
+same model settlement and attribution. Recorded observation time is not an
+economic cutoff; correction leaves retain their root execution time. Real
+accounts reject this option and retain their existing trade-date windows.
+Current execution completeness checks still apply to historical projections.
+The before/at/after-close and later-correction regressions cover both Dry Run and
+Shadow with exact-cent assertions; reads append no custody transitions.

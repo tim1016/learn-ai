@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
 
 from app.broker.alpaca.clerk.sqlite.fee_evidence import (
     FEE_EVIDENCE_MAX_AGE_MS,
@@ -210,3 +213,57 @@ def test_one_observed_order_fee_keeps_other_order_provision_through_custody(tmp_
         assert repo.account_budget(cash=1000, seen_before_ms=now).fee_claims == Decimal("2.25")
     finally:
         repo.close()
+
+
+@pytest.mark.parametrize("account_id", ["sim:prior-close", "shadow:prior-close"])
+def test_simulated_fee_cutoff_uses_inclusive_economic_time(tmp_path: Path, account_id: str) -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.alpaca.clerk.sqlite.facts import ExecutionCorrectedFacts
+    from app.broker.contract.models import BrokerOrderLeg
+    from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
+    from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_RUN_ID
+    from tests.broker.alpaca.clerk.sqlite.test_folds_execution import _correction_transition
+
+    close_ms = previous_completed_session_close_ms(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path, clock=_clock_at(NOON))
+    try:
+        repo.register_strategy_instance(strategy_instance_id=DAY_PNL_SID, symbol="SPY", config_hash="close-fees")
+        submit_start_run(repo, account_id=account_id, strategy_instance_id=DAY_PNL_SID,
+                         lifecycle_run_id=DAY_PNL_RUN_ID, clock=repo.clock)
+        accepted = accept_enter(repo, account_id=account_id, strategy_instance_id=DAY_PNL_SID,
+                                decision_id="cutoff", lifecycle_run_id=DAY_PNL_RUN_ID,
+                                leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=12_000))
+        for key, quantity, at in (("before", 1, close_ms - 1), ("at-close", 4000, close_ms),
+                                  ("after", 4000, close_ms + 1)):
+            _append_day_pnl_slice(repo, accepted, execution_id=key, side="BUY", quantity=quantity,
+                                 price=100, occurred_at_ms=at)
+        transitions = repo.custody_transitions()
+        historical = custody_fee_attribution(repo._conn, now_ms=NOON, simulated_fill_cutoff_ms=close_ms)
+        current = custody_fee_attribution(repo._conn, now_ms=NOON)
+        # CAT: ceil((1 + 4000) * .000003) = .02 at close, .03 after.
+        # All facts were recorded today, so record time cannot select the fills.
+        assert historical.known and current.known
+        assert historical.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.02")
+        assert current.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.03")
+        assert {share.state for share in historical.shares} == {"modelled_settled"}
+        assert repo.custody_transitions() == transitions
+        correction = ExecutionCorrectedFacts(execution_id="corrected-before", superseded_execution_ref="before",
+                                             symbol="SPY", side="BUY", corrected_qty=4000, corrected_price=100,
+                                             why="correct original fill quantity")
+        assert repo.append_execution_correction_or_raise(
+            correction=_correction_transition(repo, accepted=accepted, facts=correction, source_event_at_ms=NOON),
+            build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
+        ) == "appended"
+        # A later correction inherits its root execution time, repricing the
+        # selected population through the same model instead of moving today.
+        corrected = custody_fee_attribution(repo._conn, now_ms=NOON, simulated_fill_cutoff_ms=close_ms)
+        assert corrected.known and corrected.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.03")
+        assert custody_fee_attribution(repo._conn, now_ms=NOON).total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.04")
+    finally:
+        repo.close()
+
+
+def test_real_fees_refuse_simulation_fill_cutoff(day_pnl_repo: ClerkSqliteRepository) -> None:
+    with pytest.raises(ValueError, match="simulated custody"):
+        custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON, simulated_fill_cutoff_ms=YESTERDAY_NOON)
