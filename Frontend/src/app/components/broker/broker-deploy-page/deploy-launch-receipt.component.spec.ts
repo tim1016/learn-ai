@@ -50,8 +50,6 @@ const RECEIPT: DeployBotReceipt = {
     mode: 'trade',
     quantity: 1,
     carryover_policy: 'FORBID',
-    carryover_checkpoint_exposure: {},
-    carryover_checkpoint_config_matches: false,
     running: true,
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',

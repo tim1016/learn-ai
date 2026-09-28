@@ -124,21 +124,12 @@ def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
         "RECOVERY_SWEEP_EVALUATING": RecoverySweepEvaluatingError,
         "RECOVERY_UNCERTAIN": RecoveryUncertainError,
         "RESTART_INTENSITY_EXCEEDED": RestartIntensityRefusedError,
-        "RESUME_CARRYOVER_UNSUPPORTED": RecoveryUncertainError,
-        "RESUME_CHECKPOINT_MISSING": RecoveryUncertainError,
-        "RESUME_CHECKPOINT_MISMATCH": RecoveryUncertainError,
     }
     error_type = error_types.get(decision.reason_code)
     if error_type is not None:
         raise error_type(
             decision.explanation,
             detail=f"Bot runtime safety refused {decision.operation.title()}.",
-            admission_decision=decision,
-        )
-    if decision.reason_code == "RESUME_CARRYOVER_NOT_ALLOWED":
-        raise CarryoverPolicyRefusedError(
-            "Exposure carryover is not approved for this Resume.",
-            detail=decision.explanation,
             admission_decision=decision,
         )
     raise RunAdmissionRefusedError(
@@ -150,15 +141,13 @@ def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
 
 def require_start_configuration(
     carryover_policy: Literal["FORBID", "ALLOW"],
-    *,
-    carryover_allowed: bool,
 ) -> None:
     """Apply request-configuration rules shared by preview and execution."""
     if carryover_policy == "ALLOW":
         raise CarryoverPolicyRefusedError(
             "Exposure carryover is globally disabled for Alpaca bots.",
             detail=(
-                "A future per-program qualification must prove replay and restart safety before "
-                "any carryover allowlist entry can be enabled."
+                "Deploy creates a fresh identity. Resolve the previous deployment’s exposure "
+                "through Flatten; a new deployment never adopts it."
             ),
         )

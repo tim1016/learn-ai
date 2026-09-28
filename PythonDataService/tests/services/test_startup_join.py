@@ -615,12 +615,12 @@ async def test_a_pause_pressed_while_the_run_prepared_governs_the_bars_it_held(
 ) -> None:
     """Review P1: a held bar's mode was captured when the pump pulled it, before the pause."""
     from app.engine.strategy.signal_program import EvaluationMode
-    from app.services.bot_runtime import PauseAwareFeed
+    from app.services.bot_runtime import DecisionFenceFeed
 
     gate = asyncio.Event()
     gate.set()  # running when the stream delivers the bar
     source = _JoiningFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 5 * _MIN, _J)])
-    run_feed = _run_feed(PauseAwareFeed(source, gate), ledger)  # type: ignore[arg-type]
+    run_feed = _run_feed(DecisionFenceFeed(source, gate), ledger)  # type: ignore[arg-type]
 
     await run_feed.recent_closed_bars("SPY", use_rth=True)
     gate.clear()  # the operator pauses before the run takes the held bar

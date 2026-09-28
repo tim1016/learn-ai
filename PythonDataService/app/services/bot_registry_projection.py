@@ -98,9 +98,6 @@ def project_bot_status(
     desired: DesiredState,
     *,
     running: bool,
-    carryover_account_policy_enabled: bool,
-    checkpoint_exposure: str | None,
-    checkpoint_matches: bool,
 ) -> BotStatusView:
     """Compose one typed roster row from durable artifacts and task liveness."""
     duty_outcome = duty_outcome_view(lifecycle)
@@ -113,12 +110,9 @@ def project_bot_status(
         quantity=binding.quantity,
         carryover_policy=binding.carryover_policy,
         evidence_override=binding.evidence_override,
-        carryover_account_policy_enabled=carryover_account_policy_enabled,
-        carryover_checkpoint_exposure=checkpoint_exposure,
-        carryover_checkpoint_config_matches=checkpoint_matches,
         running=running,
         phase=(lifecycle.phase.value if lifecycle is not None else "OFF_DUTY"),
-        desired_state=desired.value,
+        desired_state="STOPPED" if desired is DesiredState.PAUSED else desired.value,
         active_run_id=(lifecycle.active_run_id if lifecycle is not None else None),
         duty_outcome=duty_outcome,
         binding_created_at_ms=binding.created_at_ms,

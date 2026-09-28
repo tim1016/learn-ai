@@ -49,7 +49,6 @@ from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
-    BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -77,11 +76,9 @@ from app.schemas.broker_bots import (
 from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import (
-    ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
-    TerminalEvidenceAdmissionFact,
 )
 from app.schemas.run_replay import RunReplayReceipt
 from app.schemas.signal_program_seal import ParameterOrigin
@@ -98,10 +95,6 @@ from app.services.bot_boot_recovery import (
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
-)
-from app.services.bot_carryover import (
-    checkpoint_status,
-    read_checkpoint,
 )
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
@@ -121,7 +114,6 @@ from app.services.bot_registry_projection import (
     project_process_fact,
     read_dry_run_activity,
 )
-from app.services.bot_resume_admission import AdmittedBotResume, BotResumeAdmission
 from app.services.bot_run_evidence import (
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
@@ -150,7 +142,6 @@ from app.services.bot_runner_errors import (
 from app.services.bot_runtime import (
     ManagedBot,
     execute_bot_run,
-    require_live_managed_bot,
 )
 from app.services.bot_start_admission import (
     AdmissionCustodyCut,
@@ -180,7 +171,6 @@ from app.services.strategy_validation_admission import (
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
-    "AdmittedBotResume",
     "AdmittedBotStart",
     "BootRecoveryIncompleteError",
     "BotAlreadyRunningError",
@@ -340,7 +330,7 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
 
 #: One lane-level start gate: raises :class:`RunAdmissionRefusedError` when
 #: this lane starts no new bot, and returns otherwise. ``BotTaskRegistry``
-#: probes its gates in order on every start and resume, before admission.
+#: probes its gates in order on every deployment, before admission.
 LaneStartGate = Callable[[str], None]
 
 
@@ -482,10 +472,6 @@ class BotTaskRegistry:
         # artifacts_root but are managed by the host daemon, not the
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
-        # Exposure carryover remains unavailable until a separately reviewed
-        # replay proof exists; it is no longer a compatibility constructor
-        # switch that appears configurable but has no effect.
-        self._carryover_allowed = False
         self._bindings = BotBindingRepository(
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,
@@ -532,23 +518,6 @@ class BotTaskRegistry:
             market_liveness=self._market_liveness,
             arming_fact=arming_fact,
         )
-        self._resume_admission = BotResumeAdmission(
-            now_ms=self._now_ms,
-            feed_resolver=self._feed_resolver,
-            custody_guard=self._start_custody_guard,
-            custody_projection=self._start_custody_projection,
-            process_fact=self._resume_process_fact,
-            runtime_fact=self._start_runtime_fact,
-            checkpoint=self._resume_checkpoint_fact,
-            terminal_evidence=self._resume_terminal_evidence_fact,
-            validation_fact=active_validation_fact,
-            activate=self._activate_resume_binding,
-            carryover_account_policy_enabled=self._carryover_allowed,
-            session_capability=get_market_data_capability_service().read_latest_for,
-            market_liveness=self._market_liveness,
-            legacy_migration_repository=self._bindings,
-            arming_fact=arming_fact,
-        )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
@@ -576,7 +545,7 @@ class BotTaskRegistry:
         )
         self._replay_receipt_tasks: set[asyncio.Task[None]] = set()
         # #2155 / #2269: lane-level refusals (drained, awaiting go-live),
-        # probed in order per start/resume so a flag the lane learns lands on
+        # probed in order per deployment so a flag the lane learns lands on
         # the next operator action without a process restart. Empty (tests,
         # non-lane deployments) refuses nothing.
         self._lane_start_gates = lane_start_gates
@@ -641,7 +610,6 @@ class BotTaskRegistry:
             refuse_if_gated(strategy_instance_id)
         require_start_configuration(
             carryover_policy,
-            carryover_allowed=self._carryover_allowed,
         )
         self._confined_instance_dir(strategy_instance_id)
         request = make_start_request(
@@ -695,7 +663,6 @@ class BotTaskRegistry:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
             carryover_policy,
-            carryover_allowed=self._carryover_allowed,
         )
         self._confined_instance_dir(strategy_instance_id)
         request = make_start_request(
@@ -724,62 +691,6 @@ class BotTaskRegistry:
                     detail="Refresh admission after Clerk reconciliation settles.",
                 ) from exc
 
-    async def resume_existing(self, broker: str, strategy_instance_id: str) -> BotStatusView:
-        """Start a new run from one stopped bot's durable deployment binding.
-
-        Resume never reconstructs strategy semantics in the panel. It reads the
-        backend-owned immutable configuration, preserves its ``ActionPlan``, and
-        launches a newly identified run through the same recovery and restart
-        gates as a first deployment.
-        """
-        return (await self.resume_existing_with_admission(broker, strategy_instance_id)).bot
-
-    async def preview_resume_admission(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-    ) -> RunAdmissionDecision:
-        """Project the exact new-run Resume decision without mutation."""
-        async with self._operation_lock(strategy_instance_id):
-            binding = self.binding_for_control(broker, strategy_instance_id)
-            try:
-                return await self._resume_admission.preview(
-                    binding,
-                    self.status(broker, strategy_instance_id),
-                )
-            except StartAdmissionUnavailable as exc:
-                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
-            except StartAdmissionEvidenceChanged as exc:
-                raise RunAdmissionRefusedError(
-                    "Resume admission could not obtain stable Clerk custody.",
-                    detail="Refresh admission after Clerk reconciliation settles.",
-                ) from exc
-
-    async def resume_existing_with_admission(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-    ) -> AdmittedBotResume:
-        """Create a new run using the same policy exposed by preview."""
-        for refuse_if_gated in self._lane_start_gates:
-            refuse_if_gated(strategy_instance_id)
-        async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
-            binding = self.binding_for_control(broker, strategy_instance_id)
-            try:
-                return await self._resume_admission.resume(
-                    binding,
-                    self.status(broker, strategy_instance_id),
-                )
-            except StartAdmissionDenied as exc:
-                raise_run_refusal(exc.decision)
-            except StartAdmissionUnavailable as exc:
-                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
-            except StartAdmissionEvidenceChanged as exc:
-                raise RunAdmissionRefusedError(
-                    "Resume admission could not obtain stable Clerk custody.",
-                    detail="Refresh admission after Clerk reconciliation settles.",
-                ) from exc
-
     async def _activate_start_binding(
         self,
         binding: BrokerBotBinding,
@@ -797,30 +708,13 @@ class BotTaskRegistry:
         log_run_launch(binding, reason="deploy")
         return self.status(binding.broker, binding.strategy_instance_id)
 
-    async def _activate_resume_binding(
-        self,
-        binding: BrokerBotBinding,
-        feed: MarketDataFeed,
-        now_ms: int,
-        custody: ClerkCustodySnapshot,
-    ) -> BotStatusView:
-        await self._activate_binding(
-            binding,
-            feed,
-            now=now_ms,
-            reason="resume",
-            admission_snapshot=custody,
-        )
-        log_run_launch(binding, reason="resume")
-        return self.status(binding.broker, binding.strategy_instance_id)
-
     async def _activate_binding(
         self,
         binding: BrokerBotBinding,
         feed: MarketDataFeed,
         *,
         now: int,
-        reason: Literal["deploy", "resume"],
+        reason: Literal["deploy"],
         admission_snapshot: ClerkCustodySnapshot | None = None,
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
@@ -961,86 +855,6 @@ class BotTaskRegistry:
             projected_start_count=self._projected_start_count(strategy_instance_id, observed_at_ms),
             restart_threshold=self._restart_policy.threshold,
             restart_window_ms=self._restart_policy.window_ms,
-        )
-
-    def _resume_process_fact(
-        self,
-        binding: BrokerBotBinding,
-        observed_at_ms: int,
-    ) -> RunProcessAdmissionFact:
-        process = self.process_fact(binding.broker, binding.strategy_instance_id)
-        return RunProcessAdmissionFact(
-            state=process.state,
-            run_id=process.run_id,
-            process_identity=process.process_identity,
-            registry_generation=process.registry_generation,
-            observed_at_ms=observed_at_ms,
-        )
-
-    def _resume_checkpoint_fact(
-        self,
-        binding: BrokerBotBinding,
-    ) -> ResumeCheckpointAdmissionFact | None:
-        path = self._carryover_checkpoint_path(binding.strategy_instance_id)
-        checkpoint = read_checkpoint(path)
-        if checkpoint is None:
-            return None
-        return ResumeCheckpointAdmissionFact(
-            account_id=checkpoint.account_id,
-            stopped_run_id=checkpoint.stopped_run_id,
-            configuration_hash=checkpoint.configuration_hash,
-            exposure=checkpoint.exposure,
-            approved=checkpoint.approved,
-            evidence_ref=f"carryover-checkpoint:{path.name}:{checkpoint.recorded_at_ms}",
-        )
-
-    def _resume_terminal_evidence_fact(
-        self,
-        binding: BrokerBotBinding,
-    ) -> TerminalEvidenceAdmissionFact:
-        """Mirror preserve_terminal()'s own decision so preview and execution agree."""
-        engineering_next_step = "This requires engineering investigation; Refresh to check for updated evidence."
-        try:
-            lifecycle = self._lifecycle_repo(binding.strategy_instance_id).read()
-        except BotLifecycleStateCorruptError as exc:
-            return TerminalEvidenceAdmissionFact(
-                state="UNREADABLE",
-                evidence_ref=f"terminal-evidence:{binding.strategy_instance_id}:lifecycle-corrupt",
-                explanation=f"The lifecycle projection could not be read: {exc}",
-                next_step=engineering_next_step,
-            )
-        outcome = lifecycle.duty_outcome if lifecycle is not None else None
-        if outcome is None or outcome.run_id is None or outcome.reason_code == PROVISIONAL_STOP_REASON_CODE:
-            return TerminalEvidenceAdmissionFact(
-                state="SUMMARY_READY",
-                evidence_ref=f"terminal-evidence:{binding.strategy_instance_id}:absent",
-                explanation="No terminal evidence blocks Resume for the prior run.",
-            )
-        try:
-            receipt = self._bindings.read_outcome(binding.strategy_instance_id, outcome.run_id)
-        except (ValueError, OSError) as exc:
-            return TerminalEvidenceAdmissionFact(
-                state="UNREADABLE",
-                evidence_ref=f"terminal-evidence:{outcome.run_id}:receipt-corrupt",
-                explanation=f"The terminal receipt for run '{outcome.run_id}' could not be read: {exc}",
-                next_step=engineering_next_step,
-            )
-        if receipt is not None:
-            return TerminalEvidenceAdmissionFact(
-                state="RECEIPT_READY",
-                evidence_ref=(
-                    f"terminal-evidence:{outcome.run_id}:receipt:"
-                    f"{receipt.recorded_at_ms}:{receipt.kind}:{receipt.reason_code}"
-                ),
-                explanation="An authoritative terminal receipt exists for the prior run.",
-            )
-        return TerminalEvidenceAdmissionFact(
-            state="SUMMARY_READY",
-            evidence_ref=(
-                f"terminal-evidence:{outcome.run_id}:summary:"
-                f"{outcome.recorded_at_ms}:{outcome.kind}:{outcome.reason_code}"
-            ),
-            explanation="Only the lifecycle summary exists; Resume will convert it into a receipt.",
         )
 
     async def retire(
@@ -1205,68 +1019,6 @@ class BotTaskRegistry:
                 clerk_stop_already_committed=True,
             )
 
-    async def pause(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-        *,
-        updated_by: str = "operator",
-        reason: str | None = None,
-    ) -> BotStatusView:
-        """Pause custody effects without ending or replacing the current run."""
-        async with self._operation_lock(strategy_instance_id):
-            self._confined_instance_dir(strategy_instance_id)
-            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
-            current = self._desired_repo(strategy_instance_id).read_state()
-            if current is DesiredState.PAUSED:
-                raise RunAdmissionRefusedError(
-                    "The current run is already paused.",
-                    detail="Use Continue to let this same run evaluate bars again.",
-                )
-            # Pause switches the existing task to OBSERVE_ONLY before the
-            # durable write. Unlike Stop's intent-first ordering, no later
-            # candidate can enter custody while PAUSED is being recorded;
-            # feed/session progression continues for replay equivalence.
-            managed.run_gate.clear()
-            try:
-                self._desired_repo(strategy_instance_id).set(
-                    DesiredState.PAUSED,
-                    updated_by=updated_by,
-                    now_ms=self._now_ms(),
-                    reason=reason or "operator_pause",
-                )
-            except Exception:
-                managed.run_gate.set()
-                raise
-            return self.status(broker, strategy_instance_id)
-
-    async def continue_paused(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-        *,
-        updated_by: str = "operator",
-        reason: str | None = None,
-    ) -> BotStatusView:
-        """Continue one paused live run without changing its run identity."""
-        async with self._operation_lock(strategy_instance_id):
-            self._confined_instance_dir(strategy_instance_id)
-            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
-            current = self._desired_repo(strategy_instance_id).read_state()
-            if current is not DesiredState.PAUSED:
-                raise RunAdmissionRefusedError(
-                    "Continue requires an authoritatively live paused run.",
-                    detail="Use Resume only after a stopped run has terminal evidence.",
-                )
-            self._desired_repo(strategy_instance_id).set(
-                DesiredState.RUNNING,
-                updated_by=updated_by,
-                now_ms=self._now_ms(),
-                reason=reason or "operator_continue",
-            )
-            managed.run_gate.set()
-            return self.status(broker, strategy_instance_id)
-
     async def _stop_locked(
         self,
         broker: str,
@@ -1350,7 +1102,7 @@ class BotTaskRegistry:
             # #1729 AC10: the rollback verdict is keyed off this run having
             # been admitted as a Signal-Program-backed trade-mode instance
             # (`program_build.state == "PROVEN"`, the same live-reproof
-            # `canary_gate_applies` checks at Start/Resume) -- never off
+            # `canary_gate_applies` checks at Deploy) -- never off
             # current canary admission membership. A rollback plausibly
             # *means* revoking the pairing in the activation ledger, so
             # keying the verdict off present membership would
@@ -2120,18 +1872,11 @@ class BotTaskRegistry:
         lifecycle = self._lifecycle_repo(sid).read()
         desired = self._desired_repo(sid).read_state()
         managed = self._bots.get(sid)
-        checkpoint_exposure, checkpoint_matches = checkpoint_status(
-            binding,
-            self._carryover_checkpoint_path(sid),
-        )
         return project_bot_status(
             binding,
             lifecycle,
             desired,
             running=managed is not None and not managed.task.done(),
-            carryover_account_policy_enabled=self._carryover_allowed,
-            checkpoint_exposure=checkpoint_exposure,
-            checkpoint_matches=checkpoint_matches,
         )
 
 

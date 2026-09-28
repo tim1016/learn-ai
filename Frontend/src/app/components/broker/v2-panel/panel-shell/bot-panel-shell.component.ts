@@ -633,8 +633,7 @@ export class BotPanelShellComponent {
       }
       // The rejection is always pre-execution (see runBotAction's doc), so the
       // operator's last-seen panel state is now stale relative to whatever
-      // changed underneath it — refresh so "Ready to resume" doesn't linger
-      // after a resume was just refused for no longer being ready.
+      // changed underneath it — refresh the current backend decision.
       //
       // No .catch() here, unlike fleetDirectory.refresh() above: BotPanelLiveStore.refresh()
       // catches internally and stores the failure as error state (it never rejects), while

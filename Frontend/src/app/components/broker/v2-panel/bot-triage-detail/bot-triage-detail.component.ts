@@ -388,8 +388,7 @@ export class BotTriageDetailComponent {
    *
    * These are NOT pass/fail admission gates: the backend emits one check per
    * panel action with `ready = action.enabled`, and the lifecycle commands are
-   * mutually exclusive, so a healthy running bot legitimately reports Resume
-   * and Continue as unavailable. Unavailable-first answers the question the
+   * mutually exclusive, so a healthy running bot can report recovery actions as unavailable. Unavailable-first answers the question the
    * card exists for — "why is that command greyed out?".
    */
   protected readonly commands = computed<readonly ReadinessCheckView[]>(() =>

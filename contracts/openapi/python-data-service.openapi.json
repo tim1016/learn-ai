@@ -4225,7 +4225,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -4468,15 +4467,8 @@
         "type": "object"
       },
       "BotHealthCard": {
-        "description": "Bot-health card beside the rail (\u00a77.2).\n\n``PAUSED`` means the current process/run remains live while bar delivery\nis held. Continue retains that run identity; Resume is not applicable.",
+        "description": "Bot-health card beside the rail (\u00a77.2).\n\nTerminal Stop retains custody evidence; new trading requires fresh Deploy.",
         "properties": {
-          "carryover_checkpoint_exposure": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "title": "Carryover Checkpoint Exposure",
-            "type": "object"
-          },
           "decision_stale": {
             "title": "Decision Stale",
             "type": "boolean"
@@ -4484,7 +4476,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -4539,18 +4530,6 @@
             "title": "Phase Label",
             "type": "string"
           },
-          "resume_eligible": {
-            "title": "Resume Eligible",
-            "type": "boolean"
-          },
-          "resume_explanation": {
-            "title": "Resume Explanation",
-            "type": "string"
-          },
-          "resume_label": {
-            "title": "Resume Label",
-            "type": "string"
-          },
           "running": {
             "title": "Running",
             "type": "boolean"
@@ -4570,11 +4549,7 @@
           "duty_outcome",
           "last_decision_at_ms",
           "decision_stale",
-          "last_bar_at_ms",
-          "resume_eligible",
-          "resume_label",
-          "resume_explanation",
-          "carryover_checkpoint_exposure"
+          "last_bar_at_ms"
         ],
         "title": "BotHealthCard",
         "type": "object"
@@ -4746,16 +4721,6 @@
             "title": "Recent Fills",
             "type": "array"
           },
-          "resume_admission": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RunAdmissionDecision"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -4828,7 +4793,6 @@
           "mode",
           "sealed_program",
           "program_build",
-          "resume_admission",
           "updated_at_ms",
           "revision",
           "market_pulse",
@@ -5265,23 +5229,6 @@
             "title": "Broker",
             "type": "string"
           },
-          "carryover_account_policy_enabled": {
-            "default": false,
-            "title": "Carryover Account Policy Enabled",
-            "type": "boolean"
-          },
-          "carryover_checkpoint_config_matches": {
-            "default": false,
-            "title": "Carryover Checkpoint Config Matches",
-            "type": "boolean"
-          },
-          "carryover_checkpoint_exposure": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "title": "Carryover Checkpoint Exposure",
-            "type": "object"
-          },
           "carryover_policy": {
             "default": "FORBID",
             "enum": [
@@ -5294,7 +5241,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -18197,6 +18143,10 @@
         "description": "The single most relevant action for a gallery tile (\u00a7 gallery spec).",
         "properties": {
           "action_id": {
+            "enum": [
+              "stop",
+              "deploy_again"
+            ],
             "title": "Action Id",
             "type": "string"
           },
@@ -27264,25 +27214,6 @@
             "title": "Reduction Label",
             "type": "string"
           },
-          "resume_comparisons": {
-            "items": {
-              "$ref": "#/components/schemas/ResumeComparison"
-            },
-            "maxItems": 4,
-            "minItems": 4,
-            "title": "Resume Comparisons",
-            "type": "array"
-          },
-          "resume_label": {
-            "minLength": 1,
-            "title": "Resume Label",
-            "type": "string"
-          },
-          "resume_result": {
-            "minLength": 1,
-            "title": "Resume Result",
-            "type": "string"
-          },
           "scope_cards": {
             "items": {
               "$ref": "#/components/schemas/AuthoredValue"
@@ -27303,9 +27234,6 @@
           "custody_spine",
           "exposure_label",
           "exposure_slices",
-          "resume_label",
-          "resume_result",
-          "resume_comparisons",
           "freeze_label",
           "freeze_explanation",
           "next_step",
@@ -28483,9 +28411,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28568,9 +28493,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28659,9 +28581,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28725,9 +28644,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28823,9 +28739,6 @@
             "items": {
               "enum": [
                 "deploy",
-                "resume",
-                "pause",
-                "continue",
                 "stop",
                 "flatten_stop",
                 "retire",
@@ -29678,16 +29591,13 @@
         "type": "object"
       },
       "PrimaryActionByLens": {
-        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``resume`` / ``continue`` / ``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
+        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
         "properties": {
           "operator": {
             "anyOf": [
               {
                 "enum": [
                   "deploy",
-                  "resume",
-                  "pause",
-                  "continue",
                   "stop",
                   "flatten_stop",
                   "retire",
@@ -29716,9 +29626,6 @@
               {
                 "enum": [
                   "deploy",
-                  "resume",
-                  "pause",
-                  "continue",
                   "stop",
                   "flatten_stop",
                   "retire",
@@ -31197,9 +31104,6 @@
           "operation": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -33365,52 +33269,6 @@
           "origin"
         ],
         "title": "ResolvedSignalParameter",
-        "type": "object"
-      },
-      "ResumeComparison": {
-        "additionalProperties": false,
-        "description": "An already-evaluated Resume checkpoint comparison.",
-        "properties": {
-          "checkpoint": {
-            "minLength": 1,
-            "title": "Checkpoint",
-            "type": "string"
-          },
-          "label": {
-            "minLength": 1,
-            "title": "Label",
-            "type": "string"
-          },
-          "observed": {
-            "minLength": 1,
-            "title": "Observed",
-            "type": "string"
-          },
-          "result_label": {
-            "minLength": 1,
-            "title": "Result Label",
-            "type": "string"
-          },
-          "tone": {
-            "enum": [
-              "neutral",
-              "verified",
-              "active",
-              "caution",
-              "blocked"
-            ],
-            "title": "Tone",
-            "type": "string"
-          }
-        },
-        "required": [
-          "label",
-          "checkpoint",
-          "observed",
-          "result_label",
-          "tone"
-        ],
-        "title": "ResumeComparison",
         "type": "object"
       },
       "RetireReplaceAction": {

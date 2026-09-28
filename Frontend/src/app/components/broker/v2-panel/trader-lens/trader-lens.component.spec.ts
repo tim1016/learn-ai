@@ -52,7 +52,7 @@ const PROFILE: PanelProfile = {
   flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['resume', 'stop'],
+  supported_action_ids: ['stop'],
 };
 
 const BASE_PANEL: BotPanelView = {
@@ -70,7 +70,7 @@ const BASE_PANEL: BotPanelView = {
     verified_at_ms: 1_753_800_000_000,
     explanation: 'No Signal Program build proof supplied.',
   },
-  resume_admission: null,
+
   updated_at_ms: 1_753_800_000_000,
   revision: 1,
   market_pulse: {
@@ -124,10 +124,6 @@ const BASE_PANEL: BotPanelView = {
     last_decision_at_ms: 1_753_800_000_000,
     decision_stale: false,
     last_bar_at_ms: 1_753_800_000_000,
-    resume_eligible: false,
-    resume_label: 'Resume not applicable',
-    resume_explanation: 'This strategy instance already has a live run.',
-    carryover_checkpoint_exposure: {},
   },
   clerk: {
     account_id: 'DUM284968',

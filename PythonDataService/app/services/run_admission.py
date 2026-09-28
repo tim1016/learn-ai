@@ -1,4 +1,4 @@
-"""Pure, typed Start and Resume admission policy for broker bot runs.
+"""Pure, typed Deploy admission policy for broker bot runs.
 
 Projection endpoints and mutation paths must call :func:`evaluate_run_admission`
 with authority-authored facts. The policy does not read files, call a broker,
@@ -8,16 +8,12 @@ gate.
 
 from __future__ import annotations
 
-import logging
-import math
-
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
     ARMING_NEXT_STEP,
     ARMING_REQUIRED_ADMITTED_NOTE,
     CORPUS_UNCOVERED_NEXT_STEP,
-    ResumeRunFacts,
     RunAdmissionDecision,
     RunAdmissionFactAges,
     RunAdmissionFacts,
@@ -26,8 +22,7 @@ from app.services.canary_admission import canary_gate_applies, canary_pairing_ad
 from app.services.deploy_window import start_window_next_step
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
-_QTY_TOLERANCE_ULPS = 4
-# Rides an admitted Start/Resume decision at an uncovered parameter point
+# Rides an admitted Deploy decision at an uncovered parameter point
 # (ADR 0054); the deploy page renders that decision as the latest backend
 # Start check, so the stamp is said where an operator reads it.
 CORPUS_UNCOVERED_ADMITTED_NOTE = (
@@ -35,39 +30,9 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
     "which is not citable as qualification evidence."
 )
 
-logger = logging.getLogger(__name__)
-
-
 def _not_armed(bot: RunAdmissionFacts) -> bool:
     """Whether the admitted launch must say that every ENTER refuses until it is armed (R6)."""
     return bot.arming is not None and bot.arming.state == "NOT_ARMED"
-
-
-def _exposure_matches(
-    checkpoint: dict[str, float],
-    observed: dict[str, float] | None,
-) -> bool:
-    """Compare custody quantities without rejecting JSON float round-off.
-
-    Custody contracts currently do not carry a broker minimum-increment field,
-    so the narrow safe tolerance is four IEEE-754 ULPs at each quantity. This
-    accepts serialization noise only; it cannot hide a tradable quantity move.
-    """
-    if observed is None or checkpoint.keys() != observed.keys():
-        return False
-    return all(
-        math.isclose(
-            checkpoint[symbol],
-            observed[symbol],
-            rel_tol=0.0,
-            abs_tol=max(
-                math.ulp(checkpoint[symbol]),
-                math.ulp(observed[symbol]),
-            )
-            * _QTY_TOLERANCE_ULPS,
-        )
-        for symbol in checkpoint
-    )
 
 
 def _decision(
@@ -99,10 +64,6 @@ def _decision(
             f"{bot.market_liveness.symbol_status.source}:"
             f"{bot.market_liveness.symbol_status.observed_at_ms}"
         )
-    if isinstance(bot, ResumeRunFacts):
-        evidence_refs.append(bot.terminal_evidence.evidence_ref)
-        if bot.checkpoint is not None:
-            evidence_refs.append(bot.checkpoint.evidence_ref)
     return RunAdmissionDecision(
         operation=bot.operation,
         allowed=allowed,
@@ -125,7 +86,7 @@ def evaluate_run_admission(
     *,
     evaluated_at_ms: int,
 ) -> RunAdmissionDecision:
-    """Decide Start or Resume from bot and Clerk facts; unknown blocks."""
+    """Decide a fresh deployment from bot and Clerk facts; unknown blocks."""
     fact_ages_ms = RunAdmissionFactAges(
         program_build=evaluated_at_ms - bot.program_build.verified_at_ms,
         runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
@@ -187,7 +148,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="SEALED_ACCOUNT_MISMATCH",
             explanation="The immutable run binding names a different custody account than this Clerk snapshot.",
-            next_step="Redeploy against the selected account; do not adopt changed custody on Resume.",
+            next_step="Deploy against the selected account with a fresh identity.",
         )
     # #1729 AC4: the guarded canary path additionally requires one exact
     # (program, account) pairing an operator has explicitly enabled. Every
@@ -284,45 +245,9 @@ def evaluate_run_admission(
             next_step=(
                 "Use the existing run controls."
                 if active
-                else "Use Resume for the unchanged instance, or create a new instance ID."
+                else "Open Deploy again to review a fresh instance."
             ),
         )
-    if isinstance(bot, ResumeRunFacts):
-        if bot.process.state in {"STARTING", "RUNNING", "STOPPING"}:
-            return decide(
-                allowed=False,
-                reason_code="RUN_ALREADY_ACTIVE",
-                explanation="This strategy instance already has an active process-owned run.",
-                next_step="Use the current run controls instead of creating another run.",
-            )
-        if bot.process.state != "EXITED" or bot.process.run_id != bot.prior_run_id:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_PROCESS_NOT_TERMINAL",
-                explanation="The process registry cannot prove the prior run exited terminally.",
-                next_step="Recover terminal process evidence before Resume.",
-            )
-        if bot.phase == "RETIRED":
-            return decide(
-                allowed=False,
-                reason_code="BOT_RETIRED",
-                explanation="A retired strategy instance cannot create another run.",
-                next_step="Deploy a replacement strategy instance with a new ID.",
-            )
-        if bot.phase != "OFF_DUTY" or bot.desired_state != "STOPPED":
-            return decide(
-                allowed=False,
-                reason_code="RESUME_REQUIRES_STOPPED_INSTANCE",
-                explanation="Resume requires an off-duty instance with durable STOPPED intent.",
-                next_step="Resolve the prior lifecycle transition before Resume.",
-            )
-        if bot.terminal_evidence.state == "UNREADABLE":
-            return decide(
-                allowed=False,
-                reason_code="TERMINAL_EVIDENCE_UNREADABLE",
-                explanation=bot.terminal_evidence.explanation,
-                next_step=bot.terminal_evidence.next_step,
-            )
     if bot.market_data.state != "AVAILABLE":
         reason_codes = {
             "STALE": "MARKET_DATA_STALE",
@@ -342,56 +267,6 @@ def evaluate_run_admission(
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
     extended_refusal = bot.extended_hours.refusal
-    if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
-        if not bot.exposure_carryover_supported:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CARRYOVER_UNSUPPORTED",
-                explanation="This strategy cannot safely restore its prior open-position lifecycle.",
-                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-            )
-        if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
-                explanation=(
-                    "The stopped exposure is not approved by both the immutable instance and account policy."
-                ),
-                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-            )
-        checkpoint = bot.checkpoint
-        if checkpoint is None or not checkpoint.approved:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CHECKPOINT_MISSING",
-                explanation="No approved terminal STOP checkpoint proves this carried exposure.",
-                next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
-            )
-        matches = (
-            checkpoint.account_id == clerk.account_id
-            and checkpoint.stopped_run_id == bot.prior_run_id
-            and checkpoint.configuration_hash == bot.configuration_hash
-            and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
-        )
-        if not matches:
-            logger.warning(
-                "Resume checkpoint custody does not match current Clerk exposure",
-                extra={
-                    "action": "resume_checkpoint_mismatch",
-                    "strategy_instance_id": bot.strategy_instance_id,
-                    "checkpoint_exposure": checkpoint.exposure,
-                    "clerk_exposure": clerk.exposure.positions,
-                },
-            )
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CHECKPOINT_MISMATCH",
-                explanation=(
-                    "The carryover custody proof changed: account, prior run, "
-                    "configuration, or Clerk-attributed exposure no longer matches STOP."
-                ),
-                next_step="Reconcile and flatten rather than adopting changed custody.",
-            )
 
     if extended_refusal is not None:
         return decide(
@@ -495,11 +370,7 @@ def evaluate_run_admission(
 
 def _admitted_explanation(bot: RunAdmissionFacts) -> str:
     """The admitted sentence with the corpus-coverage and not-armed notices that apply."""
-    admitted = (
-        "The process slot is absent, market data is ready, and the Clerk proves flat custody."
-        if bot.operation == "START"
-        else "The prior run is terminal, market data is ready, and the Clerk proves resumable custody."
-    )
+    admitted = "The process slot is absent, market data is ready, and the Clerk proves flat custody."
     if bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
     if _not_armed(bot):

@@ -9589,7 +9589,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -9673,21 +9673,16 @@ export interface components {
          * BotHealthCard
          * @description Bot-health card beside the rail (§7.2).
          *
-         *     ``PAUSED`` means the current process/run remains live while bar delivery
-         *     is held. Continue retains that run identity; Resume is not applicable.
+         *     Terminal Stop retains custody evidence; new trading requires fresh Deploy.
          */
         BotHealthCard: {
-            /** Carryover Checkpoint Exposure */
-            carryover_checkpoint_exposure: {
-                [key: string]: number;
-            };
             /** Decision Stale */
             decision_stale: boolean;
             /**
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             /** Desired State Label */
             desired_state_label: string;
             duty_outcome: components["schemas"]["DutyOutcomeView"] | null;
@@ -9702,12 +9697,6 @@ export interface components {
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Phase Label */
             phase_label: string;
-            /** Resume Eligible */
-            resume_eligible: boolean;
-            /** Resume Explanation */
-            resume_explanation: string;
-            /** Resume Label */
-            resume_label: string;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -9779,7 +9768,6 @@ export interface components {
             recent_decisions: components["schemas"]["RecentDecisionView"][];
             /** Recent Fills */
             recent_fills: components["schemas"]["RecentFillView"][];
-            resume_admission: components["schemas"]["RunAdmissionDecision"] | null;
             /** Revision */
             revision: number;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
@@ -9944,20 +9932,6 @@ export interface components {
             /** Broker */
             broker: string;
             /**
-             * Carryover Account Policy Enabled
-             * @default false
-             */
-            carryover_account_policy_enabled?: boolean;
-            /**
-             * Carryover Checkpoint Config Matches
-             * @default false
-             */
-            carryover_checkpoint_config_matches?: boolean;
-            /** Carryover Checkpoint Exposure */
-            carryover_checkpoint_exposure?: {
-                [key: string]: number;
-            };
-            /**
              * Carryover Policy
              * @default FORBID
              * @enum {string}
@@ -9967,7 +9941,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /** Last Transition At Ms */
@@ -15526,8 +15500,11 @@ export interface components {
          * @description The single most relevant action for a gallery tile (§ gallery spec).
          */
         GalleryPrimaryAction: {
-            /** Action Id */
-            action_id: string;
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "stop" | "deploy_again";
             /** Disabled Reason */
             disabled_reason?: string | null;
             /** Enabled */
@@ -19698,12 +19675,6 @@ export interface components {
             reduction_explanation: string;
             /** Reduction Label */
             reduction_label: string;
-            /** Resume Comparisons */
-            resume_comparisons: components["schemas"]["ResumeComparison"][];
-            /** Resume Label */
-            resume_label: string;
-            /** Resume Result */
-            resume_result: string;
             /** Scope Cards */
             scope_cards: components["schemas"]["AuthoredValue"][];
         };
@@ -20251,7 +20222,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20284,7 +20255,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -20313,7 +20284,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -20336,7 +20307,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -20379,7 +20350,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
+            supported_action_ids: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * PanelQuiesceActionRequest
@@ -20803,7 +20774,7 @@ export interface components {
          *
          *     ``trader`` is restricted to the closed
          *     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-         *     (``resume`` / ``continue`` / ``stop``); an Operator-only recovery
+         *     (``stop``); an Operator-only recovery
          *     capability can never reach it. ``operator`` also considers those same
          *     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
          *     action takes precedence when one is available — the audience-aware
@@ -20815,9 +20786,9 @@ export interface components {
          */
         PrimaryActionByLens: {
             /** Operator */
-            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            operator: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             /** Trader */
-            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            trader: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
         };
         /** ProfileCloneRequest */
         ProfileCloneRequest: {
@@ -21362,7 +21333,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -22147,25 +22118,6 @@ export interface components {
             unit: string;
             /** Value */
             value: string | number | boolean;
-        };
-        /**
-         * ResumeComparison
-         * @description An already-evaluated Resume checkpoint comparison.
-         */
-        ResumeComparison: {
-            /** Checkpoint */
-            checkpoint: string;
-            /** Label */
-            label: string;
-            /** Observed */
-            observed: string;
-            /** Result Label */
-            result_label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
         };
         /**
          * RetireReplaceAction

@@ -11,8 +11,6 @@ from pathlib import Path
 
 import pytest
 
-import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
-import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -25,7 +23,6 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.services.bot_runner import BotTaskRegistry
-from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.market_liveness import compose_market_liveness
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import admission_guard_for
@@ -257,182 +254,6 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
             / "lifecycle_state.json"
         ).read_text(encoding="utf-8")
         assert "crash_diagnostic" not in lifecycle
-    finally:
-        set_alpaca_clerk(None)
-        repository.close()
-
-
-@pytest.mark.asyncio
-async def test_ema_resume_does_not_decide_on_an_incomplete_signal_bucket(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A resumed minute bar waits for its 15-minute signal bucket to close."""
-    monkeypatch.setattr(
-        bot_trade_strategy,
-        "market_liveness_fact",
-        _tradable_market_liveness,
-    )
-    monkeypatch.setattr(
-        clerk_runtime,
-        "market_liveness_fact",
-        _tradable_market_liveness,
-    )
-    # #1729 AC4: real Alpaca Paper ("trade" mode) admission of a
-    # Signal-Program-backed strategy is gated by an exact (program, account)
-    # canary allowlist that ships empty in production. This test exercises
-    # signal-bucket resume behavior, not the allowlist itself, so it
-    # explicitly enables the one pairing it deploys under.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", "PA-TEST")}),
-    )
-    # This test proves signal-bucket resume behavior, not deploy admission.
-    feed = _ResumeFeed()
-    repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_STRATEGY_INSTANCE_ID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-            mode="trade",
-            quantity=1,
-        )
-        await registry.stop("alpaca", _STRATEGY_INSTANCE_ID)
-        feed.install((_first_resumed_bar(),))
-
-        resumed = await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
-        await _wait_for(lambda: feed.bars_consumed == 1)
-
-        status = registry.status("alpaca", _STRATEGY_INSTANCE_ID)
-        decisions = repository.decision_receipt_tail(
-            strategy_instance_id=_STRATEGY_INSTANCE_ID,
-            limit=1,
-        )
-        assert resumed.active_run_id == status.active_run_id
-        assert status.running is True
-        assert status.duty_outcome is None
-        assert decisions == []
-    finally:
-        try:
-            if registry.any_running():
-                await registry.stop("alpaca", _STRATEGY_INSTANCE_ID)
-        finally:
-            set_alpaca_clerk(None)
-            repository.close()
-
-
-@pytest.mark.asyncio
-async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PRD #1716 AC-1: a diagnostic-bearing crash can Resume into a new run,
-    with the previous receipt left byte-for-byte unchanged."""
-    # This test proves crash/resume receipt plumbing, not deploy admission.
-    crash_message = "TradeBar.__init__() got an unexpected keyword argument 'start_ms'"
-    feed = _ResumeFeed()
-    feed.install((_first_resumed_bar(),), error=TypeError(crash_message))
-    repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_STRATEGY_INSTANCE_ID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-        )
-        await _wait_for(lambda: not registry.any_running())
-
-        crashed_run = registry.current_run("alpaca", _STRATEGY_INSTANCE_ID)
-        assert crashed_run.terminal_outcome is not None
-        assert crashed_run.terminal_outcome.kind == "CRASHED"
-        diagnostic = crashed_run.terminal_outcome.crash_diagnostic
-        assert diagnostic is not None
-        outcome_path = (
-            tmp_path
-            / "runner/live_state"
-            / _STRATEGY_INSTANCE_ID
-            / "run_outcomes"
-            / f"{crashed_run.run_id}.json"
-        )
-        original_receipt_bytes = outcome_path.read_bytes()
-
-        feed.install((_first_resumed_bar(),))
-        resumed = await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
-        await _wait_for(lambda: feed.bars_consumed == 1)
-
-        assert resumed.active_run_id != crashed_run.run_id
-        assert resumed.running is True
-        assert outcome_path.read_bytes() == original_receipt_bytes
-
-        preserved = json.loads(outcome_path.read_text(encoding="utf-8"))
-        assert preserved["crash_diagnostic"] == diagnostic.model_dump(mode="json")
-    finally:
-        try:
-            if registry.any_running():
-                await registry.stop("alpaca", _STRATEGY_INSTANCE_ID)
-        finally:
-            set_alpaca_clerk(None)
-            repository.close()
-
-
-@pytest.mark.asyncio
-async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registration(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PRD #1716 FR-3/FR-4: an unreadable receipt denies admission with
-    TERMINAL_EVIDENCE_UNREADABLE before any Clerk registration, process
-    activity, or current_run.json advancement is attempted."""
-    # This test proves the unreadable-receipt admission path, not deploy
-    # admission.
-    feed = _ResumeFeed()
-    feed.install((_first_resumed_bar(),), error=TypeError("boom"))
-    repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_STRATEGY_INSTANCE_ID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-        )
-        await _wait_for(lambda: not registry.any_running())
-        crashed_run = registry.current_run("alpaca", _STRATEGY_INSTANCE_ID)
-        outcome_path = (
-            tmp_path
-            / "runner/live_state"
-            / _STRATEGY_INSTANCE_ID
-            / "run_outcomes"
-            / f"{crashed_run.run_id}.json"
-        )
-        outcome_path.write_text("{not valid json", encoding="utf-8")
-        current_run_path = (
-            tmp_path / "runner/live_state" / _STRATEGY_INSTANCE_ID / "current_run.json"
-        )
-        original_current_run_bytes = current_run_path.read_bytes()
-        clerk_run_count_before = _clerk_run_count(repository.db_path)
-
-        # AC-4b / FR-3: preview and execution evaluate the identical rule, so
-        # the panel can present Resume as unavailable before the click.
-        preview = await registry.preview_resume_admission("alpaca", _STRATEGY_INSTANCE_ID)
-        assert preview.allowed is False
-        assert preview.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
-
-        feed.install((_first_resumed_bar(),))
-        with pytest.raises(RunAdmissionRefusedError) as exc_info:
-            await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
-
-        decision = exc_info.value.admission_decision
-        assert decision is not None
-        assert decision.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
-        assert registry.any_running() is False
-        assert current_run_path.read_bytes() == original_current_run_bytes
-        assert outcome_path.read_text(encoding="utf-8") == "{not valid json"
-        assert _clerk_run_count(repository.db_path) == clerk_run_count_before
     finally:
         set_alpaca_clerk(None)
         repository.close()

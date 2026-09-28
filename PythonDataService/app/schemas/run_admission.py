@@ -322,70 +322,7 @@ class StartRunFacts(BaseModel):
     arming: ArmingAdmissionFact | None = None
 
 
-class ResumeCheckpointAdmissionFact(BaseModel):
-    """Durable STOP checkpoint compared with fresh Clerk custody on Resume."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    account_id: str
-    stopped_run_id: str
-    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    exposure: dict[str, float]
-    approved: bool
-    evidence_ref: str
-
-
-class TerminalEvidenceAdmissionFact(BaseModel):
-    """Whether the prior run's terminal evidence is safe for Resume to touch.
-
-    Mirrors exactly what ``BotRunEvidenceService.preserve_terminal`` will do
-    at activation: an existing receipt is reused, an absent one is
-    synthesized from the lifecycle summary, and either is "ready". Only a
-    receipt or lifecycle projection that fails to read is unready.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    state: Literal["RECEIPT_READY", "SUMMARY_READY", "UNREADABLE"]
-    evidence_ref: str
-    explanation: str
-    next_step: str | None = None
-
-
-class ResumeRunFacts(BaseModel):
-    """Bot-owned immutable and lifecycle facts for a proposed new run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    operation: Literal["RESUME"] = "RESUME"
-    strategy_instance_id: str
-    proposed_run_id: str
-    prior_run_id: str
-    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    sealed_account_id: str
-    # Mode is immutable per instance (set at Start); Resume replays the same
-    # tier the instance was created with. See StartRunFacts.mode for why this
-    # is required, not defaulted.
-    mode: Literal["log_only", "dry_run", "trade"]
-    program_build: ProgramBuildAdmissionFact
-    validation: StrategyValidationAdmissionFact
-    runtime: StartRuntimeAdmissionFact
-    process: RunProcessAdmissionFact
-    market_data: MarketDataAdmissionFact
-    market_liveness: MarketLivenessFact
-    extended_hours: ExtendedHoursAdmissionFact
-    start_window: StartWindowFact | None = None
-    desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
-    phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
-    carryover_policy: Literal["FORBID", "ALLOW"]
-    carryover_account_policy_enabled: bool
-    exposure_carryover_supported: bool
-    checkpoint: ResumeCheckpointAdmissionFact | None
-    terminal_evidence: TerminalEvidenceAdmissionFact
-    arming: ArmingAdmissionFact | None = None
-
-
-RunAdmissionFacts = StartRunFacts | ResumeRunFacts
+RunAdmissionFacts = StartRunFacts
 
 
 class RunAdmissionFactAges(BaseModel):
@@ -406,6 +343,7 @@ class RunAdmissionDecision(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # Historical admission receipts remain readable; only StartRunFacts can be evaluated.
     operation: Literal["START", "RESUME"]
     allowed: bool
     reason_code: str

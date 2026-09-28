@@ -82,7 +82,7 @@ const PROFILE: PanelProfile = {
   flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['resume', 'stop'],
+  supported_action_ids: ['stop'],
 };
 
 const PANEL: BotPanelView = {
@@ -100,7 +100,7 @@ const PANEL: BotPanelView = {
     verified_at_ms: 1_753_800_000_000,
     explanation: 'No Signal Program build proof supplied.',
   },
-  resume_admission: null,
+
   updated_at_ms: 1_753_800_000_000,
   revision: 1,
   market_pulse: {
@@ -154,10 +154,6 @@ const PANEL: BotPanelView = {
     last_decision_at_ms: null,
     decision_stale: false,
     last_bar_at_ms: null,
-    resume_eligible: false,
-    resume_label: 'Resume not applicable',
-    resume_explanation: 'This strategy instance already has a live run.',
-    carryover_checkpoint_exposure: {},
   },
   clerk: {
     account_id: 'DUM284968',
@@ -545,7 +541,7 @@ const mockService = {
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({
-    action_id: 'resume',
+    action_id: 'stop',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
@@ -758,9 +754,9 @@ describe('BotPanelShellComponent', () => {
         health: { ...PANEL.health, running: false },
         actions: [
           {
-            action_id: 'resume',
-            label: 'Resume',
-            explanation: 'Resume evaluating bars.',
+            action_id: 'stop',
+            label: 'Stop',
+            explanation: 'Stop evaluating bars.',
             enabled: true,
             blockers: [],
             confirmation: null,
@@ -768,7 +764,7 @@ describe('BotPanelShellComponent', () => {
             concurrency_token: 'start-token',
           },
         ],
-        primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+        primary_action_by_lens: { trader: 'stop', operator: 'stop' },
       });
     }
 
@@ -799,7 +795,7 @@ describe('BotPanelShellComponent', () => {
       )).toBeTruthy();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
       expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
 
       emitOnLiveStream('snapshot', JSON.stringify(resumableSnapshot()));
       await fixture.whenStable();
@@ -815,7 +811,7 @@ describe('BotPanelShellComponent', () => {
         .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
       const fixture = await renderShell();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
       for (let step = 0; step < 4; step += 1) {
         await fixture.whenStable();
         fixture.detectChanges();
@@ -825,7 +821,7 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByRole('alert', { name: 'The live panel stopped updating.' })).toBeTruthy();
       expect(screen.getByText('Bot start requested.')).toBeTruthy();
       expect(screen.getByText('receipt-001')).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     });
   });
 
@@ -1738,9 +1734,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Resume evaluating bars.',
+          action_id: 'stop',
+          label: 'Stop',
+          explanation: 'Stop evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -1748,7 +1744,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1769,7 +1765,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     await switchLens(fixture, 'trader');
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
 
     expect(mockService.runBotAction).toHaveBeenCalledWith(
@@ -1777,7 +1773,7 @@ describe('BotPanelShellComponent', () => {
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
       }),
       'sid-001',
-      expect.objectContaining({ action_id: 'resume' }),
+      expect.objectContaining({ action_id: 'stop' }),
       null,
     );
   });
@@ -1974,9 +1970,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Resume evaluating bars.',
+          action_id: 'stop',
+          label: 'Stop',
+          explanation: 'Stop evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -1984,7 +1980,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1994,7 +1990,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2011,9 +2007,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Resume evaluating bars.',
+          action_id: 'stop',
+          label: 'Stop',
+          explanation: 'Stop evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -2021,14 +2017,14 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'resume',
+            action_id: 'stop',
             outcome: 'unknown',
             receipt_id: 'receipt-unknown',
             recorded_at_ms: 1_753_800_000_000,
@@ -2046,7 +2042,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2065,7 +2061,7 @@ describe('BotPanelShellComponent', () => {
           'The command did not return a terminal receipt. Inspect Clerk evidence before issuing another lifecycle command.',
       }),
     );
-    // A rejected action refreshes the panel so a superseded "Ready to resume"
+    // A rejected action refreshes the panel so a superseded "Ready to stop"
     // state doesn't linger (the 2026-08-04 val-nvda-0804-05 409).
     expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -2076,9 +2072,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Resume evaluating bars.',
+          action_id: 'stop',
+          label: 'Stop',
+          explanation: 'Stop evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -2086,18 +2082,18 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
         error: {
           detail: {
-            action_id: 'resume',
+            action_id: 'stop',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
-            message: 'Resume is no longer available for this bot.',
+            message: 'Stop is no longer available for this bot.',
             why: null,
             reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
           },
@@ -2112,11 +2108,11 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByText('Resume is no longer available for this bot.')).toBeTruthy();
+    expect(screen.getByText('Stop is no longer available for this bot.')).toBeTruthy();
     expect(screen.getByText('Terminal Evidence Unreadable')).toBeTruthy();
   });
 
@@ -2129,9 +2125,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Resume evaluating bars.',
+          action_id: 'stop',
+          label: 'Stop',
+          explanation: 'Stop evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -2139,14 +2135,14 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'resume',
+            action_id: 'stop',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
@@ -2165,7 +2161,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await fixture.whenStable();
     fixture.detectChanges();
 

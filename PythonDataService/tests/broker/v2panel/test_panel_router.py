@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -457,25 +456,8 @@ _PROJECTIONS_PER_BOT_PER_ROUND = 2
 def _assert_every_bot_ran_the_custody_projection(
     registry: _FakeRegistry, fleet_size: int, rounds: int
 ) -> None:
-    """Non-vacuity for the per-bot panel surface, attributed per bot.
-
-    A scalar total is the wrong instrument here: the gallery alone fans out
-    to every bot on every round, so ``fleet_size * rounds`` is already met
-    without a single panel GET doing any custody work. A panel read that
-    regressed to returning 200 without running ``preview_resume_admission``
-    — the exact custody-projection regression these gates exist to catch —
-    would clear a total-only bound on the gallery's output alone.
-
-    Counting per sid closes that: every bot must be projected at least
-    ``_PROJECTIONS_PER_BOT_PER_ROUND * rounds`` times, so losing either
-    contributing surface halves that bot's count and fails.
-    """
-    counts = Counter(sid for sid, _state in registry.custody_projections)
-    expected = _PROJECTIONS_PER_BOT_PER_ROUND * rounds
-    short = {
-        sid: counts[sid] for sid in _fleet_sids(fleet_size) if counts[sid] < expected
-    }
-    assert not short, f"bots projected fewer than {expected} times: {short}"
+    """No read may revive the removed Resume admission workflow."""
+    assert registry.custody_projections == []
 
 
 async def _assert_every_read_surface_projected_the_whole_fleet(

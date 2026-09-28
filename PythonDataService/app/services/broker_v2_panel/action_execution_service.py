@@ -11,7 +11,7 @@ backend capability that performs the action:
 3. **Identity from the channel.** The operator identity is the configured
    ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
 
-The dispatch wires Resume, Pause, Continue, Stop, flatten-and-stop,
+The dispatch wires Stop, flatten-and-stop,
 reconciliation, clear-hold, and guarded inventory recovery. Unsupported
 closed-set actions such as Retire and Cancel order are not presented and raise
 ``ActionNotAvailableError`` if called directly.
@@ -663,7 +663,7 @@ async def execute_action(
         # never ran, so free a fresh reservation for a corrected retry. Scoped
         # to exactly these two types — NOT the broader ``ActionExecutionError``
         # — because a performer can also raise ``ActionNotAvailableError``
-        # (e.g. ``_resume``) after it already attempted real work; that case is
+        # (e.g. an inventory recovery performer) after it already attempted real work; that case is
         # legitimately pre-execution too. Any OTHER ``ActionExecutionError``
         # subclass a performer raises (e.g. ``UnknownActionError``) falls
         # through to the ``except Exception`` branch below and burns the key,
@@ -703,7 +703,7 @@ async def execute_action(
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise outcome_unknown_after_broker_io(err) from err
     except ExecutionLeaseLost:
-        # Resume/Retire/Archive dispatch through this executor rather than
+        # Retire/Archive dispatch through this executor rather than
         # sqlite_panel_source.execute_sqlite_panel_action (that module returns
         # None for the SQLITE_PANEL_LIFECYCLE_ACTION_IDS and defers here). That
         # module lets ExecutionLeaseLost/RepositoryPoisoned propagate unwrapped

@@ -442,10 +442,10 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       await acceptanceAssertion(testInfo, { check: 'operator tab selected', pageLoad }, () => {
         expect(operatorTabSelected).toBe('true');
       });
-      const resumeButton = page.getByRole('button', { name: /^Resume$/ });
-      const resumeButtonVisible = await observeVisible(resumeButton);
-      await acceptanceAssertion(testInfo, { check: 'resume button visible', pageLoad }, () => {
-        expect(resumeButtonVisible).toBe(true);
+      const deployAgainLink = page.getByRole('link', { name: /^Deploy again$/ });
+      const deployAgainLinkVisible = await observeVisible(deployAgainLink);
+      await acceptanceAssertion(testInfo, { check: 'Deploy again link visible', pageLoad }, () => {
+        expect(deployAgainLinkVisible).toBe(true);
       });
 
       for (let eventIndex = 0; eventIndex < REVISION_SEQUENCE.length; eventIndex += 1) {
@@ -480,15 +480,15 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         }, () => {
           expect(statusVisible).toBe(true);
         });
-        const revisedResumeButtonVisible = await observeVisible(
-          page.getByRole('button', { name: /^Resume$/ }),
+        const revisedDeployAgainLinkVisible = await observeVisible(
+          page.getByRole('link', { name: /^Deploy again$/ }),
         );
         await acceptanceAssertion(testInfo, {
-          check: 'resume button remains visible after SSE update',
+          check: 'Deploy again link remains visible after SSE update',
           pageLoad,
           revision,
         }, () => {
-          expect(revisedResumeButtonVisible).toBe(true);
+          expect(revisedDeployAgainLinkVisible).toBe(true);
         });
 
         const station = page.getByRole('button', { name: STATION_BUTTON_NAME });

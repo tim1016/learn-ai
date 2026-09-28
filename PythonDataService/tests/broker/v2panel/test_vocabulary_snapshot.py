@@ -137,13 +137,6 @@ def test_snapshot_codes_are_sorted_and_unique() -> None:
     assert len(codes) == len(set(codes)), "snapshot codes contain duplicates"
 
 
-def test_same_run_pause_and_continue_are_closed_vocabulary() -> None:
-    """Pause is a live-run state and Continue is its identity-preserving verb."""
-    assert "PAUSED" in ALL_VOCABULARY_CODES
-    assert "pause" in ALL_VOCABULARY_CODES
-    assert "continue" in ALL_VOCABULARY_CODES
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    assert {"PAUSED", "pause", "continue"}.issubset(snapshot["codes"])
 
 
 def test_every_emitted_code_has_nontrivial_copy() -> None:
@@ -284,3 +277,7 @@ def test_an_active_hold_never_narrows_to_no_hold() -> None:
         hold_reason_for(active=False, stored_code=code) == "NO_HOLD"
         for code in stored_codes
     )
+
+
+def test_terminal_lifecycle_excludes_retired_controls() -> None:
+    assert not {"pause", "continue", "resume", "PAUSED"} & ALL_VOCABULARY_CODES

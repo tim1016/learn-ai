@@ -19,9 +19,6 @@ import type { PanelActionTone } from '../panel-action-button/panel-action-button
  * backend has selected the action").
  */
 export const ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
-  resume: 'primary',
-  pause: 'warning',
-  continue: 'primary',
   stop: 'danger',
   stop_bot_decisions: 'danger',
   flatten_stop: 'danger',

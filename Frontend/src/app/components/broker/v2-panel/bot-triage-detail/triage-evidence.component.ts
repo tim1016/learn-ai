@@ -9,7 +9,7 @@ import type { EvidencePage, ReadinessCheckView } from '../lib/broker-v2-panel.ty
  *
  * These are per-command availability rows, not pass/fail admission gates —
  * the lifecycle commands are mutually exclusive, so a healthy running bot
- * reports Resume and Continue as unavailable. Unavailable rows arrive first
+ * can report recovery actions as unavailable. Unavailable rows arrive first
  * and carry their reason and cure; available ones stay single lines.
  */
 @Component({

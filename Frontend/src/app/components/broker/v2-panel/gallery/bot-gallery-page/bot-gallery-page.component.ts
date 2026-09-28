@@ -9,6 +9,8 @@ import {
   signal,
 } from '@angular/core';
 import { MessageService } from 'primeng/api';
+import { Router } from '@angular/router';
+import { accountWorkspaceTabRoute } from '../../../../../fleet/account-workspace';
 
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
@@ -81,6 +83,7 @@ export class BotGalleryPageComponent {
 
   protected readonly store = inject(GalleryLiveStore);
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly router = inject(Router);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
@@ -133,7 +136,14 @@ export class BotGalleryPageComponent {
   }
 
   protected async onAction(event: { sid: string; actionId: string }): Promise<void> {
-    if (this.pendingSids().has(event.sid)) return;
+    if (event.actionId === 'deploy_again') {
+      const commands = accountWorkspaceTabRoute({
+        broker: this.broker(), clerkId: this.clerkId(), accountId: this.accountId(),
+      }, 'deploy');
+      if (commands !== null) await this.router.navigate(commands);
+      return;
+    }
+    if (event.actionId !== 'stop' || this.pendingSids().has(event.sid)) return;
     const verdict = laneFenceVerdict(this.openFence(), this.fleetDirectory.lane(this.broker(), this.clerkId()));
     if (!verdict.ok) {
       this.messageService.add(actionOutcomeToast('conflict', verdict.message));

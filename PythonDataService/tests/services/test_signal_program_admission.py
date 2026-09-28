@@ -23,22 +23,19 @@ from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
-    LegacyMigrationLineageConflictError,
+    LegacyMigrationLineageRecord,
     alpaca_v1_action_plan,
 )
 from app.services.bot_carryover import configuration_hash
 from app.services.signal_program_admission import (
     DEFAULT_QUALIFICATION_MANIFEST,
-    LegacyProgramUnreconstructibleError,
     ProgramBuildQualificationManifest,
     ProgramBuildQualificationReceipt,
     SignalProgramSealError,
     build_start_program_seal,
     imported_source_drift,
-    legacy_migration_clone_instance_id,
     prove_running_program_build,
     qualification_receipt_payload,
-    reconstruct_legacy_program_seal,
     record_imported_program_sources,
     running_wiring_digest,
 )
@@ -210,52 +207,6 @@ def test_build_start_program_seal_fails_closed_on_partial_parameter_origins() ->
         build_start_program_seal(binding, _validation(), parameter_origins={"gap": "deploy_override"})
 
 
-def test_reconstruct_legacy_program_seal_refuses_when_parameter_origin_is_not_provably_recorded() -> None:
-    """Independent-review Defect 1: a guess must never be sealed as exact identity.
-
-    A legacy binding whose ``rsi_min``/``rsi_max`` were explicitly supplied
-    at deploy time (present in ``strategy_params``) but never had their
-    origin recorded has no factual source for those origins. Comparing the
-    effective value to *today's* registered default cannot prove they were
-    never overridden — the default may have drifted since deploy time — so
-    this must route to the clone path (``LegacyProgramUnreconstructibleError``)
-    instead of guessing ``"registered_default"``.
-    """
-    defaults = _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema().model_dump(mode="json")
-    legacy_binding = _binding(
-        strategy_params={"gap": defaults["gap"], "rsi_min": defaults["rsi_min"], "rsi_max": defaults["rsi_max"]},
-        strategy_param_origins={"gap": "deploy_override"},
-    )
-
-    with pytest.raises(LegacyProgramUnreconstructibleError) as exc_info:
-        reconstruct_legacy_program_seal(legacy_binding, _validation())
-
-    assert "rsi_min" in str(exc_info.value)
-    assert "rsi_max" in str(exc_info.value)
-
-
-def test_reconstruct_legacy_program_seal_treats_absent_deploy_param_as_factual_default() -> None:
-    """A parameter genuinely absent from the recorded deploy params is a
-    *fact* ('registered_default'), not an inference, and must still
-    migrate. Defect 1's fix must draw the line at "never supplied", not
-    force every pre-v2 instance through the clone path.
-    """
-    legacy_binding = _binding(
-        strategy_params={"gap": 0.35},
-        strategy_param_origins={"gap": "deploy_override"},
-    )
-
-    reconstructed = reconstruct_legacy_program_seal(legacy_binding, _validation())
-
-    assert reconstructed is not None
-    assert reconstructed.configured_signal.parameters["gap"].origin == "deploy_override"
-    # rsi_min/rsi_max were never supplied at all -- absence from
-    # `strategy_params` is a fact about this instance's own persisted
-    # configuration, not a value-vs-current-default guess.
-    assert reconstructed.configured_signal.parameters["rsi_min"].origin == "registered_default"
-    assert reconstructed.configured_signal.parameters["rsi_max"].origin == "registered_default"
-
-
 def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
@@ -368,11 +319,11 @@ def test_sealed_provider_identity_mismatch_fails_closed() -> None:
     assert proof.state == "UNPROVEN"
 
 
-def test_legacy_signal_instance_without_v2_seal_is_not_resumable() -> None:
+def test_legacy_signal_instance_without_v2_seal_requires_fresh_deployment() -> None:
     proof = prove_running_program_build(_binding(), verified_at_ms=_NOW)
 
     assert proof.state == "UNPROVEN"
-    assert "must be cloned" in proof.explanation
+    assert "fresh deployment is required" in proof.explanation
 
 
 def test_v2_seal_appends_without_rewriting_v1_identity_bytes(tmp_path: Path) -> None:
@@ -409,165 +360,26 @@ def test_v2_seal_appends_without_rewriting_v1_identity_bytes(tmp_path: Path) -> 
     ).is_file()
 
 
-def _repository(tmp_path: Path) -> BotBindingRepository:
-    return BotBindingRepository(
+def test_historical_clone_lineage_remains_readable_without_a_clone_writer(tmp_path: Path) -> None:
+    repository = BotBindingRepository(
         tmp_path,
-        instance_dir_for=lambda strategy_instance_id: tmp_path / "live_state" / strategy_instance_id,
+        instance_dir_for=lambda sid: tmp_path / "live_state" / sid,
     )
-
-
-def test_reconstruct_legacy_program_seal_matches_a_fresh_build(tmp_path: Path) -> None:
-    """PRD Sec 11.5 append case: reconstruction from persisted v1 fields is exact."""
-    del tmp_path
-    legacy_binding = _binding()  # sealed_program defaults to None, as any pre-seal record does.
-    assert legacy_binding.sealed_program is None
-
-    reconstructed = reconstruct_legacy_program_seal(legacy_binding, _validation())
-    fresh = build_start_program_seal(
-        legacy_binding,
-        _validation(),
-        parameter_origins=legacy_binding.strategy_param_origins,
+    record = LegacyMigrationLineageRecord(
+        strategy_instance_id="historical-clone",
+        migrated_from_strategy_instance_id=_SID,
+        reason="Historical v1 parameters could not reconstruct an exact seal.",
+        created_at_ms=_NOW,
     )
+    path = tmp_path / "live_state" / record.strategy_instance_id / "legacy_migration_lineage.json"
+    path.parent.mkdir(parents=True)
+    original = record.model_dump_json().encode()
+    path.write_bytes(original)
 
-    assert reconstructed is not None
-    assert reconstructed == fresh
-
-
-def test_reconstruct_legacy_program_seal_raises_for_unprovable_parameters() -> None:
-    """A gap the current schema no longer accepts cannot be reconstructed exactly."""
-    unprovable = _binding(strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0})
-
-    with pytest.raises(LegacyProgramUnreconstructibleError):
-        reconstruct_legacy_program_seal(unprovable, _validation())
-
-
-def test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes(tmp_path: Path) -> None:
-    """PRD Sec 11.5 append case, exercised end to end through the repository.
-
-    Deploy a v1-only instance (no seal), read it back the way Resume would,
-    reconstruct its seal, and record a second (resume) launch carrying it.
-    The append must land under the *same* ``strategy_instance_id`` and must
-    not perturb a single byte of the original ``strategy_instance.json``.
-
-    ``strategy_params``/``strategy_param_origins`` are both left unset:
-    ``strategy_param_origins`` never survives a repository round-trip
-    (``BrokerBotBinding.strategy_param_origins`` is ``exclude=True`` --
-    "persisted only inside the append-only v2 seal"), so ``restored`` below
-    always has ``strategy_param_origins is None`` exactly like a real Resume
-    read. A binding whose ``strategy_params`` were explicitly recorded (even
-    values that happen to equal today's defaults) would therefore have no
-    factual origin for them post-restore and must clone (see
-    ``test_reconstruct_legacy_program_seal_refuses_when_parameter_origin_is_not_provably_recorded``).
-    This binding models the other real legacy shape instead -- a deploy that
-    never supplied explicit params at all -- so every parameter is
-    factually absent and reconstruction is exact.
-    """
-    repository = _repository(tmp_path)
-    legacy_binding = _binding(strategy_params=None, strategy_param_origins=None)
-    repository.record_launch(legacy_binding, launch_reason="deploy")
-    instance_path = tmp_path / "live_state" / _SID / "strategy_instance.json"
-    original_v1_bytes = instance_path.read_bytes()
-    assert not (tmp_path / "live_state" / _SID / "sealed_program_v2.json").is_file()
-
-    restored = repository.read(_SID)
-    assert restored is not None
-    assert restored.sealed_program is None
-
-    reconstructed = reconstruct_legacy_program_seal(restored, _validation())
-    assert reconstructed is not None
-    resumed = restored.model_copy(
-        update={
-            "run_id": "run-2",
-            "created_at_ms": _NOW + 1,
-            "sealed_program": reconstructed,
-        }
-    )
-    proof = prove_running_program_build(resumed, verified_at_ms=_NOW + 1)
-    # The registered defaults and validated point are deliberately aligned, so
-    # an exact no-params reconstruction remains covered. Any root, digest, or
-    # reconstruction drift still refuses the proof at its own gate.
-    assert proof.state == "PROVEN"
-    assert proof.corpus_coverage == "COVERED"
-    resumed = resumed.model_copy(update={"program_build": proof})
-
-    repository.record_launch(resumed, launch_reason="resume")
-
-    assert instance_path.read_bytes() == original_v1_bytes
-    seal_path = tmp_path / "live_state" / _SID / "sealed_program_v2.json"
-    assert seal_path.is_file()
-    assert json.loads(seal_path.read_text(encoding="utf-8"))["strategy_instance_id"] == _SID
-    # The append landed on the exact same instance id — no clone was minted.
-    assert not (tmp_path / "live_state" / legacy_migration_clone_instance_id(_SID)).exists()
-
-
-def test_legacy_migration_clone_instance_id_is_deterministic_and_distinct() -> None:
-    first = legacy_migration_clone_instance_id(_SID)
-    second = legacy_migration_clone_instance_id(_SID)
-
-    assert first == second
-    assert first != _SID
-    assert len(first) <= 128
-
-
-def test_legacy_migration_clone_lineage_is_idempotent_across_repeated_resume_attempts(
-    tmp_path: Path,
-) -> None:
-    """PRD Sec 11.5 clone case: resuming twice must not mint two clones."""
-    repository = _repository(tmp_path)
-    unprovable = _binding(strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0})
-    repository.record_launch(unprovable, launch_reason="deploy")
-    instance_path = tmp_path / "live_state" / _SID / "strategy_instance.json"
-    original_v1_bytes = instance_path.read_bytes()
-
-    with pytest.raises(LegacyProgramUnreconstructibleError):
-        reconstruct_legacy_program_seal(unprovable, _validation())
-    clone_id = legacy_migration_clone_instance_id(unprovable.strategy_instance_id)
-
-    first = repository.ensure_legacy_migration_clone_lineage(
-        original_strategy_instance_id=unprovable.strategy_instance_id,
-        clone_instance_id=clone_id,
-        reason="Persisted v1 parameters no longer validate.",
-        now_ms=_NOW,
-    )
-    # A second Resume attempt on the same broken instance later — a fresh
-    # timestamp, the same deterministic clone id — must not mint a second
-    # clone or silently overwrite the first record's evidence.
-    second = repository.ensure_legacy_migration_clone_lineage(
-        original_strategy_instance_id=unprovable.strategy_instance_id,
-        clone_instance_id=clone_id,
-        reason="Persisted v1 parameters no longer validate.",
-        now_ms=_NOW + 999,
-    )
-
-    assert first == second
-    assert first.created_at_ms == _NOW  # the second call's now_ms never wins.
-    assert repository.read_legacy_migration_lineage(clone_id) == first
-    # The original instance is untouched: no lineage recorded under its own
-    # id, no v1 byte perturbed, and it remains readable ("inspectable").
-    assert repository.read_legacy_migration_lineage(_SID) is None
-    assert instance_path.read_bytes() == original_v1_bytes
-    restored = repository.read(_SID)
-    assert restored is not None
-    assert restored.strategy_instance_id == _SID
-
-
-def test_legacy_migration_clone_lineage_conflict_on_reused_clone_id(tmp_path: Path) -> None:
-    repository = _repository(tmp_path)
-    clone_id = legacy_migration_clone_instance_id(_SID)
-    repository.ensure_legacy_migration_clone_lineage(
-        original_strategy_instance_id=_SID,
-        clone_instance_id=clone_id,
-        reason="Persisted v1 parameters no longer validate.",
-        now_ms=_NOW,
-    )
-
-    with pytest.raises(LegacyMigrationLineageConflictError):
-        repository.ensure_legacy_migration_clone_lineage(
-            original_strategy_instance_id="a-completely-different-instance",
-            clone_instance_id=clone_id,
-            reason="Persisted v1 parameters no longer validate.",
-            now_ms=_NOW,
-        )
+    assert repository.read_legacy_migration_lineage(record.strategy_instance_id) == record
+    assert path.read_bytes() == original
+    assert not hasattr(repository, "ensure_legacy_migration_clone_lineage")
+    assert not hasattr(admission_module, "reconstruct_legacy_program_seal")
 
 
 def _sma_binding(resolution_minutes: int) -> BrokerBotBinding:

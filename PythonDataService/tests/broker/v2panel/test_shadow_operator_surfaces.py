@@ -205,7 +205,7 @@ async def shadow_registry(
         await registry.stop_all()
 
 
-async def test_shadow_runner_can_deploy_stop_and_resume(
+async def test_shadow_runner_can_deploy_stop_and_deploy_fresh(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     shadow_registry: BotTaskRegistry,
 ) -> None:
@@ -231,10 +231,10 @@ async def test_shadow_runner_can_deploy_stop_and_resume(
     stopped = await shadow_registry.stop("alpaca", SID)
     assert stopped.phase == "OFF_DUTY"
     assert runtime.sqlite_repository.active_run(SID) is None
-    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != deployed.active_run_id
-    assert runtime.sqlite_repository.active_run(SID).lifecycle_run_id == resumed.active_run_id
+    assert runtime.sqlite_repository.active_run(SID + "-fresh").lifecycle_run_id == resumed.active_run_id
 
 
 async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
@@ -258,7 +258,7 @@ async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
     assert runtime.sqlite_repository.active_run(SID) is None
 
 
-async def test_shadow_failed_activation_recovers_and_resumes_the_existing_binding(
+async def test_shadow_failed_activation_recovers_without_reusing_the_existing_binding(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     shadow_registry: BotTaskRegistry,
     monkeypatch: pytest.MonkeyPatch,
@@ -297,11 +297,11 @@ async def test_shadow_failed_activation_recovers_and_resumes_the_existing_bindin
     assert recovered.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
     assert shadow_registry.process_fact("alpaca", SID).state == "EXITED"
 
-    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != failed_binding.run_id
-    history = shadow_registry.run_history("alpaca", SID, cursor=None, limit=10)
-    failed_run = next(run for run in history.runs if run.run_id == failed_binding.run_id)
+    failed_run = shadow_registry.current_run("alpaca", SID)
+    assert failed_run.run_id == failed_binding.run_id
     assert failed_run.terminal_outcome.reason_code == "INTERRUPTED_BY_RESTART"
 
 

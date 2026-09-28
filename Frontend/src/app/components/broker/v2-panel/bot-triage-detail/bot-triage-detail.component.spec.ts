@@ -22,7 +22,7 @@ function fakeGate(overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckVi
     explanation: 'The market-data window is current.',
     cure: null,
     authority: 'start_admission',
-    operation: 'resume',
+    operation: 'stop',
     scope: 'bot',
     evidence: {},
     evaluated_at_ms: 1_700_000_001_000,
@@ -197,9 +197,9 @@ describe('BotTriageDetailComponent', () => {
         readiness_checks: [
           fakeGate({ label: 'Stop', ready: true, operation: 'stop' }),
           fakeGate({
-            label: 'Resume',
+            label: 'Stop',
             ready: false,
-            operation: 'resume',
+            operation: 'stop',
             explanation: 'Last SPY minute bar is 37s beyond tolerance.',
             cure: 'Fetch the current window from Data Lab, then retry.',
           }),
@@ -217,7 +217,7 @@ describe('BotTriageDetailComponent', () => {
     const rows = within(card)
       .getAllByRole('listitem')
       .map((item) => item.textContent ?? '');
-    expect(rows[0]).toContain('Resume');
+    expect(rows[0]).toContain('Stop');
   });
 
   /**
@@ -241,8 +241,8 @@ describe('BotTriageDetailComponent', () => {
         readiness_blocked_count: 2,
         readiness_checks: [
           fakeGate({ label: 'Stop', ready: true, operation: 'stop' }),
-          fakeGate({ label: 'Resume', ready: false, operation: 'resume' }),
-          fakeGate({ label: 'Continue', ready: false, operation: 'continue' }),
+          fakeGate({ label: 'Stop', ready: false, operation: 'stop' }),
+          fakeGate({ label: 'Flatten', ready: false, operation: 'flatten_stop' }),
         ],
       }),
     );
@@ -566,9 +566,9 @@ describe('BotTriageDetailComponent', () => {
   it('leads with one command and folds the rest into the overflow', async () => {
     await renderDetail(
       fakeBotPanelView({
-        primary_action_by_lens: { trader: 'resume', operator: null },
+        primary_action_by_lens: { trader: 'stop', operator: null },
         actions: [
-          fakePanelAction('resume', { enabled: false }),
+          fakePanelAction('stop', { enabled: false }),
           fakePanelAction('reconcile_now', { label: 'Reconcile now' }),
           fakePanelAction('prepare_safe_flatten', {
             label: 'Prepare safe flatten',
@@ -582,7 +582,7 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
-    expect(await screen.findByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More commands (2)' })).toBeTruthy();
   });

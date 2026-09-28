@@ -9,7 +9,7 @@ snapshot/TS-parity mechanism pins (see
 
 Two invariants this file enforces and the contract tests pin:
 
-- ``PAUSED`` means one live run is held; Continue keeps that run identity.
+- Terminal Stop requires fresh Deploy; historical PAUSED is projected as STOPPED.
 - Every emitted code carries server-authored copy (``label`` + ``explanation``)
   in :data:`OPERATOR_COPY`; the copy-coverage contract test fails visibly when a
   code is emitted without copy (decision #7 — no open-ended string reaches the
@@ -31,8 +31,8 @@ Phase = Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
 PHASES: Final[frozenset[str]] = frozenset({"OFF_DUTY", "ON_DUTY", "RETIRED"})
 
 # ── Desired state (§12) ───────────────────────────────────────────────────────
-DesiredState = Literal["RUNNING", "PAUSED", "STOPPED"]
-DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "PAUSED", "STOPPED"})
+DesiredState = Literal["RUNNING", "STOPPED"]
+DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "STOPPED"})
 
 # ── Duty-outcome kinds (§7.2) ────────────────────────────────────────────────
 # The typed terminal duty facts a bot records on exit (bot_runner exit taxonomy)
@@ -120,9 +120,6 @@ STATION_STATES: Final[frozenset[str]] = frozenset(
 # ── Action ids (§11, the closed presented-actions enum) ──────────────────────
 ActionId = Literal[
     "deploy",
-    "resume",
-    "pause",
-    "continue",
     "stop",
     "flatten_stop",
     "retire",
@@ -140,9 +137,6 @@ ActionId = Literal[
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
-    "resume",
-    "pause",
-    "continue",
     "stop",
     "flatten_stop",
     "retire",
@@ -161,18 +155,17 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
 
 # The closed set of action ids the Trader banner may ever reference as its
 # primary command (issue #1665, ADR 0027 audience-aware selection). Every
-# other action id — recovery capabilities, ``retire``, ``pause``,
+# other action id — recovery capabilities, ``retire``,
 # ``flatten_stop``, ... — is Operator-only and must never reach
 # ``BotPanelView.primary_action_by_lens.trader``. Enforced by the
 # ``BotPanelView`` model validator; authored by
 # ``panel_projection_service.select_primary_action_by_lens``.
-TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"resume", "continue", "stop"})
+TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"stop"})
 
 # The presented actions that only stop a bot, reduce its exposure or
 # reconcile (#2351) — the one closed set a draining lane still executes. They
 # travel on their own operation (``bot_panel_quiesce_action``, whose request
-# schema is this Literal) while the rest of the action set refuses: ``resume``
-# and ``continue`` would start decisions again. ``stop`` and ``flatten_stop``
+# schema is this Literal) while the rest of the action set refuses: new deployment would start decisions again. ``stop`` and ``flatten_stop``
 # are the runner's lifecycle pair; the other five are the SQLite recovery
 # executor's (``recovery_execution.execute_recovery_action``), which for these
 # ids stops decisions, cancels owned verified working orders, submits a
@@ -230,10 +223,7 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     # Desired state
     "RUNNING": OperatorCopy("Running", "The operator wants this bot evaluating bars."),
-    "PAUSED": OperatorCopy(
-        "Paused",
-        "The current run remains alive but bar evaluation is held until Continue.",
-    ),
+
     "STOPPED": OperatorCopy(
         "Stopped", "The operator wants this bot idle. Exposure is left untouched."
     ),
@@ -340,18 +330,8 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Create and start a new bot bound to this account. "
         "The bot begins evaluating bars immediately after creation.",
     ),
-    "resume": OperatorCopy(
-        "Resume",
-        "Create a new run of this unchanged strategy instance after backend admission.",
-    ),
-    "pause": OperatorCopy(
-        "Pause",
-        "Hold bar evaluation while keeping the current process and run identity alive.",
-    ),
-    "continue": OperatorCopy(
-        "Continue",
-        "Let this paused live run evaluate bars again without changing its run ID.",
-    ),
+
+
     "stop": OperatorCopy(
         "Stop",
         "Stop evaluating bars and cancel this bot's working entry orders. "

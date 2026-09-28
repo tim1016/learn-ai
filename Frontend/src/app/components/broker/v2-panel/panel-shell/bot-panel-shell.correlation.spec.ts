@@ -236,7 +236,7 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
       await fixture.whenStable();
       fixture.detectChanges();
-      expect(screen.getByRole('button', { name: /^Resume$/ })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /^Deploy again$/ })).toBeTruthy();
 
       const source = StubEventSource.instances.at(-1);
       if (source === undefined) throw new Error('Expected a mounted shell SSE transport.');
@@ -248,7 +248,7 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
         expect(screen.getByRole('status', {
           name: `Revision ${revision} stopped`,
         })).toBeTruthy();
-        expect(screen.getByRole('button', { name: /^Resume$/ })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /^Deploy again$/ })).toBeTruthy();
 
         const station = screen.getByRole('button', { name: STATION_BUTTON_NAME });
         fireEvent.click(station);

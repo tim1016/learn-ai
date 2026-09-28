@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
 import { describe, expect, it, vi } from 'vitest';
@@ -48,10 +48,10 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
   };
 }
 
-function fakeAction(actionId: 'resume' | 'stop', enabled = true): PanelAction {
+function fakeAction(actionId: 'stop', enabled = true): PanelAction {
   return {
     action_id: actionId,
-    label: actionId === 'resume' ? 'Resume' : 'Stop',
+    label: 'Stop',
     explanation: `${actionId} this bot.`,
     enabled,
     blockers: [],
@@ -140,6 +140,27 @@ async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverri
 }
 
 describe('BotGalleryPageComponent', () => {
+  it('navigates Deploy again to the ordinary account form without an action or old identity', async () => {
+    const store = fakeGalleryStore({
+      status: 'live',
+      bots: [bot({
+        running: false,
+        desired_state: 'OFF_DUTY',
+        primary_action: { action_id: 'deploy_again', label: 'Deploy again', enabled: true, disabled_reason: null },
+      })],
+    });
+    const { panelService } = await renderPage(store);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith([
+      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', ACCOUNT_ID, 'deploy',
+    ]));
+    expect(panelService.getPanel).not.toHaveBeenCalled();
+    expect(panelService.runBotAction).not.toHaveBeenCalled();
+  });
+
   it('starts the gallery live store with the routed broker and account', async () => {
     const store = fakeGalleryStore({ status: 'live', bots: [bot()] });
 

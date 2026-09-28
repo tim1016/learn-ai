@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import pytest
@@ -25,13 +24,10 @@ from app.schemas.run_admission import (
     ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
-    ResumeCheckpointAdmissionFact,
-    ResumeRunFacts,
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
-    TerminalEvidenceAdmissionFact,
 )
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
@@ -42,11 +38,6 @@ from app.services.run_admission import (
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
-_READY_TERMINAL_EVIDENCE = TerminalEvidenceAdmissionFact(
-    state="RECEIPT_READY",
-    evidence_ref="terminal-evidence:run-prior:receipt:1:CRASHED:TypeError",
-    explanation="An authoritative terminal receipt exists for the prior run.",
-)
 
 
 def _validation(observed_at_ms: int, *, state: str = "VERIFIED") -> StrategyValidationAdmissionFact:
@@ -202,57 +193,6 @@ def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLiveness
     )
 
 
-def _resume_bot(
-    *,
-    process_state: str = "EXITED",
-    process_run_id: str | None = "run-prior",
-    desired_state: str = "STOPPED",
-    phase: str = "OFF_DUTY",
-    checkpoint: ResumeCheckpointAdmissionFact | None = None,
-    mode: str = "trade",
-    extended_hours_state: str = "NOT_REQUESTED",
-    terminal_evidence: TerminalEvidenceAdmissionFact = _READY_TERMINAL_EVIDENCE,
-) -> ResumeRunFacts:
-    return ResumeRunFacts(
-        strategy_instance_id=_SID,
-        proposed_run_id="run-resumed",
-        prior_run_id="run-prior",
-        configuration_hash="b" * 64,
-        sealed_account_id="paper-account",
-        mode=mode,
-        program_build=_program_build(_NOW - 1_000),
-        validation=_validation(_NOW - 1_000),
-        runtime=StartRuntimeAdmissionFact(
-            state="READY",
-            observed_at_ms=_NOW - 1_000,
-            explanation="The bot runtime is ready for Resume.",
-        ),
-        process=RunProcessAdmissionFact(
-            state=process_state,
-            run_id=process_run_id,
-            process_identity=None,
-            registry_generation="registry-1",
-            observed_at_ms=_NOW - 1_000,
-        ),
-        market_data=MarketDataAdmissionFact(
-            state="AVAILABLE",
-            feed_id="alpaca-feed",
-            observed_at_ms=_NOW - 1_000,
-        ),
-        market_liveness=_liveness(observed_at_ms=_NOW - 1_000),
-        extended_hours=ExtendedHoursAdmissionFact(
-            state=extended_hours_state, observed_at_ms=_NOW - 1_000
-        ),
-        desired_state=desired_state,
-        phase=phase,
-        carryover_policy="ALLOW",
-        carryover_account_policy_enabled=True,
-        exposure_carryover_supported=True,
-        checkpoint=checkpoint,
-        terminal_evidence=terminal_evidence,
-    )
-
-
 def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
     decision = evaluate_run_admission(_bot(), _clerk(), evaluated_at_ms=_NOW)
 
@@ -375,58 +315,6 @@ def test_start_admission_refuses_an_unsupported_extended_session_in_every_mode(m
 
 
 @pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
-@pytest.mark.parametrize(
-    ("state", "reason_code"),
-    [
-        ("UNSUPPORTED", "EXTENDED_HOURS_UNSUPPORTED"),
-        ("ALLOWANCE_UNSET", "EXTENDED_HOURS_ALLOWANCE_UNSET"),
-    ],
-)
-def test_resume_admission_refuses_the_same_extended_states_as_start(
-    mode: str, state: str, reason_code: str
-) -> None:
-    """Triage T6: Resume is the path exercised after a crash mid-extended-session.
-
-    Resume reads the same ``ExtendedHoursAdmissionFact`` through the same gate,
-    so a divergence here would let a crashed extended run come back with an
-    authority that can no longer clock or price it.
-    """
-    decision = evaluate_run_admission(
-        _resume_bot(mode=mode, extended_hours_state=state), _clerk(), evaluated_at_ms=_NOW
-    )
-
-    assert decision.operation == "RESUME"
-    assert decision.allowed is False
-    assert decision.reason_code == reason_code
-
-
-@pytest.mark.parametrize("state", ["NOT_REQUESTED", "READY"])
-def test_resume_admission_admits_a_clocked_and_priced_extended_session(state: str) -> None:
-    decision = evaluate_run_admission(
-        _resume_bot(extended_hours_state=state), _clerk(), evaluated_at_ms=_NOW
-    )
-
-    assert decision.reason_code != "EXTENDED_HOURS_UNSUPPORTED"
-    assert decision.reason_code != "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def _carried_spy() -> tuple[ClerkCustodySnapshot, ResumeCheckpointAdmissionFact]:
-    """A Clerk proving one carried SPY share, and the approved STOP checkpoint that matches it."""
-    clerk = _clerk().model_copy(
-        update={"exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})}
-    )
-    checkpoint = ResumeCheckpointAdmissionFact(
-        account_id="paper-account",
-        stopped_run_id="run-prior",
-        configuration_hash="b" * 64,
-        exposure={"SPY": 1.0},
-        approved=True,
-        evidence_ref="carryover-checkpoint:run-prior",
-    )
-    return clerk, checkpoint
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
 def test_start_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode: str) -> None:
     """#2440 owner decision 2026-09-25: Start refuses until the exit allowance is set."""
     decision = evaluate_run_admission(
@@ -435,67 +323,6 @@ def test_start_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode:
 
     assert decision.allowed is False
     assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
-def test_flat_resume_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode: str) -> None:
-    decision = evaluate_run_admission(
-        _resume_bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
-        _clerk(exposure_state="zero"),
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run"])
-def test_holding_resume_without_allowance_requires_flatten(mode: str) -> None:
-    clerk, checkpoint = _carried_spy()
-    bot = _resume_bot(mode=mode, checkpoint=checkpoint, extended_hours_state="EXIT_ALLOWANCE_UNSET")
-    bot = bot.model_copy(update={"exposure_carryover_supported": False})
-    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
-    assert decision.allowed is False
-    assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
-    assert "Flatten" in decision.next_step
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run"])
-def test_unknown_exposure_does_not_bypass_missing_allowance(mode: str) -> None:
-    decision = evaluate_run_admission(
-        _resume_bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
-        _clerk(exposure_state="unknown"), evaluated_at_ms=_NOW,
-    )
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def test_holding_resume_of_an_extended_run_without_allowances_is_still_refused() -> None:
-    """The carve-out is the regular-hours run's alone: an extended run's own legs need the allowances."""
-    clerk, checkpoint = _carried_spy()
-
-    decision = evaluate_run_admission(
-        _resume_bot(checkpoint=checkpoint, extended_hours_state="ALLOWANCE_UNSET"),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def test_holding_resume_with_a_configured_exit_allowance_carries_no_note() -> None:
-    """A live (or configured) authority is unaffected: no refusal, no note."""
-    clerk, checkpoint = _carried_spy()
-
-    decision = evaluate_run_admission(
-        _resume_bot(checkpoint=checkpoint, extended_hours_state="NOT_REQUESTED"),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is True
-    assert "allowance" not in decision.explanation
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:
@@ -547,205 +374,6 @@ def test_start_admission_fact_age_boundary_is_explicit() -> None:
     assert at_boundary.allowed is True
     assert above.allowed is False
     assert above.reason_code == "AUTHORITY_FACT_STALE"
-
-
-def test_resume_admission_allows_terminal_flat_instance_and_mints_proposed_run() -> None:
-    decision = evaluate_run_admission(_resume_bot(), _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.operation == "RESUME"
-    assert decision.allowed is True
-    assert decision.reason_code == "RESUME_ADMITTED"
-    assert decision.proposed_run_id == "run-resumed"
-
-
-def test_resume_admission_blocks_without_terminal_prior_process() -> None:
-    decision = evaluate_run_admission(
-        _resume_bot(process_state="EXITED", process_run_id="run-other"),
-        _clerk(),
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "RESUME_PROCESS_NOT_TERMINAL"
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "reason_code"),
-    [
-        ({"phase": "RETIRED"}, "BOT_RETIRED"),
-        ({"desired_state": "PAUSED"}, "RESUME_REQUIRES_STOPPED_INSTANCE"),
-    ],
-)
-def test_resume_admission_refuses_invalid_instance_lifecycle(
-    kwargs: dict[str, str],
-    reason_code: str,
-) -> None:
-    decision = evaluate_run_admission(_resume_bot(**kwargs), _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == reason_code
-
-
-def test_resume_admission_refuses_unreadable_terminal_evidence() -> None:
-    """PRD #1716 FR-3: an unreadable receipt denies before any custody gate."""
-    unreadable = TerminalEvidenceAdmissionFact(
-        state="UNREADABLE",
-        evidence_ref="terminal-evidence:run-prior:receipt-corrupt",
-        explanation="The terminal receipt for run 'run-prior' could not be read: boom",
-        next_step="This requires engineering investigation; Refresh to check for updated evidence.",
-    )
-
-    decision = evaluate_run_admission(
-        _resume_bot(terminal_evidence=unreadable),
-        _clerk(),
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
-    assert decision.explanation == unreadable.explanation
-    assert decision.next_step == unreadable.next_step
-
-
-def test_resume_admission_decision_carries_the_terminal_evidence_reference() -> None:
-    """The concurrency token (hashed from evidence_refs) must move when the
-    underlying receipt or summary content changes."""
-    decision = evaluate_run_admission(_resume_bot(), _clerk(), evaluated_at_ms=_NOW)
-
-    assert _READY_TERMINAL_EVIDENCE.evidence_ref in decision.evidence_refs
-
-
-def test_resume_admission_requires_exact_approved_carryover_checkpoint() -> None:
-    clerk = _clerk().model_copy(
-        update={
-            "exposure": CustodyExposureFact(
-                state="non_zero",
-                positions={"SPY": 1.0},
-            )
-        }
-    )
-    checkpoint = ResumeCheckpointAdmissionFact(
-        account_id="paper-account",
-        stopped_run_id="run-prior",
-        configuration_hash="b" * 64,
-        exposure={"SPY": 1.0},
-        approved=True,
-        evidence_ref="carryover-checkpoint:run-prior",
-    )
-
-    allowed = evaluate_run_admission(
-        _resume_bot(checkpoint=checkpoint),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-    changed = evaluate_run_admission(
-        _resume_bot(
-            checkpoint=checkpoint.model_copy(update={"exposure": {"SPY": 2.0}})
-        ),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-
-    assert allowed.allowed is True
-    assert "carryover-checkpoint:run-prior" in allowed.evidence_refs
-    assert changed.allowed is False
-    assert changed.reason_code == "RESUME_CHECKPOINT_MISMATCH"
-
-
-@pytest.mark.parametrize(
-    ("carryover_supported", "carryover_policy", "account_policy", "checkpoint", "reason_code"),
-    [
-        (False, "ALLOW", True, None, "RESUME_CARRYOVER_UNSUPPORTED"),
-        (True, "FORBID", True, None, "RESUME_CARRYOVER_NOT_ALLOWED"),
-        (True, "ALLOW", False, None, "RESUME_CARRYOVER_NOT_ALLOWED"),
-        (True, "ALLOW", True, None, "RESUME_CHECKPOINT_MISSING"),
-    ],
-)
-def test_resume_admission_refuses_unproven_exposure_carryover(
-    carryover_supported: bool,
-    carryover_policy: str,
-    account_policy: bool,
-    checkpoint: ResumeCheckpointAdmissionFact | None,
-    reason_code: str,
-) -> None:
-    clerk = _clerk().model_copy(
-        update={
-            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
-        }
-    )
-    bot = _resume_bot(checkpoint=checkpoint).model_copy(
-        update={
-            "exposure_carryover_supported": carryover_supported,
-            "carryover_policy": carryover_policy,
-            "carryover_account_policy_enabled": account_policy,
-        }
-    )
-
-    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == reason_code
-
-
-@pytest.mark.parametrize(
-    ("checkpoint_update", "reason_code"),
-    [
-        ({"account_id": "other-account"}, "RESUME_CHECKPOINT_MISMATCH"),
-        ({"stopped_run_id": "run-other"}, "RESUME_CHECKPOINT_MISMATCH"),
-        ({"configuration_hash": "c" * 64}, "RESUME_CHECKPOINT_MISMATCH"),
-        ({"exposure": {"SPY": 2.0}}, "RESUME_CHECKPOINT_MISMATCH"),
-    ],
-)
-def test_resume_checkpoint_requires_every_identity_leg(
-    checkpoint_update: dict[str, object],
-    reason_code: str,
-) -> None:
-    clerk = _clerk().model_copy(
-        update={
-            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
-        }
-    )
-    checkpoint = ResumeCheckpointAdmissionFact(
-        account_id="paper-account",
-        stopped_run_id="run-prior",
-        configuration_hash="b" * 64,
-        exposure={"SPY": 1.0},
-        approved=True,
-        evidence_ref="carryover-checkpoint:run-prior",
-    ).model_copy(update=checkpoint_update)
-
-    decision = evaluate_run_admission(
-        _resume_bot(checkpoint=checkpoint),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == reason_code
-
-
-def test_resume_checkpoint_accepts_only_float_round_trip_noise() -> None:
-    clerk = _clerk().model_copy(
-        update={
-            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
-        }
-    )
-    exact = ResumeCheckpointAdmissionFact(
-        account_id="paper-account",
-        stopped_run_id="run-prior",
-        configuration_hash="b" * 64,
-        exposure={"SPY": 1.0},
-        approved=True,
-        evidence_ref="carryover-checkpoint:run-prior",
-    )
-    within_ulp = exact.model_copy(
-        update={"exposure": {"SPY": math.nextafter(1.0, math.inf)}}
-    )
-    changed = exact.model_copy(update={"exposure": {"SPY": 1.000_001}})
-
-    assert evaluate_run_admission(_resume_bot(checkpoint=exact), clerk, evaluated_at_ms=_NOW).allowed
-    assert evaluate_run_admission(_resume_bot(checkpoint=within_ulp), clerk, evaluated_at_ms=_NOW).allowed
-    assert not evaluate_run_admission(_resume_bot(checkpoint=changed), clerk, evaluated_at_ms=_NOW).allowed
 
 
 # ── #1702: mode-tiered admission ────────────────────────────────────────
@@ -858,24 +486,6 @@ def test_unset_extended_allowance_denies_every_mode(mode: str) -> None:
 
     assert decision.allowed is False
     assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def test_dry_run_resume_cannot_restore_unsupported_held_exposure() -> None:
-    """Defense-in-depth: the request schema already forbids
-    ``carryover_policy=="ALLOW"`` for dry_run, so this block is moot in
-    practice — but the guard covers it explicitly to match the gate table's
-    "forbidden" cell precisely, not merely by upstream convention."""
-    clerk = _clerk().model_copy(
-        update={"exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})}
-    )
-    bot = _resume_bot(mode="dry_run").model_copy(
-        update={"exposure_carryover_supported": False, "carryover_policy": "FORBID"}
-    )
-
-    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
 
 
 def test_dry_run_still_denied_for_stale_authority_facts_and_process_conflicts() -> None:
@@ -1011,22 +621,6 @@ def _canary_bot(
                 state=program_build_state, program_key=program_key, observed_at_ms=observed_at_ms
             ),
             "validation": _validation(observed_at_ms, state=validation_state),
-        }
-    )
-
-
-def _canary_resume_bot(
-    *,
-    program_key: str = "ema_crossover_signal",
-    program_build_state: str = "PROVEN",
-    sealed_account_id: str = "paper-account",
-) -> ResumeRunFacts:
-    """A Resume attempt shaped like the one that follows a canary rollback:
-    the prior process is proven EXITED and a fresh run id is proposed."""
-    return _resume_bot().model_copy(
-        update={
-            "sealed_account_id": sealed_account_id,
-            "program_build": _canary_program_build(state=program_build_state, program_key=program_key),
         }
     )
 
@@ -1180,36 +774,6 @@ def test_canary_admission_refuses_when_clerk_custody_is_unprovable_even_if_allow
     assert decision.reason_code == "CLERK_CUSTODY_UNPROVABLE"
 
 
-def test_canary_resume_after_rollback_refuses_without_a_fresh_allowlist_entry() -> None:
-    """#1729 AC10: a rollback leaves no cached admission to replay -- Resume
-    is re-gated by the same allowlist as any other admission. The shipped
-    empty allowlist (no monkeypatch here) refuses it, exactly like it would
-    have refused the original Start."""
-    decision = evaluate_run_admission(_canary_resume_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
-
-
-def test_canary_resume_after_rollback_mints_a_genuinely_new_admitted_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#1729 AC10: once an operator re-enables the exact pairing, Resume
-    mints a fresh run rather than reviving the stopped one -- no process is
-    hot-swapped."""
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", "paper-account")}),
-    )
-
-    decision = evaluate_run_admission(_canary_resume_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is True
-    assert decision.reason_code == "RESUME_ADMITTED"
-    assert decision.proposed_run_id == "run-resumed"
-    assert decision.proposed_run_id != "run-prior"
-
-
 # --- Corpus coverage: a stamp on a proven paper account, a blocker elsewhere --
 
 
@@ -1357,22 +921,3 @@ def test_an_armed_or_not_applicable_launch_carries_no_arming_note() -> None:
         assert decision.allowed is True
         assert ARMING_REQUIRED_ADMITTED_NOTE not in decision.explanation
         assert decision.next_step is None
-
-
-def test_resume_reports_current_data_refusal_without_aging_the_connection() -> None:
-    liveness = compose_market_liveness(
-        "SPY", now_ms=_NOW,
-        market_clock=MarketClockLivenessEvidence(
-            state="OPEN", source="alpaca.clock", observed_at_ms=_NOW,
-        ),
-        connected=True, connection_changed_at_ms=_NOW - 60_000,
-        symbol_status=None, require_market_data=True,
-    )
-    bot = _resume_bot().model_copy(update={"market_liveness": liveness})
-
-    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
-
-    assert not decision.allowed
-    assert decision.reason_code == "MARKET_LIVENESS_UNKNOWN"
-    assert liveness.reason_code == "MARKET_DATA_STARTING"
-    assert liveness.observed_at_ms == _NOW

@@ -20,7 +20,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
     SubstitutionRefusal,
 )
-from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
+from app.services.bot_runtime import DecisionFenceFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
 from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_ledger import SourceBarLedger
@@ -97,13 +97,13 @@ async def test_retained_feed_consumes_modes_of_filtered_bars(tmp_path: Path) -> 
 
     The session pops a captured mode only for bars it actually evaluates, and
     it never sees a bar the retained feed filters out. Without the retained
-    feed consuming those modes, PauseAwareFeed's map would grow unbounded over
+    feed consuming those modes, DecisionFenceFeed's map would grow unbounded over
     a long-running paper session (Codex PR #1764 P2).
     """
     gate = asyncio.Event()
     gate.set()  # DECIDE mode
     bars = [_phase_bar(0, "PRE"), _phase_bar(1, "RTH"), _phase_bar(2, "POST")]
-    pause_feed = PauseAwareFeed(_MixedPhaseFeed(bars), gate)
+    pause_feed = DecisionFenceFeed(_MixedPhaseFeed(bars), gate)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:leak")
     try:
         retained = _RetainedSourceBarFeed(pause_feed, ledger, run_id="run-1", session=_RTH_SESSION)
@@ -206,7 +206,7 @@ async def test_pause_aware_feed_forwards_the_continuity_policy_to_its_source() -
     gate.set()
     source = _FakeFeed([_phase_bar(0, "RTH")], mode="finite")
     policy = _continuity_policy()
-    feed = PauseAwareFeed(source, gate)
+    feed = DecisionFenceFeed(source, gate)
 
     yielded = [bar async for bar in feed.stream_bars("SPY", continuity=policy)]
 

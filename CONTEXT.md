@@ -57,12 +57,15 @@ is archived while the code it names still runs.
   the same write preserves the original receipt; conflicting terminal evidence
   is rejected. The UI may not invent terminal wording when this evidence is
   absent.
-- **Continue** — allow an existing paused, still-live run to proceed. It keeps
-  the same `run_id`.
-- **Resume** — create and bind a new run of the same immutable strategy
-  instance after its prior run stopped. Resume never edits the instance
-  configuration. Any legacy use of “Resume” to mean continuing a paused live
-  process should be renamed to **Continue**.
+- **Deploy** — authorize a fresh strategy deployment after reviewing its current
+  account, configuration, money and terms. It creates a new identity.
+- **Deploy again** — open the ordinary Deploy journey from a stopped deployment.
+  The old deployment keeps its evidence and custody; opening the form grants no
+  trading permission.
+- **Stop** — terminally end a deployment's new strategy decisions. Its existing
+  orders and exposure still require Clerk recovery or guarded Flatten.
+- **Pause / Continue / Resume** — retired broker controls, retained only as
+  historical terminology. They cannot authorize new trading.
 - **Dry run** — an explicitly non-submitting strategy run that consumes real
   market data and produces simulated decisions/fills without sending broker
   orders. Submission mode is part of immutable instance configuration, so
@@ -70,9 +73,9 @@ is archived while the code it names still runs.
   new `strategy_instance_id`.
 - **Sealed custody account** — the exact Clerk account captured in the final
   Start custody snapshot and made immutable with the strategy instance. Every
-  later Resume and Clerk registration must match it; a legacy instance without
-  a seal is readable evidence but cannot be resumed into newly selected custody.
-- **Validation admission fact** — the Start/Resume-time receipt that re-reads
+  Clerk registration must match it; a legacy instance without
+  a seal is readable evidence and cannot adopt newly selected custody.
+- **Validation admission fact** — the Deploy-time receipt that re-reads
   the active human validation event and re-hashes each referenced validator,
   settings, and audit artifact. A rendered deploy page is not this fact; stale,
   missing, or unreadable proof refuses a new run.
@@ -86,7 +89,7 @@ is archived while the code it names still runs.
   update. It is what makes an instance's immutability checkable rather than
   merely asserted.
   _Avoid_: config version, spec version (neither is a content hash).
-- **Launch reason** — why a run was created: a fresh deploy, a Resume of a
+- **Launch reason** — historical creation evidence: a fresh deploy, a retired Resume of a
   stopped instance, or a legacy record lifted from an older artifact. Recorded
   on the run, never on the instance.
 
@@ -443,10 +446,8 @@ so they survive a broker change.
   approved STOP leaves instance-attributed exposure in place. Alpaca Paper
   carryover is currently globally disabled: no current program or setting may
   create an approved checkpoint or resume exposure from one.
-- **Resume custody proof** — a fresh proof that immutable strategy
-  configuration, current Clerk attribution, and broker account truth exactly
-  match the carryover stop checkpoint. A new run may attach to the stopped
-  instance only when this proof passes.
+- **Historical Resume custody proof** — retained evidence from the removed
+  Resume workflow. It grants no permission to create a run or transfer exposure.
 - **Account recovery proof** — the stricter account reconciliation receipt used
   for recovery actions such as freeze clearing and ADR-required flat starts.
   It combines observation proof with accepted resolved exposure/flatness and
@@ -612,26 +613,22 @@ Liveness is resolved **server-side** and returned with names that make misuse
 hard (`live_binding` vs `evidence_binding`) — the client never scans runs to
 infer liveness.
 
-## Operator intent — single knob (resolved 2026-05-30)
+## Operator intent — Deploy and Stop (amended 2026-09-27)
 
 **Lineage: live.**
 
-**Durable desired-state is the single operator intent knob**, with one
-liveness-independent semantic:
+Durable desired state expresses one terminal lifecycle per instance:
 
-- **PAUSED** — strategy should not make new decisions/orders.
-- **RUNNING** — strategy may act when readiness gates pass.
-- **STOPPED** — strategy must not restart without explicit operator change.
+- **RUNNING** — the deployed strategy may act when readiness gates pass.
+- **STOPPED** — this instance may not produce new decisions or restart.
 
-**Invariant** — any live actuation of PAUSE/CONTINUE/STOP must leave the durable
-intent at the same semantic state as the action it executed. This makes
-"paused-but-still-trading" structurally hard: durable state changes first, live
-actuation is queued, the UI shows pending/acked actuation against the same
-intent.
+Stop fences decisions before asynchronous teardown. Existing orders, account
+custody, and guarded Flatten remain visible and recoverable through the Clerk.
+Deploy again is navigation to fresh deployment consent, with a new instance and
+run and current checks; it is never a state change on the old instance.
 
-The knob is the same fact **Control intent** names under "Bot control plane"
-below, and it is deliberately not held by the custody authority: a stopped bot
-must refuse to restart itself even when that authority is unreachable.
+Historical **PAUSED** sidecars decode as stopped and are durably normalized to
+STOPPED during boot recovery. They grant no executable pause or restart path.
 
 ## Live-instances intent endpoint and command channel (resolved 2026-05-30)
 
@@ -664,8 +661,8 @@ status and live-actuation ack pointer; (4) with no live binding, return
 `FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED` (and maybe `DUMP_STATUS` later).
 `PAUSE`/`CONTINUE`/`STOP` are removed from that one-shot channel. They are
 first-class Bot Cockpit controls only when the backend's capability projection
-renders them as available; the UI never invents availability. Legacy `resume`
-remains a backend-compatible wire verb for the same-run Continue control only
+renders them as available; the UI never invents availability. Historical `resume`
+records retain their original spelling without executable compatibility
 until the vocabulary migration is complete.
 
 **Command lifecycle** (operator vocabulary; one row per command, not
@@ -1095,56 +1092,12 @@ stable formula:
 impossible-with-clean so future policy semantics do not require an
 Angular change.
 
-## Continue vs Resume — the legacy `resume` naming (resolved 2026-06-20)
+## Retired Pause, Continue and Resume (2026-09-27)
 
-**Lineage: live.**
-
-Two different operator acts that a legacy wire name conflates. The distinction is
-current and load-bearing; only the resolver that carried the legacy name retires.
-
-- **Continue** and **Resume** are defined in the Identity ladder above: Continue
-  lets an existing paused, still-live run proceed under the same `run_id`;
-  Resume creates and binds a **new** run of the same immutable strategy instance
-  after its prior run stopped.
-- **The legacy `resume` identifier means Continue.** `ResumeGuardState`,
-  `operator_surface.actions.resume`, the wire verb `resume`, and the CLI
-  `cmd_resume` are legacy code and wire names for *continuing an existing paused
-  live run*. They never mean creating a new run, and they do not define the
-  domain meaning of **Resume**.
-- **Renaming is gated on new-run admission.** Retiring or renaming those
-  identifiers requires separate new-run admission first — otherwise the rename
-  silently widens a Continue control into a Resume control.
-  _Avoid_: using "Resume" for the same-run Continue control in trader-facing
-  copy, and reading `actions.resume` as a new-run capability.
-
-## Continue / Pause / Stop guards — shared resolver (legacy Resume naming)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-The guard resolver behind the live-instances capability projection. The
-Continue-vs-Resume distinction it was named after is **live** — see above.
-
-ADR 0010 §A3 and PRD #616 — the three Continue guards (broker safety
-verdict, reconciliation receipt, uncertain-intent WAL) are resolved
-once-per-request by `ResumeGuardState` and shared across:
-
-- the capability projection (`operator_surface.actions.resume / pause / stop`)
-- the desired-state mutation endpoint (re-validates before the durable
-  write)
-- the CLI `cmd_resume` (no bypass — the `--force` flag was deleted in
-  PRD #616)
-
-The legacy `operator_surface.actions.resume / pause / stop` fields are
-renderable Bot Cockpit capability fields, not one-shot commands. A present and
-allowed field renders the matching Continue, Pause, or Stop control; a blocked
-field renders that control disabled with its backend-authored reason. The
-`actions.resume` name means Continue during migration and never means creating
-a new run.
-
-The closed reason-code vocabulary, the priority order for the
-single-line tooltip, and the structured `disabled_reasons` list are
-the only set of disabled-reason codes the cockpit's typed lookup
-covers.  Unknown codes fail closed.
+These broker controls no longer exist. Historical records preserve their original
+names, identities and sealed policy values. New trading after Stop or terminal
+failure requires fresh Deploy; feed reconnection within a live run and recovery
+of existing orders are continuity, not a new deployment.
 
 ## Broker session mirror — client-connection observability (resolved 2026-07-03)
 
@@ -1671,8 +1624,7 @@ Authority: ADR-0025.
 
 **Lineage: neutral.**
 
-Every mutation response (Resume, Start, Reconcile, Flatten-and-pause,
-crash-recovery override, Mark Poisoned) carries a backend-authored
+Every current mutation response carries a backend-authored
 **rung receipt**: a notice-shaped statement naming the **next blocking
 rung** from the blockage ladder — or the scoped all-clear ("no enforced
 gate blocks the next start"). It exists because a mutation can succeed
@@ -2017,7 +1969,7 @@ record** above, and they are never used interchangeably.
 
 Decision record: ADR 0043. Sharpens **Signal Program** and **Sealed account**
 above for the PRD Slice 2 build that actually seals a deployed program and
-proves its running build at Start/Resume.
+proves its running build at Deploy.
 
 - **Configured-signal seal** — the inner, self-hashed identity of one deployed
   Signal Program: program key/version, golden trace root, every resolved
@@ -2033,7 +1985,7 @@ proves its running build at Start/Resume.
   place of — the strategy instance's original v1 `configuration_hash`; the two
   live as separate create-once artifacts under the same instance directory.
   _Avoid_: v2 hash, seal hash, bot hash.
-- **Program build proof** — the Start/Resume admission fact answering whether
+- **Program build proof** — the Deploy admission fact answering whether
   the currently loaded program bytes have a golden-qualification receipt for
   the sealed `(program_version, golden_trace_root)`. One of three closed
   states: `PROVEN`; `UNPROVEN`, which refuses the run as
@@ -2055,14 +2007,10 @@ proves its running build at Start/Resume.
   Neither the roots alone nor the full unfiltered import graph is this
   closure; an undeclared drift in either direction fails a dedicated census
   test before it can land.
-- **Legacy seal migration** — the append-or-clone rule for a strategy instance
-  that predates the v2 seal. Append an exact seal under the same
-  `strategy_instance_id` when every semantic field still reconstructs from
-  persisted v1 data; otherwise clone a new, deterministically-derived instance
-  id with durable, one-directional lineage evidence. Either path leaves the
-  original v1 bytes untouched forever; a clone is inspectable under its own id
-  but the original can never Resume again under its old one.
-  _Avoid_: seal migration, resealing, v2 upgrade.
+- **Historical legacy seal migration** — the removed append-or-clone workflow
+  for instances predating the v2 seal. Existing seals and lineage remain readable
+  without changing their original bytes. New runs always use fresh Deploy consent,
+  identity, and seals; there is no reconstruction or automatic clone capability.
 
 ## Exposure lifecycle closure (resolved 2026-08-24)
 
@@ -2077,7 +2025,7 @@ proves its running build at Start/Resume.
 - **Recovery status** — the Clerk's last observed answer to whether an exit is working, held, eligible, unreachable, stuck, or not yet verified. Its check time is separate from the original unresolved-exit time.
 - **Redrive** — a new automatic reduction attempt for an unresolved exit. Only failed regular-session market attempts consume its bounded attempt count; ordinary holds pause recovery without spending that count.
 - **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.
-- **`FAILED_ENTER_FILLED`** — the custody-subject fence raised when a fill is recorded on an ENTER the Clerk already folded `failed`/`rejected` (#2348). The Clerk keeps the real position; the fence names the order and its fill quantity, blocks new exposure, and allows reduction toward zero of the named symbols only. Every reconciliation pass re-derives it from durable facts (a crash between the fill and the fence heals on the next pass). The account verdict stays `clean` — broker and journal agree — while the fenced bot's custody proof carries a freeze that refuses its Start/Resume; it clears only on attributed-flat proof from a pass whose broker snapshot agrees, and re-raises only if the order fills further.
+- **`FAILED_ENTER_FILLED`** — the custody-subject fence raised when a fill is recorded on an ENTER the Clerk already folded `failed`/`rejected` (#2348). The Clerk keeps the real position; the fence names the order and its fill quantity, blocks new exposure, and allows reduction toward zero of the named symbols only. Every reconciliation pass re-derives it from durable facts (a crash between the fill and the fence heals on the next pass). The account verdict stays `clean` — broker and journal agree — while the fenced bot's custody proof carries a freeze that refuses new exposure; it clears only on attributed-flat proof from a pass whose broker snapshot agrees, and re-raises only if the order fills further.
 
 ## Registration exit (resolved 2026-08-31)
 

@@ -318,7 +318,8 @@ class SyntheticUiCorrelationRecord(BaseModel):
     browser_epoch: str = Field(pattern=r"^browser-reload-[0-9]+$")
     revision: int = Field(ge=0)
     historical_snapshot_state: Literal["OFF_DUTY_STOPPED_FLAT_POST_RESTART"] = "OFF_DUTY_STOPPED_FLAT_POST_RESTART"
-    presented_action_id: Literal["resume"] = "resume"
+    # Old qualification receipts remain decodable; current UI has navigation only.
+    presented_action_id: Literal["resume", "deploy_again"] = "resume"
     click_target: Literal["BROKER_ACK_RAW_EVIDENCE"] = "BROKER_ACK_RAW_EVIDENCE"
     evidence_request_method: Literal["GET"] = "GET"
     evidence_request_path: str = Field(min_length=1, max_length=2_048)
@@ -364,7 +365,8 @@ class SyntheticUiCorrelationEvidence(BaseModel):
     observed_revision_count: int = Field(ge=1)
     revision_sequence: tuple[int, ...] = Field(min_length=1)
     historical_snapshot_state: Literal["OFF_DUTY_STOPPED_FLAT_POST_RESTART"] = "OFF_DUTY_STOPPED_FLAT_POST_RESTART"
-    presented_action_id: Literal["resume"] = "resume"
+    # Old qualification receipts remain decodable; current UI has navigation only.
+    presented_action_id: Literal["resume", "deploy_again"] = "resume"
     correlation_records: tuple[SyntheticUiCorrelationRecord, ...] = Field(
         min_length=1,
         max_length=4_096,

@@ -3,7 +3,6 @@ import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { AlpacaDeployWorkflowComponent } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.component';
-import { DeployResumeBotsComponent } from '../../broker/broker-deploy-page/deploy-resume-bots.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneFenceDrifted } from '../../../fleet/lane-fence';
@@ -30,7 +29,7 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 @Component({
   selector: 'app-alpaca-deploy-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaDeployWorkflowComponent, DeployResumeBotsComponent],
+  imports: [AlpacaDeployWorkflowComponent],
   templateUrl: './alpaca-deploy-tab.component.html',
   styleUrl: './alpaca-deploy-tab.component.scss',
 })

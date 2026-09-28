@@ -24,9 +24,6 @@
     <section><h2>{{ operator.exposure_label }}</h2>
       @for (slice of operator.exposure_slices; track slice.label) { <div class="slice"><strong>{{ slice.label }} · {{ slice.quantity_label }}</strong><p>{{ slice.explanation }}</p></div> }
     </section>
-    <section><h2>{{ operator.resume_label }}</h2><p>{{ operator.resume_result }}</p>
-      <dl>@for (comparison of operator.resume_comparisons; track comparison.label) { <div [attr.data-tone]="comparison.tone"><dt>{{ comparison.label }}</dt><dd>{{ comparison.checkpoint }} → {{ comparison.observed }} · {{ comparison.result_label }}</dd></div> }</dl>
-    </section>
   </div>
 
   <section class="freeze"><h2>{{ operator.freeze_label }}</h2><p>{{ operator.freeze_explanation }}</p><strong>Next step: {{ operator.next_step }}</strong></section>

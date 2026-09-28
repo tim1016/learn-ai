@@ -44,6 +44,9 @@
     </div>
 
     <div class="bot-banner__actions">
+      @if (!panel().health.running) {
+        <a class="bot-banner__manual-order" [routerLink]="deployAgainRoute()">Deploy again</a>
+      }
       @if (primaryAction(); as action) {
         <app-panel-action-button
           [action]="action"

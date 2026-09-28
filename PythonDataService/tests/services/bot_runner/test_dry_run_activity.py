@@ -302,36 +302,3 @@ async def test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_f
     assert "could not be loaded" in decision.explanation
     assert refusal.next_step in decision.next_step
     assert "Fix the Alpaca connection" in decision.next_step
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("holding", [False, True])
-async def test_dry_run_resume_requires_flatten_before_restoring_held_exposure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    _isolated_synthetic_authority: None, holding: bool,
-) -> None:
-    from app.broker.alpaca import active_binding
-
-    from ._support import _green_bar
-
-    bars = [_green_bar(1_704_214_860_000), _green_bar(1_704_214_920_000)] if holding else []
-    feed = _FakeFeed(bars, mode="hold")
-    registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
-    if holding:
-        await _wait_for(lambda: len(registry.dry_run_activity("alpaca", _SID)) == 1)
-    await registry.stop("alpaca", _SID)
-    refusal = active_binding.UnboundBroker(
-        reason="account_pin_mismatch", message="The selected account differs from the pinned account.",
-        next_step="Repair the account pin before starting a new run.",
-    )
-    monkeypatch.setattr(active_binding, "_binding", None)
-    monkeypatch.setattr(active_binding, "_refusal", refusal)
-    decision = await registry.preview_resume_admission("alpaca", _SID)
-    if not holding:
-        # Sealed per-bot exit terms survive a later profile refusal.
-        assert decision.allowed is True
-    else:
-        assert decision.allowed is False
-        assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
-        assert "Flatten" in decision.next_step

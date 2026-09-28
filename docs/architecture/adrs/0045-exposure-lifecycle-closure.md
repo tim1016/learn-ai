@@ -161,3 +161,15 @@ extended-hours limit.
 - The recovery surface's promise holds: an enabled `execute_safe_flatten` is a promise, not a lie — it is presented only where the executor can deliver, and reports honest per-leg outcomes.
 
 Recovery observation persistence (PR #2505 review correction): repeated successful checks of an unchanged hold update the per-bot `exit_recovery_checks` operational row. Outcome, reason, allowed-from time and failure-budget changes remain immutable custody transitions. Reconciliation collects explicit results and commits them only after its final broker verdict; no implicit buffering mode or queued escalation exists. The sweep's configured cadence and observed pass boundaries distinguish slow work from downtime. This operational row is not custody authority: after restart or mirror rebuild, the new lease owner must complete a check before status is current.
+
+
+## 2026-09-27 amendment: stopped custody never transfers to a new deployment
+
+[ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path)
+supersedes this ADR's Resume and deferred carryover requirements. Pause, Continue
+and Resume are removed. A new deployment has a fresh identity and current
+consent; the stopped deployment keeps all existing orders, exposure, receipts and
+sealed exit terms until the Clerk proves their resolution. Guarded Flatten and
+same-order recovery remain available after Stop or terminal failure. Historical
+carryover checkpoints are evidence, never permission for a new run to adopt
+custody. This changes no exit allowance, market-data provider or recovery fence.

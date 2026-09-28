@@ -1,4 +1,4 @@
-"""Durable Alpaca STOP checkpoint and fresh Resume-custody policy.
+"""Durable Alpaca STOP custody evidence.
 
 The bot runner owns process liveness; this module owns the lifecycle proof
 that connects a stopped run to Clerk-authored account truth. It deliberately
@@ -51,16 +51,8 @@ class CustodyClerk(Protocol):
     async def prove_instance_custody(self, strategy_instance_id: str) -> InstanceCustodyProof: ...
 
 
-class CarryoverResumeRefusedError(Exception):
-    """Fresh Resume proof failed without changing runtime or broker state."""
-
-    def __init__(self, message: str, *, detail: str) -> None:
-        super().__init__(message)
-        self.detail = detail
-
-
 class CarryoverStopCheckpoint(BaseModel):
-    """Durable STOP custody result used as the Resume comparison baseline."""
+    """Historical STOP custody result; never permission to restart trading."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -109,23 +101,6 @@ def read_checkpoint(path: Path) -> CarryoverStopCheckpoint | None:
             },
         )
         return None
-
-
-def checkpoint_status(
-    binding: CarryoverBinding,
-    path: Path,
-) -> tuple[dict[str, float], bool]:
-    checkpoint = read_checkpoint(path)
-    matches = (
-        checkpoint is not None
-        and checkpoint.approved
-        and checkpoint.stopped_run_id == binding.run_id
-        and checkpoint.configuration_hash == configuration_hash(binding)
-    )
-    return (
-        checkpoint.exposure if checkpoint is not None and checkpoint.approved else {},
-        matches,
-    )
 
 
 async def prove_stop_outcome(
@@ -185,81 +160,3 @@ async def prove_stop_outcome(
     )
     _atomic_write_json(checkpoint_path, checkpoint.model_dump())
     return outcome
-
-
-async def require_resume_custody(
-    binding: CarryoverBinding,
-    *,
-    clerk: CustodyClerk | None,
-    checkpoint_path: Path,
-    desired_state: str,
-    phase: str,
-    exposure_carryover_supported: bool = True,
-) -> None:
-    """Admit Resume only after a fresh exact Clerk proof."""
-    if phase == "RETIRED":
-        raise CarryoverResumeRefusedError(
-            f"Bot '{binding.strategy_instance_id}' is retired and cannot resume.",
-            detail="Deploy a replacement strategy instance with explicit lineage.",
-        )
-    if desired_state != "STOPPED":
-        raise CarryoverResumeRefusedError(
-            f"Bot '{binding.strategy_instance_id}' has no durable STOP intent.",
-            detail=(
-                "Resume is limited to an explicitly stopped instance; resolve "
-                "the prior run outcome before starting a new run."
-            ),
-        )
-    if binding.broker != "alpaca" or binding.mode != "trade":
-        return
-    if clerk is None:
-        raise CarryoverResumeRefusedError(
-            "Resume is refused because the Alpaca Clerk is unavailable.",
-            detail="Restore Clerk custody and obtain a fresh account proof.",
-        )
-
-    proof = await clerk.prove_instance_custody(binding.strategy_instance_id)
-    if proof.freeze.active or proof.reconciliation_verdict != "clean":
-        raise CarryoverResumeRefusedError(
-            "Resume is refused by the account custody proof.",
-            detail=proof.freeze.explanation or f"Reconciliation verdict is {proof.reconciliation_verdict}.",
-        )
-    if proof.working_order_refs or proof.unresolved_intent_refs:
-        raise CarryoverResumeRefusedError(
-            "Resume is refused while this instance has unresolved order work.",
-            detail=(f"working={len(proof.working_order_refs)}; unresolved={len(proof.unresolved_intent_refs)}"),
-        )
-    if not proof.exposure:
-        return
-    if not exposure_carryover_supported:
-        raise CarryoverResumeRefusedError(
-            "Resume is refused because the strategy cannot safely restore carried exposure.",
-            detail=(
-                "This runtime does not persist the strategy's open-position lifecycle. "
-                "Flatten the exact Clerk-attributed exposure before Resume."
-            ),
-        )
-    if binding.carryover_policy != "ALLOW":
-        raise CarryoverResumeRefusedError(
-            "Resume is refused because stopped exposure was not approved for carryover.",
-            detail="Flatten the exact Clerk-attributed exposure before resuming.",
-        )
-    checkpoint = read_checkpoint(checkpoint_path)
-    if checkpoint is None or not checkpoint.approved:
-        raise CarryoverResumeRefusedError(
-            "Resume is refused because no approved carryover checkpoint exists.",
-            detail="STOP must persist an approved checkpoint before exposure can carry.",
-        )
-    comparisons_match = (
-        checkpoint.account_id == proof.account_id
-        and checkpoint.stopped_run_id == binding.run_id
-        and checkpoint.configuration_hash == configuration_hash(binding)
-        and checkpoint.exposure == proof.exposure
-    )
-    if not comparisons_match:
-        raise CarryoverResumeRefusedError(
-            "Resume is refused because the carryover custody proof changed.",
-            detail=(
-                "Account, run, immutable configuration, or exact attributed quantity differs from the STOP checkpoint."
-            ),
-        )

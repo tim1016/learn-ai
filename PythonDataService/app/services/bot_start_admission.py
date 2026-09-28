@@ -148,11 +148,11 @@ class StartAdmissionUnavailable(Exception):
 class RunAdmissionInvariantError(RuntimeError):
     """An admitted run lost evidence its own admission decision required.
 
-    ``evaluate_run_admission`` only allows Start/Resume once
+    ``evaluate_run_admission`` only allows Deploy once
     ``market_data.state == "AVAILABLE"``, and ``market_data_admission_fact``
     only reports that state when a feed was resolved — so an allowed
     decision with no feed means that invariant broke upstream. Shared by
-    Start and Resume so both admission paths fail the same explicit way
+    Deploy so both admission paths fail the same explicit way
     instead of a bare ``assert`` that ``python -O`` would strip.
     """
 
@@ -347,8 +347,8 @@ def extended_hours_admission_fact(
 
     Every new run needs exit terms, including regular-session runs whose last
     bar exits after the close. Extended entries additionally need the account's
-    declared window and entry allowance. Holding Resume separately requires
-    Flatten and cannot change the prior bot's immutable terms.
+    declared window and entry allowance. A stopped bot retains its immutable
+    terms and resolves remaining exposure through Flatten.
     """
     if exit_terms is None or exit_terms.exit_allowance_bps is None:
         state: ExtendedHoursAdmissionState = "EXIT_ALLOWANCE_UNSET"
@@ -453,9 +453,9 @@ def seal_binding_to_custody_snapshot(
 def log_run_launch(
     binding: BrokerBotBinding,
     *,
-    reason: Literal["deploy", "resume"],
+    reason: Literal["deploy"],
 ) -> None:
-    """Emit the common structured launch event for Start and Resume."""
+    """Emit the common structured launch event for Deploy."""
     logger.info(
         "Bot run launched",
         extra={

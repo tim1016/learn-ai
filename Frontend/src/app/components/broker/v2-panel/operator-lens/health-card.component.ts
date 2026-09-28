@@ -4,7 +4,6 @@ import {
   input,
   output,
 } from '@angular/core';
-import { KeyValuePipe } from '@angular/common';
 import type {
   BotHealthCard,
   PanelAction,
@@ -29,7 +28,6 @@ import { StartupJoinStatusComponent } from '../startup-join/startup-join-status.
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ExposureNoticesComponent,
-    KeyValuePipe,
     PanelActionButtonComponent,
     StartupJoinStatusComponent,
     TimestampDisplayComponent,

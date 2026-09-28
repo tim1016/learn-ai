@@ -6,6 +6,7 @@ import {
   output,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { accountWorkspaceTabRoute } from '../../../../fleet/account-workspace';
 
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -82,6 +83,12 @@ export class BotBannerComponent {
 
   readonly actionRequested = output<PanelActionTrigger>();
   readonly retryRequested = output();
+
+  protected readonly deployAgainRoute = computed(() => accountWorkspaceTabRoute({
+    broker: this.panel().broker,
+    clerkId: this.clerkId(),
+    accountId: this.panel().account_id,
+  }, 'deploy'));
 
   protected readonly operator = computed(() => this.lens() === 'operator');
 

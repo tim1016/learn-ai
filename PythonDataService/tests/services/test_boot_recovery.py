@@ -688,9 +688,10 @@ async def test_boot_sweep_repairs_service_shutdown_stranded_as_paused(
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
     await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.pause("alpaca", _SID)
+    # A retained pre-cutover sidecar is history, never a restart capability.
+    registry._desired_repo(_SID).set(DesiredState.PAUSED, updated_by="legacy", now_ms=_T0)
     await registry.stop_all()
-    assert registry.status("alpaca", _SID).desired_state == "PAUSED"
+    assert registry.status("alpaca", _SID).desired_state == "STOPPED"
 
     rebooted = _registry(tmp_path, feed)
     await rebooted.run_boot_recovery()

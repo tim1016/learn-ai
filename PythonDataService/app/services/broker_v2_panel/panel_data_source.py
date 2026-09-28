@@ -53,15 +53,13 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
-from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
     live_state_binding_repository,
 )
 from app.services.bot_runner import (
-    ActivationFailedCleanupProvenError,
-    BotRunnerError,
     get_bot_task_registry,
 )
 from app.services.bot_start_admission import market_data_capability_account_id
@@ -73,7 +71,6 @@ from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
     ActionNotAvailableError,
     ActionPerformer,
-    ActivationFailedError,
     AuthorityPoisonedError,
     DryRunAuthorityLeaseLostError,
     ExecutionAuthorityLostError,
@@ -374,24 +371,6 @@ async def _get_panel_with_entries_from_authority(
             detail="Restore or reactivate the account-scoped SQLite authority.",
         )
     status = _status_in_binding_mode(evidence.status, binding)
-    resume_admission: RunAdmissionDecision | None = None
-    if not status.running:
-        try:
-            # Resume is the only action this projection informs, so skip it
-            # entirely for a live run. The preview itself is a pure read: it
-            # projects the sweep's verdict rather than reconciling (#1776).
-            resume_admission = await registry.preview_resume_admission(broker, sid)
-        except BotRunnerError as exc:
-            resume_admission = exc.admission_decision
-            if resume_admission is None:
-                logger.warning(
-                    "broker panel Resume admission is unavailable",
-                    extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
-                )
-        # No second evidence cut: the preview projects the sweep's last
-        # verdict and mutates nothing (#1776 WP2), so the evidence read above
-        # is already this response's single consistent cut. Re-reading here
-        # doubled the cost of every stopped bot's poll.
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
     entries: list[OrderJournalEntry] = []
@@ -445,7 +424,6 @@ async def _get_panel_with_entries_from_authority(
         now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
-        resume_admission=resume_admission,
         sealed_program=binding.sealed_program,
         program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
@@ -629,32 +607,6 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
     presenting a fake success.
     """
 
-    async def _resume(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        try:
-            admitted = await registry.resume_existing_with_admission(broker, sid)
-        except ActivationFailedCleanupProvenError as exc:
-            raise ActivationFailedError(
-                f"Resume for run '{exc.attempted_run_id}' failed after Clerk "
-                "registration; the Clerk stop committed.",
-                detail=exc.detail or str(exc),
-            ) from exc
-        except BotRunnerError as exc:
-            raise ActionNotAvailableError(
-                "Resume is no longer available for this bot.",
-                detail=exc.detail or str(exc),
-                reason_code=(
-                    exc.admission_decision.reason_code
-                    if exc.admission_decision is not None
-                    else exc.reason_code
-                ),
-            ) from exc
-        return (
-            f"Bot resumed as new run {admitted.bot.active_run_id} from its immutable configuration. "
-            "The Clerk remains the only owner of broker order effects."
-        )
 
     async def _stop(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
@@ -695,29 +647,6 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             "kept; it can start no new runs."
         )
 
-    async def _pause(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        status = await registry.pause(
-            broker,
-            sid,
-            updated_by=operator,
-            reason=f"Panel pause by {operator}",
-        )
-        return f"Run {status.active_run_id} is paused; its process remains live."
-
-    async def _continue(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        status = await registry.continue_paused(
-            broker,
-            sid,
-            updated_by=operator,
-            reason=f"Panel Continue by {operator}",
-        )
-        return f"Run {status.active_run_id} continued without changing run identity."
 
     async def _reconcile(operator: str, reason: str | None) -> str:
         clerk = get_alpaca_clerk()
@@ -766,9 +695,6 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         )
 
     return {
-        "resume": _resume,
-        "pause": _pause,
-        "continue": _continue,
         "stop": _stop,
         "retire": _retire,
         "archive": _archive,

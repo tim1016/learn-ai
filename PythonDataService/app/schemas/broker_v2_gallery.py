@@ -26,7 +26,7 @@ class GalleryPrimaryAction(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    action_id: str
+    action_id: Literal["stop", "deploy_again"]
     label: str
     enabled: bool
     disabled_reason: str | None = None

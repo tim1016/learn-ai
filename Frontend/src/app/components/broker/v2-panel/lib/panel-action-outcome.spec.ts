@@ -30,7 +30,7 @@ describe('deriveActionRejection', () => {
   it('renders backend-authored why as-is when present', () => {
     const error = rejection({
       outcome: 'conflict',
-      message: 'Resume is no longer available for this bot.',
+      message: 'Stop is no longer available for this bot.',
       why: 'The Clerk evidence changed before activation.',
       reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
     });
@@ -39,7 +39,7 @@ describe('deriveActionRejection', () => {
 
     expect(rejectionResult).toEqual({
       outcome: 'conflict',
-      message: 'Resume is no longer available for this bot.',
+      message: 'Stop is no longer available for this bot.',
       why: 'The Clerk evidence changed before activation.',
       reasonCode: 'TERMINAL_EVIDENCE_UNREADABLE',
     });
@@ -48,7 +48,7 @@ describe('deriveActionRejection', () => {
   it('falls back to a receiptLabel-formatted reason_code when why is absent', () => {
     const error = rejection({
       outcome: 'failure',
-      message: 'Resume is no longer available for this bot.',
+      message: 'Stop is no longer available for this bot.',
       why: null,
       reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
     });
@@ -271,9 +271,9 @@ describe('nested legacy bodies that carry next_step', () => {
 
 describe('actionOutcomeToast', () => {
   it('appends why to the detail when present', () => {
-    const toast = actionOutcomeToast('failure', 'Resume failed.', 'Refresh and try again.');
+    const toast = actionOutcomeToast('failure', 'Stop failed.', 'Refresh and try again.');
 
-    expect(toast.detail).toBe('Resume failed. Refresh and try again.');
+    expect(toast.detail).toBe('Stop failed. Refresh and try again.');
     expect(toast.severity).toBe('error');
   });
 

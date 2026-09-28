@@ -23,7 +23,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
-from app.services.bot_runtime import PauseAwareFeed
+from app.services.bot_runtime import DecisionFenceFeed
 from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from tests._helpers.bot_runner.ema_parity import _ema_signal_evaluation_id
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
@@ -87,7 +87,7 @@ async def test_the_first_live_bar_never_fires_the_last_warmup_bucket() -> None:
 @pytest.mark.asyncio
 async def test_a_paused_run_never_receives_the_stranded_bucket_as_decide() -> None:
     paused = asyncio.Event()  # never set: the run is paused, observe-only
-    feed = PauseAwareFeed(_PhaseFeed(retained_bars=_history(), live_bars=[_first_live_bar()]), paused)
+    feed = DecisionFenceFeed(_PhaseFeed(retained_bars=_history(), live_bars=[_first_live_bar()]), paused)
     assert feed.observe_only
 
     evaluations = await _drain(strategy_evaluations(_binding(run_id="run-1"), feed))

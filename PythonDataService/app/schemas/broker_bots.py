@@ -386,12 +386,9 @@ class BotStatusView(BaseModel):
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
-    carryover_account_policy_enabled: bool = False
-    carryover_checkpoint_exposure: dict[str, float] = Field(default_factory=dict)
-    carryover_checkpoint_config_matches: bool = False
     running: bool
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
-    desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
+    desired_state: Literal["RUNNING", "STOPPED"]
     active_run_id: str | None
     duty_outcome: BotDutyOutcomeView | None
     binding_created_at_ms: int

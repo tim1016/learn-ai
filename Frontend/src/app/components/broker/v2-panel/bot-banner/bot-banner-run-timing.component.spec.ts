@@ -16,7 +16,6 @@ const HEALTH: BotHealthCard = {
   last_bar_at_ms: 1_753_800_100_000,
   last_decision_at_ms: 1_753_800_200_000,
   decision_stale: false,
-  carryover_checkpoint_exposure: {},
 } as BotHealthCard;
 
 function fakeRun(overrides: Partial<BotRunView> = {}): BotRunView {

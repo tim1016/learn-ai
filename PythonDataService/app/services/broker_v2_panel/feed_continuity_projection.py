@@ -221,7 +221,7 @@ WARMUP_REFUSAL_COPY: dict[str, tuple[str, str]] = {
         "Refused: gap could not be filled",
         "IBKR history did not return every regular-hours minute that passed while the bot "
         "was stopped, so the run was refused rather than warmed across the gap. Check that "
-        "IB Gateway's historical-data farm is connected, then resume again.",
+        "IB Gateway's historical-data farm is connected, then review a fresh deployment.",
     ),
     WARMUP_HISTORY_UNAVAILABLE: (
         "Refused: warmup history unavailable",
@@ -321,7 +321,7 @@ def build_warmup_join(join: RetainedWarmupJoin | None) -> WarmupJoinView | None:
     elif join.outcome == "contiguous":
         label, explanation = (
             "Warmed on its retained bars",
-            "The bars kept from earlier runs already reached this resume; nothing was missing.",
+            "The retained bars reached the recorded join boundary; nothing was missing.",
         )
     elif history_only:
         label, explanation = (

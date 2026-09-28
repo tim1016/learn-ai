@@ -255,3 +255,12 @@ transaction's hash chain and sealed identity are untouched.
   (account, mode, Action Plan, carryover) — collapsing them into one hash
   would make a pure execution-plan edit indistinguishable from a change to the
   underlying signal math.
+
+
+## Amendment — 2026-09-27: fresh deployment replaces legacy restart migration
+
+PRD #2540 and slice #2541 supersede this ADR's executable Resume and legacy
+append-or-clone migration workflow. Existing v1 identity, v2 seals, launch reasons,
+and lineage remain readable without rewriting hashes or historical `pause_policy`.
+A new run requires a fresh instance through Deploy with current explicit choices
+and build proof. The orphaned reconstruction and clone writers are removed.

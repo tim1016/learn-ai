@@ -277,8 +277,8 @@ describe('BotTileComponent', () => {
       inputs: {
         bot: bot({
           primary_action: {
-            action_id: 'resume',
-            label: 'Resume',
+            action_id: 'deploy_again',
+            label: 'Deploy again',
             enabled: false,
             disabled_reason: 'Recovery required before resuming.',
           },
@@ -290,7 +290,7 @@ describe('BotTileComponent', () => {
       providers: [routerProvider()],
     });
 
-    const button = screen.getByRole('button', { name: /Resume/i }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: /Deploy again/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.title).toBe('Recovery required before resuming.');
   });
@@ -327,10 +327,10 @@ describe('BotTileComponent', () => {
     expect(screen.queryByText('Fills')).toBeNull();
   });
 
-  it('uses a filled green play icon for the Resume action', async () => {
+  it('uses a filled green play icon for the Deploy again action', async () => {
     await render(BotTileComponent, {
       inputs: {
-        bot: bot({ primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null } }),
+        bot: bot({ primary_action: { action_id: 'deploy_again', label: 'Deploy again', enabled: true, disabled_reason: null } }),
         bars: [bar()],
         broker: 'alpaca',
         accountId: 'PA3',
@@ -338,7 +338,7 @@ describe('BotTileComponent', () => {
       providers: [routerProvider()],
     });
 
-    const button = screen.getByRole('button', { name: 'Resume' });
+    const button = screen.getByRole('button', { name: 'Deploy again' });
     expect(button.classList).toContain('bot-tile__action-button--play');
     expect(button.querySelector('.bot-tile__action-icon path')).not.toBeNull();
   });
@@ -361,13 +361,13 @@ describe('BotTileComponent', () => {
     expect(screen.queryByText('Stop SPY · sid-1?')).toBeNull();
   });
 
-  it('opens an inline confirm and emits resume for a stopped bot', async () => {
+  it('opens Deploy again without granting a command or asking for trading confirmation', async () => {
     const onAction = vi.fn();
     await render(BotTileComponent, {
       inputs: {
         bot: bot({
           running: false,
-          primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null },
+          primary_action: { action_id: 'deploy_again', label: 'Deploy again', enabled: true, disabled_reason: null },
         }),
         bars: [bar()],
         broker: 'alpaca',
@@ -377,14 +377,9 @@ describe('BotTileComponent', () => {
       providers: [routerProvider()],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-    expect(onAction).not.toHaveBeenCalled();
-    expect(screen.getByText('Resume SPY · sid-1?')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-
-    expect(onAction).toHaveBeenCalledWith({ sid: 'sid-1', actionId: 'resume' });
-    expect(screen.queryByText('Resume SPY · sid-1?')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
+    expect(onAction).toHaveBeenCalledWith({ sid: 'sid-1', actionId: 'deploy_again' });
+    expect(screen.queryByText('Deploy again SPY · sid-1?')).toBeNull();
   });
 
   it('does not emit when the inline confirm is cancelled', async () => {
