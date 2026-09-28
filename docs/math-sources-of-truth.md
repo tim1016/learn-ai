@@ -118,12 +118,6 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 | Extended-session decision triggers | `PythonDataService/app/services/decision_clock.py::extended_trigger_instants` | none — bucket rule shares its file with `rth_trigger_instants`, a different concept (regular-session buckets) | ADR 0059 D5.2; [alpaca-extended-hours](docs/references/alpaca-extended-hours.md) | `PythonDataService/tests/services/test_decision_clock.py` | canonical — 4-field provenance block present |
 | Synthetic fill models (`immediate_fill_price` for the `sim:` world, `limit_touch_fill` for the shadow port) | `PythonDataService/app/broker/alpaca/clerk/fill_models.py` | none — both models live in this one file, which is the point: `synthetic_broker` calls `immediate_fill_price` rather than deciding marketability itself | ADR 0059 D5.5 (limit_touch), plan ruling R9 (immediate); [alpaca-extended-hours](docs/references/alpaca-extended-hours.md) | `PythonDataService/tests/broker/alpaca/clerk/test_fill_models.py` | canonical (`immediate_fill_price` consumer: `synthetic_broker._resolved_order`; `limit_touch_fill` consumer: `shadow_broker.ShadowOrderBook._settle_locked`) — 4-field provenance block present |
 
-### Shadow gate (ADR 0059 D2)
-
-| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
-|---|---|---|---|---|---|
-| Shadow-vs-paper-twin trade reconciliation | `PythonDataService/app/services/alpaca_shadow_reconciliation.py::reconcile_twin_day` orders each side's fills by `(filled_at_ms, order_ref)` and pairs them by index under the repo divergence taxonomy; classification order is symbol/absent → side → quantity → price; gating set `{DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMATCH}` (a deliberate local narrowing of the repo-wide set); `FILL_PRICE_ATOL = $0.01` and `max_fill_time_drift_ms` are reported, never gated | none — the taxonomy enum is `app/research/parity/qc_reconciler.py::DivergenceCategory` (kept in lockstep per `.claude/rules/numerical-rigor.md`) | ADR 0059 D2 — "synthesized fills are optimistic by construction", so price drift is reported rather than gated; [alpaca-shadow-authority](docs/references/alpaca-shadow-authority.md) | `PythonDataService/tests/services/test_alpaca_shadow_reconciliation.py` | canonical — 4-field provenance block present |
-
 ### Indicators — Python-canonical, ported from LEAN
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
@@ -362,3 +356,9 @@ These are the remaining known cases where the Python-owns-all-math rule is viola
 | Concept | Canonical implementation | Legacy duplicates | Reference | Validation | Status |
 | --- | --- | --- | --- | --- | --- |
 | Shadow/Dry Run cash and retained equity | `PythonDataService/app/broker/alpaca/clerk/sqlite/simulated_account.py` composing effective fills, canonical FIFO, modelled fee attribution and NYSE calendar | Mixed real-account unrealized P&L path removed from `live_envelope_sync.py` | `docs/references/alpaca-live-envelope.md` — exact cash arithmetic and existing FIFO tolerance | `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_simulated_account.py` | canonical; private Dry Run or one shared Shadow pool, no new money ledger |
+
+The Shadow session/receipt prerequisite's private twin reconciler was retired
+with #2546 after its callers were removed. Independent research parity and
+Paper/Live comparison authorities remain unchanged. The budget-entry read view
+and actual ENTER share `budgets.py::budget_entry_decision`; its exact cent and
+next-position fee fixture is in `test_budgets.py`.

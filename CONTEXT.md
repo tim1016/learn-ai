@@ -503,7 +503,10 @@ so they survive a broker change.
   real-money account's activation record, after which the account boots its
   live authority instead of its shadow authority. It requires a flat,
   order-free account; a shadow rehearsal is a mode the operator may choose,
-  not a requirement. _Avoid_: going live, flipping to live, promotion
+  not a requirement. Its review binds the currently applied account risk policy;
+  verified activation initializes a distinct Live policy before installing the
+  runtime. Shadow balances and holds remain foreign; every Live Deploy needs
+  fresh budget consent. _Avoid_: going live, flipping to live, promotion
 - **Live evidence namespace** — `live-evidence:<strategy_instance_id>`, the
   retained-bar ledger of one instance on the live authority; the same shape as
   `paper:` and `shadow-evidence:`, read under the same rule it is written under.

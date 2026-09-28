@@ -55,6 +55,7 @@ from app.broker.alpaca.clerk.sqlite.database_verification import (
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
+from app.broker.alpaca.clerk.sqlite.graduation_risk import GraduationRiskReview
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
     canonical_json_bytes,
@@ -172,6 +173,7 @@ class CutoverPlan:
     broker_evidence: BrokerCutoverEvidence
     runner_roster: tuple[RunnerBotEvidence, ...]
     legacy_artifacts: tuple[LegacyArtifactEvidence, ...]
+    graduation_risk: GraduationRiskReview | None = None
 
 
 @dataclass(frozen=True)
@@ -434,6 +436,7 @@ def plan_cutover(
     max_broker_evidence_age_ms: int,
     confirmation_ttl_ms: int = DEFAULT_CONFIRMATION_TTL_MS,
     clock: Clock = now_ms_utc,
+    graduation_risk: GraduationRiskReview | None = None,
 ) -> CutoverPlan:
     """Read and content-address every prerequisite without writing anything."""
     now = clock()
@@ -477,7 +480,7 @@ def plan_cutover(
         ),
     )
     draft = CutoverPlan(
-        schema_version=3,
+        schema_version=3 if graduation_risk is None else 4,
         plan_id="",
         confirmation_token="",
         account_id=account_id,
@@ -488,6 +491,7 @@ def plan_cutover(
         broker_evidence=normalized_broker,
         runner_roster=runner_roster,
         legacy_artifacts=legacy,
+        graduation_risk=graduation_risk,
     )
     token = plan_content_token(_cutover_plan_payload(draft))
     return replace(draft, plan_id=token, confirmation_token=token)
@@ -551,7 +555,10 @@ def apply_cutover(
         raise CutoverRefused(
             "cutover initialization evidence changed after cutover planning"
         )
-    if normalized_broker != plan.broker_evidence:
+    # A fresh observation must have a new timestamp/proof. Compare the actual
+    # account state while retaining the independently fresh proof in activation.
+    if replace(normalized_broker, observed_at_ms=plan.broker_evidence.observed_at_ms,
+            proof_reference=plan.broker_evidence.proof_reference) != plan.broker_evidence:
         raise CutoverRefused("broker evidence changed after cutover planning")
     if current_roster != plan.runner_roster:
         raise CutoverRefused("durable stopped-bot roster changed after cutover planning")
@@ -603,6 +610,7 @@ def apply_cutover(
                 "db_identity_token": plan.database.db_identity_token,
                 "cutover_plan_id": plan.plan_id,
                 "broker_evidence": asdict(normalized_broker),
+                **({} if plan.graduation_risk is None else {"graduation_risk": asdict(plan.graduation_risk)}),
                 "recorded_at_ms": now,
             },
         )
@@ -887,7 +895,11 @@ def _require_checkpointed_database(account_dir: Path) -> None:
 
 
 def _cutover_plan_payload(plan: CutoverPlan) -> dict[str, Any]:
-    return plan_payload(plan, schema_version=3, refused=CutoverRefused, label="cutover")
+    version = 3 if plan.graduation_risk is None else 4
+    payload = plan_payload(plan, schema_version=version, refused=CutoverRefused, label="cutover")
+    if version == 3:
+        payload.pop("graduation_risk")  # Preserve every historical content hash.
+    return payload
 
 
 _CUTOVER_PLAN_FIELDS = frozenset(
@@ -900,7 +912,7 @@ _CUTOVER_PLAN_FIELDS = frozenset(
 
 
 def decode_cutover_plan(payload: dict[str, Any]) -> CutoverPlan:
-    """Reconstruct a schema-version-3 plan from its serialized payload.
+    """Reconstruct a historical v3 or risk-reviewed v4 cutover plan.
 
     The single decoder for :func:`_cutover_plan_payload`'s encoding — every
     reader of a persisted or CLI-supplied cutover plan (the browser-driven
@@ -909,11 +921,21 @@ def decode_cutover_plan(payload: dict[str, Any]) -> CutoverPlan:
     schema change to this safety-critical, real-money plan cannot update one
     reader and silently miss the other.
     """
-    if not isinstance(payload, dict) or set(payload) != _CUTOVER_PLAN_FIELDS or payload.get("schema_version") != 3:
-        raise ValueError("cutover plan fields do not match schema version 3")
+    if not isinstance(payload, dict):
+        raise ValueError("cutover plan must be an object")
+    version = payload.get("schema_version")
+    fields = set(payload)
+    if version == 3 and payload.get("graduation_risk") is None:
+        fields.discard("graduation_risk")
+        valid = fields == _CUTOVER_PLAN_FIELDS
+    else:
+        valid = version == 4 and fields == _CUTOVER_PLAN_FIELDS | {"graduation_risk"} and isinstance(payload.get("graduation_risk"), dict)
+    if not valid:
+        raise ValueError("cutover plan fields do not match schema version 3 or 4")
     broker = payload["broker_evidence"]
     return CutoverPlan(
         schema_version=payload["schema_version"],
+        graduation_risk=None if version == 3 else GraduationRiskReview.from_payload(payload["graduation_risk"]),
         plan_id=payload["plan_id"],
         confirmation_token=payload["confirmation_token"],
         account_id=payload["account_id"],

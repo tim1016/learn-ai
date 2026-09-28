@@ -41,7 +41,6 @@ class LiveGraduationPlanView(BaseModel):
     backup_reference: str
     daily_loss_fraction: float = Field(gt=0, lt=1)
     daily_loss_usd: float = Field(gt=0)
-    arming_max_sessions: int = Field(ge=1)
     extended_hours_entry_bps: float = Field(ge=0, lt=10_000)
     extended_hours_exit_bps: float = Field(ge=0, lt=10_000)
     consequence: str

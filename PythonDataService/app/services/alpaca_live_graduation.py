@@ -13,11 +13,13 @@ import logging
 import os
 import secrets
 import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.active_binding import get_active_alpaca_binding, resolved_alpaca_settings
 from app.broker.alpaca.clerk.account_authority import (
     canonical_alpaca_account_id,
     live_account_id_for_shadow_account,
@@ -33,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
     plan_cutover,
 )
+from app.broker.alpaca.clerk.sqlite.graduation_risk import GraduationRiskReview
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
     relative_reference,
@@ -48,6 +51,7 @@ from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker_configuration.envelope import InvalidLiveEnvelope, require_whole_cent_loss_cap
+from app.broker_configuration.runtime import get_broker_configuration_service
 from app.config import fleet_settings, settings
 from app.schemas.alpaca_live_graduation import (
     LiveGraduationApplyOutcome,
@@ -137,8 +141,8 @@ class AlpacaLiveGraduationService:
                 authority="live",
                 state="graduated",
                 headline="Live authority is active",
-                detail="Graduation is complete. It did not deploy or arm a strategy.",
-                next_action="Deploy a new Live-sealed strategy instance, then review its arming ceremony.",
+                detail="Graduation is complete. It did not deploy a strategy.",
+                next_action="Review a fresh dollar budget and consent in Deploy before starting a Live strategy.",
                 restart_managed=True,
             )
         if runtime.selected_account_authority_kind != "shadow":
@@ -182,26 +186,9 @@ class AlpacaLiveGraduationService:
                     str(exc),
                     "Keep every bot stopped, leave the account flat and order-free, then prepare a fresh review.",
                 ) from exc
-        configured = resolved_alpaca_settings()
-        values = (
-            configured.live_loss_fraction,
-            configured.live_loss_usd,
-            configured.live_arming_max_sessions,
-            configured.live_xh_entry_bps,
-            configured.live_xh_exit_bps,
-        )
-        if any(value is None for value in values):  # guarded by live settings; fail closed if drifted
-            raise LiveGraduationRefused(
-                "live_envelope_missing",
-                "The effective Live profile has no complete risk envelope.",
-                "Repair and apply the Live profile before preparing graduation again.",
-            )
-        try:
-            require_whole_cent_loss_cap(float(configured.live_loss_usd))
-        except InvalidLiveEnvelope as exc:
-            raise LiveGraduationRefused(
-                "live_envelope_invalid", str(exc), "Save and apply a loss cap in whole cents before graduation."
-            ) from exc
+        review = plan.graduation_risk
+        if review is None:
+            raise LiveGraduationRefused("risk_review_missing", "The graduation review has no effective risk policy.", "Apply risk limits and prepare a fresh graduation review.")
         return LiveGraduationPlanView(
             plan_id=plan.plan_id,
             confirmation_token=plan.confirmation_token,
@@ -213,15 +200,15 @@ class AlpacaLiveGraduationService:
             open_order_count=len(plan.broker_evidence.open_order_ids),
             stopped_bot_ids=tuple(item.strategy_instance_id for item in plan.runner_roster),
             backup_reference=backup_reference,
-            daily_loss_fraction=float(configured.live_loss_fraction),
-            daily_loss_usd=float(configured.live_loss_usd),
-            arming_max_sessions=int(configured.live_arming_max_sessions),
-            extended_hours_entry_bps=float(configured.live_xh_entry_bps),
-            extended_hours_exit_bps=float(configured.live_xh_exit_bps),
+            daily_loss_fraction=review.source_policy.loss_fraction,
+            daily_loss_usd=review.source_policy.loss_usd,
+            extended_hours_entry_bps=review.extended_hours_entry_bps,
+            extended_hours_exit_bps=review.extended_hours_exit_bps,
             consequence=(
                 "Confirmation activates real-money custody and restarts this clerk. "
                 "Every existing Shadow bot stays stopped and foreign to the Live authority; "
-                "nothing is deployed or armed by graduation."
+                "nothing is deployed by graduation. The reviewed loss limits initialize a new Live policy; "
+                "Shadow holds, balances and history remain separate."
             ),
         )
 
@@ -284,7 +271,7 @@ class AlpacaLiveGraduationService:
             activated_at_ms=receipt.activation.activated_at_ms,
             message=(
                 "Live activation is durable. This clerk will restart into the Live authority; "
-                "no strategy was deployed or armed."
+                "no strategy was deployed."
             ),
         )
 
@@ -355,11 +342,48 @@ class AlpacaLiveGraduationService:
         atomic_write_json(proof_path, payload)
         return relative_reference(artifacts_root, proof_path)
 
+    @contextmanager
+    def _risk_review_fence(self, account_id: str) -> Iterator[GraduationRiskReview]:
+        service = get_broker_configuration_service()
+        with service.selection_handover():
+            selection = service.selection()
+            runtime = get_active_clerk_runtime()
+            binding = get_active_alpaca_binding()
+            repo = None if runtime is None else runtime.sqlite_repository
+            if (repo is None or repo.account_id != f"shadow:{account_id}"
+                    or selection.effective_account_id != account_id
+                    or binding is None or binding.profile_id != selection.effective_profile_id
+                    or binding.revision != selection.effective_revision):
+                raise CutoverRefused("The effective Shadow account or profile changed. Refresh Configuration.")
+            with repo._write_lock:
+                policy = repo.account_risk_policy()
+                if policy is None:
+                    raise CutoverRefused("Apply account risk limits in Configuration before reviewing graduation.")
+                try:
+                    require_whole_cent_loss_cap(policy.loss_usd)
+                except InvalidLiveEnvelope as exc:
+                    raise CutoverRefused(str(exc)) from exc
+                configured = binding.settings
+                if configured.live_xh_entry_bps is None or configured.live_xh_exit_bps is None:
+                    raise CutoverRefused("The effective profile has no complete extended-hours allowances.")
+                yield GraduationRiskReview(
+                    source_account_id=repo.account_id, source_policy=policy,
+                    selection_generation=selection.selection_generation,
+                    profile_id=selection.effective_profile_id, profile_revision=selection.effective_revision,
+                    actor=service.owner().owner_id,
+                    extended_hours_entry_bps=float(configured.live_xh_entry_bps),
+                    extended_hours_exit_bps=float(configured.live_xh_exit_bps),
+                )
+
     def _prepare_domain_plan(
         self,
         account_id: str,
         evidence: BrokerCutoverEvidence,
     ) -> tuple[CutoverPlan, str]:
+        with self._risk_review_fence(account_id) as review:
+            return self._prepare_reviewed_plan(account_id, evidence, review)
+
+    def _prepare_reviewed_plan(self, account_id: str, evidence: BrokerCutoverEvidence, review: GraduationRiskReview) -> tuple[CutoverPlan, str]:
         artifacts_root = resolved_alpaca_settings().clerk_dir
         runner_root = live_artifacts_root()
         accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
@@ -378,6 +402,7 @@ class AlpacaLiveGraduationService:
             broker_evidence=evidence,
             max_broker_evidence_age_ms=_EVIDENCE_MAX_AGE_MS,
             confirmation_ttl_ms=_CONFIRMATION_TTL_MS,
+            graduation_risk=review,
         )
         backup = create_verified_backup(
             account_id=account_id,
@@ -407,6 +432,12 @@ class AlpacaLiveGraduationService:
         confirmation_token: str,
         broker_evidence: BrokerCutoverEvidence,
     ) -> Any:
+        with self._risk_review_fence(plan.account_id) as current:
+            if plan.graduation_risk != current:
+                raise CutoverRefused("Account risk limits or the effective profile changed after review. Prepare a fresh graduation review.")
+            return self._apply_reviewed_plan(plan, backup_path, confirmation_token, broker_evidence)
+
+    def _apply_reviewed_plan(self, plan: CutoverPlan, backup_path: Path, confirmation_token: str, broker_evidence: BrokerCutoverEvidence) -> Any:
         artifacts_root = resolved_alpaca_settings().clerk_dir
         verify_backup_bundle(
             account_id=plan.account_id,

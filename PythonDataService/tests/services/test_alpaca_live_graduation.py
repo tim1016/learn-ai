@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.cutover import BrokerCutoverEvidence
+from app.broker.alpaca.clerk.sqlite.graduation_risk import GraduationRiskReview
 from app.services import alpaca_live_graduation as graduation
 
 ACCOUNT = "318420190"
@@ -19,7 +21,6 @@ def _settings() -> SimpleNamespace:
         mode="live",
         live_loss_fraction=0.1,
         live_loss_usd=200.0,
-        live_arming_max_sessions=1,
         live_xh_entry_bps=0.0,
         live_xh_exit_bps=0.0,
     )
@@ -36,7 +37,7 @@ def _safe_live_posture(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(graduation.fleet_settings, "WORKER_SERVICE", "alpaca-live-clerk")
 
 
-def test_shadow_authority_offers_review_without_claiming_deploy_or_arming(
+def test_shadow_authority_offers_review_without_claiming_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -56,7 +57,7 @@ def test_shadow_authority_offers_review_without_claiming_deploy_or_arming(
     assert "No authority changes" in (result.next_action or "")
 
 
-def test_graduated_authority_names_deploy_then_arm_as_separate_next_steps(
+def test_graduated_authority_requires_fresh_budget_consent_in_deploy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -75,7 +76,7 @@ def test_graduated_authority_names_deploy_then_arm_as_separate_next_steps(
     assert result.authority == "live"
     assert result.next_action is not None
     assert "Deploy" in result.next_action
-    assert "arming" in result.next_action
+    assert "budget" in result.next_action
 
 
 def test_graduation_refuses_an_unmanaged_restart(
@@ -143,6 +144,7 @@ def _fake_plan(evidence: BrokerCutoverEvidence) -> SimpleNamespace:
         expires_at_ms=1_000 + 300_000,
         broker_evidence=evidence,
         runner_roster=(),
+        graduation_risk=GraduationRiskReview(f"shadow:{ACCOUNT}", AccountRiskPolicy(2, 0.07, 350, "profile", 1, "owner", 1_000), 3, "profile", 1, "owner", 0, 0),
     )
 
 
@@ -213,6 +215,8 @@ async def test_apply_re_observes_broker_state_instead_of_replaying_prepares_snap
     )
 
     assert applied_with == [drifted_evidence]
+    assert plan_view.daily_loss_fraction == 0.07 and plan_view.daily_loss_usd == 350
+    assert "arming_max_sessions" not in plan_view.model_dump()
 
 
 # Public routes carry the canonical (lowercase) account; custody keeps Alpaca's

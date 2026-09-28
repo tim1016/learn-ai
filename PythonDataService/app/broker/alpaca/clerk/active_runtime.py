@@ -280,6 +280,7 @@ async def compose_repository_runtime(
     arming_gate: ArmingGate | None = None,
     instance_seals: InstanceSeals | None = None,
     simulation_initial_cash: Decimal | None = None,
+    initialize_reviewed_policy: Callable[[ClerkSqliteRepository], None] | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -316,6 +317,8 @@ async def compose_repository_runtime(
             retry_interval_s=execution_lease_retry_interval_s,
         )
         verify_activation(repository.control_meta_snapshot())
+        if initialize_reviewed_policy is not None:
+            initialize_reviewed_policy(repository)
         if repository.budget_authority_version() >= 2:
             # Historical arming remains readable for exit-term migration;
             # it supplies no executable permission after the cutover.

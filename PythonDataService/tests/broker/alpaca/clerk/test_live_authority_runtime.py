@@ -202,7 +202,7 @@ async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_
     ledger.path.parent.mkdir(parents=True, exist_ok=True)
     ledger.path.write_text("unreadable retired permission\n")
     broker = _RecordingLiveBroker(now_ms=NOW_MS)
-    activation = live_activation(authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token)
+    activation = live_activation(authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token, artifacts_root=tmp_path)
     runtime = await select_active_clerk_runtime(read=broker, trade=broker, artifacts_root=tmp_path,
         activation_store=_ActivationStore(activation), repository_opener=pinned_repository(NOW_MS),
         live_envelope_values=TEST_ENVELOPE_VALUES, instance_seals=lambda _: pytest.fail("retired grants must not be read"))

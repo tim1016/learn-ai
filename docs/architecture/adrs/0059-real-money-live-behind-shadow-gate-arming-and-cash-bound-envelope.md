@@ -278,3 +278,33 @@ world's money, risk holds and retained evidence stay in its own custody pool.
 A missing budget or unreadable money fact refuses new exposure and preserves
 normal reducing recovery. There is no fallback to the historical arming ledger.
 Historical grants and six-field profile hashes remain readable and unchanged.
+
+### Graduation binds current risk policy — 2026-09-27 (#2543 / #2546 / #2547)
+
+Graduation reviews the effective account policy recorded by Apply risk limits,
+not the profile's former defaults. A version-four cutover plan content-addresses
+the source Shadow policy, selection generation, effective profile and current
+extended-hours allowances. Applying the review holds the same selection and
+custody writer fences as risk edits through durable activation; a changed
+policy or selection requires a fresh review. Version-three historical plan
+hashes and the recovery CLI decoder remain compatible. Fresh broker proofs
+may have new observation times and references; their independently fresh
+account identity, mode, positions and orders must still match the review.
+
+The target database remains empty through the existing cutover's verified
+backup and activation boundary. The activation proof carries the accepted
+policy. Before composing any Live Clerk execution capability, startup records
+that policy as Live revision one through the ordinary account-policy transition.
+An interruption after activation resumes this same initialization; failure to
+record it prevents runtime installation. Repeated startup cannot overwrite a
+later explicit Apply. The activation proof remains the durable provenance.
+
+This creates no budget, no bot and no trade consent. Shadow's policy is the
+reviewed source for the new Live limits, but its holds, session baseline, P&L,
+fees, budgets and order history stay in Shadow. Real cash and fresh real risk
+evidence must be observed before Live Deploy; existing budget-authority
+upgrade rules and per-deployment consent still apply.
+
+Validated by `tests/services/test_graduation_risk_boundary.py` through real
+cutover, interrupted startup and admission, plus cutover compatibility and
+composed Shadow operator tests.
