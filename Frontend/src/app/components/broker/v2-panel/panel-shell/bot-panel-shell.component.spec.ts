@@ -737,9 +737,8 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('the workspace tab this page belongs to', () => {
-    // A bot's page sits inside the account workspace, under the tab it was
-    // opened from (ADR 0064 Decision 1). The Gallery tile and the roster's
-    // links stamp that tab on the URL; this is the reading half.
+    // A bot's page sits inside the account workspace, under Home (PRD #2560):
+    // Overview, Bots and Gallery merged into it, so there is no tab to stamp.
     async function renderShellWithStamp(query: string) {
       const view = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -758,18 +757,11 @@ describe('BotPanelShellComponent', () => {
       return view;
     }
 
-    it.each([
-      ['?from=gallery', 'Gallery', 'gallery'],
-      ['?from=bots', 'Bots', 'bots'],
-      ['', 'Bots', 'bots'],
-      ['?from=elsewhere', 'Bots', 'bots'],
-    ])('points its way back at %s → %s', async (query, label, segment) => {
+    it.each([[''], ['?from=gallery']])('points its way back at Home (%s)', async (query) => {
       await renderShellWithStamp(query);
 
-      const back = screen.getByRole('link', { name: label });
-      expect(back.getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/${segment}`,
-      );
+      const back = screen.getByRole('link', { name: 'Home' });
+      expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968');
     });
 
     it('names the bot in its header', async () => {

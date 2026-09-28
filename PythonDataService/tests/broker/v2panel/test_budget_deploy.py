@@ -370,6 +370,8 @@ async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority:
     assert view.segments[0].shortfall_usd is None and view.observed_at_ms == NOON
     assert (view.segments[0].palette_index, view.segments[1].palette_index) == (0, None)
     assert view.detail == "Cash plus shares at the price paid."
+    # Deploy would admit a new bot: nothing refuses beside the bar.
+    assert view.deploy_refusal is None
 
 
 async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
@@ -429,6 +431,7 @@ async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(auth
     assert view.state == "ready" and view.free_to_deploy_usd == "800.00"
     assert (view.equity_usd, view.today_pnl_usd) == ("1000.00", "0.00")
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
+    assert view.deploy_refusal is not None
 
 
 async def test_a_stale_reading_is_unavailable_never_zero(authority: tuple) -> None:
@@ -562,6 +565,11 @@ async def test_an_account_without_risk_limits_still_shows_its_money_while_deploy
         repo.close()
     assert view.state == "ready" and _segments(view) == [("free", "free to deploy", "1000.00", 10_000)]
     assert preview.state == "unavailable" and preview.money_after is None
+    # Slice 1 review condition (#2562): free to deploy must not look
+    # spendable while Deploy refuses, so the money read carries the refusal
+    # in the preview's own words, for Home to state beside the bar.
+    assert view.deploy_refusal == preview.detail
+    assert "daily loss limit" in view.deploy_refusal
 
 
 async def test_an_account_not_switched_to_budgets_reads_legacy_with_its_settings_action(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

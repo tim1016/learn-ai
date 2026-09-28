@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import NoReturn
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -37,16 +38,19 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.schemas.account_authority import AuthorityKind
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotGroup,
     BotPanelView,
     PanelAction,
     PanelActionRequest,
@@ -63,12 +67,18 @@ from app.services.broker_v2_panel.action_execution_service import (
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
+    bot_group,
+    bot_world,
+    ended_at_ms,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
+    CatalogHomeFacts,
     build_sqlite_catalog,
+    with_finished_results,
 )
 from app.services.broker_v2_panel.sqlite_roster_status import (
+    RosterMembership,
     build_roster_status,
     build_terminal_roster_status,
     roster_membership,
@@ -705,7 +715,7 @@ async def read_sqlite_catalog(
         # their ids would read every bot's lifecycle file twice per request
         # (again per coherence retry); the fenced pass below builds each row
         # exactly once, at a revision it can vouch for.
-        membership = roster_membership(facade.repository)
+        membership = await asyncio.to_thread(roster_membership, facade.repository)
         strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
@@ -732,28 +742,71 @@ async def read_sqlite_catalog(
                 raise SqliteCatalogRevisionMismatch(
                     "SQLite catalog has no economic revision to bind lifecycle identity."
                 )
-            statuses = _bound_roster_statuses(
+            rows = await asyncio.to_thread(
+                _bind_catalog_rows,
                 facade,
                 broker,
-                account_id=first_snapshot.account_id,
-                authority_generation=first_snapshot.authority_generation,
-                control_revision=first_snapshot.control_revision,
-                inert_terminal=membership.inert_terminal,
-            )
-            if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
-                raise SqliteCatalogRevisionMismatch(
-                    "SQLite roster membership changed during catalog projection."
-                )
-            return build_sqlite_catalog(
-                statuses,
-                projections,
-                economic_rollups=economic_rollups,
                 account_id=account_id,
+                membership=membership,
+                projections=projections,
+                economic_rollups=economic_rollups,
+                fence=first_snapshot,
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
                 raise
+            continue
+        return await with_finished_results(rows, facade.repository.bot_results)
     raise AssertionError("catalog coherence retry exhausted without a result")
+
+
+def _bind_catalog_rows(
+    facade: SqliteAlpacaClerkFacade,
+    broker: str,
+    *,
+    account_id: str,
+    membership: RosterMembership,
+    projections: dict[str, ClerkProjection],
+    economic_rollups: dict[str, EconomicSnapshot],
+    fence: EconomicSnapshot,
+) -> list[BotCatalogView]:
+    """Bind one projection cut to the roster's lifecycle rows and Home facts.
+
+    Raises ``SqliteCatalogRevisionMismatch`` when the roster moved under the
+    cut, for the caller's coherence retry. Blocking: every row's lifecycle,
+    the holding set's fill-lineage claims scan and the latest run stops are
+    SQLite reads under the write lock, so callers run it off the event loop
+    (a Home tab polls the catalog every 5 s).
+    """
+    statuses = _bound_roster_statuses(
+        facade,
+        broker,
+        account_id=fence.account_id,
+        authority_generation=fence.authority_generation,
+        control_revision=fence.control_revision,
+        inert_terminal=membership.inert_terminal,
+    )
+    if [status.strategy_instance_id for status in statuses] != membership.identities:
+        raise SqliteCatalogRevisionMismatch(
+            "SQLite roster membership changed during catalog projection."
+        )
+    return build_sqlite_catalog(
+        statuses,
+        projections,
+        economic_rollups=economic_rollups,
+        account_id=account_id,
+        home=_catalog_home(facade),
+    )
+
+
+def _catalog_home(facade: SqliteAlpacaClerkFacade) -> CatalogHomeFacts:
+    """What places one authority's roster rows on its account's Home. Blocking."""
+    repository = facade.repository
+    return CatalogHomeFacts(
+        world=authority_kind_for_account(facade.account_id, account_mode=facade.account_mode),
+        holding_money=repository.bots_holding_money(),
+        latest_stops=repository.latest_run_stops(),
+    )
 
 
 async def read_sqlite_catalog_from_facade(
@@ -769,7 +822,7 @@ async def read_sqlite_catalog_from_facade(
     """
     account_id = facade.account_id
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
-        membership = roster_membership(facade.repository)
+        membership = await asyncio.to_thread(roster_membership, facade.repository)
         strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
@@ -809,27 +862,21 @@ async def read_sqlite_catalog_from_facade(
                 "SQLite catalog has no economic revision to bind lifecycle identity."
             )
         try:
-            statuses = _bound_roster_statuses(
+            rows = await asyncio.to_thread(
+                _bind_catalog_rows,
                 facade,
                 broker,
-                account_id=first_snapshot.account_id,
-                authority_generation=first_snapshot.authority_generation,
-                control_revision=first_snapshot.control_revision,
-                inert_terminal=membership.inert_terminal,
-            )
-            if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
-                raise SqliteCatalogRevisionMismatch(
-                    "SQLite roster membership changed during catalog projection."
-                )
-            return build_sqlite_catalog(
-                statuses,
-                projections,
-                economic_rollups=economic_rollups,
                 account_id=account_id,
+                membership=membership,
+                projections=projections,
+                economic_rollups=economic_rollups,
+                fence=first_snapshot,
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
                 raise
+            continue
+        return await with_finished_results(rows, facade.repository.bot_results)
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
@@ -1086,6 +1133,74 @@ __all__ = [
     "read_sqlite_panel_evidence",
     "read_sqlite_roster_statuses",
 ]
+
+
+async def read_account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProjection:
+    """The account's custody projection alone, on its own snapshot, off the loop."""
+    def read() -> ClerkProjection:
+        reader = SqliteClerkProjectionReader.from_facade(facade)
+        try:
+            return reader.account_snapshot()
+        finally:
+            reader.close()
+
+    return await asyncio.to_thread(read)
+
+
+@dataclass(frozen=True)
+class HomeRosterBot:
+    """Where one live registration sits on its account's Home (PRD #2560 D7).
+
+    ``group`` is ``None`` when the bot's lifecycle cannot be read, so where it
+    sits is unknown. ``unclean_ended_at_ms`` is when a stopped bot's run ended
+    without a clean exit (a crash, an unverified exit), else ``None``.
+    """
+
+    strategy_instance_id: str
+    symbol: str
+    group: BotGroup | None
+    unclean_ended_at_ms: int | None
+
+
+def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> list[HomeRosterBot]:
+    """Each live registration's Home group, placed by the catalog's own rule.
+
+    The same roster status the catalog builds -- so a crashed bot whose run
+    row is stuck ACTIVE is stopped here exactly as it is there -- the same
+    holding set (``bots_holding_money``) and the same ``bot_group``. A retired
+    registration with no live custody is the catalog's inert row (#1911) and
+    is skipped. A bot whose lifecycle cannot be read is kept, ungrouped: a
+    bad bot never hides its siblings. Blocking: callers run it off the loop.
+    """
+    membership = roster_membership(repository)
+    holding = repository.bots_holding_money()
+    stops = repository.latest_run_stops()
+    bots: list[HomeRosterBot] = []
+    for registration in repository.strategy_instances():
+        sid = str(registration["strategy_instance_id"])
+        if sid in membership.inert_terminal:
+            continue
+        try:
+            status = build_roster_status("alpaca", registration, repository)
+        except SqliteCatalogProjectionUnavailable:
+            logger.error("Could not read one bot's lifecycle for Home", extra={
+                "action": "home_roster_unreadable", "strategy_instance_id": sid,
+                "account_id": repository.account_id,
+            }, exc_info=True)
+            bots.append(HomeRosterBot(sid, str(registration["symbol"]), None, None))
+            continue
+        outcome = status.duty_outcome
+        unclean = not status.running and outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
+        bots.append(HomeRosterBot(
+            strategy_instance_id=sid,
+            symbol=status.symbol,
+            group=bot_group(
+                world=bot_world(world, status.mode), running=status.running,
+                holds_money=sid in holding,
+            ),
+            unclean_ended_at_ms=ended_at_ms(status, latest_stop_ms=stops.get(sid)) if unclean else None,
+        ))
+    return bots
 
 
 async def read_account_custody(

@@ -158,8 +158,10 @@ export interface AccountOperatorPosture {
 }
 
 /**
- * The `confirm_in_form` anchor the Alpaca operator lens recognizes to open
- * its in-place Clerk recovery panel. Mirrors
+ * The `confirm_in_form` anchor naming the in-place Clerk recovery panel,
+ * which now lives in Activity's order records
+ * (`alpaca-activity-records.component.html`); no current surface dispatches
+ * it since PRD #2560 retired the Overview operator lens. Mirrors
  * `ACCOUNT_DESK_RECOVERY_ANCHOR` in
  * `app/broker/alpaca/clerk/sqlite/account_operator_posture.py`.
  */

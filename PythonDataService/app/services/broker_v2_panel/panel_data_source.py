@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.models import (
     EffectPurpose,
     OrderJournalEntry,
 )
+from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     RepositoryPoisoned,
@@ -326,13 +327,17 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
             async with _panel_authority_for_binding(registry, binding) as facade:
                 assert facade is not None
                 rows = await read_sqlite_catalog_from_facade(broker, facade)
+                budget = facade.repository.deployment_budget(binding.strategy_instance_id)
         except SqliteCatalogProjectionUnavailable as exc:
             raise PanelUnavailableError(
                 "The sealed Dry Run roster could not be projected.",
                 detail=str(exc),
             ) from exc
+        # A Dry Run's starting cash is its consent amount, private to its
+        # simulated account (PRD #2540); a pre-budget Dry Run has none.
+        simulated_cash = None if budget is None else dollars(budget["committed_cents"])
         synthetic_rows.extend(
-            row.model_copy(update={"mode": "dry_run"})
+            row.model_copy(update={"mode": "dry_run", "simulated_cash_usd": simulated_cash})
             for row in rows
             if row.strategy_instance_id == binding.strategy_instance_id
         )

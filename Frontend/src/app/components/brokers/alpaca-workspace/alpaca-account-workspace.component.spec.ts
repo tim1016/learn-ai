@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component } from '@angular/core';
 import {
   Router,
   RouterOutlet,
@@ -36,7 +36,6 @@ import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-li
 import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
-import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 
 const LANE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
 const WORKSPACE_URL = `${LANE_URL}/accounts/${TEST_ACCOUNT_ID}`;
@@ -57,14 +56,8 @@ class WorkspaceHostComponent {}
 // Each real tab roots itself in a labelled `<main>`; the stubs do the same so
 // the accessibility assertion below grades the workspace's own chrome against
 // the landmark structure the tabs actually bring.
-@Component({ selector: 'app-overview-stub', template: '<main aria-label="Overview">Overview tab</main>' })
-class OverviewStubComponent {}
-
-@Component({ selector: 'app-bots-stub', template: '<main aria-label="Bots">Bots tab</main>' })
-class BotsStubComponent {}
-
-@Component({ selector: 'app-gallery-stub', template: '<main aria-label="Gallery">Gallery tab</main>' })
-class GalleryStubComponent {}
+@Component({ selector: 'app-home-stub', template: '<main aria-label="Home">Home tab</main>' })
+class HomeStubComponent {}
 
 @Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
 class ActivityStubComponent {}
@@ -95,21 +88,14 @@ const WORKSPACE_ROUTES: Routes = [
     component: AlpacaAccountWorkspaceComponent,
     children: [
       { path: 'settings', component: SettingsStubComponent },
-      { path: 'bots', data: { surface: 'bots' }, component: AlpacaSurfaceNotReadyTabComponent },
-      {
-        path: 'gallery',
-        data: { surface: 'gallery' },
-        component: AlpacaSurfaceNotReadyTabComponent,
-      },
+      { path: 'home', component: AlpacaSurfaceNotReadyTabComponent },
       {
         path: 'accounts/:accountId',
         children: [
           { path: 'bots/:sid', component: BotStubComponent },
-          { path: 'bots', component: BotsStubComponent },
-          { path: 'gallery', component: GalleryStubComponent },
           { path: 'activity', component: ActivityStubComponent },
           { path: 'deploy', component: DeployStubComponent },
-          { path: '', component: OverviewStubComponent },
+          { path: '', component: HomeStubComponent },
         ],
       },
       { path: '', redirectTo: 'settings', pathMatch: 'full' },
@@ -230,9 +216,8 @@ async function renderWorkspace(
 
 describe('AlpacaAccountWorkspaceComponent', () => {
   it.each([
-    [WORKSPACE_URL, 'Overview'],
-    [`${WORKSPACE_URL}/bots`, 'Bots'],
-    [`${WORKSPACE_URL}/gallery`, 'Gallery'],
+    [WORKSPACE_URL, 'Home'],
+    [`${WORKSPACE_URL}?view=wall`, 'Home'],
     [`${WORKSPACE_URL}/activity`, 'Activity'],
     [`${WORKSPACE_URL}/deploy`, 'Deploy strategy'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
@@ -240,8 +225,12 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
-    for (const label of ['Overview', 'Bots', 'Gallery', 'Activity', 'Settings', 'Deploy strategy']) {
+    // Overview, Bots and Gallery are one Home tab (PRD #2560).
+    for (const label of ['Home', 'Activity', 'Settings', 'Deploy strategy']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
+    }
+    for (const retired of ['Overview', 'Bots', 'Gallery']) {
+      expect(screen.queryByRole('link', { name: retired })).toBeNull();
     }
     expect(screen.getByRole('link', { name: tab }).getAttribute('aria-current')).toBe('page');
     expect(
@@ -249,24 +238,13 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     ).toHaveLength(1);
   });
 
-  it('hosts the Bots tab’s roster commands, including Flatten cohort, while it is registered', async () => {
-    const { view } = await renderWorkspace({ url: `${WORKSPACE_URL}/bots` });
-    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
-    const host = {
-      refreshing: signal(false),
-      initialLoading: signal(false),
-      refresh: vi.fn(),
-      openArchive: vi.fn(),
-      openCohortFlatten: vi.fn(),
-    };
-    expect(screen.queryByRole('button', { name: 'Flatten cohort' })).toBeNull();
+  it('hosts no page commands in the header: Home carries its own', async () => {
+    await renderWorkspace();
+    await screen.findByRole('heading', { name: 'Paper' });
 
-    bridge.register(host);
-    view.fixture.detectChanges();
-    fireEvent.click(await screen.findByRole('button', { name: 'Flatten cohort' }));
-
-    expect(host.openCohortFlatten).toHaveBeenCalledTimes(1);
-    expect(host.openArchive).not.toHaveBeenCalled();
+    for (const retired of ['Refresh bots', 'Archive finished', 'Flatten cohort']) {
+      expect(screen.queryByRole('button', { name: retired })).toBeNull();
+    }
   });
 
   it('has no detectable accessibility violations', async () => {
@@ -318,20 +296,21 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(screen.queryByText(/Free to deploy/)).toBeNull();
     });
 
-    it('offers no Overview to a lane with no account, rather than another lane’s', async () => {
+    it('offers no Deploy to a lane with no account, and Home explains itself in place', async () => {
       await renderWorkspace({
         url: `${LANE_URL}/settings`,
         directory: unboundDirectory(),
       });
 
       await screen.findByRole('heading', { name: 'Unbound' });
-      expect(screen.queryByRole('link', { name: 'Overview' })).toBeNull();
-      expect(screen.getByText('Overview').getAttribute('aria-disabled')).toBe('true');
+      expect(screen.queryByRole('link', { name: 'Deploy strategy' })).toBeNull();
+      expect(screen.getByText('Deploy strategy').getAttribute('aria-disabled')).toBe('true');
+      expect(screen.getByRole('link', { name: 'Home' }).getAttribute('href')).toBe(`${LANE_URL}/home`);
       expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
     });
 
     it('has no detectable accessibility violations with no account to offer', async () => {
-      // The bound render above never emits the inert Overview tab, so this is
+      // The bound render above never emits the inert Deploy tab, so this is
       // the only pass that grades it — and the unoffered tab is exactly the
       // markup an operator is most likely to meet with a screen reader.
       await renderWorkspace({ url: `${LANE_URL}/settings`, directory: unboundDirectory() });
@@ -342,27 +321,22 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(results.violations).toEqual([]);
     });
 
-    it.each([
-      ['bots', 'Bots roster'],
-      ['gallery', 'Gallery'],
-    ] as const)(
-      'explains in place why the %s tab cannot open, and links to Settings',
-      async (surface, surfaceName) => {
-        const { router } = await renderWorkspace({
-          url: `${LANE_URL}/${surface}`,
-          directory: unboundDirectory(),
-        });
+    it('explains in place why Home cannot open, and links to Settings', async () => {
+      const { router } = await renderWorkspace({
+        url: `${LANE_URL}/home`,
+        directory: unboundDirectory(),
+      });
 
-        expect(await screen.findByText(`${surfaceName} unavailable`)).toBeTruthy();
-        expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
-        expect(
-          screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href'),
-        ).toBe(`${LANE_URL}/settings`);
-        // FR-096: it fails in place. No other lane, and no other account, is
-        // substituted by the navigation itself.
-        expect(router.url).toBe(`${LANE_URL}/${surface}`);
-      },
-    );
+      expect(await screen.findByText('Home unavailable')).toBeTruthy();
+      expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
+      expect(
+        screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href'),
+      ).toBe(`${LANE_URL}/settings`);
+      expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
+      // FR-096: it fails in place. No other lane, and no other account, is
+      // substituted by the navigation itself.
+      expect(router.url).toBe(`${LANE_URL}/home`);
+    });
   });
 
   it('renders Free to deploy, Cash, Equity and Today exactly as the money read authored them', async () => {
@@ -475,7 +449,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     // Blocked-reason messaging (no lane, no declared capability, no confirmed
     // account) is `AlpacaDeployTabComponent`'s own concern now — this shell
     // only has to get the tab's address right, from wherever it is clicked.
-    await renderWorkspace({ url: `${WORKSPACE_URL}/gallery` });
+    await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1` });
 
     expect(screen.getByRole('link', { name: 'Deploy strategy' }).getAttribute('href')).toBe(
       `${WORKSPACE_URL}/deploy`,
@@ -485,7 +459,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
   it('lands on the chosen account’s Deploy tab under a deploy intent', async () => {
     // The regression this pins: the link's `href` stayed correct while the
     // destination stopped reading `?deploy`, so choosing an account under a
-    // deploy intent landed on Overview with nothing open. This follows the
+    // deploy intent landed on the account's page with nothing open. This follows the
     // card and looks at what the destination actually renders, not just its
     // href. The list has no Deploy link of its own (#2187): the whole card is
     // the click target, and it carries the intent the hand-off arrived with.
@@ -498,17 +472,12 @@ describe('AlpacaAccountWorkspaceComponent', () => {
   });
 
   describe("a bot's own page", () => {
-    it.each([
-      ['?from=gallery', 'Gallery', 'the Gallery it was opened from'],
-      ['?from=bots', 'Bots', 'the roster it was opened from'],
-      ['', 'Bots', 'Bots, because a pasted URL carries no stamp'],
-      ['?from=elsewhere', 'Bots', 'Bots, because the stamp is not a tab'],
-    ])('renders inside the workspace and highlights %s → %s', async (query, tab) => {
+    it.each([[''], ['?from=gallery']])('renders inside the workspace under Home (%s)', async (query) => {
       await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1${query}` });
 
       expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
       expect(screen.getByText('Bot page')).toBeTruthy();
-      expect(screen.getByRole('link', { name: tab }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
       expect(
         screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page'),
       ).toHaveLength(1);
@@ -532,7 +501,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     });
 
     it.each([
-      [`${WORKSPACE_URL}/gallery`, 'a tab change'],
+      [`${WORKSPACE_URL}/deploy`, 'a tab change'],
       [`${WORKSPACE_URL}/bots/sid-1`, "a bot's page opening"],
     ])('moves into the tab body after %s', async (url) => {
       // The header and tab strip do not move, so without this the keyboard
@@ -581,13 +550,13 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(document.activeElement).not.toBe(workspaceBody());
     });
 
-    it('moves focus when a not-ready tab’s roster link resolves to the real, servable roster', async () => {
+    it('moves focus when a not-ready Home’s link resolves to the real, servable Home', async () => {
       // The lane's account is already confirmed when this renders — the
       // mirror-image case: the resolved account id never changes, but the
-      // whole body swaps from the refusal to the real roster, and that swap
+      // whole body swaps from the refusal to the real Home, and that swap
       // is what must move the keyboard.
-      const { view } = await renderWorkspace({ url: `${LANE_URL}/bots` });
-      const rosterLink = await screen.findByRole('link', { name: 'Open the Bots roster' });
+      const { view } = await renderWorkspace({ url: `${LANE_URL}/home` });
+      const rosterLink = await screen.findByRole('link', { name: 'Open Home' });
 
       fireEvent.click(rosterLink);
       await view.fixture.whenStable();
@@ -600,12 +569,12 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     const { view, router, getAccount } = await renderWorkspace();
     const headerBefore = await screen.findByRole('heading', { name: 'Paper' });
 
-    await router.navigateByUrl(`${WORKSPACE_URL}/bots`);
+    await router.navigateByUrl(`${WORKSPACE_URL}/deploy`);
     await view.fixture.whenStable();
-    await router.navigateByUrl(`${WORKSPACE_URL}/gallery`);
+    await router.navigateByUrl(`${WORKSPACE_URL}?view=wall`);
     await view.fixture.whenStable();
 
-    expect(screen.getByText('Gallery tab')).toBeTruthy();
+    expect(screen.getByText('Home tab')).toBeTruthy();
     // The same DOM node, not an equal one: a re-created workspace would
     // flicker its header and drop every per-lane read behind it.
     expect(screen.getByRole('heading', { name: 'Paper' })).toBe(headerBefore);
@@ -654,10 +623,9 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     });
 
     it.each([
-      [WORKSPACE_URL, LIVE_URL, 'Overview'],
-      [`${WORKSPACE_URL}/bots`, `${LIVE_URL}/bots`, 'Bots'],
-      [`${WORKSPACE_URL}/gallery`, `${LIVE_URL}/gallery`, 'Gallery'],
+      [WORKSPACE_URL, LIVE_URL, 'Home'],
       [`${LANE_URL}/settings`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/settings`, 'Settings'],
+      [`${WORKSPACE_URL}/activity`, `${LIVE_URL}/activity`, 'Activity'],
       [`${WORKSPACE_URL}/deploy`, `${LIVE_URL}/deploy`, 'Deploy'],
     ])('lands on the same tab of the chosen account, from %s', async (url, expected) => {
       await openSwitcher(url);
@@ -665,21 +633,19 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(expected);
     });
 
-    it("lands on the chosen account's Bots from a bot's page", async () => {
+    it("lands on the chosen account's Home from a bot's page", async () => {
       // The chosen account need not run this bot, so the bot's page itself is
       // never carried across (ADR 0064 Decision 4).
-      await openSwitcher(`${WORKSPACE_URL}/bots/sid-1?from=gallery`);
+      await openSwitcher(`${WORKSPACE_URL}/bots/sid-1`);
 
-      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
-        `${LIVE_URL}/bots`,
-      );
+      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(LIVE_URL);
     });
 
     it('carries the lens perspective across', async () => {
-      await openSwitcher(`${WORKSPACE_URL}/bots?lens=operator`);
+      await openSwitcher(`${WORKSPACE_URL}?lens=operator`);
 
       expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
-        `${LIVE_URL}/bots?lens=operator`,
+        `${LIVE_URL}?lens=operator`,
       );
     });
 

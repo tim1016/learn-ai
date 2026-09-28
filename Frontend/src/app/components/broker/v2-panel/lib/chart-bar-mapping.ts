@@ -5,8 +5,9 @@ import type { ChartBar } from './broker-v2-panel.types';
  * Map a millisecond UTC ChartBar to lightweight-charts candle data.
  *
  * Canonical implementation — every chart surface plotting a `ChartBar`
- * (the full `DualPaneChartComponent` market tape and the gallery's
- * `BotTileComponent` thin tile) imports this rather than re-deriving the
+ * (the full `DualPaneChartComponent` market tape and the Wall's
+ * `candle-renderer`, drawn by Home's `HomeSparklineComponent` tiles) imports
+ * this rather than re-deriving the
  * OHLC-string-to-number conversion and the seconds-truncated `time`.
  */
 export function toCandle(bar: ChartBar): {

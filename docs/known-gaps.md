@@ -246,7 +246,14 @@ carries the F1–F19 adjudication table; the ops study
 timings (the session scratchpad logs were ephemeral — the study doc is the
 primary record). F1 and F9 were fixed in-session (`238821c7`, `ff5ed49f`);
 F18/F19 were closed by ADR 0045 (see §1); F6 was closed 2026-09-11 by #2034
-(`6f174718` — empty-input runs now fail closed). The items below entered this backlog on
+(`6f174718` — empty-input runs now fail closed); F12 (the LIVE chart pane
+serving stale bars unmarked) was closed 2026-09-24 by #2355 (PR #2401): the
+pane's own IBKR line now reports its state (`ChartLiveResponse.feed`,
+`ChartFeedView`: STALLED / ERRORED / RECOVERING with backend-authored copy),
+which the bot panel's chart renders as a notice
+(`Frontend/src/app/components/broker/v2-panel/dual-pane-chart/dual-pane-chart.component.html`),
+and `overlay_notices` stays scoped to Polygon overlay failures. Its old anchor,
+`bot-triage-detail.component.ts`, was deleted by PRD #2560. The items below entered this backlog on
 static code verification plus live observation during the session; severities
 were assigned at lift time from that evidence. The handoff's independent
 adjudication (confirm/refute, one issue per confirmed finding) may still
@@ -322,12 +329,6 @@ a defect.
   **Residual:** the admission gate still reads an instantaneous feed-age
   sample (`app/services/run_admission.py:286-297`); no flap was observed after
   the fixes, so re-verify before treating this as open work.
-- **F12 — LIVE chart pane serves stale bars unmarked (medium).** 7–17 min
-  behind its own bot with `overlay_notices` empty — the staleness field
-  exists in the contract and is unpopulated
-  (`Frontend/src/app/components/broker/v2-panel/bot-triage-detail/bot-triage-detail.component.ts`;
-  study §7; same defect class as the R4 tape fix recorded in
-  `docs/superpowers/specs/2026-08-24-bots-triage-trader-lens-design.md` §10).
 - **F13 — panel reads serialize globally (medium; concurrency unmeasured
   since #1776).** 56 ms alone → 2.6 s each at 10 concurrent; ~21 s/sweep
   projected at 80 bots (projection path,

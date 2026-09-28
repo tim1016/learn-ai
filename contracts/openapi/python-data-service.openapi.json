@@ -141,6 +141,17 @@
             ],
             "title": "Cash Usd"
           },
+          "deploy_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deploy Refusal"
+          },
           "detail": {
             "title": "Detail",
             "type": "string"
@@ -4304,7 +4315,7 @@
         "type": "object"
       },
       "BotCatalogView": {
-        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest.",
+        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest. ``group`` places the row on Home; a row's money is never here --\nHome joins it from the account-money read by ``strategy_instance_id``.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -4333,6 +4344,19 @@
             "title": "Desired State",
             "type": "string"
           },
+          "ended_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At Ms"
+          },
           "exposure": {
             "additionalProperties": {
               "type": "number"
@@ -4350,6 +4374,27 @@
               }
             ],
             "title": "Fills Today"
+          },
+          "final_result_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Result Usd"
+          },
+          "group": {
+            "enum": [
+              "running",
+              "holding",
+              "finished",
+              "dry_run"
+            ],
+            "title": "Group",
+            "type": "string"
           },
           "last_activity_at_ms": {
             "anyOf": [
@@ -4420,6 +4465,17 @@
             "title": "Running",
             "type": "boolean"
           },
+          "simulated_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Cash Usd"
+          },
           "status_explanation": {
             "title": "Status Explanation",
             "type": "string"
@@ -4443,6 +4499,22 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "trade_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Count"
+          },
+          "world_label": {
+            "title": "World Label",
+            "type": "string"
           }
         },
         "required": [
@@ -4464,7 +4536,9 @@
           "open_pnl",
           "day_pnl",
           "last_activity_at_ms",
-          "needs_attention"
+          "needs_attention",
+          "group",
+          "world_label"
         ],
         "title": "BotCatalogView",
         "type": "object"
@@ -10648,194 +10722,6 @@
           "failed_count"
         ],
         "title": "CohortActionResult",
-        "type": "object"
-      },
-      "CohortArchiveCohort": {
-        "description": "One (strategy_key, symbol) group of archivable members.",
-        "properties": {
-          "enabled_count": {
-            "title": "Enabled Count",
-            "type": "integer"
-          },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/CohortArchiveLeg"
-            },
-            "title": "Legs",
-            "type": "array"
-          },
-          "strategy_key": {
-            "title": "Strategy Key",
-            "type": "string"
-          },
-          "strategy_label": {
-            "title": "Strategy Label",
-            "type": "string"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_key",
-          "strategy_label",
-          "symbol",
-          "legs",
-          "enabled_count"
-        ],
-        "title": "CohortArchiveCohort",
-        "type": "object"
-      },
-      "CohortArchiveLeg": {
-        "description": "One archivable roster member with its executability facts (ADR 0047).",
-        "properties": {
-          "blocker_headline": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Blocker Headline"
-          },
-          "concurrency_token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Concurrency Token"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "revision": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Revision"
-          },
-          "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "enabled",
-          "revision",
-          "concurrency_token",
-          "blocker_headline"
-        ],
-        "title": "CohortArchiveLeg",
-        "type": "object"
-      },
-      "CohortArchiveLegRequest": {
-        "additionalProperties": false,
-        "description": "One leg the operator confirmed \u2014 echoes the presented action facts.\n\nCarries no ``action_id``: this endpoint archives, and nothing else. A\nclient that could name the action could reach a different mutation\nthrough a surface whose confirmation copy described archiving.",
-        "properties": {
-          "concurrency_token": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Concurrency Token",
-            "type": "string"
-          },
-          "revision": {
-            "minimum": 0.0,
-            "title": "Revision",
-            "type": "integer"
-          },
-          "strategy_instance_id": {
-            "maxLength": 96,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "revision",
-          "concurrency_token"
-        ],
-        "title": "CohortArchiveLegRequest",
-        "type": "object"
-      },
-      "CohortArchiveRequest": {
-        "additionalProperties": false,
-        "description": "Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5).",
-        "properties": {
-          "idempotency_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "type": "string"
-          },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/CohortArchiveLegRequest"
-            },
-            "maxItems": 256,
-            "minItems": 1,
-            "title": "Legs",
-            "type": "array"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          }
-        },
-        "required": [
-          "idempotency_key",
-          "legs"
-        ],
-        "title": "CohortArchiveRequest",
-        "type": "object"
-      },
-      "CohortArchiveView": {
-        "description": "Backend-authored cohort-archive presentation (ADR 0052).",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "cohorts": {
-            "items": {
-              "$ref": "#/components/schemas/CohortArchiveCohort"
-            },
-            "title": "Cohorts",
-            "type": "array"
-          },
-          "observed_at_ms": {
-            "title": "Observed At Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "cohorts",
-          "observed_at_ms"
-        ],
-        "title": "CohortArchiveView",
         "type": "object"
       },
       "CohortFlattenCohort": {
@@ -23419,13 +23305,37 @@
         "title": "LaneAccountQuietRead",
         "type": "object"
       },
-      "LaneAttentionItem": {
-        "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is the uncertainty id \u2014 stable across polls, so the bell\ndedupes by it and an item disappears exactly when the underlying episode\nresolves. The narrow v1 set: active uncertainties only, which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator.",
+      "LaneAttentionAction": {
+        "additionalProperties": false,
+        "description": "An attention line's one fix: a link into the account's workspace.\n\n``bot`` opens the page of the item's own bot, so an item with that\ndestination always names one.",
         "properties": {
-          "action_label": {
-            "default": "Open bot",
-            "title": "Action Label",
+          "destination": {
+            "enum": [
+              "bot",
+              "activity",
+              "settings"
+            ],
+            "title": "Destination",
             "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "destination"
+        ],
+        "title": "LaneAttentionAction",
+        "type": "object"
+      },
+      "LaneAttentionItem": {
+        "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is stable across polls, so the bell dedupes by it and an\nitem disappears exactly when its condition resolves: the uncertainty id\nfor an episode, or a key naming the bot or account fact otherwise. Every\nitem has one backend-authored ``headline`` and exactly one ``action``\n(PRD #2560): only what the owner must act on is listed.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/LaneAttentionAction"
           },
           "condition_id": {
             "title": "Condition Id",
@@ -23436,7 +23346,17 @@
             "type": "string"
           },
           "kind": {
-            "default": "uncertainty",
+            "enum": [
+              "account",
+              "hold",
+              "channel",
+              "out_of_sync",
+              "exit",
+              "uncertainty",
+              "stopped_holding",
+              "position_unverified",
+              "legacy_budget"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -23484,6 +23404,8 @@
         "required": [
           "condition_id",
           "reason_code",
+          "kind",
+          "action",
           "severity",
           "headline"
         ],
@@ -53319,148 +53241,6 @@
         ]
       }
     },
-    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-archive": {
-      "get": {
-        "operationId": "get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CohortArchiveView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Cohort-archive presentation: archivable bots grouped with per-leg executability facts (ADR 0052)",
-        "tags": [
-          "broker-v2-panel"
-        ]
-      },
-      "post": {
-        "operationId": "run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CohortArchiveRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CohortActionResult"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Archive a batch of finished bots with per-leg receipts (ADR 0052)",
-        "tags": [
-          "broker-v2-panel"
-        ]
-      }
-    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
       "get": {
         "operationId": "get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get",
@@ -57275,171 +57055,6 @@
           }
         },
         "summary": "Fleet Bots Catalog Read",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-archive": {
-      "get": {
-        "description": "Fleet-routed GET /accounts/{account_id}/bots/cohort-archive (bot_panel_read).",
-        "operationId": "fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Bot Cohort Archive Read",
-        "tags": [
-          "broker-clerks"
-        ]
-      },
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/bots/cohort-archive (bot_action).",
-        "operationId": "fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Bot Cohort Archive",
         "tags": [
           "broker-clerks"
         ]

@@ -9,7 +9,7 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
     from app.broker.alpaca.clerk.budgets import AccountBudget
+    from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
 
@@ -97,6 +98,35 @@ class ClerkSqliteRepositoryReadApi:
                 (strategy_instance_id,),
             ).fetchone()
             return RunResource(**dict(row)) if row is not None else None
+
+    def latest_run_stops(self: ClerkSqliteRepository) -> dict[str, int | None]:
+        """Each instance's newest run's stop instant, in one read.
+
+        The same run ``latest_run`` answers -- ordered by ``started_at_ms``
+        then ``run_id`` -- for every instance at once, so a roster poll never
+        issues one query per bot. ``None`` while that run has not stopped.
+        """
+        with self._write_lock:
+            rows = self._conn.execute(
+                "SELECT strategy_instance_id, stopped_at_ms FROM ("
+                "SELECT strategy_instance_id, stopped_at_ms, ROW_NUMBER() OVER ("
+                "PARTITION BY strategy_instance_id ORDER BY started_at_ms DESC, run_id DESC) AS newest "
+                "FROM runs) WHERE newest = 1"
+            ).fetchall()
+            return {str(row[0]): None if row[1] is None else int(row[1]) for row in rows}
+
+    def last_clean_account_check_ms(self: ClerkSqliteRepository) -> int | None:
+        """When the whole account last reconciled cleanly against the broker.
+
+        An account-wide reconciliation (no operation, no order) that resolved
+        successfully; ``None`` when none ever has.
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT MAX(attempted_at_ms) FROM reconciliations "
+                "WHERE effect_operation_id IS NULL AND order_ref IS NULL AND outcome = 'RESOLVED_SUCCESS'"
+            ).fetchone()
+            return None if row[0] is None else int(row[0])
 
     def lifecycle_projection_snapshot(
         self: ClerkSqliteRepository,
@@ -799,3 +829,25 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             fees = self.fee_attribution(now_ms=self.clock())
             return project_account_money(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
+
+    def bots_holding_money(self: ClerkSqliteRepository) -> frozenset[str]:
+        """The bots with position cost or still-claimed money (see ``budget_projection``)."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import bots_holding_money
+
+        with self._write_lock:
+            return bots_holding_money(self._conn)
+
+    def bot_results(self: ClerkSqliteRepository, strategy_instance_ids: Sequence[str]) -> dict[str, BotResult]:
+        """Whole-life results, read on a query-only snapshot: never under the writer's lock.
+
+        Blocking: an async caller runs it in a worker thread. Answers at an
+        unchanged custody revision are reused (``BotResultsMemo``).
+        """
+        from app.broker.alpaca.clerk.sqlite.budget_projection import BotResultsMemo, read_bot_results
+
+        if self._bot_results_memo is None:
+            self._bot_results_memo = BotResultsMemo()
+        return read_bot_results(
+            self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
+            strategy_instance_ids=strategy_instance_ids, memo=self._bot_results_memo,
+        )

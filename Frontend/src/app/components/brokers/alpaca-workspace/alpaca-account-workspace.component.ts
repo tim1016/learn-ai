@@ -15,7 +15,6 @@ import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
-import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
 import {
   ACCOUNT_WORKSPACE_TABS,
@@ -39,8 +38,8 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-d
  * one tab, and none is pushed. */
 const ACCOUNT_POLL_MS = 15_000;
 
-/** Why the Overview tab is not offered on a lane with no confirmed account:
- * it is that account's own page, and there is no account. */
+/** Why Deploy is not offered on a lane with no confirmed account: it binds a
+ * strategy to that account, and there is no account. */
 const TAB_WITHOUT_ACCOUNT = 'Opens once Alpaca confirms this lane’s account.';
 
 /** Why a workspace is showing no account's facts: the lane is still coming up,
@@ -54,7 +53,7 @@ type WorkspaceAccountStatus =
 
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
- * Overview, Bots, Gallery, Configuration and Deploy tabs.
+ * Home, Configuration and Deploy tabs (PRD #2560).
  *
  * The operator chooses an account once, in the account list, and the
  * workspace keeps it while they move between its pages — the tabs are
@@ -70,7 +69,7 @@ type WorkspaceAccountStatus =
  * than borrowing a sibling's fact. The sync verdict is not a header fact: an
  * out-of-sync account is an attention line on Home.
  *
- * Deploy is one of the five tabs, not an overlay: `AlpacaDeployTabComponent`
+ * Deploy is one of the tabs, not an overlay: `AlpacaDeployTabComponent`
  * reads this same `AlpacaDeskAccountDataService` instance for its target
  * (FR-094), so a bind command can never target an account the header itself
  * is not showing.
@@ -95,9 +94,6 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
-  /** The Bots tab's own Refresh/Archive finished/Flatten cohort commands, while
-   * that tab is the one mounted — rendered in the header's action slot below. */
-  protected readonly botsPageActions = inject(BotsPageActionsBridgeService).host;
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
   private readonly currentUrl = inject(CurrentUrlService).url;
   private readonly document = inject(DOCUMENT);
@@ -137,7 +133,7 @@ export class AlpacaAccountWorkspaceComponent {
           broker: 'alpaca',
           clerkId: this.clerkId(),
           accountId: this.accountId(),
-          tab: 'overview',
+          tab: 'home',
           botSid: null,
         }
       : { ...routed, accountId: routed.accountId ?? this.accountId() };
@@ -145,7 +141,7 @@ export class AlpacaAccountWorkspaceComponent {
 
   protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
 
-  /** The five tabs with the route each one links to, or `null` for a tab this
+  /** The tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per
    * render, so a tab's `routerLink` is not handed a freshly allocated array on
    * every change-detection pass. */
@@ -156,9 +152,9 @@ export class AlpacaAccountWorkspaceComponent {
     })),
   );
 
-  /** Why a tab has no address here. Overview is the account's own page, so a
-   * lane with no confirmed account has none to open — and substituting another
-   * lane's is exactly what FR-096 forbids. */
+  /** Why a tab has no address here. Deploy targets the account itself, so a
+   * lane with no confirmed account has none to offer — and substituting
+   * another lane's is exactly what FR-096 forbids. */
   protected readonly TAB_WITHOUT_ACCOUNT = TAB_WITHOUT_ACCOUNT;
 
   /** This workspace's lane, or `null` while the directory has not resolved
@@ -220,7 +216,7 @@ export class AlpacaAccountWorkspaceComponent {
    *
    * Keyed on `routedLocation` — parsed from the URL — rather than `location`:
    * `location().accountId` falls back to the lane's confirmed account on the
-   * lane-scoped tabs (Configuration, not-ready Bots/Gallery), which resolves
+   * lane-scoped tabs (Configuration, a not-ready Home), which resolves
    * asynchronously from the fleet directory. Keying on that async value made
    * this key change on its own, a tick or two after arrival, with no
    * navigation involved — and stole focus out from under the operator when it
@@ -230,8 +226,8 @@ export class AlpacaAccountWorkspaceComponent {
    *
    * `null` when the URL is not a workspace URL at all — which no route that
    * renders this shell produces. It is reported rather than papered over with
-   * an invented Overview, which would key indistinguishably from a real
-   * account-less Overview on the same lane. */
+   * an invented Home, which would key indistinguishably from a real
+   * account-less Home on the same lane. */
   private readonly renderedContent = computed(() => {
     const routed = this.routedLocation();
     return routed === null

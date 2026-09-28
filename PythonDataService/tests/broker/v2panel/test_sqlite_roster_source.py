@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
 from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicSnapshot,
@@ -106,6 +109,21 @@ class _Repository:
             if self.active_run(str(registration["strategy_instance_id"])) is not None
         }
 
+    def bots_holding_money(self) -> frozenset[str]:
+        """No attributed positions and no entry claims in these doubles."""
+        return frozenset()
+
+    def bot_results(self, strategy_instance_ids: list[str]) -> dict[str, BotResult]:
+        return {sid: BotResult(result=Decimal("0"), trade_count=0) for sid in strategy_instance_ids}
+
+    def latest_run_stops(self) -> dict[str, int | None]:
+        """Derived from ``latest_run``, so the batch read cannot disagree with it."""
+        return {
+            str(registration["strategy_instance_id"]): run.stopped_at_ms
+            for registration in self.strategy_instances()
+            if (run := self.latest_run(str(registration["strategy_instance_id"]))) is not None
+        }
+
     def active_run(self, strategy_instance_id: str):
         if strategy_instance_id == "active-spy":
             return SimpleNamespace(
@@ -170,7 +188,7 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
         def active_run(self, strategy_instance_id: str):
             return None
 
-    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
@@ -234,7 +252,7 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
                 stopped_at_ms=1_720_000_100_000,
             )
 
-    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
@@ -319,7 +337,7 @@ def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
                 stopped_at_ms=1_720_000_100_000,
             )
 
-    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
@@ -368,7 +386,7 @@ def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
                 stopped_at_ms=1_720_000_100_000,
             )
 
-    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
@@ -384,7 +402,7 @@ def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
 
 
 def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.MonkeyPatch) -> None:
-    facade = SimpleNamespace(account_id="paper-account", repository=_Repository())
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_Repository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
 
     statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
@@ -433,7 +451,7 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=_Repository()),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_Repository()),
     )
 
     result = await panel_data_source.get_catalog("alpaca", "paper-account")
@@ -449,16 +467,14 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
 
     class _SyntheticFacade:
         account_id = "sim:dry-spy"
+        repository = SimpleNamespace(deployment_budget=lambda sid: {"committed_cents": 200_000})
 
     class _CatalogRow:
         strategy_instance_id = "dry-spy"
         mode = "trade"
 
         def model_copy(self, *, update: dict[str, str]) -> SimpleNamespace:
-            return SimpleNamespace(
-                strategy_instance_id=self.strategy_instance_id,
-                mode=update["mode"],
-            )
+            return SimpleNamespace(strategy_instance_id=self.strategy_instance_id, **update)
 
     binding = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
     facade = _SyntheticFacade()
@@ -488,6 +504,8 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
     result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
     assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
+    # Its simulated starting cash is its own consent amount, Python-authored.
+    assert result[0].simulated_cash_usd == "2000.00"
 
 
 @pytest.mark.asyncio
@@ -514,7 +532,7 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=_Repository()),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_Repository()),
     )
 
     for _ in range(20):
@@ -589,7 +607,7 @@ def test_sqlite_roster_refuses_unknown_identity_after_activation(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
 
     with pytest.raises(SqliteCatalogProjectionUnavailable, match="immutable SQLite configuration"):
@@ -601,7 +619,7 @@ async def test_catalog_economics_use_one_reader_rollup_for_the_whole_roster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", repository=repository)
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
     calls: list[tuple[list[str], SessionWindow | None]] = []
     closed = False
 
@@ -650,7 +668,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", repository=repository)
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
     snapshot = replace(
         _economic_rollup_map("paper-account", ["active-spy"])["active-spy"],
         session_open_ms=None,
@@ -753,7 +771,7 @@ async def test_catalog_economics_use_verified_zero_outside_nyse_session(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
     monkeypatch.setattr(sqlite_panel_source, "current_trading_session_window", lambda _now: None)
@@ -816,7 +834,7 @@ async def test_chart_evidence_retries_status_revision_race(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
 
@@ -872,7 +890,7 @@ async def test_chart_evidence_refuses_persistent_status_revision_churn(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
 
@@ -914,7 +932,7 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
 
     receipts = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "active-spy")
@@ -947,7 +965,7 @@ async def test_catalog_retries_when_status_identity_straddles_a_revision(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_economic_rollups", _economic_rollups)
@@ -981,7 +999,7 @@ async def test_catalog_fails_closed_after_bounded_revision_contention(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_economic_rollups", _economic_rollups)
@@ -991,6 +1009,95 @@ async def test_catalog_fails_closed_after_bounded_revision_contention(
         await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
 
     assert attempts == 2
+
+
+class _ThreadRecordingRepository(_Repository):
+    """Records the thread each of Home's blocking roster reads runs on."""
+
+    def __init__(self) -> None:
+        self.read_threads: dict[str, list[threading.Thread]] = {
+            "bots_holding_money": [],
+            "latest_run_stops": [],
+        }
+
+    def bots_holding_money(self) -> frozenset[str]:
+        self.read_threads["bots_holding_money"].append(threading.current_thread())
+        return super().bots_holding_money()
+
+    def latest_run_stops(self) -> dict[str, int | None]:
+        self.read_threads["latest_run_stops"].append(threading.current_thread())
+        return super().latest_run_stops()
+
+
+class _CatalogCustodyReader:
+    @classmethod
+    def from_facade(cls, _received: SimpleNamespace) -> _CatalogCustodyReader:
+        return cls()
+
+    def bot_snapshot(self, strategy_instance_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            account_id="paper-account",
+            strategy_instance_id=strategy_instance_id,
+            authority_generation=7,
+            control_revision=42,
+            holds=(),
+            uncertainties=(),
+            authority_health="healthy",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _CatalogEconomicReader:
+    @classmethod
+    def from_repository(cls, _received: _Repository) -> _CatalogEconomicReader:
+        return cls()
+
+    def catalog_economic_rollup(
+        self,
+        strategy_instance_ids: tuple[str, ...],
+        *,
+        session_window: SessionWindow | None,
+    ) -> dict[str, EconomicSnapshot]:
+        return _economic_rollup_map("paper-account", list(strategy_instance_ids))
+
+    def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["active_authority", "explicit_facade"])
+async def test_catalog_reads_homes_roster_facts_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entry: str,
+) -> None:
+    """Review F2 (#2571): Home polls the catalog every 5 s per open tab.
+
+    The holding set is the fill-lineage claims scan and the latest run stops
+    another write-locked query; both are blocking, so neither catalog entry
+    point may run them on the event loop thread.
+    """
+    loop_thread = threading.current_thread()
+    repository = _ThreadRecordingRepository()
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+
+    if entry == "active_authority":
+        monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+        monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
+        monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_economic_rollups", _economic_rollups)
+        rows = await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
+    else:
+        monkeypatch.setattr(sqlite_panel_source, "SqliteClerkProjectionReader", _CatalogCustodyReader)
+        monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _CatalogEconomicReader)
+        monkeypatch.setattr(sqlite_panel_source, "current_trading_session_window", lambda _now: None)
+        rows = await sqlite_panel_source.read_sqlite_catalog_from_facade("alpaca", facade)
+
+    assert rows is not None
+    assert [row.strategy_instance_id for row in rows] == ["active-spy", "retired-qqq"]
+    for read, threads in repository.read_threads.items():
+        assert threads, f"the catalog never read {read}"
+        assert all(thread is not loop_thread for thread in threads), f"{read} ran on the event loop"
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1111,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
     a SQLite authority that was already healthy.
     """
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", repository=repository)
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
 
     class _CustodyReader:
         @classmethod
@@ -1135,7 +1242,7 @@ async def test_exhausted_chart_projection_records_its_refusal_too(
     monkeypatch.setattr(
         sqlite_panel_source,
         "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
     )
     monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
 

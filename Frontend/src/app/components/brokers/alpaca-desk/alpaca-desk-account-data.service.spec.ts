@@ -61,8 +61,7 @@ function neverAccount() {
  * `AlpacaDeskAccountDataService` is the ONE place `openLaneFence(freeze,
  * source)` is wired for this feature (#2106) — every consumer spec
  * (`alpaca-order-entry`, `alpaca-sqlite-custody`, `account-desk-transaction-
- * history`, `alpaca-operator-lens`, `alpaca-trader-lens`, `alpaca-desk`)
- * fakes `AlpacaDeskAccountDataService` and feeds `fence` as a literal input,
+ * history`, `alpaca-activity-page`) fakes `AlpacaDeskAccountDataService` and feeds `fence` as a literal input,
  * so none of them exercise this wiring. This spec renders the service with a
  * REAL, reactive `FleetDirectoryService` double (`provideFleetDirectory`,
  * not a static stub) and proves BOTH halves of the one property that makes
@@ -95,8 +94,8 @@ describe('AlpacaDeskAccountDataService', () => {
   // account outside the routed workspace is rejected exactly like a mismatched
   // `getAccount` response is above — this is also what protects against a
   // stale response surviving a navigation to a different account, the case
-  // `AlpacaHoldBannerComponent`'s own resource used to guard before this
-  // read moved here.
+  // the retired hold banner's own resource used to guard before this read
+  // moved here.
   it.each([['pa1', true], ['OTHER', false]])('checks the clerk status account against canonical route %s', async (accountId, accepted) => {
     TestBed.configureTestingModule({
       providers: [

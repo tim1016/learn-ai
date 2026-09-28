@@ -53,7 +53,7 @@ type LaneCardState =
  * One account's card in the Alpaca account list (ADR 0064 Decision 2).
  *
  * The whole card is a single click target into that account's workspace —
- * its Overview, or Settings for a lane with no confirmed account, which
+ * its Home, or Settings for a lane with no confirmed account, which
  * is the one tab such a lane can serve and where binding it happens anyway.
  * The destination is the navigation resolver's to decide
  * (`accountWorkspaceEntryRoute`), never composed here, so a card and a shell

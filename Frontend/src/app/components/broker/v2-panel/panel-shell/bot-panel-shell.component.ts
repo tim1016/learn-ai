@@ -45,9 +45,7 @@ import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
-  ORIGIN_TAB_QUERY_PARAM,
-  accountWorkspaceOriginTab,
-  accountWorkspaceOriginTabRoute,
+  accountWorkspaceHomeRoute,
   accountWorkspaceTabLabel,
 } from '../../../../fleet/account-workspace';
 import {
@@ -223,29 +221,19 @@ export class BotPanelShellComponent {
     initialValue: this.route.snapshot.queryParamMap,
   });
 
-  // ── The workspace tab this page belongs to ───────────────────────────────
-  // A bot's page sits inside the account workspace, under the tab it was
-  // opened from (ADR 0064 Decision 1): the Gallery tile and the roster's links
-  // stamp that tab on the URL, the workspace's tab strip keeps it highlighted
-  // from the same stamp, and the way back below returns there. A URL with no
-  // stamp — pasted, bookmarked — belongs to Bots.
-
-  private readonly originTab = computed(() =>
-    accountWorkspaceOriginTab(this.queryParams().get(ORIGIN_TAB_QUERY_PARAM)),
-  );
+  // ── The way back ─────────────────────────────────────────────────────────
+  // A bot's page sits inside the account workspace, under Home (PRD #2560):
+  // the way back below returns there.
 
   protected readonly backRoute = computed(() =>
-    accountWorkspaceOriginTabRoute(
-      {
-        broker: this.broker(),
-        clerkId: this.clerkId(),
-        accountId: this.accountId(),
-      },
-      this.originTab(),
-    ),
+    accountWorkspaceHomeRoute({
+      broker: this.broker(),
+      clerkId: this.clerkId(),
+      accountId: this.accountId(),
+    }),
   );
 
-  protected readonly backLabel = computed(() => accountWorkspaceTabLabel(this.originTab()));
+  protected readonly backLabel = accountWorkspaceTabLabel('home');
 
   /** The frozen lane context (FR-094): every request and command this shell
    * issues carries broker, clerk and account identity, and commands pin the

@@ -60,17 +60,13 @@ describe('AppComponent', () => {
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
           { path: 'brokers/alpaca/clerks/:clerkId/settings', component: ShellSmokeRouteComponent },
-          { path: 'brokers/alpaca/clerks/:clerkId/bots', component: ShellSmokeRouteComponent },
+          { path: 'brokers/alpaca/clerks/:clerkId/home', component: ShellSmokeRouteComponent },
           {
             path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
             component: ShellSmokeRouteComponent,
           },
           {
-            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots',
-            component: ShellSmokeRouteComponent,
-          },
-          {
-            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery',
+            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/deploy',
             component: ShellSmokeRouteComponent,
           },
           {
@@ -197,11 +193,11 @@ describe('AppComponent', () => {
     }
 
     it.each([
-      [WORKSPACE, 'Overview · Paper'],
-      [`${WORKSPACE}/bots`, 'Bots · Paper'],
-      [`${WORKSPACE}/gallery`, 'Gallery · Paper'],
+      [WORKSPACE, 'Home · Paper'],
+      [`${WORKSPACE}?view=wall`, 'Home · Paper'],
+      [`${WORKSPACE}/deploy`, 'Deploy strategy · Paper'],
       [`${LANE}/settings`, 'Settings · Paper'],
-      [`${LANE}/bots`, 'Bots · Paper'],
+      [`${LANE}/home`, 'Home · Paper'],
     ])('names what is open and the account it is open on: %s', async (url, expected) => {
       // ADR 0064 Decision 6. "Paper" here is the account's NAME — the lane's
       // label until a nickname is set — not its Paper/Live mode, which is a
@@ -223,14 +219,14 @@ describe('AppComponent', () => {
       });
       await directory.useValue.refresh?.();
 
-      expect(await titleAt(`${WORKSPACE}/gallery`)).toBe('Gallery · Growth (Paper)');
+      expect(await titleAt(WORKSPACE)).toBe('Home · Growth (Paper)');
     });
 
     it("names a bot's page by the bot once its page publishes a label", async () => {
-      const botUrl = `${WORKSPACE}/bots/sid-1?from=gallery`;
+      const botUrl = `${WORKSPACE}/bots/sid-1`;
       // Before the panel has loaded there is no label, so the tab it belongs
       // to names the window rather than a stale bot's.
-      expect(await titleAt(botUrl)).toBe('Gallery · Paper');
+      expect(await titleAt(botUrl)).toBe('Home · Paper');
 
       TestBed.inject(WorkspaceTitleContextService).setBotLabel('Deployment Validation');
       fixture.detectChanges();
@@ -241,7 +237,7 @@ describe('AppComponent', () => {
     it("never lets a bot's label reach a tab that is not a bot's page", async () => {
       TestBed.inject(WorkspaceTitleContextService).setBotLabel('Deployment Validation');
 
-      expect(await titleAt(`${WORKSPACE}/bots`)).toBe('Bots · Paper');
+      expect(await titleAt(WORKSPACE)).toBe('Home · Paper');
     });
 
     it('leaves titles outside a workspace to the active menu node', async () => {

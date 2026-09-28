@@ -159,6 +159,12 @@ class AccountMoneyView(BaseModel):
     equity_usd: str | None = None
     today_pnl_usd: str | None = None
     segments: tuple[MoneySegment, ...] = ()
+    # Why Deploy would refuse a new bot on this account's money right now
+    # (a missing daily loss limit, a loss hold, no fresh reading), in the
+    # words the Deploy preview refuses with. Absent when Deploy would admit
+    # one, so free to deploy never reads as spendable when it is not (PRD
+    # #2560 story 12). Beside a ready bar only: otherwise ``detail`` speaks.
+    deploy_refusal: str | None = None
 
     @model_validator(mode="after")
     def conserves_every_dollar(self) -> AccountMoneyView:
@@ -167,7 +173,7 @@ class AccountMoneyView(BaseModel):
                     self.settling_usd, self.stopped_holding_count)
         shortfall = self.account_shortfall_usd
         if self.state != "ready":
-            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail)
+            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail, self.deploy_refusal)
             if self.segments or any(value is not None for value in (*headline, *notes)):
                 raise ValueError("a money read that cannot draw its bar carries a reason, never bar figures")
             if self.state == "legacy" and (self.equity_usd, self.today_pnl_usd, self.observed_at_ms) != (None, None, None):

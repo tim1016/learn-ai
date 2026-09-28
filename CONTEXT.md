@@ -559,8 +559,8 @@ so they survive a broker change.
 **Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The shape of the live-instances operator console. Its live successor surfaces are
-the account overview (then called the Broker Desk), the bot panel, and the Bot
-Gallery.
+the bot panel and the account's Home, which since PRD #2560 absorbs the
+account overview (then called the Broker Desk) and the Bot Gallery.
 
 - **Bot Cockpit** — the trader-facing name for the live-instances
   deployed-strategy operator console (`cockpit-v2` in implementation docs). The
@@ -1758,9 +1758,14 @@ are counted in. The units differ deliberately and must not be summed together.
   reported. A fee that is unknown is rendered unknown; it is never rendered as
   zero.
 
-## Broker Desk lenses (resolved 2026-08-12)
+## Broker Desk lenses (resolved 2026-08-12; account lens retired 2026-09-28)
 
 **Lineage: live.**
+
+Since PRD #2560 (D2) an account's pages carry no lens: the account overview
+that held the account's lens pair is historical, merged into the account's
+**Home**. Only the **bot panel** keeps its lens pair, until #2563 makes it one
+view.
 
 - **Lens** — a manual, per-surface view mode that decides which of two purpose-
   built views of the same account or bot is rendered. It is a presentation
@@ -1776,19 +1781,22 @@ are counted in. The units differ deliberately and must not be summed together.
   that is genuinely identical in each lens; differing guidance is two blockers
   sharing one condition identity. Presentational routing only — never an
   authorization decision.
-- **Account overview** — the **account workspace**'s first tab for one broker
-  account, carrying both lenses. Distinct from the **bot panel**, the
-  instance-scoped surface for one bot, which carries its own lens pair.
-  Formerly the Broker Desk (renamed 2026-09-16; older ADRs keep that name).
-  _Avoid_: Broker Desk (it now reads as the whole workspace), account monitor,
-  account page, Bot Cockpit (the retiring live-instances console).
+- **Historical account overview** — the account workspace's former first tab
+  for one broker account, carrying both lenses (formerly the Broker Desk,
+  renamed 2026-09-16; older ADRs keep that name). PRD #2560 retired it on
+  2026-09-28, merging it with the Bots and Gallery tabs into **Home**; its
+  Clerk recovery panel moved to Activity's order records. Retained as
+  vocabulary for older ADRs and receipts.
+  _Avoid_: Broker Desk (it reads as the whole workspace), Overview as a
+  current tab.
 - **Evidence drawer** — the shared, on-demand reader for one immutable projected
   Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
   never re-derives one.
   _Avoid_: evidence modal, receipt viewer.
-- **Deploy drawer** — the slide-over that hosts the deploy workflow over the
-  account workspace, opened from its header on any tab, so deploying is an
-  action taken *at* an account rather than a separate destination.
+- **Historical Deploy drawer** — the retired slide-over that hosted the deploy
+  workflow over the account workspace. ADR 0064's 2026-09-17 amendment made
+  Deploy a routed tab of its own; #2564 makes it the account header's
+  "Deploy a bot" button, at the same URL.
 - **Asset identity** — the canonical rendering of one tradeable instrument:
   its symbol with the recognisable mark that goes with it. One renderer owns
   symbol presentation; feature surfaces do not re-derive logos or fallbacks.
@@ -1819,7 +1827,7 @@ for the account badges it hosts.
   account workspace, the window title, which is why those two can never
   disagree. Inside a workspace the menubar highlights Accounts and the title is
   the workspace tab — or the bot's name on a bot's page — followed by the
-  account name ("Gallery · Paper"), so two windows on different accounts are
+  account name ("Activity · Paper"), so two windows on different accounts are
   told apart.
 - **Account badge** — one per account, in the top bar on every route: the
   account's name and its server-authored Paper/Live mode, loud when the mode
@@ -1831,16 +1839,23 @@ for the account badges it hosts.
   shell adds no inner page padding. Declared by the route, never guessed by the
   page.
 
-## Bot Gallery (resolved 2026-08-14)
+## Bot Gallery (resolved 2026-08-14; page retired 2026-09-28)
 
 **Lineage: live.**
 
-- **Bot Gallery** — the live chart wall for one account: one tile per
-  non-retired bot, fed by a single aggregated stream. A stopped bot keeps its
-  tile; a retired bot has none, because an action offered on a retired tile
-  would be a lie.
-  _Avoid_: bot list, dashboard, Bot Sprite Gallery (an unrelated illustration
-  showcase).
+The Gallery page is historical (PRD #2560, D3): its wall is now Home's
+**Wall** view (`?view=wall`). The Wall reads the same aggregated gallery
+stream, so the tile and stream terms below stay live.
+
+- **Wall** — Home's chart view of one account's bots (`?view=wall`): one
+  tile per bot in the List's groups and order — running, stopped but still
+  holding, Dry Run — with no drag-to-arrange (D11). A Finished bot has no
+  tile; it stays in Home's folded Finished list.
+  _Avoid_: Gallery (the retired page), dashboard.
+- **Historical Bot Gallery** — the retired per-account chart-wall page (the
+  workspace's former Gallery tab): one tile per non-retired bot. Its links
+  open Home's Wall. Retained as vocabulary for older ADRs and receipts.
+  _Avoid_: Bot Sprite Gallery (an unrelated illustration showcase).
 - **Tile** — one bot's place on the wall, keyed by strategy instance. Its chart
   is per-symbol and shared, so many tiles watching one symbol cost one
   subscription, not many.
@@ -2116,12 +2131,12 @@ How an operator moves around one broker account's pages. The account, not the pa
 
 - **Account workspace** — the place an operator works in for one broker account: every page about that account sits under one account header, so moving between them never loses the account. The account is chosen once, on entry, rather than again for each page.
   _Avoid_: surface chooser, lane chooser, per-surface account picker.
-- **Account switcher** — the account header's control for moving to another account while staying on the same tab (a bot's page, which the other account does not have, lands on that account's Bots tab). It is navigation only, never command authority: a command still carries the account it was prepared against.
+- **Account switcher** — the account header's control for moving to another account while staying on the same tab (a bot's page, which the other account does not have, lands on that account's Home). It is navigation only, never command authority: a command still carries the account it was prepared against.
 - **Account name** — the one name an account is shown by wherever it appears: its **account nickname**, or the lane's label until a nickname is set. A name is not guaranteed unique: when two accounts share one, each is shown with its lane's label beside it, and nothing refuses the duplicate. The account number is identity, not a name: it is shown only on the account's configuration page and in the confirmation of a consequential action. The Paper/Live mode is always shown beside the name, never folded into it.
   _Avoid_: using the profile name or the lane label as the account's name once a nickname exists.
-- **Bot roster** — the account workspace's Bots tab: every bot on one account listed beside the selected bot's detail. The tab is labelled "Bots".
+- **Bot roster** — every bot on one account, on its **Home**: grouped running, stopped but still holding, Dry Run, and a folded Finished list, shown as the List or the **Wall**. Until PRD #2560 (2026-09-28) it was the workspace's Bots tab, listed beside the selected bot's detail; that tab is historical and its links open Home.
   _Avoid_: Bots roster, Bot rosters, Alpaca bots, bots list, fleet (the **fleet** is the set of lanes, not one account's bots).
-- **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under the tab it was opened from (Bots or Gallery), and its way back returns to that tab. With no origin it belongs to Bots.
+- **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under Home, and its way back returns to Home. (Before PRD #2560 it sat under the Bots or Gallery tab it was opened from.)
 - **Account list** — the broker's entry page and the only page that shows every account at once: each account by name, mode, readiness, equity and running-bot count, opening into that account's workspace. An account that is not ready still appears, says why, and opens with only its configuration usable. Lane mechanics (authority, binding generation, endpoint) are not shown here.
   _Avoid_: lane directory (the **fleet directory** is the underlying listing, not this page), surface chooser, account selection (that is the configuration act of choosing, staging and applying which account a lane serves — opening an account from this list selects nothing).
 

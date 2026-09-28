@@ -7,6 +7,11 @@ its bot counts are the lane's own facts rather than a browser tally. The
 heartbeat reaches ``lane_counts`` through the probe the composition root
 installs (``FleetLaneBoot.lane_counts_probe``).
 
+Every attention item is one line on the account's Home: a backend-authored
+headline and exactly one fix, a link to where that fix lives. Only what the
+owner must act on is listed -- an old bot that is flat and fully released is
+Finished, not attention (hurdles H13, H34).
+
 Locks a beat takes: the bot counts read the runner's task table only -- no
 lock, no file. The attention count is the attention read: one SQLite read
 transaction on its own connection for the account projection, plus short
@@ -19,64 +24,278 @@ or around a broker call; it all runs off the loop.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
+from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
+    AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
+)
+from app.broker.alpaca.clerk.sqlite.account_operator_posture import build_account_eligibility_posture
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    POSITION_DRIFT_REASON_CODE,
+    RECONCILIATION_INCOMPLETE_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+)
+from app.schemas.account_authority import AuthorityKind
+from app.schemas.broker_v2_panel import (
+    LaneAttentionAction,
+    LaneAttentionItem,
+    LaneAttentionKind,
+    LaneAttentionRead,
+)
 from app.services.bot_runner import get_bot_task_registry
-from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
+from app.services.broker_account_snapshot import cached_broker_account_snapshot
+from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
+from app.services.broker_v2_panel.catalog_projection_service import holdings_text
+from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
+from app.services.sqlite_clerk_compat import account_operator_posture_context
 
 logger = logging.getLogger(__name__)
 
+_OPEN_BOT = LaneAttentionAction(label="Open bot", destination="bot")
+_ORDER_RECORDS = LaneAttentionAction(label="Open order records", destination="activity")
+
+#: What each episode is about, and where its fix lives. A hold on losses is
+#: cleared in Settings; a channel is checked there; an order or position the
+#: account and Alpaca disagree on is recovered from Activity's order records;
+#: an exit that has not flattened is its bot's. An episode not named here
+#: opens its bot, or the order records when it names none.
+_EPISODE_LINES: dict[str, tuple[LaneAttentionKind, LaneAttentionAction]] = {
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: ("hold", LaneAttentionAction(label="Open Settings", destination="settings")),
+    STREAM_HEALTH_HOLD_REASON_CODE: ("channel", LaneAttentionAction(label="Check connection", destination="settings")),
+    **{
+        reason_code: ("out_of_sync", _ORDER_RECORDS)
+        for reason_code in (
+            UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+            UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+            POSITION_DRIFT_REASON_CODE,
+            BROKER_SNAPSHOT_STALE_REASON_CODE,
+            RECONCILIATION_INCOMPLETE_REASON_CODE,
+            ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+            EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            EXECUTION_PRICE_CONFLICT_REASON_CODE,
+            FAILED_ENTER_FILLED_REASON_CODE,
+        )
+    },
+    EXIT_NOT_FLAT_REASON_CODE: ("exit", _OPEN_BOT),
+    EXIT_STUCK_REASON_CODE: ("exit", _OPEN_BOT),
+}
+
+#: The provider behind each channel, named as the owner knows it: IBKR
+#: supplies market data and Alpaca the account's orders.
+_CHANNEL_NAMES = {"market_data": "IBKR market data", "execution": "Alpaca order updates"}
+
 
 async def lane_attention_read() -> LaneAttentionRead:
-    """Everything currently needing the operator on this lane (#2228).
+    """Everything currently needing the owner on this lane (#2228, PRD #2560).
 
-    The lane's active uncertainties (including ``EXIT_NOT_FLAT`` and every
-    exit waiting for an operator) plus its terminal-exposure notices, from
-    the lane's own custody ledger alone: a lane with no active authority
-    answers empty rather than unknown.
+    From the lane's own custody ledger, never the broker: its active episodes
+    (holds, channels, out-of-sync orders and positions, exits that have not
+    flattened), a bot whose lifecycle cannot be read, stopped bots still
+    holding money, bots that ended uncleanly since the account was last
+    checked against Alpaca, the account's own standing (a failed authority,
+    or what the latest cached account observation says), and an account that
+    has not switched to budgets. A lane with no authority at all answers
+    empty rather than unknown.
     """
     runtime = get_active_clerk_runtime()
     repository = None if runtime is None else runtime.sqlite_repository
     if runtime is None or repository is None:
-        return LaneAttentionRead(account_id=None, items=[])
+        failure = None if runtime is None else runtime.startup_failure
+        if failure is None or not failure.activation_detected:
+            return LaneAttentionRead(account_id=None, items=[])
+        return LaneAttentionRead(account_id=failure.account_id, items=[_failed_authority_item(failure)])
     # Read eligibility from the selected facade, exactly as the desk and
     # panel do. A repository without its policy authority cannot name a time.
     clerk = runtime.clerk
-    notices = []
+    account_items: list[LaneAttentionItem] = []
     if isinstance(clerk, SqliteAlpacaClerkFacade):
-        projection, notices = await read_account_custody(clerk)
+        projection = await read_account_projection(clerk)
         uncertainties = projection.uncertainties
+        account_items = _account_standing_items(projection)
+        world = authority_kind_for_account(clerk.account_id, account_mode=clerk.account_mode)
     else:
-        uncertainties = project_uncertainties(
+        uncertainties = await asyncio.to_thread(lambda: project_uncertainties(
             repository.active_uncertainties(),
             now_ms=repository.clock(),
             exits_in_progress=repository.strategies_with_active_exit,
-        )
-    items = [
-        LaneAttentionItem(
-            condition_id=uncertainty.uncertainty_id,
-            reason_code=uncertainty.reason_code,
-            severity=uncertainty.severity,
-            strategy_instance_id=uncertainty.strategy_instance_id,
-            symbol=uncertainty.symbol,
-            headline=uncertainty.headline,
-            recovery_status=uncertainty.recovery_status,
-        )
-        for uncertainty in uncertainties
-    ]
-    items.extend(LaneAttentionItem(
-        condition_id=f"terminal-exposure:{notice.strategy_instance_id}:{notice.kind}",
-        reason_code=notice.kind.upper(), kind=notice.kind, severity="warning",
-        strategy_instance_id=notice.strategy_instance_id, symbol=notice.symbol,
-        headline=notice.label, action_label=notice.action_label,
-    ) for notice in notices)
+        ))
+        world = runtime.selected_account_authority_kind or "real_paper"
+    items = [*account_items, *(_episode_item(uncertainty) for uncertainty in uncertainties)]
+    # One line per bot: a bot whose exit is already named above is not named
+    # again as merely stopped.
+    named = {item.strategy_instance_id for item in items if item.kind == "exit"}
+    items.extend(await asyncio.to_thread(_bot_items, repository, world=world, already_named=named))
+    if repository.budget_authority_version() < 2:
+        items.append(LaneAttentionItem(
+            condition_id="legacy-budget", reason_code="BUDGETS_NOT_SWITCHED_ON", kind="legacy_budget",
+            severity="warning", headline=LEGACY_BUDGET_DETAIL,
+            action=LaneAttentionAction(label="Open Settings", destination="settings"),
+        ))
     return LaneAttentionRead(account_id=repository.account_id, items=items)
+
+
+def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
+    """An activated authority that failed to start: the account is not managed.
+
+    Review B5: its only renderer was retired with Overview, so a failed
+    custody authority left Home quiet. Recovery is an offline step the
+    account's order records and recovery explain.
+    """
+    return LaneAttentionItem(
+        condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
+        kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,
+        action=_ORDER_RECORDS,
+    )
+
+
+def _account_standing_items(projection: ClerkProjection) -> list[LaneAttentionItem]:
+    """What the account's own standing needs from the owner (review B5).
+
+    Judged by the canonical operator posture on the latest account
+    observation already cached (``cached_broker_account_snapshot``) -- never
+    a broker read of its own -- so an account Alpaca blocked, left inactive
+    or runs in the wrong mode is a line on Home and in the bell. Channels and
+    in-flight commands are left out: a channel that holds entries is its own
+    episode above, and a command still resolving needs nothing from the
+    owner. Nothing cached means nothing is claimed either way.
+    """
+    account = cached_broker_account_snapshot("alpaca")
+    if account is None:
+        return []
+    context = account_operator_posture_context(projection, channel_healths=None, account=account)
+    posture = build_account_eligibility_posture(replace(context, channels_ready=True, outstanding_intents=0))
+    if posture is None or posture.condition is None or posture.account_desk is None:
+        return []
+    return [LaneAttentionItem(
+        condition_id=f"account:{posture.condition.id}", reason_code=posture.condition.id, kind="account",
+        severity=posture.condition.severity, headline=posture.account_desk.headline,
+        action=LaneAttentionAction(label="Open Settings", destination="settings"),
+    )]
+
+
+def _episode_item(uncertainty: ProjectedUncertainty) -> LaneAttentionItem:
+    """One active episode as one line, with the fix its kind names."""
+    kind, action = _EPISODE_LINES.get(
+        uncertainty.reason_code,
+        ("uncertainty", _ORDER_RECORDS if uncertainty.strategy_instance_id is None else _OPEN_BOT),
+    )
+    headline = (
+        _channel_headline(uncertainty.evidence_refs)
+        if uncertainty.reason_code == STREAM_HEALTH_HOLD_REASON_CODE
+        else uncertainty.headline
+    )
+    return LaneAttentionItem(
+        condition_id=uncertainty.uncertainty_id,
+        reason_code=uncertainty.reason_code,
+        kind=kind,
+        action=action,
+        severity=uncertainty.severity,
+        strategy_instance_id=uncertainty.strategy_instance_id,
+        symbol=uncertainty.symbol,
+        headline=headline,
+        recovery_status=uncertainty.recovery_status,
+    )
+
+
+def _channel_headline(evidence_refs: tuple[str, ...]) -> str:
+    """Which connection holds new entries, from the hold's own evidence lines.
+
+    Each line is ``"{stream}: {reason}"`` (``StreamHealthHoldCause``): the
+    stream is a closed name, the reason the provider's own words.
+    """
+    down = "; ".join(
+        f"{_CHANNEL_NAMES.get(stream.strip(), stream.strip())} ({reason.strip()})"
+        for stream, _, reason in (line.partition(":") for line in evidence_refs)
+    )
+    return f"New entries are on hold while a connection is down: {down}." if down else (
+        "New entries are on hold while a connection is down."
+    )
+
+
+def _bot_items(
+    repository: ClerkSqliteRepository, *, world: AuthorityKind, already_named: set[str | None],
+) -> list[LaneAttentionItem]:
+    """The lines Home's bots need, placed by the catalog's own groups (PRD #2560 D7).
+
+    - A stopped bot still holding money -- the catalog's ``holding`` group,
+      so a crashed bot whose run row is stuck ACTIVE is here exactly as it
+      is on Home -- is one line: nothing manages it. Shares are flattened
+      from its page; a working entry order with no shares yet is cancelled
+      there too.
+    - A bot whose lifecycle cannot be read is one line: where it sits, and
+      what it holds, are unknown.
+    - A flat bot with nothing claimed is never a line of its own (H13, H34).
+      When some ended without a clean exit after the account was last
+      checked against Alpaca, the Clerk cannot vouch that they left nothing
+      behind: that is ONE account line, cleared by reconciling the account.
+    Blocking: runs off the event loop.
+    """
+    items: list[LaneAttentionItem] = []
+    unchecked: list[str] = []
+    last_check_ms = repository.last_clean_account_check_ms()
+    for bot in home_roster(repository, world=world):
+        sid = bot.strategy_instance_id
+        if bot.group is None:
+            items.append(LaneAttentionItem(
+                condition_id=f"lifecycle-unreadable:{sid}", reason_code="LIFECYCLE_UNREADABLE",
+                kind="position_unverified", severity="warning", strategy_instance_id=sid, symbol=bot.symbol,
+                headline=f"{sid}'s lifecycle could not be read, so what it holds is unknown. Check it at the broker.",
+                action=_OPEN_BOT,
+            ))
+        elif bot.group == "holding" and sid not in already_named:
+            items.append(_stopped_holding_item(repository, sid))
+        elif bot.group == "finished" and bot.unclean_ended_at_ms is not None and (
+            last_check_ms is None or bot.unclean_ended_at_ms > last_check_ms
+        ):
+            unchecked.append(sid)
+    if unchecked:
+        items.append(LaneAttentionItem(
+            condition_id="positions-unchecked", reason_code="POSITIONS_UNCHECKED_SINCE_UNCLEAN_EXIT",
+            kind="out_of_sync", severity="warning",
+            headline=(
+                f"{len(unchecked)} bot{'s' if len(unchecked) != 1 else ''} ended without a clean exit after "
+                "this account was last checked against Alpaca. Reconcile now to confirm nothing is still held."
+            ),
+            action=_ORDER_RECORDS,
+        ))
+    return items
+
+
+def _stopped_holding_item(repository: ClerkSqliteRepository, sid: str) -> LaneAttentionItem:
+    """A stopped bot still holding money: nothing manages it (PRD #2560 D7)."""
+    held = {
+        symbol: quantity
+        for symbol, quantity in repository.attributed_positions_for_strategy(sid).items()
+        if position_quantity_is_nonzero(quantity)
+    }
+    what = f"still holds {holdings_text(held)}" if held else "has an entry order still working"
+    return LaneAttentionItem(
+        condition_id=f"stopped-holding:{sid}", reason_code="STOPPED_STILL_HOLDING", kind="stopped_holding",
+        severity="warning", strategy_instance_id=sid, symbol=min(held, default=None),
+        headline=f"{sid} is stopped but {what}. No bot is managing it.",
+        action=LaneAttentionAction(label="Flatten…", destination="bot") if held else _OPEN_BOT,
+    )
 
 
 @dataclass(frozen=True)
@@ -131,9 +350,8 @@ async def _bot_counts() -> tuple[int, int] | None:
 
 
 async def _attention_count() -> int | None:
-    runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.sqlite_repository is None:
-        # No clerk is serving an account: the bell has nothing to list, but
-        # that is "not counted", never "none need attention".
-        return None
-    return len((await lane_attention_read()).items)
+    read = await lane_attention_read()
+    # No clerk is serving an account: the bell has nothing to list, but that
+    # is "not counted", never "none need attention". A failed authority names
+    # its account, and its line counts.
+    return None if read.account_id is None else len(read.items)

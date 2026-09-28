@@ -1,0 +1,45 @@
+@let bot = entry().bot;
+@let slice = entry().slice;
+<header class="home-tile__head">
+  <span class="home-tile__id">
+    @if (hue(); as hue) {
+      <span class="home-tile__swatch" [style.background]="hue" aria-hidden="true"></span>
+    }
+    <a class="home-tile__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  </span>
+  <span class="home-tile__chip">{{ groupWords() }}</span>
+</header>
+<p class="home-tile__meta">
+  <app-asset-identity class="home-tile__symbol" [symbol]="bot.symbol" size="xs" />
+  · {{ bot.strategy_label }} · {{ bot.world_label }}
+</p>
+@if (bot.needs_attention) {
+  <p class="home-tile__attention">Needs attention: {{ bot.status_explanation }}</p>
+}
+
+<app-home-sparkline [bars]="bars()" [markers]="markers()" />
+
+@if (slice) {
+  <app-money-bar [segments]="strip()" size="mini" [caption]="stripCaption()" />
+}
+
+<footer class="home-tile__foot">
+  <span class="home-tile__fact">
+    @switch (bot.group) {
+      @case ('dry_run') {
+        sim cash {{ (bot.simulated_cash_usd | authoredUsd) ?? 'not recorded' }}
+      }
+      @case ('holding') { {{ bot.status_explanation }} }
+      @default {
+        @if (slice) { balance {{ slice.amount_usd | authoredUsd }} } @else { money unavailable }
+      }
+    }
+  </span>
+  <span class="home-tile__pnl">{{ pnl() }}</span>
+  <app-home-bot-action
+    [bot]="bot"
+    [account]="account()"
+    [pending]="pending()"
+    (stopRequested)="stopRequested.emit($event)"
+  />
+</footer>
