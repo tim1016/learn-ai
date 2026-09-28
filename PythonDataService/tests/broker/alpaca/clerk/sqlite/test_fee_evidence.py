@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.fee_evidence import (
     FEE_EVIDENCE_KIND,
     FEE_EVIDENCE_MAX_AGE_MS,
@@ -381,18 +381,11 @@ def test_outside_short_sale_on_a_custody_day_still_refuses(day_pnl_repo) -> None
     assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in result.unresolved
 
 
-async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_repo) -> None:
-    """A tracked external order pulls the floor back to its oldest execution (#2550).
-
-    Its executions predate custody, but the budget needs all of them. One
-    witnessed fill is not enough: the walk continues until the order's
-    filled quantity is explained, then stops short of exhaustion.
-    """
+def _observe_tracked_gtc(repo: ClerkSqliteRepository) -> None:
+    """An outside GTC order custody tracks: 2 of 5 shares filled, then canceled."""
     from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
     from app.broker.contract.models import BrokerOrder
 
-    repo = day_pnl_repo
     observe_external_order(repo, order=BrokerOrder(
         broker="alpaca", order_id="gtc-order", client_order_id="console-gtc", symbol="SPY",
         asset_class="us_equity", side="buy", order_type="limit", time_in_force="gtc", quantity=5,
@@ -400,6 +393,19 @@ async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_
         submitted_at_ms=None, created_at_ms=None, updated_at_ms=None, filled_at_ms=None,
         canceled_at_ms=None, expired_at_ms=None, observed_at_ms=NOON,
     ))
+
+
+async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_repo) -> None:
+    """The walk continues until a tracked external order is explained (#2550).
+
+    Its executions predate custody, but the budget needs all of them. One
+    witnessed fill is not enough: the walk continues until the order's
+    filled quantity is explained, then stops short of exhaustion.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _observe_tracked_gtc(repo)
     newer = _outside_fill("gtc-newer", YESTERDAY_NOON, order="gtc-order")
     older = _outside_fill("gtc-older", et_minute_of_day_ms(date(2026, 9, 2), 12 * 60), order="gtc-order")
     # The head reaches past custody's genesis day, so only the order drives the walk.
@@ -413,6 +419,38 @@ async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_
     result = repo.fee_attribution(now_ms=NOON)
     assert result.known
     assert sorted(fill.fill_id for fill in result.external_fills) == ["gtc-newer", "gtc-older"]
+
+
+# The tracked GTC works across custody's genesis (09-08). Its earlier execution
+# once widened the attribution floor to its own day, pricing it before the
+# pinned fee rates or re-admitting an unrelated outside short sale custody
+# never owned; either refused every deploy and ENTER forever (#2550).
+@pytest.mark.parametrize(
+    ("earlier_day", "unrelated"),
+    [
+        (date(2026, 8, 20), []),
+        (date(2026, 9, 2), [_outside_fill(
+            "unrelated-short", et_minute_of_day_ms(date(2026, 9, 3), 12 * 60), side="sell_short", order="unrelated-order"
+        )]),
+    ],
+    ids=["unpinned-rate-execution", "unrelated-short-after-it"],
+)
+def test_tracked_order_execution_before_custody_reaches_only_the_cash_claim(
+    day_pnl_repo, earlier_day, unrelated
+) -> None:
+    repo = day_pnl_repo
+    _observe_tracked_gtc(repo)
+    later = _outside_fill("gtc-later", NOON - 1_000, order="gtc-order")
+    earlier = _outside_fill("gtc-earlier", et_minute_of_day_ms(earlier_day, 12 * 60), order="gtc-order")
+    record_fee_evidence(repo, [later, *unrelated, earlier], checked_at_ms=NOON, history_complete=True)
+    result = repo.fee_attribution(now_ms=NOON)
+    assert result.known, result.unresolved
+    assert sorted(fill.fill_id for fill in result.external_fills) == ["gtc-earlier", "gtc-later"]
+    # Only the execution on custody's day is priced.
+    assert result.total_for("external:gtc-order") == Decimal("0.01")
+    # Both executions reach the claim's exact filled-quantity check (2 shares).
+    assert _external_cash_claim(repo._conn, result, seen_before_ms=NOON) == Decimal(200)
+    assert _external_cash_claim(repo._conn, result, seen_before_ms=NOON + 1) == 0
 
 
 async def test_guard_refuses_to_answer_a_continuation_with_the_newest_rows() -> None:

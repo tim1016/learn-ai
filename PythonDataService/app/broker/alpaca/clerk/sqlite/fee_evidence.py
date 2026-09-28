@@ -88,13 +88,20 @@ class _HistoryFloor:
 
     Custody began at the first transition of its hash chain; activity on an
     earlier day is already inside the cash it started from. The floor reaches
-    further back only for fills custody recorded and for executions of the
-    external orders it tracks. ``day`` is ``None`` only before any history.
+    further back only for fills custody recorded. ``day`` is ``None`` only
+    before any history.
+
+    An external order custody tracks may have executed before the floor (a
+    GTC working across genesis). Those executions never move the floor: the
+    walk continues until they explain the order's filled quantity, and they
+    reach only the external cash claim, never a fee day.
     """
 
     day: date | None
+    # Broker order ids of the external orders custody tracks.
+    tracked: frozenset[str]
     # Every tracked external order's filled quantity is witnessed. Until then
-    # its older executions may lie before ``day``, so the walk continues.
+    # its older executions may lie beyond the window, so the walk continues.
     explained: bool
 
     def admits(self, day: date) -> bool:
@@ -110,8 +117,8 @@ def _history_floor(
     """Custody-owned bound for both the history walk and fee attribution.
 
     Replayed hash-chain facts only: ``control_meta.created_at_ms`` is
-    re-stamped when the database is rebuilt from its mirror. A provider row
-    moves the floor only as an execution of an order custody tracks.
+    re-stamped when the database is rebuilt from its mirror. No provider row
+    moves the floor; a tracked order's executions only keep the walk going.
     """
     genesis = conn.execute("SELECT recorded_at_ms FROM custody_transitions ORDER BY sequence LIMIT 1").fetchone()
     days = {*fill_days, *([] if genesis is None else [et_date_at_ms(genesis[0])])}
@@ -119,10 +126,9 @@ def _history_floor(
     witnessed: dict[str, Decimal] = defaultdict(Decimal)
     for row in activities:
         if row.activity_type in {"FILL", "PARTIAL_FILL"} and row.native_order_id in required and row.occurred_at_ms is not None:
-            days.add(et_date_at_ms(row.occurred_at_ms))
             witnessed[row.native_order_id] += _normalized_or_none(row.quantity) or 0
     explained = all(quantity is not None and witnessed[order] >= quantity for order, quantity in required.items())
-    return _HistoryFloor(min(days, default=None), explained)
+    return _HistoryFloor(min(days, default=None), frozenset(required), explained)
 
 
 def _evidence_window(snapshots: Sequence[FeeEvidenceFacts]) -> _EvidenceWindow:
@@ -168,8 +174,9 @@ def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> Non
 def fee_evidence_cursor(repo: ClerkSqliteRepository) -> str | None:
     """The provider cursor the history walk resumes from, or ``None`` when none is due.
 
-    No read is due once the walk proved custody's history floor. The cursor
-    is kept, so a floor that later moves back resumes the same walk.
+    No read is due once the walk proved custody's history floor and
+    explained every tracked external order. The cursor is kept, so a floor
+    that later moves back, or a newly tracked order, resumes the same walk.
     """
     with repo._write_lock:
         snapshots = _recorded_evidence(repo._conn)
@@ -353,6 +360,10 @@ def custody_fee_attribution(
     snapshots = [] if simulated else _recorded_evidence(conn)
     window = _evidence_window(snapshots)
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
+    # A tracked external order's executions dated before the floor: inside
+    # the cash custody started from, so never priced and never a fee day, but
+    # its external cash claim needs the order's whole filled quantity.
+    before_floor: dict[str, BrokerActivity] = {}
     undated: dict[str, BrokerActivity] = {}
     # Recorded order keeps each activity's first observation, so repeated
     # polling never turns a recognized fee back into an unrecognized claim.
@@ -374,6 +385,8 @@ def custody_fee_attribution(
         day = et_date_at_ms(activity.occurred_at_ms)
         if floor.admits(day):
             by_date[day][activity.activity_id] = activity
+        elif activity.activity_type in {"FILL", "PARTIAL_FILL"} and activity.native_order_id in floor.tracked:
+            before_floor[activity.activity_id] = activity
     external_orders = {
         row[0]
         for row in conn.execute(
@@ -385,7 +398,8 @@ def custody_fee_attribution(
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
     from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
 
-    for day, rows in by_date.items():
+    # ``None`` marks the pre-floor executions: claimed, never priced.
+    for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
                 continue
@@ -415,7 +429,8 @@ def custody_fee_attribution(
                 native_order_id=row.native_order_id,
                 observed_at_ms=row.observed_at_ms,
             )
-            grouped[day].append(external)
+            if day is not None:
+                grouped[day].append(external)
             external_fills.append(external)
     population_complete = population_complete and external_orders <= witnessed_external
     shares = []
