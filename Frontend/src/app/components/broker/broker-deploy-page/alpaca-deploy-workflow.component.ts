@@ -82,6 +82,7 @@ import { DeployParametersSectionComponent } from './deploy-parameters-section.co
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
 import { DeployStepComponent } from './deploy-step.component';
+import { DEPLOY_WORLDS } from './deploy-world';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
@@ -206,13 +207,6 @@ function sameValidationScope(left: ValidationScopeSeed | null, right: Validation
 }
 
 const OVERRIDE_REASON_MIN_LENGTH = 10;
-
-/** The owner-facing name of each world, as the permission and summaries word it. */
-const WORLD_LABELS: Readonly<Record<'paper' | 'shadow' | 'live', 'Paper' | 'Shadow' | 'Live'>> = {
-  paper: 'Paper',
-  shadow: 'Shadow',
-  live: 'Live',
-};
 
 interface DeploySubmissionReadiness {
   canSubmit: boolean;
@@ -502,7 +496,7 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   /** The account's one broker world, as the permission copy words it. */
-  protected readonly brokerModeLabel = computed(() => WORLD_LABELS[this.brokerMode()]);
+  protected readonly brokerModeLabel = computed(() => DEPLOY_WORLDS[this.brokerMode()].name);
 
   /**
    * True when the ticket's mode contacts the broker. Dry Run is the only

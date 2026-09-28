@@ -15,7 +15,7 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-d
 import type { DeployReadinessCheck, RunAdmissionDecision } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
-import { DEPLOY_WORLD_WORDING, type DeployWorld } from './deploy-world';
+import { DEPLOY_WORLDS, type DeployWorld } from './deploy-world';
 
 /** A refused deployment, shaped for display by the workflow that caught it. */
 export interface DeployError {
@@ -35,13 +35,6 @@ export interface DeployBlocker {
   readonly headline: string;
   readonly fix: string | null;
 }
-
-const BUTTON_WORLD: Readonly<Record<DeployWorld, string>> = {
-  live: 'live',
-  paper: 'paper',
-  shadow: 'shadow',
-  dry_run: 'Dry Run',
-};
 
 /**
  * Deploy step 4, Confirm (PRD #2560 D8).
@@ -103,11 +96,11 @@ export class DeployConfirmStepComponent {
 
   protected readonly worldWording = computed(() => {
     const world = this.world();
-    return world === null ? 'Choose where it trades in How' : DEPLOY_WORLD_WORDING[world];
+    return world === null ? 'Choose where it trades in How' : DEPLOY_WORLDS[world].wording;
   });
   protected readonly buttonWorld = computed(() => {
     const world = this.world();
-    return world === null ? '' : BUTTON_WORLD[world];
+    return world === null ? '' : DEPLOY_WORLDS[world].button;
   });
   protected readonly dryRun = computed(() => this.world() === 'dry_run');
   protected readonly blockedDecision = computed(() => {

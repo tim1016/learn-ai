@@ -54,7 +54,7 @@ type WorkspaceAccountStatus =
 
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
- * Overview, Bots, Gallery, Configuration and Deploy tabs.
+ * Overview, Bots, Gallery, Activity and Settings tabs.
  *
  * The operator chooses an account once, in the account list, and the
  * workspace keeps it while they move between its pages — the tabs are
@@ -146,7 +146,7 @@ export class AlpacaAccountWorkspaceComponent {
 
   protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
 
-  /** The five tabs with the route each one links to, or `null` for a tab this
+  /** The strip's tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per
    * render, so a tab's `routerLink` is not handed a freshly allocated array on
    * every change-detection pass. */

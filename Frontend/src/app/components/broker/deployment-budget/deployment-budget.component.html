@@ -4,7 +4,7 @@
   @else if (budget.error()) { <p role="alert">Budget evidence is unavailable. Refresh before making another deployment.</p> }
   @else if (view(); as report) {
     <p>{{ report.detail }}</p>
-    <p>{{ worldLabels[report.world] }} · {{ report.entry_eligible ? 'Budget and account risk ready' : 'Budget or account risk unavailable' }}</p>
+    <p>{{ worldName() }} · {{ report.entry_eligible ? 'Budget and account risk ready' : 'Budget or account risk unavailable' }}</p>
     <dl>
       @for (row of amounts(); track row.label) {
         <dt>{{ row.label }}</dt><dd>{{ (row.amount === null || row.amount === undefined) ? 'Unknown' : (row.amount | authoredUsd) }}</dd>

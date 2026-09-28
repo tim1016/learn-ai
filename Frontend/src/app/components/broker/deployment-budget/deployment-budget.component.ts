@@ -2,7 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, resource }
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
-import { DEPLOYMENT_WORLD_LABELS, BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
+import { DEPLOY_WORLDS, deployWorldOf } from '../broker-deploy-page/deploy-world';
 
 @Component({
   selector: 'app-deployment-budget',
@@ -12,7 +13,6 @@ import { DEPLOYMENT_WORLD_LABELS, BrokerV2PanelService } from '../v2-panel/lib/b
   styleUrl: './deployment-budget.component.scss',
 })
 export class DeploymentBudgetComponent {
-  protected readonly worldLabels = DEPLOYMENT_WORLD_LABELS;
   readonly target = input.required<ResourceTarget>();
   readonly strategyInstanceId = input.required<string>();
   readonly revision = input(0);
@@ -22,6 +22,10 @@ export class DeploymentBudgetComponent {
     loader: ({ params }) => this.service.getBudget(params.target, params.sid),
   });
   protected readonly view = computed(() => this.budget.hasValue() ? this.budget.value() : null);
+  protected readonly worldName = computed(() => {
+    const view = this.view();
+    return view === null ? '' : DEPLOY_WORLDS[deployWorldOf(view.world)].name;
+  });
   protected readonly amounts = computed(() => {
     const view = this.view();
     return view === null ? [] : [

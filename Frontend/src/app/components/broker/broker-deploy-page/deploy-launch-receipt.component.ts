@@ -6,7 +6,7 @@ import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
-import { DEPLOY_WORLD_WORDING, deployWorldOf } from './deploy-world';
+import { DEPLOY_WORLDS, deployWorldOf } from './deploy-world';
 
 /**
  * What one Deploy recorded: the bot the backend named, the money set aside,
@@ -26,7 +26,7 @@ export class DeployLaunchReceiptComponent {
   readonly botLink = input<AccountWorkspaceLink | null>(null);
 
   protected readonly dryRun = computed(() => this.receipt().world === 'synthetic');
-  protected readonly worldWording = computed(() => DEPLOY_WORLD_WORDING[deployWorldOf(this.receipt().world)]);
+  protected readonly worldWording = computed(() => DEPLOY_WORLDS[deployWorldOf(this.receipt().world)].wording);
 
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
 

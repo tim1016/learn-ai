@@ -22,10 +22,10 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
  * Reads the workspace shell's own `AlpacaDeskAccountDataService` instance —
  * provided on `AlpacaAccountWorkspaceComponent` and inherited by every tab
  * under it — so this page can never target a different account than the one
- * the header names. Blocked-state messaging mirrors the other lane-scoped
- * pages (Bots, Gallery): the page always has a route once an account is
- * confirmed, and explains in place why it cannot deploy rather than the
- * button being hidden or disabled (FR-096).
+ * the header names. The header offers the button only once Alpaca has
+ * confirmed the account (an accountless lane has nowhere to open Deploy);
+ * reached by its URL without a lane, a capability or an account, this page
+ * explains in place why it cannot deploy, as Bots and Gallery do (FR-096).
  */
 @Component({
   selector: 'app-alpaca-deploy-tab',

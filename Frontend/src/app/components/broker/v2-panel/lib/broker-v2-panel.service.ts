@@ -109,9 +109,6 @@ export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput
 export type AccountMoneyView = components['schemas']['AccountMoneyView'];
 export type MoneySegment = components['schemas']['MoneySegment'];
 export type MoneyParts = components['schemas']['MoneyParts'];
-export const DEPLOYMENT_WORLD_LABELS: Readonly<Record<BudgetDeployReceipt['world'], string>> = {
-  real_paper: 'Paper', real_live: 'Live', shadow: 'Shadow', synthetic: 'Dry Run',
-};
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type QualifiedDeployConfiguration = components['schemas']['QualifiedDeployConfiguration'];
