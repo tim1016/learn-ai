@@ -35,11 +35,11 @@ export class AlpacaDeskAccountDataService {
   /** The account this desk reads.
    *
    * The URL names it on every account-scoped tab, and that is the only answer
-   * those tabs ever take. The workspace's lane-scoped tabs — Configuration and
+   * those tabs ever take. The workspace's lane-scoped tabs — Settings and
    * the not-ready Bots and Gallery (FR-092) — name no account at all, and for
    * those the lane's own confirmed binding is the account the header is about:
-   * "Configuration … renders inside the workspace from the lane's confirmed
-   * account" (ADR 0064, FR-092).
+   * Settings stays lane-scoped and renders inside the workspace from the
+   * lane's confirmed account (ADR 0064, FR-092).
    *
    * Read through `accountWorkspaceLocation`, not this service's own
    * `ActivatedRoute`: that route is the one the parent shell is provided on

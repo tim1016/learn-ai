@@ -1,0 +1,147 @@
+@use './configuration-controls' as controls;
+
+:host {
+  display: block;
+  min-height: 100%;
+  background: var(--bg-canvas);
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.settings__titlebar h2 {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-lg, 1.15rem);
+}
+
+.settings__account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.settings__account strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+}
+
+.settings__link-button {
+  @include controls.secondary-button;
+}
+
+// The account sections sit side by side where there is room and stack on a
+// phone; each keeps its own card chrome.
+.settings__sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.settings__connection-card {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.settings__connection-title {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+// The summary keeps its default display: its native marker is the fold's
+// open/closed cue, and a flex summary drops it.
+.settings__connection > summary {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.settings__connection-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.settings__lede {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.settings__review-context {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-faint);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.settings__profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings__profiles-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.settings__profiles h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.settings__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.settings__error,
+.settings__loading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.settings__error {
+  border-color: var(--bear);
+  color: var(--text-primary);
+}
+
+.settings__error button {
+  @include controls.secondary-button;
+}

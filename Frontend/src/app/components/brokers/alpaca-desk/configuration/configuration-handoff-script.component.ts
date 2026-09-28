@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.component';
@@ -102,9 +102,12 @@ export function withWorkerExports(script: string, restartCommand: string): strin
  * in this lane's own worker-restart export lines (see `withWorkerExports`)
  * before the operator ever copies or reads it. Those exports come from the
  * same desk read the switch guide's restart command does
- * (`AlpacaConfigurationPageComponent.restartCommand`, sourced from
+ * (`AlpacaSettingsPageComponent.restartCommand`, sourced from
  * `deskState.value().restart_command`) — the process where compose actually
  * injected `FLEET_WORKER_SERVICE`, never composed here.
+ *
+ * Folded behind "Show script" (PRD #2560): the section says what the script
+ * does, and the bytes are fetched and shown only when the owner asks for them.
  */
 @Component({
   selector: 'app-configuration-handoff-script',
@@ -122,8 +125,10 @@ export class ConfigurationHandoffScriptComponent {
    * `undefined` while the read is in flight or failed. Never composed here.
    */
   readonly restartCommand = input.required<string | null | undefined>();
+  protected readonly shown = signal(false);
   protected readonly script = resource({
-    loader: () => firstValueFrom(this.http.get(this.scriptUrl, { responseType: 'text' })),
+    params: () => (this.shown() ? this.scriptUrl : undefined),
+    loader: ({ params }) => firstValueFrom(this.http.get(params, { responseType: 'text' })),
   });
   /** The exact bytes the operator sees and copies. Empty until the asset
    * has loaded, so the copy button never offers to copy `undefined`. */

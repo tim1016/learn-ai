@@ -370,8 +370,8 @@ def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
     assert state.choices == ()
     assert state.profiles_requiring_setup == 0
     assert state.empty_choices_message == (
-        "All saved account configurations are archived. Restore one on the Configuration "
-        "page, or set up a new account."
+        "All saved account configurations are archived. Restore one under Broker "
+        "connection in Settings, or set up a new account."
     )
     assert state.action.kind == "review_configuration"
     assert state.action.label == "Review account configurations"

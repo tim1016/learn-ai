@@ -194,7 +194,7 @@ export class AlpacaDeskComponent {
   protected reviewAccount(choice: AlpacaDeskSelectionSummary | null): void {
     const target = this.contextTarget();
     if (target === null) return;
-    const commands = ['/brokers', 'alpaca', 'clerks', target.clerkId, 'configuration'];
+    const commands = ['/brokers', 'alpaca', 'clerks', target.clerkId, 'settings'];
     if (choice === null) {
       void this.router.navigate(commands);
       return;
