@@ -923,3 +923,65 @@ async def test_degraded_boot_report_names_a_few_bots_and_counts_the_rest() -> No
     assert "bot-0, bot-1, bot-2, bot-3, bot-4" in fact.explanation
     assert "and 2 more" in fact.explanation
     assert "bot-5" not in fact.explanation
+
+
+async def test_an_unreadable_validation_store_is_named_as_the_cause_not_a_missing_seal() -> None:
+    """H11 (2026-09-28): a clerk that cannot read Golden Validation has no
+    validation event, so the new bot's program cannot be sealed. That
+    SignalProgramSealError was swallowed and every Deploy was refused as "no
+    complete v2 Signal Program seal ... Run golden qualification", sending the
+    owner to re-qualify code that was fine. The refusal must carry the real cause."""
+    cause = "Golden Validation evidence could not be read (InsufficientPrivilegeError)."
+
+    def now_ms() -> int:
+        return 1_000
+
+    async def runtime_fact(strategy_instance_id: str, observed_at_ms: int) -> StartRuntimeAdmissionFact:
+        del strategy_instance_id
+        return StartRuntimeAdmissionFact(state="READY", observed_at_ms=observed_at_ms, explanation="ready")
+
+    def process_fact(binding: object, observed_at_ms: int) -> RunProcessAdmissionFact:
+        del binding
+        return RunProcessAdmissionFact(
+            state="ABSENT", run_id=None, process_identity=None, registry_generation="registry-1",
+            observed_at_ms=observed_at_ms,
+        )
+
+    @asynccontextmanager
+    async def custody_guard(strategy_instance_id: str):
+        del strategy_instance_id
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
+
+    async def activate(*args: object, **kwargs: object) -> None:
+        raise AssertionError("activate must not be called by preview()")
+
+    async def unreadable_validation(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+        return StrategyValidationAdmissionFact(
+            state="UNREADABLE", strategy_key="ema_crossover_signal", evidence_status="unknown",
+            verified_at_ms=observed_at_ms, explanation=cause,
+            next_step="Restore the Golden Validation evidence store, then retry admission.",
+        )
+
+    admission = BotStartAdmission(
+        now_ms=now_ms, feed_resolver=lambda: None, custody_guard=custody_guard, process_fact=process_fact,
+        runtime_fact=runtime_fact, validation_fact=unreadable_validation, activate=activate,
+        session_capability=lambda symbol, account_id: None,
+        market_liveness=lambda symbol, observed_at_ms: compose_market_liveness(
+            symbol, now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN", source="test.clock", observed_at_ms=observed_at_ms, vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True, connection_changed_at_ms=observed_at_ms, symbol_status=None,
+        ),
+    )
+    request = StartRequest(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, strategy_key="ema_crossover_signal",
+        symbol="SPY", use_rth=True, mode="trade", quantity=1, carryover_policy="FORBID", evidence_override=None,
+        action_plan=alpaca_v1_action_plan("SPY"),
+    )
+
+    decision = await admission.preview(request)
+
+    assert not decision.allowed
+    assert cause in decision.explanation
+    assert "no complete v2 Signal Program seal" not in decision.explanation

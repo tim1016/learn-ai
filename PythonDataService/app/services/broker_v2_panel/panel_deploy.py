@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
 )
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
@@ -28,20 +29,30 @@ from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.account_authority import world_admits_account_mode
 from app.schemas.broker_bots import (
+    AlpacaDeploySubmission,
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
+    AlpacaPaperSizingSelection,
+    BotDeployPrefill,
 )
 from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeploymentBudgetPreview
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
-from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
+from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel.deploy_submissions import (
+    BotNameUnavailable,
+    DeploySubmissionConflict,
+    DeploySubmissionLedger,
+)
 from app.services.broker_v2_panel.panel_errors import (
     AccountMismatchError,
     PanelRunnerError,
     PanelUnavailableError,
+    UnknownBotError,
 )
 from app.services.broker_v2_panel.panel_scope import (
     clerk_status,
@@ -61,6 +72,7 @@ from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
     strategy_registry_seeds,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -162,13 +174,7 @@ async def get_alpaca_paper_deploy_view(
                 "the authority for this account, then refresh."
             ),
         )
-    registry = get_bot_task_registry()
-    if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-            next_action="Wait for the data plane to become healthy, then refresh.",
-        )
+    _runner()
     clerk = await clerk_status(symbol=symbol)
     try:
         validation_entries = load_strategy_validation_entries(strategy_registry_seeds())
@@ -201,32 +207,76 @@ async def preview_alpaca_deployment_budget(
         raise budget_deploy.budget_error(exc) from exc
 
 
+def _runner() -> BotTaskRegistry:
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+            next_action="Wait for the data plane to become healthy, then refresh.",
+        )
+    return registry
+
+
+def _claim_bot_name(registry: BotTaskRegistry, account_id: str, request: AlpacaDeploySubmission) -> str:
+    """Name this submission's bot, or return the name its key already holds (#2551)."""
+    try:
+        submission = DeploySubmissionLedger(registry.artifacts_root).claim(
+            submission_key=request.submission_key,
+            symbol=request.symbol,
+            strategy_key=request.strategy_key,
+            request_fingerprint=canonical_sha256(
+                {"account": canonical_alpaca_account_id(account_id), "request": request.content()}
+            ),
+            replaces_strategy_instance_id=request.replaces_strategy_instance_id,
+            now_ms=now_ms_utc(),
+        )
+    except DeploySubmissionConflict as exc:
+        raise PanelRunnerError(
+            "This Deploy was already sent with other settings.",
+            detail=f"{exc} Nothing new was set aside or started.",
+            next_action="Start a new Deploy from the form.",
+            http_status=409,
+            operation_attempted=False,
+        ) from exc
+    except BotNameUnavailable as exc:
+        raise PanelRunnerError(
+            "This bot cannot be named.",
+            detail=str(exc),
+            next_action="Choose a shorter symbol, or try again in a minute.",
+            http_status=409,
+            operation_attempted=False,
+        ) from exc
+    return submission.strategy_instance_id
+
+
 async def deploy_alpaca_paper_bot(
     broker: str,
     account_id: str,
-    request: AlpacaPaperDeployRequest,
+    request: AlpacaDeploySubmission,
 ) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
-    """Execute or recover one durable deployment through the runner seam."""
+    """Execute or recover one durable deployment through the runner seam.
+
+    The bot is named first, from the submission key: a resend of the same key
+    lands on the same bot, and a Deploy it already committed is returned
+    exactly as recorded instead of starting anything again.
+    """
+    registry = _runner()
+    sid = _claim_bot_name(registry, account_id, request)
     if request.budget is not None:
         try:
-            existing = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+            existing = await budget_deploy.command_receipt(account_id, sid)
             if existing is not None:
                 return existing
         except BudgetUnavailable as exc:
             raise budget_deploy.budget_error(exc) from exc
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
-    registry = get_bot_task_registry()
-    if registry is None:  # guarded by the view; retained for type narrowing
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
     try:
         consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         started = await registry.deploy_with_admission(
             broker=broker,
-            strategy_instance_id=request.strategy_instance_id,
+            strategy_instance_id=sid,
             strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
@@ -242,7 +292,7 @@ async def deploy_alpaca_paper_bot(
     except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
         if request.budget is not None:
             try:
-                existing = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+                existing = await budget_deploy.command_receipt(account_id, sid)
                 if existing is not None:
                     return existing
             except BudgetUnavailable as conflict:
@@ -260,7 +310,7 @@ async def deploy_alpaca_paper_bot(
             reason_code=exc.reason_code,
         ) from exc
     if request.budget is not None:
-        receipt = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+        receipt = await budget_deploy.command_receipt(account_id, sid)
         if receipt is None:
             raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
         return receipt
@@ -268,6 +318,7 @@ async def deploy_alpaca_paper_bot(
         broker=broker,
         view=view,
         request=request,
+        strategy_instance_id=sid,
         bot=started.bot,
         admission=started.admission,
         resolved_params=resolved_params,
@@ -279,20 +330,28 @@ async def preview_alpaca_paper_start_admission(
     account_id: str,
     request: AlpacaPaperDeployRequest,
 ) -> RunAdmissionDecision:
-    """Project the same request-specific Start decision used by execution."""
+    """Project the same request-specific Start decision used by execution.
+
+    The bot has no name yet, so the checks run against the name a Deploy
+    claimed now would get: they describe the bot the Deploy would create.
+    """
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
-    registry = get_bot_task_registry()
-    if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
+    registry = _runner()
+    try:
+        sid = DeploySubmissionLedger(registry.artifacts_root).provisional_name(
+            symbol=request.symbol, strategy_key=request.strategy_key, now_ms=now_ms_utc(),
         )
+    except BotNameUnavailable as exc:
+        raise PanelRunnerError(
+            "This bot cannot be named.", detail=str(exc),
+            next_action="Choose a shorter symbol, or try again in a minute.", http_status=409,
+        ) from exc
     try:
         consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         return await registry.preview_start_admission(
             broker=broker,
-            strategy_instance_id=request.strategy_instance_id,
+            strategy_instance_id=sid,
             strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
@@ -316,6 +375,36 @@ async def preview_alpaca_paper_start_admission(
             admission_decision=exc.admission_decision,
             reason_code=exc.reason_code,
         ) from exc
+
+
+async def deploy_prefill(account_id: str, sid: str) -> BotDeployPrefill:
+    """Deploy again: one earlier bot's sealed settings, never its money or consent.
+
+    Strategy, symbol, sizing and parameters come from the bot's immutable
+    runner binding; exit terms from the custody authority that sealed them.
+    """
+    try:
+        binding = _runner().binding_for_control("alpaca", sid)
+    except RunnerUnknownBotError as exc:
+        raise UnknownBotError(str(exc), detail=exc.detail, next_action="Choose a bot this account deployed.") from exc
+    try:
+        terms = await budget_deploy.sealed_exit_terms(account_id, sid)
+    except BudgetUnavailable as exc:
+        raise budget_deploy.budget_error(exc) from exc
+    return BotDeployPrefill(
+        source_strategy_instance_id=sid,
+        strategy_key=binding.strategy_key,
+        symbol=binding.symbol,
+        sizing=AlpacaPaperSizingSelection(
+            preset="safe_canary" if binding.quantity == 1 else "custom", quantity=binding.quantity,
+        ),
+        # `symbol` is deploy-authoritative, carried on its own field.
+        parameters={name: value for name, value in (binding.strategy_params or {}).items() if name != "symbol"},
+        exit_terms=(
+            None if terms is None or terms.exit_allowance_bps is None
+            else ExitTermsInput.model_validate(terms.model_dump(exclude={"provenance"}))
+        ),
+    )
 
 
 def _require_alpaca_deploy_request(

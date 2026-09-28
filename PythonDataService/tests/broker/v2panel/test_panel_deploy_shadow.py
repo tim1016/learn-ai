@@ -42,7 +42,7 @@ from app.services.strategy_validation_manifest import (
 )
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.broker.v2panel.conftest import _BODY, account_snapshot
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
 LIVE_ACCT = "9LIVE0001"
@@ -189,7 +189,7 @@ def test_real_paper_view_still_names_the_paper_account(monkeypatch: pytest.Monke
 
 
 def _request(execution_mode: str) -> AlpacaPaperDeployRequest:
-    return AlpacaPaperDeployRequest.model_validate({**_BODY, "execution_mode": execution_mode})
+    return AlpacaPaperDeployRequest.model_validate({**_SETTINGS, "execution_mode": execution_mode})
 
 
 def test_deploy_request_for_a_mode_the_view_does_not_offer_is_refused(
@@ -264,6 +264,7 @@ def _receipt(view: AlpacaPaperDeployView, execution_mode: str) -> AlpacaPaperDep
         broker="alpaca",
         view=view,
         request=request,
+        strategy_instance_id=SID,
         bot=_bot(),
         admission=_admission(),
         resolved_params=resolve_deploy_strategy_params(
@@ -325,7 +326,7 @@ async def test_live_account_with_no_shadow_world_is_still_refused(
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots",
-            json={**_BODY, "strategy_instance_id": SID},
+            json=_BODY,
         )
 
     assert response.status_code == 503

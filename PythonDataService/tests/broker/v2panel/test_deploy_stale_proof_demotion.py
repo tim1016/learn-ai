@@ -25,7 +25,7 @@ from app.services.strategy_validation_manifest import (
     strategy_registry_seeds,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.broker.v2panel.conftest import _BODY, _accepted_deploy_entry, _FakeDeployRegistry
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, _accepted_deploy_entry, _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import ACCT
 
 
@@ -351,7 +351,7 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
-            json={**_BODY, "strategy_key": "deployment_validation"},
+            json={**_SETTINGS, "strategy_key": "deployment_validation"},
         )
 
     assert response.status_code == 409

@@ -996,6 +996,101 @@
         "title": "AlpacaBotControlFixtureEnvelope",
         "type": "object"
       },
+      "AlpacaDeploySubmission": {
+        "additionalProperties": false,
+        "description": "One Deploy command: the settings plus the opaque key that makes it retry-safe.\n\n``submission_key`` is minted by the browser when the form opens. The same\nkey returns the same bot; a new key with identical settings is a second\nbot. ``replaces_strategy_instance_id`` is Deploy again's display-only\nlineage: it names the bot this one follows and grants it nothing.",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "carryover_policy": {
+            "default": "FORBID",
+            "enum": [
+              "FORBID",
+              "ALLOW"
+            ],
+            "title": "Carryover Policy",
+            "type": "string"
+          },
+          "evidence_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_mode": {
+            "default": "paper",
+            "enum": [
+              "paper",
+              "dry_run",
+              "shadow",
+              "live"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "exit_terms": {
+            "$ref": "#/components/schemas/ExitTermsInput"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "object"
+          },
+          "replaces_strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces Strategy Instance Id"
+          },
+          "sizing": {
+            "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
+          },
+          "strategy_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "submission_key": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Submission Key",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 12,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "exit_terms",
+          "symbol",
+          "submission_key"
+        ],
+        "title": "AlpacaDeploySubmission",
+        "type": "object"
+      },
       "AlpacaDeskStateResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1491,7 +1586,7 @@
       },
       "AlpacaPaperDeployRequest": {
         "additionalProperties": false,
-        "description": "Closed account-scoped command for the production Alpaca deploy page.",
+        "description": "What one Deploy asks for: the settings a preview judges and consent binds to.\n\nThe bot's name is not here. The backend authors it when the Deploy is\ncommitted (#2551), so a client that still sends ``strategy_instance_id``\nis refused with 422 rather than having its name silently ignored.",
         "properties": {
           "budget": {
             "anyOf": [
@@ -1543,12 +1638,6 @@
           "sizing": {
             "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
           },
-          "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
           "strategy_key": {
             "maxLength": 128,
             "minLength": 1,
@@ -1563,7 +1652,6 @@
           }
         },
         "required": [
-          "strategy_instance_id",
           "strategy_key",
           "exit_terms",
           "symbol"
@@ -4434,6 +4522,53 @@
         "title": "BotCrashDiagnostic",
         "type": "object"
       },
+      "BotDeployPrefill": {
+        "additionalProperties": false,
+        "description": "Deploy again: the sealed settings of one earlier bot, never its money or consent.",
+        "properties": {
+          "exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTermsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "sizing": {
+            "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
+          },
+          "source_strategy_instance_id": {
+            "title": "Source Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_strategy_instance_id",
+          "strategy_key",
+          "symbol",
+          "sizing",
+          "parameters"
+        ],
+        "title": "BotDeployPrefill",
+        "type": "object"
+      },
       "BotDutyOutcomeView": {
         "additionalProperties": false,
         "description": "Durable terminal duty evidence rendered by the operator surface.",
@@ -6555,6 +6690,20 @@
             "title": "Explanation",
             "type": "string"
           },
+          "first_deployed_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Deployed At Ms"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -6572,10 +6721,6 @@
             "title": "Outcome",
             "type": "string"
           },
-          "panel_path": {
-            "title": "Panel Path",
-            "type": "string"
-          },
           "receipt_id": {
             "title": "Receipt Id",
             "type": "string"
@@ -6586,6 +6731,17 @@
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
+          },
+          "replaces_strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces Strategy Instance Id"
           },
           "run_id": {
             "title": "Run Id",
@@ -6628,8 +6784,7 @@
           "committed_usd",
           "message",
           "explanation",
-          "next_action",
-          "panel_path"
+          "next_action"
         ],
         "title": "BudgetDeployCommandReceipt",
         "type": "object"
@@ -13918,6 +14073,22 @@
       "DeploymentBudgetPreview": {
         "additionalProperties": false,
         "properties": {
+          "bot_name_note": {
+            "default": "The bot is named at Deploy.",
+            "title": "Bot Name Note",
+            "type": "string"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
           "confirmation_text": {
             "anyOf": [
               {
@@ -13930,8 +14101,15 @@
             "title": "Confirmation Text"
           },
           "custody_account_id": {
-            "title": "Custody Account Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custody Account Id"
           },
           "detail": {
             "title": "Detail",
@@ -14047,8 +14225,7 @@
         "required": [
           "state",
           "detail",
-          "world",
-          "custody_account_id"
+          "world"
         ],
         "title": "DeploymentBudgetPreview",
         "type": "object"
@@ -52755,7 +52932,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
+                "$ref": "#/components/schemas/AlpacaDeploySubmission"
               }
             }
           },
@@ -52791,7 +52968,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Deploy one Clerk-governed Alpaca paper bot (\u00a75)",
+        "summary": "Deploy one Clerk-governed Alpaca bot, named by the backend (\u00a75, #2551)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -53987,9 +54164,9 @@
         ]
       }
     },
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-prefill": {
       "get": {
-        "operationId": "read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get",
+        "operationId": "read_deploy_prefill_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_prefill_get",
         "parameters": [
           {
             "in": "path",
@@ -54040,7 +54217,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                  "$ref": "#/components/schemas/BotDeployPrefill"
                 }
               }
             },
@@ -54057,7 +54234,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Read Deployment Command Scoped",
+        "summary": "Deploy again: one earlier bot's sealed settings, never its money or consent",
         "tags": [
           "broker-v2-panel"
         ]
@@ -54688,6 +54865,83 @@
         "summary": "Account-scoped alias of the bot run history",
         "tags": [
           "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/deploy-submissions/{submission_key}": {
+      "get": {
+        "operationId": "read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+              "title": "Submission Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recover what one Deploy submission recorded, by its key",
+        "tags": [
+          "broker-v2-panel"
         ]
       }
     },
@@ -57919,10 +58173,10 @@
         ]
       }
     },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-prefill": {
       "get": {
-        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).",
-        "operationId": "fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get",
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-prefill (deploy).",
+        "operationId": "fleet_bot_deploy_prefill_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_prefill_get",
         "parameters": [
           {
             "in": "path",
@@ -57997,7 +58251,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Fleet Bot Deploy Command Read",
+        "summary": "Fleet Bot Deploy Prefill Read",
         "tags": [
           "broker-clerks"
         ]
@@ -60121,6 +60375,90 @@
           }
         },
         "summary": "Fleet Custody Transaction Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/deploy-submissions/{submission_key}": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/deploy-submissions/{submission_key} (bot_panel_read).",
+        "operationId": "fleet_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__deploy_submissions__submission_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_key",
+            "required": true,
+            "schema": {
+              "title": "Submission Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Deploy Submission Read",
         "tags": [
           "broker-clerks"
         ]

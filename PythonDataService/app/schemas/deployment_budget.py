@@ -161,7 +161,14 @@ class DeploymentBudgetPreview(BaseModel):
     state: Literal["ready", "unavailable", "awaiting_price"]
     detail: str
     world: AuthorityKind
-    custody_account_id: str
+    # The account whose money this budget comes from. ``None`` for Dry Run:
+    # its simulated cash lives in the bot's own ``sim:`` account, which is
+    # named from the bot at Deploy, so no real account number applies (H18).
+    custody_account_id: str | None = None
+    # How the bot will be named -- the backend names it at Deploy (#2551).
+    bot_name_note: str = "The bot is named at Deploy."
+    # The previewed amount as Python normalizes it: what Deploy sets aside.
+    budget_usd: str | None = None
     observed_at_ms: EpochMs | None = None
     minimum_budget_usd: str | None = None
     unreserved_usd: str | None = None
@@ -210,6 +217,7 @@ class BudgetDeployCommandReceipt(BaseModel):
     receipt_id: str
     recorded_at_ms: EpochMs
     command_id: str
+    # The backend-authored bot name (#2551); a pre-#2551 bot keeps its own.
     strategy_instance_id: str
     run_id: str
     account_id: str
@@ -218,7 +226,11 @@ class BudgetDeployCommandReceipt(BaseModel):
     message: str
     explanation: str
     next_action: str
-    panel_path: str
+    # When the Deploy was first claimed; ``None`` for a bot deployed before
+    # names were backend-authored, which has no submission record.
+    first_deployed_at_ms: EpochMs | None = None
+    # Deploy again's display-only lineage: the bot this one follows.
+    replaces_strategy_instance_id: str | None = None
 
 
 class BudgetAuthorityState(BaseModel):

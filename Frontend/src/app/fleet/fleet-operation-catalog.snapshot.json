@@ -87,9 +87,14 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/decision-evidence",
       "requires_account": true
     },
-    "bot_deploy_command_read": {
+    "bot_deploy_prefill_read": {
       "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/deploy-command",
+      "path_template": "/accounts/{account_id}/bots/{sid}/deploy-prefill",
+      "requires_account": true
+    },
+    "bot_deploy_submission_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/deploy-submissions/{submission_key}",
       "requires_account": true
     },
     "bot_evidence": {

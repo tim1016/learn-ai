@@ -58,7 +58,9 @@ from app.schemas.deployment_budget import (
     MoneyParts,
     MoneySegment,
 )
+from app.schemas.exit_terms import ExitTerms
 from app.services.bot_runner import UnknownBotError, get_bot_task_registry
+from app.services.broker_v2_panel.deploy_submissions import DeploySubmissionLedger, bot_name_note
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.market_liveness import prepared_top_of_book
 
@@ -80,9 +82,14 @@ def _primary(account_id: str) -> ActiveClerkRuntime:
     return runtime
 
 
-def _request_world(runtime: ActiveClerkRuntime, request: AlpacaPaperDeployRequest) -> tuple[AuthorityKind, str]:
+def _request_world(runtime: ActiveClerkRuntime, request: AlpacaPaperDeployRequest) -> tuple[AuthorityKind, str | None]:
+    """The world this Deploy trades in, and the real account whose money it uses.
+
+    Dry Run uses none: its simulated cash lives in the bot's own ``sim:``
+    account, which is named from the bot only when the Deploy is committed.
+    """
     if request.execution_mode == "dry_run":
-        return "synthetic", synthetic_account_id_for_strategy(request.strategy_instance_id)
+        return "synthetic", None
     world = runtime.account_authority_kind
     offered = {"real_paper": "paper", "real_live": "live", "shadow": "shadow"}
     if world not in offered or offered[world] != request.execution_mode:
@@ -91,18 +98,19 @@ def _request_world(runtime: ActiveClerkRuntime, request: AlpacaPaperDeployReques
 
 
 def request_fingerprint(request: AlpacaPaperDeployRequest, *, custody_account_id: str, world: AuthorityKind) -> str:
-    payload = request.model_dump(mode="json")
-    if payload["budget"] is not None:
-        payload["budget"].pop("review_token", None)
-        # The separately checked typed phrase proves the final click. It is
-        # not part of the draft token, which is available before typing.
-        payload["budget"].pop("live_confirmation", None)
-    return canonical_sha256({"account": custody_account_id, "world": world, "request": payload})
+    """What consent binds to: the settings, the world and this lane's custody account.
+
+    ``custody_account_id`` is the lane's own custody account in every world,
+    Dry Run included -- the Dry Run's private account does not exist until
+    the bot is named, after the preview this fingerprint is issued from.
+    """
+    return canonical_sha256({"account": custody_account_id, "world": world, "request": request.content()})
 
 
 def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict) -> DeploymentBudgetPreview:
     runtime = _primary(account_id)
     world, custody_id = _request_world(runtime, request)
+    name_note = bot_name_note(request.symbol, request.strategy_key)
     repo = runtime.sqlite_repository
     assert repo is not None
     now = repo.clock()
@@ -113,7 +121,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             # a later snapshot, so the client re-checks instead of giving up.
             return DeploymentBudgetPreview(
                 state="awaiting_price", detail="Wait for a fresh IBKR price for this instrument, then review the budget.",
-                world=world, custody_account_id=custody_id,
+                world=world, custody_account_id=custody_id, bot_name_note=name_note,
             )
         requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         minimum = cents_required(requirement)
@@ -173,7 +181,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             registration = _STRATEGY_REGISTRY.get(request.strategy_key)
             contract = None if registration is None else registration.signal_program_contract
             token = canonical_sha256({
-                "request": request_fingerprint(request, custody_account_id=custody_id, world=world),
+                "request": request_fingerprint(request, custody_account_id=runtime.selected_account_id, world=world),
                 "resolved_parameters": resolved_parameters,
                 "program_version": None if contract is None else contract.program_version,
             })
@@ -181,7 +189,8 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                 confirmation = f"DEPLOY {account_id} ${dollars(amount)}"
         return DeploymentBudgetPreview(
             state="ready", detail="This is an entry-admission budget. Market fills and losses can exceed it.",
-            world=world, custody_account_id=custody_id, observed_at_ms=observed_at,
+            world=world, custody_account_id=custody_id, bot_name_note=name_note,
+            budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
             minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
             estimated_price_usd=display_dollars(normalize_money(quote.ask)), risk_revision=risk_revision,
             risk_limits_summary=risk_summary,
@@ -189,7 +198,9 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             money_after=money_after,
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
-        return DeploymentBudgetPreview(state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id)
+        return DeploymentBudgetPreview(
+            state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
+        )
 
 
 def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict) -> DeployBudgetConsent:
@@ -202,7 +213,10 @@ def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resol
     return DeployBudgetConsent(
         committed_cents=consent_cents(budget.amount_usd), risk_revision=budget.risk_revision,
         actor=get_broker_configuration_service().owner().owner_id,
-        request_fingerprint=request_fingerprint(request, custody_account_id=preview.custody_account_id, world=preview.world), world=preview.world,
+        request_fingerprint=request_fingerprint(
+            request, custody_account_id=_primary(account_id).selected_account_id, world=preview.world,
+        ),
+        world=preview.world,
     )
 
 
@@ -243,35 +257,66 @@ def _recoverable_dry_run(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
     return runtime
 
 
-async def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest | None = None) -> BudgetDeployCommandReceipt | None:
+async def sealed_exit_terms(account_id: str, sid: str) -> ExitTerms | None:
+    """The exit terms ``sid`` was deployed with, from the authority that custodies it."""
     async with _deployment_runtime(account_id, sid) as runtime:
-        return _command_receipt(runtime, account_id, sid, request)
+        repo = runtime.sqlite_repository
+        assert repo is not None
+        return repo.exit_terms(sid)
 
 
-def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str, request: AlpacaPaperDeployRequest | None) -> BudgetDeployCommandReceipt | None:
+async def command_receipt(account_id: str, sid: str) -> BudgetDeployCommandReceipt | None:
+    """The recorded outcome of ``sid``'s Deploy, or ``None`` when none was committed."""
+    async with _deployment_runtime(account_id, sid) as runtime:
+        return _command_receipt(runtime, account_id, sid)
+
+
+async def submission_receipt(account_id: str, submission_key: str) -> BudgetDeployCommandReceipt | None:
+    """The recovery read: what one Deploy submission recorded, by its key.
+
+    ``None`` when the key named no bot, or named one whose Deploy was never
+    committed -- nothing was set aside and nothing started.
+    """
+    registry = get_bot_task_registry()
+    submission = None if registry is None else DeploySubmissionLedger(registry.artifacts_root).by_key(submission_key)
+    return None if submission is None else await command_receipt(account_id, submission.strategy_instance_id)
+
+
+#: The receipt's words per outcome. Honest on a first read and on every
+#: recovery read alike, so no copy claims a replay (H12).
+_RECEIPT_COPY: dict[str, tuple[str, str]] = {
+    "deployed": ("{sid} is deployed", "{money} is set aside for it."),
+    "pending": ("{sid} is committed; its launch is not confirmed yet",
+                "{money} is set aside for it. Check again in a moment; checking never starts a second bot."),
+    "failed": ("{sid} did not launch", "Nothing is running. Its budget is released."),
+}
+
+
+def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str) -> BudgetDeployCommandReceipt | None:
     repo = runtime.sqlite_repository
     assert repo is not None
     with repo.write_fence():
         row = repo.deployment_budget(sid)
         if row is None:
             return None
-        if request is not None:
-            fingerprint = request_fingerprint(request, custody_account_id=repo.account_id, world=row["world"])
-            if fingerprint != row["request_fingerprint"]:
-                raise BudgetUnavailable("This deployment identity already has different consent. Use a fresh deployment identity.")
         command = repo.get_command(row["command_id"])
         if command is None:
             raise BudgetUnavailable("Deployment command evidence is unavailable. Resolve custody recovery before continuing.")
     state = "failed" if command.state == "failed" else ("deployed" if row["launched_at_ms"] is not None else "pending")
+    committed = dollars(row["committed_cents"])
+    money = f"${committed} of simulated cash" if row["world"] == "synthetic" else f"${committed}"
+    message, explanation = _RECEIPT_COPY[state]
+    registry = get_bot_task_registry()
+    submission = None if registry is None else DeploySubmissionLedger(registry.artifacts_root).by_name(sid)
     return BudgetDeployCommandReceipt(
         status=state, outcome={"failed": "failure", "deployed": "success", "pending": "pending"}[state],
         receipt_id=command.command_id, command_id=command.command_id, recorded_at_ms=command.updated_at_ms,
         strategy_instance_id=sid, run_id=row["run_id"], account_id=account_id, world=row["world"],
-        committed_usd=dollars(row["committed_cents"]),
-        message={"failed": "Deployment failed", "deployed": "Deployment launch recorded", "pending": "Deployment committed; launch pending"}[state],
-        explanation="The stored deployment result is returned unchanged. Current running and custody state are shown on the bot panel.",
-        next_action="Open the bot panel to see current status and retained obligations.",
-        panel_path=f"/brokers/alpaca/accounts/{account_id}/bots/{sid}",
+        committed_usd=committed,
+        message=message.format(sid=sid), explanation=explanation.format(money=money),
+        next_action="Open the bot's page to watch it trade." if state != "failed" else "Deploy again when the cause is fixed.",
+        first_deployed_at_ms=None if submission is None else submission.first_deployed_at_ms,
+        replaces_strategy_instance_id=None if submission is None else submission.replaces_strategy_instance_id,
     )
 
 

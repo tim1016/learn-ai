@@ -70,7 +70,6 @@ def test_a_live_request_passes_the_mode_offer_check(monkeypatch: pytest.MonkeyPa
     strategy = next(s for s in view.strategies if s.selectable)
     request = AlpacaPaperDeployRequest(
         exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
-        strategy_instance_id="ema-live-1",
         strategy_key=strategy.strategy_key,
         symbol="SPY",
         execution_mode="live",
@@ -103,6 +102,7 @@ def _receipt(
         broker="alpaca",
         view=view,
         request=request,
+        strategy_instance_id=SID,
         bot=_bot(),
         admission=_admission(),
         resolved_params=resolve_deploy_strategy_params(

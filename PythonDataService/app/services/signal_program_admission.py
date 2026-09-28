@@ -92,7 +92,16 @@ class ProgramBuildQualificationManifest(BaseModel):
 
 
 class SignalProgramSealError(ValueError):
-    """A new instance cannot produce a complete semantic v2 seal."""
+    """A new instance cannot produce a complete semantic v2 seal.
+
+    The message is the owner-facing cause; ``next_step`` its remedy when the
+    cause names one (H11: an unreadable validation store must say so, never
+    be reported as a missing seal).
+    """
+
+    def __init__(self, cause: str, *, next_step: str | None = None) -> None:
+        super().__init__(cause)
+        self.next_step = next_step
 
 
 def build_start_program_seal(
@@ -137,7 +146,9 @@ def build_start_program_seal(
     if binding.sealed_account_id is None:
         raise SignalProgramSealError("Signal Program seal requires an exact account identity")
     if validation.event_id is None or validation.evidence_snapshot_sha256 is None:
-        raise SignalProgramSealError("Signal Program seal requires immutable validation evidence")
+        # The validation fact already names why it has no event: that is the
+        # cause the owner can act on, not the seal it prevents.
+        raise SignalProgramSealError(validation.explanation, next_step=validation.next_step)
 
     requested = binding.strategy_params or {}
     validated = registration.param_schema.model_validate({**requested, "symbol": binding.symbol})
@@ -215,6 +226,25 @@ def build_start_program_seal(
         validation_event_id=validation.event_id,
         validation_snapshot_sha256=validation.evidence_snapshot_sha256,
         sealed_at_ms=binding.created_at_ms,
+    )
+
+
+def unsealed_program_build(
+    program_key: str,
+    verified_at_ms: int,
+    failure: SignalProgramSealError,
+) -> ProgramBuildAdmissionFact:
+    """The build fact for a new instance whose program could not be sealed.
+
+    Carries the seal failure's own cause instead of the generic "no complete
+    v2 seal", which described a symptom and sent owners to re-qualify code
+    that was fine (H11).
+    """
+    return _unproven(
+        program_key,
+        verified_at_ms,
+        explanation=f"This bot's program could not be prepared to start: {failure}",
+        **({"next_step": failure.next_step} if failure.next_step else {}),
     )
 
 
@@ -623,4 +653,5 @@ __all__ = [
     "record_imported_program_sources",
     "running_artifact_digest",
     "running_wiring_digest",
+    "unsealed_program_build",
 ]

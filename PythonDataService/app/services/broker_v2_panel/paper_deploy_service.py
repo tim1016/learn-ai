@@ -884,6 +884,7 @@ def build_alpaca_paper_deploy_receipt(
     broker: str,
     view: AlpacaPaperDeployView,
     request: AlpacaPaperDeployRequest,
+    strategy_instance_id: str,
     bot: BotStatusView,
     admission: RunAdmissionDecision,
     resolved_params: ResolvedDeployParams,
@@ -905,13 +906,13 @@ def build_alpaca_paper_deploy_receipt(
     return AlpacaPaperDeployReceipt(
         status="deployed",
         receipt_id=(
-            f"alpaca-{lane_world}-deploy:{view.account_id}:{request.strategy_instance_id}:{bot.binding_created_at_ms}"
+            f"alpaca-{lane_world}-deploy:{view.account_id}:{strategy_instance_id}:{bot.binding_created_at_ms}"
         ),
         recorded_at_ms=bot.binding_created_at_ms,
-        message=f"{request.strategy_instance_id} is on duty in {copy.duty}.",
+        message=f"{strategy_instance_id} is on duty in {copy.duty}.",
         explanation=copy.explanation,
         next_action=copy.next_action,
-        panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{request.strategy_instance_id}"),
+        panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{strategy_instance_id}"),
         account_id=view.account_id,
         execution_mode=request.execution_mode,
         sizing=request.sizing,

@@ -43,6 +43,7 @@ from app.services.signal_program_admission import (
     SignalProgramSealError,
     build_start_program_seal,
     prove_running_program_build,
+    unsealed_program_build,
 )
 from app.services.strategy_validation_admission import (
     ValidationFactResolver,
@@ -546,6 +547,7 @@ class BotStartAdmission:
                 # after that await so newer market-clock evidence cannot look
                 # as though it came from the future.
                 observed_at_ms = self._now_ms()
+                seal_failure: SignalProgramSealError | None = None
                 if binding.sealed_program is None:
                     try:
                         sealed_program = build_start_program_seal(
@@ -553,12 +555,13 @@ class BotStartAdmission:
                             validation,
                             parameter_origins=binding.strategy_param_origins,
                         )
-                    except SignalProgramSealError:
-                        sealed_program = None
+                    except SignalProgramSealError as exc:
+                        sealed_program, seal_failure = None, exc
                     binding = binding.model_copy(update={"sealed_program": sealed_program})
-                program_build = prove_running_program_build(
-                    binding,
-                    verified_at_ms=observed_at_ms,
+                program_build = (
+                    unsealed_program_build(binding.strategy_key, observed_at_ms, seal_failure)
+                    if seal_failure is not None
+                    else prove_running_program_build(binding, verified_at_ms=observed_at_ms)
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
                 facts = StartRunFacts(
