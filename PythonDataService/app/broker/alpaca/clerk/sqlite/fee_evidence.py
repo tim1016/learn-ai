@@ -53,6 +53,8 @@ class FeeEvidenceFacts(BaseModel):
     delivery, or an economically different copy of a known identity (which
     the projection treats as a conflict). The window facts describe the whole
     read, so coverage never depends on re-recording rows already retained.
+    A read either starts at the newest activity (``page_token`` absent) or
+    continues an unfinished walk from the provider cursor it names.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -62,25 +64,45 @@ class FeeEvidenceFacts(BaseModel):
     # Oldest dated row anywhere in the read's newest-first window.
     oldest_occurred_at_ms: int | None
     history_complete: bool
+    page_token: str | None
+    next_page_token: str | None
 
 
 @dataclass(frozen=True)
-class _EvidenceReach:
+class _EvidenceWindow:
     """How far back the recorded reads proved the activity history."""
 
     oldest_ms: int | None
     complete: bool
+    # Where the unfinished newest-first history walk continues.
+    cursor: str | None
 
     def covers(self, day: date) -> bool:
         return self.complete or (self.oldest_ms is not None and self.oldest_ms < et_midnight_ms(day))
 
 
-def _evidence_reach(snapshots: Sequence[FeeEvidenceFacts]) -> _EvidenceReach:
-    """A day once proven covered stays covered: reach only ever extends."""
-    return _EvidenceReach(
-        min((row.oldest_occurred_at_ms for row in snapshots if row.oldest_occurred_at_ms is not None), default=None),
-        any(row.history_complete for row in snapshots),
-    )
+def _evidence_window(snapshots: Sequence[FeeEvidenceFacts]) -> _EvidenceWindow:
+    """Reach proven by newest-first reads and the one walk linked to them.
+
+    A head read starts at the newest activity; an unfinished one roots the
+    walk when none is in progress. A continuation counts only when it resumed
+    exactly at the retained cursor, so the walk stays contiguous with its
+    head. Reach only ever extends: a day once proven covered stays covered.
+    """
+    oldest: int | None = None
+    complete = False
+    cursor: str | None = None
+    for snapshot in snapshots:
+        if snapshot.page_token is None:
+            cursor = snapshot.next_page_token if cursor is None else cursor
+        elif snapshot.page_token == cursor:
+            cursor = snapshot.next_page_token
+        else:
+            continue
+        complete = complete or snapshot.history_complete
+        if snapshot.oldest_occurred_at_ms is not None:
+            oldest = snapshot.oldest_occurred_at_ms if oldest is None else min(oldest, snapshot.oldest_occurred_at_ms)
+    return _EvidenceWindow(oldest, complete, None if complete else cursor)
 
 
 def _recorded_evidence(conn: sqlite3.Connection) -> list[FeeEvidenceFacts]:
@@ -98,19 +120,27 @@ def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> Non
     FeeEvidenceFacts.model_validate_json(payload["facts_json"])
 
 
+def fee_evidence_cursor(repo: ClerkSqliteRepository) -> str | None:
+    """The provider cursor the history walk resumes from, or ``None`` when none is due."""
+    with repo._write_lock:
+        return _evidence_window(_recorded_evidence(repo._conn)).cursor
+
+
 def record_fee_evidence(
     repo: ClerkSqliteRepository,
     activities: Sequence[BrokerActivity],
     *,
     checked_at_ms: int,
     history_complete: bool = False,
+    page_token: str | None = None,
+    next_page_token: str | None = None,
 ) -> bool:
-    """Record what one successful read adds, then stamp producer freshness.
+    """Record what one successful read adds; a head read stamps freshness.
 
     Only rows no earlier record retained are appended, with the window facts
-    coverage needs. An unchanged read appends nothing: like the account
-    observation's cash freshness, liveness is this process's latest read
-    time, not a custody fact. Returns whether custody grew.
+    coverage needs. A read that adds neither rows nor reach appends nothing:
+    like the account observation's cash freshness, liveness is this process's
+    latest head-read time, not a custody fact. Returns whether custody grew.
     """
     if repo.account_id.startswith(("sim:", "shadow:")):
         raise ValueError("simulated custody cannot record real broker fee activities")
@@ -133,8 +163,10 @@ def record_fee_evidence(
                 (row.occurred_at_ms for row in activities if row.occurred_at_ms is not None), default=None
             ),
             history_complete=history_complete,
+            page_token=page_token,
+            next_page_token=next_page_token,
         )
-        grows = not recorded or bool(new_rows) or _evidence_reach([*recorded, facts]) != _evidence_reach(recorded)
+        grows = not recorded or bool(new_rows) or _evidence_window([*recorded, facts]) != _evidence_window(recorded)
         if grows:
             repo.append_transition(
                 TransitionInput(
@@ -147,7 +179,8 @@ def record_fee_evidence(
                     facts_json=canonicalize(facts.model_dump(mode="json")),
                 )
             )
-        repo._fee_evidence_checked_at_ms = checked_at_ms
+        if page_token is None:
+            repo._fee_evidence_checked_at_ms = checked_at_ms
     return grows
 
 
@@ -258,7 +291,7 @@ def custody_fee_attribution(
         conn, simulated_fill_cutoff_ms=simulated_fill_cutoff_ms
     )
     snapshots = [] if simulated else _recorded_evidence(conn)
-    reach = _evidence_reach(snapshots)
+    window = _evidence_window(snapshots)
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
     undated: dict[str, BrokerActivity] = {}
     # Recorded order keeps each activity's first observation, so repeated
@@ -364,7 +397,7 @@ def custody_fee_attribution(
             fills=grouped[day],
             charges=fees,
             population_complete=population_complete and day not in conflicting,
-            activities_complete=simulated or reach.covers(day),
+            activities_complete=simulated or window.covers(day),
             simulated=simulated,
             session_ended=day < et_date_at_ms(now_ms),
             settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),

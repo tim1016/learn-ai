@@ -223,6 +223,87 @@ async def test_background_producer_uses_completion_proof_without_ui(day_pnl_repo
     assert day_pnl_repo.fee_attribution(now_ms=NOON).known
 
 
+class _PagedHistory:
+    """Newest-first provider history read like the adapter: 3 pages of 100."""
+
+    def __init__(self, rows: list[BrokerActivity]) -> None:
+        self.rows = rows
+        self.tokens: list[str | None] = []
+
+    async def read_activity_evidence(self, *, page_token: str | None = None):
+        from app.broker.contract.models import BrokerActivityEvidence
+
+        self.tokens.append(page_token)
+        start = 0 if page_token is None else [row.activity_id for row in self.rows].index(page_token) + 1
+        read: list[BrokerActivity] = []
+        for _ in range(3):
+            page = self.rows[start:start + 100]
+            read.extend(page)
+            if len(page) < 100:
+                return BrokerActivityEvidence(activities=read, history_complete=True)
+            start += 100
+        return BrokerActivityEvidence(activities=read, history_complete=False, next_page_token=read[-1].activity_id)
+
+
+async def test_busy_account_backfills_to_its_oldest_fill_day_instead_of_bricking(day_pnl_repo) -> None:
+    """More than 300 newer activities once made an old fill day uncoverable (#2550).
+
+    Every head read is the newest 300 rows, so the yesterday fill day was never
+    covered and every deploy/ENTER was refused forever. The producer now walks
+    the rest of history from the cursor custody retained, one bounded read a
+    tick, and stays fail-closed until that walk passes the fill day.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _seed(repo)
+    today = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 1_000) for index in range(900)]
+    older = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(100)]
+    history = _PagedHistory([*today, *older])
+    known = []
+    for sync in (FeeEvidenceSync(repo=repo, read=history),) * 2 + (FeeEvidenceSync(repo=repo, read=history),):
+        await sync.tick()
+        known.append(repo.fee_attribution(now_ms=NOON).known)
+    assert known == [False, False, True]
+    # A fresh producer (restart) resumes from the retained cursor.
+    assert history.tokens == [None, "row-299", None, "row-599", None, "row-899"]
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert history.tokens[-1:] == [None] and repo.fee_attribution(now_ms=NOON).known
+
+
+async def test_backfill_keeps_an_uncovered_fill_day_fail_closed(day_pnl_repo) -> None:
+    """Relevant days stay refused until a linked read reaches them."""
+    repo = day_pnl_repo
+    _seed(repo)
+    head = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 1_000) for index in range(300)]
+    assert record_fee_evidence(repo, head, checked_at_ms=NOON, next_page_token="row-299")
+    assert not repo.fee_attribution(now_ms=NOON).known
+    # A read that did not resume at the retained cursor proves no contiguity.
+    stray = _activity("stray", "CSD", YESTERDAY_NOON - 86_400_000)
+    record_fee_evidence(repo, [stray], checked_at_ms=NOON, history_complete=True, page_token="not-the-cursor")
+    assert not repo.fee_attribution(now_ms=NOON).known
+    # The linked continuation covers the day; later heads never uncover it.
+    assert record_fee_evidence(repo, [stray], checked_at_ms=NOON, page_token="row-299", next_page_token="stray")
+    assert repo.fee_attribution(now_ms=NOON).known
+    record_fee_evidence(repo, head, checked_at_ms=NOON + 15_000, next_page_token="row-299")
+    assert repo.fee_attribution(now_ms=NOON + 15_000).known
+
+
+async def test_guard_refuses_to_answer_a_continuation_with_the_newest_rows() -> None:
+    from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.contract.errors import BrokerEvidenceUnavailable
+
+    class NewestOnly:
+        async def list_activities(self, **_kwargs: object) -> list[BrokerActivity]:
+            return []
+
+    guarded = guard_broker_read_port(NewestOnly(), intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+    assert not (await guarded.read_activity_evidence()).history_complete
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await guarded.read_activity_evidence(page_token="older")
+
+
 def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:
     record_fee_evidence(day_pnl_repo, [], checked_at_ms=NOON + 1, history_complete=True)
     result = day_pnl_repo.fee_attribution(now_ms=NOON)

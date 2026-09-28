@@ -91,9 +91,11 @@ class BrokerActivityEvidencePort(Protocol):
     Adapters that implement it let the fee-evidence sync claim provable
     ``history_complete``; a plain ``BrokerReadPort`` without it falls back to
     the bounded ``list_activities`` read, which never claims completeness.
+    ``page_token`` resumes a previous read's ``next_page_token`` so a busy
+    account's history is walked in bounded steps instead of never.
     """
 
-    async def read_activity_evidence(self) -> BrokerActivityEvidence: ...
+    async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence: ...
 
 
 @runtime_checkable

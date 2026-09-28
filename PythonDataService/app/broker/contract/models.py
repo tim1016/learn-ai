@@ -270,10 +270,13 @@ class BrokerActivityEvidence(_ContractModel):
 
     ``history_complete`` is true only when a provider returned a short final
     page. A consumer must not infer it from the filtered activity list's length.
+    ``next_page_token`` continues an unfinished newest-first walk exactly where
+    this read stopped; it is absent when complete or the provider gave none.
     """
 
     activities: list[BrokerActivity]
     history_complete: bool
+    next_page_token: str | None = None
 
 
 class PortfolioHistoryRange(StrEnum):

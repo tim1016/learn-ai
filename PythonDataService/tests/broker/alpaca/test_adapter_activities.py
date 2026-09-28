@@ -185,6 +185,25 @@ async def test_activity_evidence_never_claims_completion_at_page_bound(
     assert not evidence.history_complete
     assert len(evidence.activities) == 300
     assert client.page_tokens == [None, "first-99", "second-99"]
+
+
+async def test_activity_evidence_resumes_an_unfinished_walk_where_it_stopped(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """A bounded read hands back its cursor so older history is reachable (#2550)."""
+    _, non_trade = load_alpaca_fixture("activities", "activities.json")
+    pages = {None: [{**non_trade, "id": f"first-{i}"} for i in range(100)],
+        "first-99": [{**non_trade, "id": f"second-{i}"} for i in range(100)],
+        "second-99": [{**non_trade, "id": f"third-{i}"} for i in range(100)],
+        "third-99": [{**non_trade, "id": "oldest"}]}
+    client = _ActivitiesClient(pages)
+    broker = AlpacaBroker(client=client)
+    head = await broker.read_activity_evidence()
+    assert not head.history_complete and head.next_page_token == "third-99"
+    rest = await broker.read_activity_evidence(page_token=head.next_page_token)
+    assert rest.history_complete and rest.next_page_token is None
+    assert [row.activity_id for row in rest.activities] == ["oldest"]
+    assert client.page_tokens == [None, "first-99", "second-99", "third-99"]
 async def test_transfer_cursor_reads_every_page_until_the_window_is_complete(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:

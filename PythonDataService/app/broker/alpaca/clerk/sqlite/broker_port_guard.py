@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.contract.capabilities import BrokerCapabilities
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -92,11 +93,18 @@ class GuardedBrokerReadPort:
             **activity_filter,
         )
 
-    async def read_activity_evidence(self) -> BrokerActivityEvidence:
+    async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence:
         self._assert_unfenced("read_activity_evidence")
         reader = getattr(self._inner, "read_activity_evidence", None)
         if callable(reader):
-            return await reader()
+            return await reader(page_token=page_token)
+        if page_token is not None:
+            # The fallback can only read the newest rows; answering a
+            # continuation with them would fake a contiguous history walk.
+            raise BrokerEvidenceUnavailable(
+                "The broker cannot continue an activity history walk.",
+                detail="Its read port has no paged activity evidence.",
+            )
         return BrokerActivityEvidence(
             activities=await self._inner.list_activities(after_ms=0, limit=100),
             history_complete=False,
