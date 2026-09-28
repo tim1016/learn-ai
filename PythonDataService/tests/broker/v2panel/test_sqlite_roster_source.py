@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -1007,6 +1008,95 @@ async def test_catalog_fails_closed_after_bounded_revision_contention(
         await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
 
     assert attempts == 2
+
+
+class _ThreadRecordingRepository(_Repository):
+    """Records the thread each of Home's blocking roster reads runs on."""
+
+    def __init__(self) -> None:
+        self.read_threads: dict[str, list[threading.Thread]] = {
+            "bots_holding_money": [],
+            "latest_run_stops": [],
+        }
+
+    def bots_holding_money(self) -> frozenset[str]:
+        self.read_threads["bots_holding_money"].append(threading.current_thread())
+        return super().bots_holding_money()
+
+    def latest_run_stops(self) -> dict[str, int | None]:
+        self.read_threads["latest_run_stops"].append(threading.current_thread())
+        return super().latest_run_stops()
+
+
+class _CatalogCustodyReader:
+    @classmethod
+    def from_facade(cls, _received: SimpleNamespace) -> _CatalogCustodyReader:
+        return cls()
+
+    def bot_snapshot(self, strategy_instance_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            account_id="paper-account",
+            strategy_instance_id=strategy_instance_id,
+            authority_generation=7,
+            control_revision=42,
+            holds=(),
+            uncertainties=(),
+            authority_health="healthy",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _CatalogEconomicReader:
+    @classmethod
+    def from_repository(cls, _received: _Repository) -> _CatalogEconomicReader:
+        return cls()
+
+    def catalog_economic_rollup(
+        self,
+        strategy_instance_ids: tuple[str, ...],
+        *,
+        session_window: SessionWindow | None,
+    ) -> dict[str, EconomicSnapshot]:
+        return _economic_rollup_map("paper-account", list(strategy_instance_ids))
+
+    def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["active_authority", "explicit_facade"])
+async def test_catalog_reads_homes_roster_facts_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entry: str,
+) -> None:
+    """Review F2 (#2571): Home polls the catalog every 5 s per open tab.
+
+    The holding set is the fill-lineage claims scan and the latest run stops
+    another write-locked query; both are blocking, so neither catalog entry
+    point may run them on the event loop thread.
+    """
+    loop_thread = threading.current_thread()
+    repository = _ThreadRecordingRepository()
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+
+    if entry == "active_authority":
+        monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+        monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
+        monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_economic_rollups", _economic_rollups)
+        rows = await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
+    else:
+        monkeypatch.setattr(sqlite_panel_source, "SqliteClerkProjectionReader", _CatalogCustodyReader)
+        monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _CatalogEconomicReader)
+        monkeypatch.setattr(sqlite_panel_source, "current_trading_session_window", lambda _now: None)
+        rows = await sqlite_panel_source.read_sqlite_catalog_from_facade("alpaca", facade)
+
+    assert rows is not None
+    assert [row.strategy_instance_id for row in rows] == ["active-spy", "retired-qqq"]
+    for read, threads in repository.read_threads.items():
+        assert threads, f"the catalog never read {read}"
+        assert all(thread is not loop_thread for thread in threads), f"{read} ran on the event loop"
 
 
 @pytest.mark.asyncio

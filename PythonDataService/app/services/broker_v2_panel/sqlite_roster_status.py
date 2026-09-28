@@ -160,10 +160,6 @@ class RosterMembership:
     inert_terminal: frozenset[str]
     """Retired registrations with no live custody — see :func:`roster_membership`."""
 
-    holding_money: frozenset[str] = frozenset()
-    """Bots with position cost or still-claimed money: a stopped one is
-    holding, not finished (``budget_projection.bots_holding_money``)."""
-
     @property
     def with_live_custody(self) -> list[str]:
         """The identities whose rows must be projected in full, in order."""
@@ -205,7 +201,6 @@ def roster_membership(repository: ClerkSqliteRepository) -> RosterMembership:
     return RosterMembership(
         identities=identities,
         inert_terminal=frozenset(inert_terminal),
-        holding_money=repository.bots_holding_money(),
     )
 
 

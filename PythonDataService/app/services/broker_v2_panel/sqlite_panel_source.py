@@ -688,7 +688,7 @@ async def read_sqlite_catalog(
         # their ids would read every bot's lifecycle file twice per request
         # (again per coherence retry); the fenced pass below builds each row
         # exactly once, at a revision it can vouch for.
-        membership = roster_membership(facade.repository)
+        membership = await asyncio.to_thread(roster_membership, facade.repository)
         strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
@@ -715,24 +715,15 @@ async def read_sqlite_catalog(
                 raise SqliteCatalogRevisionMismatch(
                     "SQLite catalog has no economic revision to bind lifecycle identity."
                 )
-            statuses = _bound_roster_statuses(
+            rows = await asyncio.to_thread(
+                _bind_catalog_rows,
                 facade,
                 broker,
-                account_id=first_snapshot.account_id,
-                authority_generation=first_snapshot.authority_generation,
-                control_revision=first_snapshot.control_revision,
-                inert_terminal=membership.inert_terminal,
-            )
-            if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
-                raise SqliteCatalogRevisionMismatch(
-                    "SQLite roster membership changed during catalog projection."
-                )
-            rows = build_sqlite_catalog(
-                statuses,
-                projections,
-                economic_rollups=economic_rollups,
                 account_id=account_id,
-                home=_catalog_home(facade, membership),
+                membership=membership,
+                projections=projections,
+                economic_rollups=economic_rollups,
+                fence=first_snapshot,
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
@@ -742,12 +733,52 @@ async def read_sqlite_catalog(
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
-def _catalog_home(facade: SqliteAlpacaClerkFacade, membership: RosterMembership) -> CatalogHomeFacts:
-    """What places one authority's roster rows on its account's Home."""
+def _bind_catalog_rows(
+    facade: SqliteAlpacaClerkFacade,
+    broker: str,
+    *,
+    account_id: str,
+    membership: RosterMembership,
+    projections: dict[str, ClerkProjection],
+    economic_rollups: dict[str, EconomicSnapshot],
+    fence: EconomicSnapshot,
+) -> list[BotCatalogView]:
+    """Bind one projection cut to the roster's lifecycle rows and Home facts.
+
+    Raises ``SqliteCatalogRevisionMismatch`` when the roster moved under the
+    cut, for the caller's coherence retry. Blocking: every row's lifecycle,
+    the holding set's fill-lineage claims scan and the latest run stops are
+    SQLite reads under the write lock, so callers run it off the event loop
+    (a Home tab polls the catalog every 5 s).
+    """
+    statuses = _bound_roster_statuses(
+        facade,
+        broker,
+        account_id=fence.account_id,
+        authority_generation=fence.authority_generation,
+        control_revision=fence.control_revision,
+        inert_terminal=membership.inert_terminal,
+    )
+    if [status.strategy_instance_id for status in statuses] != membership.identities:
+        raise SqliteCatalogRevisionMismatch(
+            "SQLite roster membership changed during catalog projection."
+        )
+    return build_sqlite_catalog(
+        statuses,
+        projections,
+        economic_rollups=economic_rollups,
+        account_id=account_id,
+        home=_catalog_home(facade),
+    )
+
+
+def _catalog_home(facade: SqliteAlpacaClerkFacade) -> CatalogHomeFacts:
+    """What places one authority's roster rows on its account's Home. Blocking."""
+    repository = facade.repository
     return CatalogHomeFacts(
         world=authority_kind_for_account(facade.account_id, account_mode=facade.account_mode),
-        holding_money=membership.holding_money,
-        latest_stops=facade.repository.latest_run_stops(),
+        holding_money=repository.bots_holding_money(),
+        latest_stops=repository.latest_run_stops(),
     )
 
 
@@ -764,7 +795,7 @@ async def read_sqlite_catalog_from_facade(
     """
     account_id = facade.account_id
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
-        membership = roster_membership(facade.repository)
+        membership = await asyncio.to_thread(roster_membership, facade.repository)
         strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
@@ -804,24 +835,15 @@ async def read_sqlite_catalog_from_facade(
                 "SQLite catalog has no economic revision to bind lifecycle identity."
             )
         try:
-            statuses = _bound_roster_statuses(
+            rows = await asyncio.to_thread(
+                _bind_catalog_rows,
                 facade,
                 broker,
-                account_id=first_snapshot.account_id,
-                authority_generation=first_snapshot.authority_generation,
-                control_revision=first_snapshot.control_revision,
-                inert_terminal=membership.inert_terminal,
-            )
-            if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
-                raise SqliteCatalogRevisionMismatch(
-                    "SQLite roster membership changed during catalog projection."
-                )
-            rows = build_sqlite_catalog(
-                statuses,
-                projections,
-                economic_rollups=economic_rollups,
                 account_id=account_id,
-                home=_catalog_home(facade, membership),
+                membership=membership,
+                projections=projections,
+                economic_rollups=economic_rollups,
+                fence=first_snapshot,
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
@@ -1086,12 +1108,13 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
 
     The same roster status the catalog builds -- so a crashed bot whose run
     row is stuck ACTIVE is stopped here exactly as it is there -- the same
-    holding set (``roster_membership``) and the same ``bot_group``. A retired
+    holding set (``bots_holding_money``) and the same ``bot_group``. A retired
     registration with no live custody is the catalog's inert row (#1911) and
     is skipped. A bot whose lifecycle cannot be read is kept, ungrouped: a
     bad bot never hides its siblings. Blocking: callers run it off the loop.
     """
     membership = roster_membership(repository)
+    holding = repository.bots_holding_money()
     stops = repository.latest_run_stops()
     bots: list[HomeRosterBot] = []
     for registration in repository.strategy_instances():
@@ -1114,7 +1137,7 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
             symbol=status.symbol,
             group=bot_group(
                 world=bot_world(world, status.mode), running=status.running,
-                holds_money=sid in membership.holding_money,
+                holds_money=sid in holding,
             ),
             unclean_ended_at_ms=ended_at_ms(status, latest_stop_ms=stops.get(sid)) if unclean else None,
         ))
