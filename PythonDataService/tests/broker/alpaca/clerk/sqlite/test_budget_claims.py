@@ -106,6 +106,35 @@ def test_canceled_order_without_fills_does_not_invent_missing_population(day_pnl
     assert custody_fee_attribution(repo._conn, now_ms=NOON).known
 
 
+def test_first_tiny_broker_fill_is_retained_instead_of_becoming_zero(day_pnl_repo) -> None:
+    repo = day_pnl_repo
+    accepted = _accept_day_pnl_enter(repo, decision_id="tiny-total")
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
+    order = filled_order(accepted.order_ref).model_copy(update={"status": "canceled", "filled_quantity": 1e-10})
+    fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=order)
+    assert repo.latest_reported_filled_quantity(accepted.order_ref) == 1e-10
+    assert not custody_fee_attribution(repo._conn, now_ms=NOON).known
+    _append_slice(repo, accepted, execution_id="tiny-exact", quantity=1e-10, source_event_at_ms=NOON, fee=0)
+    assert custody_fee_attribution(repo._conn, now_ms=NOON).known
+
+
+@pytest.mark.parametrize("prior,current", [(1, 1.0000000001), (1.0000000001, 1)])
+def test_same_state_broker_quantity_changes_are_retained_exactly(day_pnl_repo, prior: float, current: float) -> None:
+    repo = day_pnl_repo
+    accepted = _accept_day_pnl_enter(repo, decision_id="tiny-change")
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
+    _append_slice(repo, accepted, execution_id="exact-one", quantity=1, source_event_at_ms=NOON, fee=0)
+    order = filled_order(accepted.order_ref).model_copy(update={"filled_quantity": prior})
+    fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=order)
+    restated = order.model_copy(update={"filled_quantity": current})
+    fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=restated)
+    assert repo.latest_reported_filled_quantity(accepted.order_ref) == current
+    assert custody_fee_attribution(repo._conn, now_ms=NOON).known == (current == 1)
+    after = repo.custody_transitions()
+    fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=restated)
+    assert repo.custody_transitions() == after
+
+
 def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Path) -> None:
     repo = _new_budget_repo(tmp_path)
     try:

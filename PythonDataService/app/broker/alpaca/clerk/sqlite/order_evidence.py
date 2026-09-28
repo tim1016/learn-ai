@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 
+from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     SIMULATED_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
@@ -603,7 +604,7 @@ def fold_order_acknowledgement(
     assert order_ref is not None
     latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
     reported_filled_quantity = (
-        order.filled_quantity if order.filled_quantity >= FILL_QTY_EPSILON else None
+        order.filled_quantity if normalize_money(order.filled_quantity) > 0 else None
     )
     # The broker's cumulative is recorded on the acknowledgement (#2305) and
     # the shortfall read keys on the latest one, so a snapshot reporting a
@@ -615,8 +616,11 @@ def fold_order_acknowledgement(
     reported_differs = (reported_filled_quantity is None) != (latest_reported is None) or (
         reported_filled_quantity is not None
         and latest_reported is not None
-        and abs(reported_filled_quantity - latest_reported) >= FILL_QTY_EPSILON
+        and normalize_money(reported_filled_quantity) != normalize_money(latest_reported)
     )
+    # This is evidence capture, not a numerical equivalence verdict. Dropping
+    # a small positive total or restatement could make missing debit evidence
+    # look complete to the money authority. Historical rows stay unchanged.
     ack_changed = latest_ack is None or (
         latest_ack["broker_order_id"] != order.order_id
         or latest_ack["broker_state"] != order.status

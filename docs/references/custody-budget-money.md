@@ -37,6 +37,9 @@ contains its debit. Broker acknowledgements with missing execution quantity
 make fee population and new spending unknown, including tiny fractional-share
 gaps; zero-fill cancellations remain complete. The governing acknowledgement
 and effective correction lineage are reused, with no admission epsilon.
+New order acknowledgements retain every positive reported cumulative quantity
+and every changed finite quantity exactly after normalization, including
+same-state/time corrections. Existing custody hashes are never rewritten.
 
 Pending entry fee quotes price only the unfilled remainder at the original
 reference price and quote date, through the canonical regulatory model. Filled
