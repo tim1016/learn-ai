@@ -100,7 +100,7 @@ def live_arming_admission_fact(
                 "The arming ledger or the ALPACA_LIVE_* environment for this account does not "
                 "verify; the detail is in the service log."
             ),
-            next_step="Review Budget authority upgrade in Configuration; historical permission cannot be renewed.",
+            next_step="Switch this account to budgets in Settings; historical permission cannot be renewed.",
             observed_at_ms=observed_at_ms,
         )
     status = arming.statuses[binding.strategy_instance_id]

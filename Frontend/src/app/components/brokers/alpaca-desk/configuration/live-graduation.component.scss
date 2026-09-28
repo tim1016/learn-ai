@@ -1,5 +1,4 @@
 @use './configuration-controls' as controls;
-@use '../../../../styles/eyebrow-heading' as *;
 
 :host {
   display: block;
@@ -18,20 +17,17 @@
 }
 
 .graduation__header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
 }
 
-.graduation__header h2 {
+.graduation__header h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
 }
 
-.graduation__header p:not(.graduation__eyebrow),
+.graduation__header p,
 .graduation__state p,
 .graduation__restart p {
   max-width: 48rem;
@@ -39,20 +35,6 @@
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   line-height: 1.5;
-}
-
-.graduation__eyebrow {
-  @include eyebrow-heading;
-  margin: 0 0 var(--space-1);
-}
-
-.graduation__account {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
 }
 
 .authority-rail {

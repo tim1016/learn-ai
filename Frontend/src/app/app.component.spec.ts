@@ -59,7 +59,7 @@ describe('AppComponent', () => {
           { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
           // The workspace's own URLs, stubbed: these specs grade the window
           // title the shell computes from them, not what the tabs render.
-          { path: 'brokers/alpaca/clerks/:clerkId/configuration', component: ShellSmokeRouteComponent },
+          { path: 'brokers/alpaca/clerks/:clerkId/settings', component: ShellSmokeRouteComponent },
           { path: 'brokers/alpaca/clerks/:clerkId/bots', component: ShellSmokeRouteComponent },
           {
             path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
@@ -200,7 +200,7 @@ describe('AppComponent', () => {
       [WORKSPACE, 'Overview · Paper'],
       [`${WORKSPACE}/bots`, 'Bots · Paper'],
       [`${WORKSPACE}/gallery`, 'Gallery · Paper'],
-      [`${LANE}/configuration`, 'Configuration · Paper'],
+      [`${LANE}/settings`, 'Settings · Paper'],
       [`${LANE}/bots`, 'Bots · Paper'],
     ])('names what is open and the account it is open on: %s', async (url, expected) => {
       // ADR 0064 Decision 6. "Paper" here is the account's NAME — the lane's

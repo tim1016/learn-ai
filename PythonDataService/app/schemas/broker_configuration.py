@@ -626,6 +626,9 @@ class AccountRiskStateResponse(_Response):
     applied_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     entry_state: Literal["ready", "held", "unknown"]
     detail: str
+    # No limit is set at all, so setting one is the fix and re-reading cannot
+    # settle an `unknown` state; otherwise it waits on account evidence.
+    limit_missing: bool
     hold_loss_limit_usd: float | None = None
     hold_session_start_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     hold_policy_revision: int | None = None

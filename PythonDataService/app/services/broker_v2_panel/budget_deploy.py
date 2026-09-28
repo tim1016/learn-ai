@@ -57,7 +57,7 @@ def _primary(account_id: str) -> ActiveClerkRuntime:
     runtime = get_active_clerk_runtime()
     custody_id = None if runtime is None else runtime.selected_account_id
     if runtime is None or custody_id is None or canonical_alpaca_account_id(custody_id.removeprefix("shadow:")) != canonical_alpaca_account_id(account_id):
-        raise BudgetUnavailable("This account's custody authority is unavailable. Activate it in Configuration.")
+        raise BudgetUnavailable("This account's custody authority is unavailable. Activate it in Settings.")
     if runtime.sqlite_repository is None:
         raise BudgetUnavailable("Wait for this account's custody recovery to finish.")
     return runtime
@@ -110,17 +110,17 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
         else:
             with repo.write_fence():
                 if repo.budget_authority_version() < 2:
-                    raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
+                    raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
                 sync = runtime.envelope_sync
                 if sync is None:
-                    raise BudgetUnavailable("Wait for account cash and risk observations in Configuration.")
+                    raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
                 risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
                 if not risk.allowed:
                     raise BudgetUnavailable(risk.detail)
                 snapshot = sync.risk_snapshot()
                 observation = risk.observation
                 if observation is None or snapshot.policy is None:
-                    raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
+                    raise BudgetUnavailable("Set a daily loss limit in Settings and wait for fresh cash and risk evidence.")
                 projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
                 available = projection.unreserved_cents
                 observed_at = observation.observed_at_ms

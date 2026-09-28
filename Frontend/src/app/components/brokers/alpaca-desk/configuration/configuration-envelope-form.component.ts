@@ -5,7 +5,7 @@ import { ENVELOPE_LABELS, type RevisionDraft } from './configuration-revision-dr
 
 /**
  * Profile startup loss defaults and extended-hours offsets. Effective account
- * loss limits change only through Apply risk limits; existing deployments keep
+ * loss limits change only through Settings' Daily loss limit; existing deployments keep
  * their immutable exit terms. New fields stay empty until explicitly chosen.
  * The shared offset fields preserve typed values when the endpoint switches.
  */
