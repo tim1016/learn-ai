@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.account_risk import fold_account_risk_policy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     FILL_QTY_EPSILON,
@@ -1585,6 +1586,7 @@ def _fold_exit_terms_sealed(conn: sqlite3.Connection, payload: dict[str, Any]) -
     fold_exit_terms(conn, payload["strategy_instance_id"], ExitTerms.model_validate_json(payload["facts_json"]))
 
 
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_RISK_LIMITS_APPLIED", fold_account_risk_policy)
 DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_SEALED", _fold_exit_terms_sealed)
 DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_UPGRADE_COMPLETED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)

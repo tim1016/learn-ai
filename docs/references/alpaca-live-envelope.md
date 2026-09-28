@@ -395,3 +395,20 @@ post-observation fills), the simulated-custody cash subtraction, withdrawal on
 a missing `last_equity`, an external order or a breach (R-A′), the sync as the
 loss hold's sole raiser that never releases it, and every ENTER-time refusal
 staying transient at the runner.
+
+## Immediate risk edits and retained loss windows (#2543, 2026-09-27)
+
+The effective loss policy is now the last explicit account risk Apply in Clerk
+custody; the original profile/arming payloads remain historical. The loss formula
+is unchanged. A held period is evaluated with the same canonical FIFO projection,
+from the hold's recorded session start through the fresh observation, using its
+original dollar limit. This prevents a new session or raised baseline from
+forgiving a standing loss. No second P&L engine is introduced.
+
+The independent retained-window fixture is the existing deterministic round trip
+of 10 shares bought at 100 USD and sold at 110 USD in the prior session. Retaining
+that session yields 100 USD realized and, with a 25 USD current unrealized mark,
+125 USD total. `test_retained_hold_window_keeps_yesterdays_realized_result` pins
+absolute tolerance 1e-9, relative tolerance zero to the existing float FIFO.
+Policy revision, apply/clear races, unknown facts, rollover, restart and mirror
+rebuild are tested in `tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py`.

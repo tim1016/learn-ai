@@ -186,6 +186,7 @@ class AccountObservation:
     last_equity_usd: float | None
     unrealized_pl_usd: float
     position_count: int
+    risk_revision: int | None = None
 
     @property
     def fills_seen_before_ms(self) -> int:
@@ -240,7 +241,7 @@ class LiveEnvelopeGate:
     def __init__(
         self,
         *,
-        values: LiveEnvelopeValues,
+        values: LiveEnvelopeValues | None,
         sealed: LiveEnvelopeValues | None = None,
         custody_is_simulated: bool,
         observation_max_age_ms: int = OBSERVATION_MAX_AGE_MS,
@@ -253,7 +254,7 @@ class LiveEnvelopeGate:
 
     @property
     def agreement(self) -> EnvelopeAgreement:
-        return envelope_agreement(self.values, self.sealed)
+        return "unsealed" if self.values is None else envelope_agreement(self.values, self.sealed)
 
     @property
     def in_force(self) -> LiveEnvelopeValues:
@@ -278,7 +279,10 @@ class LiveEnvelopeGate:
         *about* the configured half: ``agreement`` (does the environment still
         match what was armed?) and the arming snapshot's own disagreement check.
         """
-        return self.values if self.sealed is None else self.sealed
+        values = self.values if self.sealed is None else self.sealed
+        if values is None:
+            raise LiveEnvelopeIncomplete("No historical live envelope is configured")
+        return values
 
     @property
     def in_force_is_sealed(self) -> bool:
@@ -300,6 +304,10 @@ class LiveEnvelopeGate:
         bounding one against a figure that only *looks* fresh.
         """
         self._observation = None
+
+    @property
+    def observation_max_age_ms(self) -> int:
+        return self._max_age_ms
 
     def latest_observation(self) -> AccountObservation | None:
         return self._observation

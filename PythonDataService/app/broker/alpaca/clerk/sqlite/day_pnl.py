@@ -62,8 +62,11 @@ def day_pnl_at(
     *,
     observation: AccountObservation,
     now_ms: int,
+    retained_start_ms: int | None = None,
 ) -> DayPnl:
     day_start_ms, day_end_ms = et_day_window_ms(now_ms)
+    if retained_start_ms is not None:
+        day_start_ms = retained_start_ms
     attribution = reader.account_pnl_attribution(from_ms=day_start_ms, to_ms=now_ms)
     return DayPnl(
         day_start_ms=day_start_ms,

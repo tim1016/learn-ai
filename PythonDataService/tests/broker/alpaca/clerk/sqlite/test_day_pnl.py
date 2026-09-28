@@ -258,3 +258,16 @@ def test_an_unfoldable_order_resting_unchanged_since_yesterday_keeps_today_known
 
     pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
     assert pnl.unfoldable_orders_today == 0 and pnl.known
+
+
+def test_retained_hold_window_keeps_yesterdays_realized_result(
+    day_pnl_repo: ClerkSqliteRepository,
+    seeded_round_trip_closed_yesterday: None,
+    reader: SqliteEconomicProjectionReader,
+) -> None:
+    """#2543: independent hand calculation: 10 × (110 - 100) = 100 USD."""
+    start, _ = et_day_window_ms(YESTERDAY_NOON)
+    pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=25), now_ms=NOON, retained_start_ms=start)
+    assert pnl.day_start_ms == start
+    assert pnl.realized_usd == pytest.approx(100.0, abs=1e-9, rel=0)
+    assert pnl.total_usd == pytest.approx(125.0, abs=1e-9, rel=0)

@@ -29,7 +29,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
-from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
+from app.services.alpaca_live_envelope import clear_loss_hold
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
@@ -133,15 +133,11 @@ async def test_the_clear_judges_the_sealed_limit_not_a_loosened_configured_one(
     assert _hold(runtime.sqlite_repository) is not None
 
 
-async def test_a_re_arm_at_the_looser_envelope_is_what_lets_the_clear_release(
+async def test_a_looser_legacy_rearm_cannot_clear_the_original_loss_hold(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
     tmp_path: Path,
 ) -> None:
-    """The other half of the same rule: the CLI re-arm is the release path.
-
-    Without this the fix above could be "the hold can never clear once the
-    environment moved", which is a different bug.
-    """
+    """#2543: historical arming cannot erase the retained loss threshold."""
     runtime, broker = shadow_runtime
     assert runtime.envelope_sync is not None
     _arm(tmp_path)
@@ -153,9 +149,9 @@ async def test_a_re_arm_at_the_looser_envelope_is_what_lets_the_clear_release(
     _arm(tmp_path, envelope=loosened, armed_at_ms=NOW_MS + 1)
     cleared = await clear_loss_hold(runtime, now_ms=NOW_MS)
 
-    assert cleared.outcome == "cleared", cleared.detail
+    assert cleared.outcome == "refused", cleared.detail
     assert cleared.loss_limit_usd == pytest.approx(9_000.0)
-    assert _hold(runtime.sqlite_repository) is None
+    assert _hold(runtime.sqlite_repository) is not None
 
 
 async def test_the_clear_refuses_an_unknown_fact(
@@ -215,6 +211,6 @@ async def test_no_hold_is_reported_not_invented(
     assert (await clear_loss_hold(runtime, now_ms=NOW_MS)).outcome == "no_hold"
 
 
-async def test_a_runtime_without_an_envelope_cannot_clear(paper_runtime: ActiveClerkRuntime) -> None:
-    with pytest.raises(LiveEnvelopeNotInstalled):
-        await clear_loss_hold(paper_runtime, now_ms=NOW_MS)
+async def test_paper_uses_the_same_guarded_hold_surface(paper_runtime: ActiveClerkRuntime) -> None:
+    assert paper_runtime.envelope_sync is not None
+    assert (await clear_loss_hold(paper_runtime, now_ms=NOW_MS)).outcome == "no_hold"

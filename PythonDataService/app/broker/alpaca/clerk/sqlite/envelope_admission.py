@@ -62,7 +62,9 @@ def require_envelope_admission(
             "at arming; re-arm to change them.",
         )
     observation = envelope.fresh_observation(now_ms)
-    if observation is None:
+    policy = repo.account_risk_policy()
+    expected_revision = None if policy is None else policy.revision
+    if observation is None or observation.risk_revision != expected_revision:
         raise _refuse(
             LIVE_ENVELOPE_UNOBSERVED,
             "No fresh broker cash observation exists; the envelope cannot bound this ENTER yet.",

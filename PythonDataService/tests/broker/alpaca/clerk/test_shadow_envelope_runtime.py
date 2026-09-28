@@ -270,10 +270,10 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     assert refused.explanation.startswith("LIVE_ENVELOPE_UNOBSERVED:"), refused.explanation
 
 
-async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offered(
+async def test_paper_installs_the_same_account_risk_observation_gate(
     tmp_path: Path,
 ) -> None:
-    """The envelope is the live world's; a paper authority never composes one."""
+    """#2543: Paper and Live share the account loss policy authority."""
     broker = _Broker()
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST", artifacts_root=tmp_path
@@ -290,9 +290,9 @@ async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offere
         )
 
         assert runtime.authority_kind == "sqlite"
-        assert runtime.envelope_sync is None
+        assert runtime.envelope_sync is not None
         assert runtime.clerk is not None
-        assert runtime.clerk.live_envelope is None
+        assert runtime.clerk.live_envelope is runtime.envelope_sync.envelope
     finally:
         # A composed runtime owns this handle and closes it; if the selector
         # never returned one, the repository was opened before it and its

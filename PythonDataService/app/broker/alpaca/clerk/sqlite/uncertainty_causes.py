@@ -669,6 +669,7 @@ class LossHoldCause:
     loss_limit_usd: float
     last_equity_usd: float
     observed_at_ms: int
+    policy_revision: int | None = None
 
     def to_mapping(self) -> dict[str, Any]:
         return {
@@ -677,6 +678,7 @@ class LossHoldCause:
             "loss_limit_usd": self.loss_limit_usd,
             "last_equity_usd": self.last_equity_usd,
             "observed_at_ms": self.observed_at_ms,
+            **({"policy_revision": self.policy_revision} if self.policy_revision is not None else {}),
         }
 
     @classmethod
@@ -687,9 +689,12 @@ class LossHoldCause:
         # hold whose policy authorizes reductions, so an unrecognized extra
         # field has to fail closed rather than ride along as a familiar cause.
         _require_exact_keys(
-            value,
+            {key: item for key, item in value.items() if key != "policy_revision"},
             {"day_start_ms", "day_pnl_usd", "loss_limit_usd", "last_equity_usd", "observed_at_ms"},
         )
+        revision = value.get("policy_revision")
+        if revision is not None and (type(revision) is not int or revision < 1):
+            raise ValueError("loss hold policy revision must be positive")
         for field_name in ("day_start_ms", "observed_at_ms"):
             stamp = value[field_name]
             if not isinstance(stamp, int) or isinstance(stamp, bool) or stamp < 0:
@@ -700,6 +705,7 @@ class LossHoldCause:
             loss_limit_usd=_finite_number(value["loss_limit_usd"], field_name="loss_limit_usd"),
             last_equity_usd=_finite_number(value["last_equity_usd"], field_name="last_equity_usd"),
             observed_at_ms=value["observed_at_ms"],
+            policy_revision=revision,
         )
 
 

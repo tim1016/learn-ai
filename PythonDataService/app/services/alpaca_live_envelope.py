@@ -24,7 +24,6 @@ from typing import Literal
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import EnvelopeReading
-from app.broker.alpaca.clerk.sqlite.uncertainty import resolve_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.contract.errors import BrokerError
 from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
@@ -146,7 +145,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
             detail=_unjudgeable_detail(reading),
         )
-    limit_source = _SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT
+    limit_source = "effective account policy" if reading.policy_revision is not None else (_SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT)
     if reading.breached:
         return _from_reading(
             reading,
@@ -157,27 +156,13 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
                 f"{loss_limit_usd:.2f} USD loss limit {limit_source}. The hold stands."
             ),
         )
-    released = resolve_account_hold(
-        repo,
-        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-        summary_code=LIVE_ENVELOPE_LOSS_HOLD_CLEARED,
-    )
-    if not released:
-        return _from_reading(
-            reading,
-            outcome="no_hold",
-            reason_code=None,
-            detail="The hold was already released.",
-        )
+    outcome, detail = sync.clear_observed_loss_hold(reading)
     return _from_reading(
         reading,
-        outcome="cleared",
-        reason_code=None,
-        detail=(
-            f"Loss hold cleared: day P&L {day_pnl.total_usd:.2f} USD is above the "
-            f"{loss_limit_usd:.2f} USD loss limit {limit_source}. New entries are "
-            "admitted again."
-        ),
+        outcome="refused" if outcome in {"unknown", "held"} else outcome,
+        reason_code=(LIVE_ENVELOPE_UNOBSERVED if outcome == "unknown" else
+                     LIVE_ENVELOPE_LOSS_HOLD_STANDS if outcome == "held" else None),
+        detail=detail,
     )
 
 

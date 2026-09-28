@@ -31,11 +31,12 @@ arrives.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
@@ -49,11 +50,12 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
 from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, resolve_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
@@ -101,12 +103,21 @@ class EnvelopeReading:
     # the four reasons the two figures above can be absent -- and the operator
     # surface that reports "unknown" has to name the right one.
     seal_readable: bool = True
+    policy_revision: int | None = None
 
     @property
     def breached(self) -> bool | None:
         if self.day_pnl is None or not self.day_pnl.known or self.loss_limit_usd is None:
             return None
         return loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
+
+
+@dataclass(frozen=True)
+class AccountRiskSnapshot:
+    policy: AccountRiskPolicy | None
+    legacy_values: LiveEnvelopeValues | None
+    observation: AccountObservation | None
+    hold: LossHoldCause | None
 
 
 def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
@@ -126,6 +137,7 @@ def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
         loss_limit_usd=limit,
         last_equity_usd=last_equity,
         observed_at_ms=reading.observation.observed_at_ms,
+        policy_revision=reading.policy_revision,
     )
 
 
@@ -227,6 +239,7 @@ class LiveEnvelopeSync:
         # ``shadow:`` custody namespace -- and every figure on a log line here
         # is the former's. ``None`` until the first read returns.
         self._observed_account_id: str | None = None
+        self._last_reading: EnvelopeReading | None = None
 
     async def observe(self) -> EnvelopeReading:
         """One ledger read and one broker read → the day-P&L reading, and the gate's observation.
@@ -287,51 +300,129 @@ class LiveEnvelopeSync:
             unrealized_pl_usd=unrealized_pl_usd,
             position_count=len(positions),
         )
-        # Withholding both loss inputs is the whole treatment: ``breached`` is
-        # then None, the tick withdraws on the existing path, and no new
-        # refusal code has to exist for a broker that reported a NaN.
-        # ``_noted_non_finite`` is evaluated first and unconditionally: it
-        # deduplicates its own log against the previous observation, and
-        # short-circuiting it would make that log depend on the seal.
-        seal_readable = not self._seal_unreadable()
-        unjudgeable = (
-            self._noted_non_finite(
-                _non_finite_risk_fields(
-                    cash=account.cash,
-                    last_equity=account.last_equity,
-                    unrealized_pl=unrealized_pl_usd,
-                )
-            )
-            or not seal_readable
+        with self._repo._write_lock:
+            return self._evaluate_observation(observation, now_ms=returned_at_ms)
+
+    def _evaluate_observation(self, observation: AccountObservation, *, now_ms: int) -> EnvelopeReading:
+        """Rejudge current facts under the writer fence, using one effective policy."""
+        policy = self._repo.account_risk_policy()
+        revision = None if policy is None else policy.revision
+        observation = replace(observation, risk_revision=revision)
+        # Once explicit policy exists, the retired arming seal cannot override
+        # account risk. Until then Live keeps its historical policy intact.
+        readable = policy is not None or (
+            self.envelope.values is not None and not self._seal_unreadable()
         )
+        unjudgeable = self._noted_non_finite(_non_finite_risk_fields(
+            cash=observation.broker_cash_usd,
+            last_equity=observation.last_equity_usd,
+            unrealized_pl=observation.unrealized_pl_usd,
+        )) or not readable
+        values = policy if policy is not None else (self.envelope.in_force if readable else None)
         reading = EnvelopeReading(
-            observation=observation,
-            seal_readable=seal_readable,
-            day_pnl=(
-                None
-                if unjudgeable
-                else day_pnl_at(
-                    self._reader, self._repo, observation=observation, now_ms=returned_at_ms
-                )
+            observation=observation, seal_readable=readable, policy_revision=revision,
+            day_pnl=None if unjudgeable else day_pnl_at(
+                self._reader, self._repo, observation=observation, now_ms=now_ms,
             ),
-            loss_limit_usd=(
-                None
-                if unjudgeable or account.last_equity is None
-                # The sealed envelope's limit, falling back to the configured
-                # one only where nothing has ever been armed: raising the hold
-                # and clearing it are the same judgement and must read the same
-                # number, and neither may follow an unarmed environment edit.
-                # An account whose seal could not be *read* never reaches here
-                # -- it is unjudgeable above, because that fallback would be a
-                # relaxation.
-                else loss_limit_usd(self.envelope.in_force, last_equity_usd=account.last_equity)
+            loss_limit_usd=None if unjudgeable or observation.last_equity_usd is None else loss_limit_usd(
+                values, last_equity_usd=observation.last_equity_usd,
             ),
         )
         if reading.breached is False:
             self.envelope.publish(observation)
         else:
             self.envelope.withdraw()
+        self._last_reading = reading
         return reading
+
+    def risk_snapshot(self) -> AccountRiskSnapshot:
+        with self._repo._write_lock:
+            hold = self._repo.active_uncertainty(
+                scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+                strategy_instance_id=None,
+            )
+            return AccountRiskSnapshot(
+                policy=self._repo.account_risk_policy(),
+                legacy_values=self.envelope.in_force if self.envelope.values is not None else None,
+                observation=self.envelope.fresh_observation(self._repo.clock()),
+                hold=None if hold is None else LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"]),
+            )
+
+    def discard_observation(self) -> None:
+        with self._repo._write_lock:
+            self.envelope.withdraw()
+            self._last_reading = None
+
+    def apply_risk_policy(self, policy: AccountRiskPolicy, *, expected_revision: int) -> AccountRiskSnapshot:
+        """Commit and judge one Apply before another ENTER acquires the writer.
+
+        No network call occurs under the fence. Missing/stale evidence keeps
+        entries withdrawn, while the receipt honestly reports effective limits.
+        """
+        with self._repo._write_lock:
+            current = self._repo.account_risk_policy()
+            if (0 if current is None else current.revision) != expected_revision:
+                raise RiskRevisionConflict("Risk limits changed since review. Reload and review again.")
+            last = self._last_reading
+            self.envelope.withdraw()
+            append_risk_policy(self._repo, policy=policy, expected_revision=expected_revision)
+            if last is None or not 0 <= self._repo.clock() - last.observation.observed_at_ms <= self.envelope.observation_max_age_ms:
+                return self.risk_snapshot()
+            reading = self._evaluate_observation(last.observation, now_ms=self._repo.clock())
+            self._raise_loss_hold(reading)
+            return self.risk_snapshot()
+
+    def _raise_loss_hold(self, reading: EnvelopeReading) -> str | None:
+        if self._hold_stands():
+            return None
+        cause = _breach_cause(reading)
+        if cause is None:
+            return None
+        return raise_account_hold(
+            self._repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+            evidence_refs=[f"day-pnl:{cause.day_start_ms}"], cause_facts=cause.to_mapping(),
+        )
+
+    def clear_observed_loss_hold(self, reading: EnvelopeReading) -> tuple[str, str]:
+        """Prove current policy and the retained breach together, then resolve.
+
+        A rollover alone supplies no proof: the retained window starts at the
+        original session and keeps its original equity-derived dollar limit.
+        A subsequent recovery must make that cumulative window safe too.
+        """
+        with self._repo._write_lock:
+            current = self._repo.account_risk_policy()
+            revision = None if current is None else current.revision
+            if revision != reading.policy_revision or self.envelope.fresh_observation(self._repo.clock()) is None:
+                return "unknown", "The risk policy or observation changed. Refresh and clear again."
+            current_reading = self._evaluate_observation(reading.observation, now_ms=self._repo.clock())
+            if current_reading.breached is None:
+                return "unknown", "Current loss evidence cannot be judged. The hold stands."
+            if current_reading.breached:
+                return "held", "The current effective loss limit remains breached. The hold stands."
+            hold = self._repo.active_uncertainty(
+                scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+                strategy_instance_id=None,
+            )
+            if hold is None:
+                return "no_hold", "The hold was already released."
+            try:
+                cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
+            except (ValueError, TypeError, KeyError):
+                return "unknown", "The original loss-hold evidence is incomplete. The hold stands."
+            retained = day_pnl_at(
+                self._reader, self._repo, observation=reading.observation,
+                now_ms=self._repo.clock(), retained_start_ms=cause.day_start_ms,
+            )
+            if not retained.known or not math.isfinite(retained.total_usd):
+                return "unknown", "The original loss period cannot be judged. The hold stands."
+            if loss_breached(day_pnl_usd=retained.total_usd, loss_limit_usd=cause.loss_limit_usd):
+                return "held", "The loss still breaches the limit recorded when this hold began. The hold stands."
+            released = resolve_account_hold(
+                self._repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+                summary_code="LIVE_ENVELOPE_LOSS_HOLD_CLEARED",
+            )
+            return ("cleared", "Both the current policy and the retained loss period are safe. Loss hold cleared.") if released else ("no_hold", "The hold was already released.")
 
     def _seal_unreadable(self) -> bool:
         """Whether this observation could not read the account's arming inputs.
@@ -357,7 +448,7 @@ class LiveEnvelopeSync:
         of that method -- the cadence and the guarded operator clear alike --
         judges against the seal the ledger holds right now.
         """
-        if self._arming is None:
+        if self._arming is None or self.envelope.values is None:
             return
         self._assign_sealed(self._arming.refresh(self._repo.clock(), self.envelope.values))
 
@@ -414,30 +505,18 @@ class LiveEnvelopeSync:
             return self._acted("read_failed", {"why": str(exc)})
         if self._arming_gate is not None:
             self._arming_gate.release()
-        if self._hold_stands():
-            # A hold standing over an account that *also* cannot be judged is a
-            # different operator situation from one over a judgeable account:
-            # the second clears on the next guarded attempt, the first cannot
-            # be attempted at all. Same verdict, so the same action -- but the
-            # diagnosis rides along rather than being invisible.
-            return self._acted(
-                "hold_stands",
-                {}
-                if reading.breached is not None
-                else {"why": "the account is also unjudgeable", **_unknown_detail(reading)},
-            )
-        if reading.breached is None:
-            return self._acted("unknown", _unknown_detail(reading))
-        cause = _breach_cause(reading)
-        if cause is None:
-            return self._acted("observed", _observed_detail(reading))
-        outcome = raise_account_hold(
-            self._repo,
-            reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-            evidence_refs=[f"day-pnl:{cause.day_start_ms}"],
-            cause_facts=cause.to_mapping(),
-        )
-        return self._acted("hold_raised", {"outcome": outcome, **cause.to_mapping()})
+        with self._repo._write_lock:
+            # An Apply can finish during the broker read. Rejudge inside the
+            # same fence as ENTER before raising the durable cause.
+            reading = self._evaluate_observation(reading.observation, now_ms=self._repo.clock())
+            if self._hold_stands():
+                return self._acted("hold_stands", {} if reading.breached is not None else {"why": "the account is also unjudgeable", **_unknown_detail(reading)})
+            if reading.breached is None:
+                return self._acted("unknown", _unknown_detail(reading))
+            outcome = self._raise_loss_hold(reading)
+            if outcome is None:
+                return self._acted("observed", _observed_detail(reading))
+            return self._acted("hold_raised", {"outcome": outcome})
 
     def _noted_non_finite(self, fields: tuple[str, ...]) -> bool:
         """Log a changed non-finite verdict, and say whether one stands.

@@ -37,6 +37,7 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, read_account_risk_policy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     AtomicDecisionReceipt,
     append_atomic_decision_receipt_row,
@@ -247,6 +248,11 @@ class ClerkSqliteRepository(
         # sequence, and append_transition (called from inside that sequence)
         # takes it again from the same thread — must not deadlock.
         self._write_lock = threading.RLock()
+
+    def account_risk_policy(self) -> AccountRiskPolicy | None:
+        """The effective, replayable policy; call inside admission's writer fence."""
+        with self._write_lock:
+            return read_account_risk_policy(self._conn)
 
     @property
     def account_id(self) -> str:

@@ -47,7 +47,7 @@ from app.broker.alpaca.clerk.live_authority import (
     InstanceSealsForAccount,
     select_live_clerk_runtime,
 )
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate, LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
     activate_shadow_clerk_authority,
@@ -270,6 +270,7 @@ async def select_active_clerk_runtime(
             account_mode=account.account_mode,
             artifacts_root=artifacts_root,
             verify_activation=_verify_paper_activation,
+            live_envelope=LiveEnvelopeGate(values=live_envelope_values, custody_is_simulated=False),
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
@@ -298,6 +299,7 @@ async def select_active_clerk_runtime(
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        envelope_sync=composed.envelope_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=composed.repository,
             intake=composed.facade.intake,

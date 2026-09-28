@@ -394,7 +394,7 @@ class SqliteAlpacaClerkFacade:
         immutable custody seal through ``exit_policy_for_instance``.
         """
         policy = self._program_leg_policy
-        if self._live_envelope is not None:
+        if self._live_envelope is not None and self._live_envelope.values is not None:
             values = self._live_envelope.in_force
             return replace(policy, allowance_refusal=None, allowances=ExtendedHoursAllowances(
                 entry_bps=Decimal(str(values.xh_entry_bps)), exit_bps=None,

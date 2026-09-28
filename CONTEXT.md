@@ -540,7 +540,11 @@ so they survive a broker change.
 - **Loss hold** — the account-wide state entered when day P&L breaches the
   daily loss limit, in which every ENTER on the account is refused and every
   EXIT still runs until a guarded operator action clears it. It does not clear
-  at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
+  at session rollover or when limits are loosened. It retains its original policy,
+  baseline and loss period until fresh evidence satisfies both that hold and the
+  current account limits. _Avoid_: kill switch, freeze, halt, circuit breaker
+- **Effective account risk policy** — the loss limits explicitly applied to the
+  account. Draft edits have no effect; existing bot exit terms remain fixed.
 - **Day P&L** — Clerk-projected realized session P&L plus broker-observed
   unrealized P&L. It is unknown, not zero, when an external order was seen
   today, when the broker reports no previous-close equity, or when marks are

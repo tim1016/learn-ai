@@ -270,3 +270,12 @@ A new feature lands in this repo in roughly this order:
 This doc answers "which engine should I extend / which engine owns this job?" One row per engine path, coarse, ~20 rows.
 
 The two documents are deliberately at different levels of granularity. A coarse engine map plus a granular concept registry is enough metadata for one developer to make consistent decisions over time. Anything more would be ceremony.
+
+Account risk amendment (#2543, 2026-09-27): `sqlite/account_risk.py` owns the
+replayable effective loss policy; `sqlite/live_envelope_sync.py` judges and
+publishes it under the custody coordinator. Paper and Live share this authority.
+`sqlite/day_pnl.py` also evaluates a standing hold’s retained loss period through
+the same FIFO projection. Explicit clearance requires both current and retained
+limits. Profile drafts, legacy arming seals and per-instance ExitTerms do not
+replace this effective account policy. See ADR 0060’s dated amendment and
+`tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py`.

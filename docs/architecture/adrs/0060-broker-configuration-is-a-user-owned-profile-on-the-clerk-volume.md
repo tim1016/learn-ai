@@ -173,3 +173,33 @@ supersedes account-level EXIT pricing with immutable registration terms,
 introduces profile v4 defaults and the acknowledged manual band override,
 and exposes the existing arming ceremony through the Live UI. Entry allowance
 semantics and the IBKR-data/Alpaca-orders boundary remain unchanged.
+
+### 2026-09-27 amendment — immediate account risk limits (#2543)
+
+For account loss limits only, **Apply risk limits** replaces Decision 4's
+restart/re-arm rule. A reviewed policy revision is committed through the existing
+Clerk custody transition and mirror, with its effective profile reference and
+server-resolved actor. That replayable projection is the single effective risk
+policy; saved profile content remains immutable historical configuration.
+Profile identity, credentials, endpoint changes and their selection handover keep
+the existing controls. Old profile hashes and arming payloads are never rewritten.
+
+Apply, observation publication, ENTER and guarded hold clearance use the same
+custody write coordinator and effective policy revision. Tightening immediately
+withdraws entry permission and raises the existing hold when fresh evidence
+breaches the new threshold. Unknown evidence remains blocked. Draft edits do
+nothing. Paper and Live use this same policy and observation implementation.
+
+A standing hold retains the original policy revision, session start, equity
+baseline and derived dollar threshold. Clear requires fresh evidence safe under
+both the current session policy and the original hold's retained period. After
+rollover, that retained period spans the original session start through the new
+observation; rollover or a larger equity baseline cannot erase the original loss.
+An external/unresolved execution in that window makes clearance unknown. The
+explicit Clear loss hold action remains available in Configuration. Loosening a
+limit, applying it, restarting, and legacy re-arming never clear the hold.
+
+Immutable per-instance ExitTerms remain the sole exit pricing authority; risk
+changes do not replace working orders or mutate those seals. This amendment
+supersedes the loss-limit and exit-pricing claims in Decision 4 wherever they
+conflict with #2543 and ADR 0045's immutable ExitTerms.
