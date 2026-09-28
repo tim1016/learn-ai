@@ -209,6 +209,8 @@ async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_
     try:
         assert runtime.authority_kind == "sqlite", runtime.startup_failure
         assert runtime.clerk.live_arming is None
+        # Fee freshness belongs to this process's producer, as at a real boot.
+        assert runtime.fee_sync is not None and not await runtime.fee_sync.tick()
         assert await runtime.envelope_sync.tick() == "observed"
         assert runtime.envelope_sync.risk_snapshot().observation is not None
         assert not broker.submissions

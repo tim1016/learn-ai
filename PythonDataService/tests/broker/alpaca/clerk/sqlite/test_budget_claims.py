@@ -11,7 +11,7 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, 
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
-from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution, record_fee_evidence
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
@@ -88,13 +88,13 @@ def test_missing_legacy_terminal_execution_is_unknown_until_reconciled(
         "status": status, "quantity": 10, "filled_quantity": reported, "filled_avg_price": 100,
         "updated_at_ms": NOON, "observed_at_ms": NOON,
     }))
-    fees = custody_fee_attribution(repo._conn, now_ms=NOON)
+    fees = repo.fee_attribution(now_ms=NOON)
     assert not fees.known
     with pytest.raises(BudgetUnavailable, match="fill coverage"):
         repo.account_budget(cash=1000, seen_before_ms=NOON + 1)
     _append_slice(repo, accepted, execution_id="late-legacy-fill",
                   quantity=float(Decimal(str(reported)) - Decimal(str(recorded))), source_event_at_ms=NOON, fee=0)
-    assert custody_fee_attribution(repo._conn, now_ms=NOON).known
+    assert repo.fee_attribution(now_ms=NOON).known
     assert repo.account_budget(cash=1000, seen_before_ms=NOON + 1).available == 1000
 
 
@@ -104,7 +104,7 @@ def test_canceled_order_without_fills_does_not_invent_missing_population(day_pnl
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
     fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id,
         order=filled_order(accepted.order_ref).model_copy(update={"status": "canceled", "filled_quantity": 0}))
-    assert custody_fee_attribution(repo._conn, now_ms=NOON).known
+    assert repo.fee_attribution(now_ms=NOON).known
 
 
 def test_first_tiny_broker_fill_is_retained_instead_of_becoming_zero(day_pnl_repo) -> None:
@@ -114,9 +114,9 @@ def test_first_tiny_broker_fill_is_retained_instead_of_becoming_zero(day_pnl_rep
     order = filled_order(accepted.order_ref).model_copy(update={"status": "canceled", "filled_quantity": 1e-10})
     fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=order)
     assert repo.latest_reported_filled_quantity(accepted.order_ref) == 1e-10
-    assert not custody_fee_attribution(repo._conn, now_ms=NOON).known
+    assert not repo.fee_attribution(now_ms=NOON).known
     _append_slice(repo, accepted, execution_id="tiny-exact", quantity=1e-10, source_event_at_ms=NOON, fee=0)
-    assert custody_fee_attribution(repo._conn, now_ms=NOON).known
+    assert repo.fee_attribution(now_ms=NOON).known
 
 
 @pytest.mark.parametrize("prior,current", [(1, 1.0000000001), (1.0000000001, 1)])
@@ -130,7 +130,7 @@ def test_same_state_broker_quantity_changes_are_retained_exactly(day_pnl_repo, p
     restated = order.model_copy(update={"filled_quantity": current})
     fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=restated)
     assert repo.latest_reported_filled_quantity(accepted.order_ref) == current
-    assert custody_fee_attribution(repo._conn, now_ms=NOON).known == (current == 1)
+    assert repo.fee_attribution(now_ms=NOON).known == (current == 1)
     after = repo.custody_transitions()
     fold_order_acknowledgement(repo, effect_operation_id=accepted.effect_operation_id, order=restated)
     assert repo.custody_transitions() == after
@@ -300,6 +300,7 @@ def test_external_fill_before_order_observation_keeps_its_unseen_debit(tmp_path:
         assert unseen.fee_claims == Decimal("0.01")
         assert unseen.available == Decimal("399.99")
         # Duplicate polling cannot move an already recognized debit's cutoff.
+        repo.clock.advance(1)
         record_fee_evidence(repo, [_external_fill(observed_at=NOON + 1)], checked_at_ms=NOON + 1, history_complete=True)
         seen = repo.account_budget(cash=400, seen_before_ms=NOON + 1)
         assert seen.order_claims == 0 and seen.available == unseen.available
@@ -327,6 +328,11 @@ def test_terminal_external_order_needs_all_its_exact_executions_then_replays(tmp
     database.rename(database.with_suffix(".saved"))
     rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=lambda: NOON)
     try:
+        # Freshness is this process's producer read, never replayed: the
+        # rebuilt authority refuses until it reads again, which adds nothing.
+        with pytest.raises(BudgetUnavailable, match="missing or stale"):
+            rebuilt.account_budget(cash=1000, seen_before_ms=NOON)
+        assert not record_fee_evidence(rebuilt, [_external_fill(quantity=2), remainder], checked_at_ms=NOON, history_complete=True)
         assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
     finally:
         rebuilt.close()

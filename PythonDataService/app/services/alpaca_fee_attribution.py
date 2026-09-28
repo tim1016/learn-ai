@@ -17,12 +17,12 @@ never a guessed deployment debit. Simulations never consume broker activities.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, Inexact, localcontext
 from fractions import Fraction
-from typing import Literal
+from typing import Any, Literal
 
 from app.broker.alpaca.clerk.money import money_context
 from app.broker.alpaca.regulatory_fees import (
@@ -33,7 +33,7 @@ from app.broker.alpaca.regulatory_fees import (
     fees_for_fill,
     settle_session,
 )
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import BrokerActivity, OrderSide
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
@@ -158,6 +158,46 @@ class FeeAttribution:
         )
 
 
+@dataclass(frozen=True)
+class CollapsedDeliveries[T]:
+    """One evidence stream after the duplicate-delivery rule."""
+
+    unique: dict[str, T]
+    # Every disagreeing copy of an identity, first-seen copy first.
+    conflicts: dict[str, tuple[T, ...]]
+
+
+def collapse_deliveries[T](
+    deliveries: Iterable[T], *, identity: Callable[[T], str], economics: Callable[[T], object],
+) -> CollapsedDeliveries[T]:
+    """The one duplicate-delivery rule for broker fee evidence.
+
+    A repeated identity is one fact. Observation time is delivery metadata;
+    every other field is economic identity. Deliveries arrive in recorded
+    order and the first copy is retained, so repolling never moves a
+    recognized charge's observation boundary (a later copy may carry an
+    earlier clock stamp). Copies whose economics disagree are conflicts;
+    every caller fails closed on them.
+    """
+    unique: dict[str, T] = {}
+    conflicts: dict[str, list[T]] = {}
+    for delivery in deliveries:
+        key = identity(delivery)
+        first = unique.setdefault(key, delivery)
+        if first is not delivery and economics(first) != economics(delivery):
+            conflicts.setdefault(key, [first]).append(delivery)
+    return CollapsedDeliveries(unique, {key: tuple(copies) for key, copies in conflicts.items()})
+
+
+def activity_economics(activity: BrokerActivity) -> dict[str, Any]:
+    """A broker activity's economic identity: everything but its delivery time."""
+    return activity.model_dump(exclude={"observed_at_ms"})
+
+
+def collapse_activity_deliveries(activities: Iterable[BrokerActivity]) -> CollapsedDeliveries[BrokerActivity]:
+    return collapse_deliveries(activities, identity=lambda row: row.activity_id, economics=activity_economics)
+
+
 @money_context()
 def apportion_cents(amount: Decimal, weights: Mapping[str, Decimal]) -> dict[str, Decimal]:
     """Exact Hamilton shares, including deterministic signed reversal shares."""
@@ -272,17 +312,14 @@ def attribute_session_fees(
         unresolved.append("The complete fee-bearing fill population is unavailable. Reconcile account executions.")
     unique: dict[str, FeeCharge] = {}
     if not simulated:
-        for charge in charges:
-            prior = unique.get(charge.charge_id)
-            # Observation time is delivery metadata, not economic identity.
-            if prior is not None and (
-                prior.amount, prior.native_order_id, prior.component, prior.refund_of, prior.covers_fill_ids
-            ) != (
-                charge.amount, charge.native_order_id, charge.component, charge.refund_of, charge.covers_fill_ids
-            ):
-                unresolved.append(f"Conflicting fee evidence for {charge.charge_id}. Reconcile broker activities.")
-            if prior is None or charge.observed_at_ms < prior.observed_at_ms:
-                unique[charge.charge_id] = charge
+        collapsed = collapse_deliveries(
+            charges, identity=lambda charge: charge.charge_id,
+            economics=lambda charge: replace(charge, observed_at_ms=0),
+        )
+        unique = collapsed.unique
+        unresolved.extend(
+            f"Conflicting fee evidence for {charge_id}. Reconcile broker activities." for charge_id in collapsed.conflicts
+        )
         if not activities_complete:
             unresolved.append("The broker activity read does not cover this fee day. Refresh account evidence.")
     reported = {fill.fill_id: fill for fill in fills if fill.reported_fee is not None and not simulated}

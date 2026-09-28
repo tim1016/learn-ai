@@ -172,8 +172,8 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "The reviewed loss limits now govern new entries. Existing exit terms and standing holds remain.",
     ),
     "FEE_EVIDENCE_OBSERVED": (
-        "Account fee evidence refreshed",
-        "Broker activity evidence was retained for deployment fee attribution.",
+        "Account fee evidence recorded",
+        "New broker activity evidence was retained for deployment fee attribution.",
     ),
     "RECONCILIATION_ATTEMPTED": (
         "Reconciliation completed",

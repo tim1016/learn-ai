@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import (
     risk_evidence_ready,
 )
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS, custody_fee_attribution
+from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -73,7 +73,7 @@ async def test_equity_including_a_fee_is_not_debited_by_its_provision_again(day_
         assert _hold(repo) is not None
         reading = await sync.observe()
         # Independent fixture: CAT 100000 * .000003 = .30; gross loss 99.80 + .30.
-        fees = custody_fee_attribution(repo._conn, now_ms=NOON)
+        fees = repo.fee_attribution(now_ms=NOON)
         assert fees.known and {share.state for share in fees.shares} == {"estimated"}
         assert reading.day_pnl.total_usd == pytest.approx(-100.10, abs=1e-9, rel=0)
         assert reading.breached
@@ -148,12 +148,12 @@ def test_late_observed_fee_replaces_provision_without_double_debiting_account_eq
     complete_fee_evidence(repo)
     accepted = _accept_day_pnl_enter(repo, decision_id="fee-settlement")
     _append_day_pnl_slice(repo, accepted, execution_id="fee-buy", side="BUY", quantity=10, price=100, occurred_at_ms=NOON)
-    before = custody_fee_attribution(repo._conn, now_ms=NOON)
+    before = repo.fee_attribution(now_ms=NOON)
     assert float(sum(share.amount for share in before.shares)) == pytest.approx(.01, abs=1e-9, rel=0)
     day_pnl_clock.advance(86_400_000)
     repo.revive_execution_lease()
     complete_fee_evidence(repo, (_activity("settled", "FEE", NOON, -.10),))
-    after = custody_fee_attribution(repo._conn, now_ms=repo.clock())
+    after = repo.fee_attribution(now_ms=repo.clock())
     assert after.known and float(sum(share.amount for share in after.shares)) == pytest.approx(.10, abs=1e-9, rel=0)
     observation = replace(_observation(repo.clock()), equity_usd=99_999.90)
     retained = observed_day_pnl(observation=observation, now_ms=repo.clock(), retained_start_ms=day_pnl_window_start_ms(NOON), retained_equity_usd=100_000)
@@ -174,7 +174,7 @@ def test_fee_at_midnight_stays_in_canonical_fee_evidence(tmp_path: Path) -> None
         complete_fee_evidence(repo)
         accepted = _accept_day_pnl_enter(repo, decision_id="midnight-fee")
         _append_day_pnl_slice(repo, accepted, execution_id="midnight-buy", side="BUY", quantity=10, price=100, occurred_at_ms=midnight)
-        fees = custody_fee_attribution(repo._conn, now_ms=clock())
+        fees = repo.fee_attribution(now_ms=clock())
         assert fees.known and float(sum(share.amount for share in fees.shares)) == pytest.approx(.01, abs=1e-9, rel=0)
     finally:
         repo.close()

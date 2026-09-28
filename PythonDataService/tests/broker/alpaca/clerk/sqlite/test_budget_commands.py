@@ -142,6 +142,8 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
     database.rename(database.with_suffix(".saved"))
     rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
     try:
+        # Fee freshness is the rebuilt process's own producer read; it adds nothing.
+        assert not record_fee_evidence(rebuilt, [], checked_at_ms=NOON, history_complete=True)
         assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
         assert rebuilt.deployment_budget("a")["released_at_ms"] == NOON
     finally:

@@ -238,6 +238,10 @@ class ClerkSqliteRepository(
         self._authority_generation_at_open = authority_generation
         self._poisoned = False
         self._reconciliation_in_progress = False
+        # Latest successful fee-evidence read by this process. Process-local
+        # liveness like the envelope's published account observation, never
+        # a custody fact: only record_fee_evidence writes it, under the lock.
+        self._fee_evidence_checked_at_ms: int | None = None
         # Pinned contracts doc §2: "one application-owned write coordinator
         # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
