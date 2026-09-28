@@ -39,8 +39,8 @@ per-fill records and the bound distribution; every timestamp is int64 ms UTC
 (raw vendor ISO fields are stored as parsed ``*_ms`` integers). Each measured
 fill carries a ``status``: ``led_stream`` (the reflecting read answered
 before the event's receipt — cash provably visible at the receipt instant,
-bound 0), ``resolved`` (read issued at/after the receipt — bound at issue
-time), or ``interval_censored_at_receipt`` (read issued before the receipt
+bound 0), ``resolved`` (read issued at/after the receipt — bound at answer
+time, since Alpaca guarantees no issue-to-snapshot ordering), or ``interval_censored_at_receipt`` (read issued before the receipt
 but answered after it — bound at answer time; a straddling answer proves
 nothing about the receipt instant). Censored statuses — ``no_baseline``,
 ``not_visible_within_window``, and passive mode's ``overlapping_fills`` —
@@ -558,8 +558,10 @@ class AlpacaRest:
         try:
             return self._request("/v2/orders", "POST", order), None
         except AlpacaHttpError as exc:
-            available = exc.body.get("available")
-            if exc.status != 403 or not available:
+            available = _to_float(exc.body.get("available")) if exc.status == 403 else None
+            # A retried quantity of zero (or a balance the body never named)
+            # is a rejection, not an adjustment.
+            if available is None or available <= 0:
                 raise
             return (
                 self._request("/v2/orders", "POST", {**order, "qty": str(available)}),
@@ -768,9 +770,10 @@ def _classify_visibility(fill: FillEvent, reading: CashReading) -> tuple[str, in
     - answered at/before the receipt → the cash was visible *before* the
       Clerk could have recorded the fill: ``led_stream``, bound 0.
     - issued at/after the receipt → ``resolved``; the bound is
-      ``issued − receipt`` under the envelope's issue-time dating (the true
-      transition is somewhere in the preceding read gap, so this too is an
-      upper bound).
+      ``answered − receipt``. Alpaca guarantees nothing about the snapshot's
+      as-of instant, so a cash change applied after issuance can ride inside
+      the response — only the answer time is provable (the #2549 review's
+      point, applied to this branch too).
     - issued before but answered after the receipt → ``interval_censored_at_receipt``:
       the cash was visible no later than the answer and possibly before the
       receipt — a read whose answer postdates the receipt proves nothing
@@ -780,7 +783,7 @@ def _classify_visibility(fill: FillEvent, reading: CashReading) -> tuple[str, in
     if reading.answered_at_ms <= fill.receipt_at_ms:
         return "led_stream", 0
     if reading.issued_at_ms >= fill.receipt_at_ms:
-        return "resolved", reading.issued_at_ms - fill.receipt_at_ms
+        return "resolved", reading.answered_at_ms - fill.receipt_at_ms
     return "interval_censored_at_receipt", reading.answered_at_ms - fill.receipt_at_ms
 
 
@@ -892,7 +895,6 @@ def _run_one_roundtrip(
     increment: float,
     min_order_size: float,
     visibility_timeout_s: float,
-    poll_ms: int,
     skipped: list[str],
 ) -> list[dict[str, Any]]:
     """One BUY/SELL round trip; returns the fill records it produced.
@@ -901,30 +903,57 @@ def _run_one_roundtrip(
     state and submitted only after the buy's fill visibility resolved (or
     censored), so at most one fill is in flight and the cash-delta
     attribution to each fill is unambiguous.
+
+    Failure policy (the #2549 review's Major): never place another order
+    while an accepted order's status is unknown. A submission the broker
+    refused (4xx) skips the round; a 5xx on submission, or any failure to
+    read an accepted order's terminal state, refuses the whole run and names
+    the order to reconcile — resubmitting could double-sell or, on a margin
+    account, open an unintended short. The one unwind path is a sell
+    *submission* failure after the buy filled: nothing was accepted, so one
+    retry at the floored quantity is safe, and its failure refuses the run
+    with the account explicitly named not flat.
     """
     fills: list[dict[str, Any]] = []
+    qty_str = lambda qty: f"{qty:.10f}".rstrip("0").rstrip(".")  # noqa: E731
     # Start from an observed, settled cash level so the first baseline is real.
     _await_settled_reads(poller, equal_reads=2, timeout_s=10.0)
     buy_submitted_ms = now_ms()
-    buy = rest.submit_order(
-        {
-            "symbol": symbol,
-            "notional": f"{notional_usd:.2f}",
-            "side": "buy",
-            "type": "market",
-            "time_in_force": "gtc",
-        }
-    )
-    buy_events = _await_order_fill_events(sink, buy["id"], visibility_timeout_s)
-    buy_terminal = _await_order_terminal(rest, buy["id"], visibility_timeout_s)
+    try:
+        buy = rest.submit_order(
+            {
+                "symbol": symbol,
+                "notional": f"{notional_usd:.2f}",
+                "side": "buy",
+                "type": "market",
+                "time_in_force": "gtc",
+            }
+        )
+    except AlpacaHttpError as exc:
+        if exc.status >= 500:
+            # A 5xx may have accepted the order anyway.
+            raise StreamRefused(
+                f"round {index}: buy submission failed with HTTP {exc.status}; "
+                f"the order may exist — reconcile the account before measuring again"
+            ) from exc
+        raise  # 4xx: the broker refused creation; run_roundtrips skips the round.
+    try:
+        buy_events = _await_order_fill_events(sink, buy["id"], visibility_timeout_s)
+        buy_terminal = _await_order_terminal(rest, buy["id"], visibility_timeout_s)
+    except AlpacaHttpError as exc:
+        raise StreamRefused(
+            f"round {index}: buy {buy['id']} was accepted but its status could "
+            f"not be read ({exc}); reconcile the order before measuring again"
+        ) from exc
+    if buy_terminal is None:
+        raise StreamRefused(
+            f"round {index}: buy {buy['id']} did not reach a terminal state "
+            f"within {visibility_timeout_s}s; reconcile the order before measuring again"
+        )
     for event in buy_events:
         fills.append(_record_fill(event, poller, visibility_timeout_s, buy_submitted_ms))
-    if not buy_events or buy_terminal is None:
-        skipped.append(
-            f"round {index}: buy {buy['id']} status "
-            f"{(buy_terminal or {}).get('status', 'unknown')}, "
-            f"{len(buy_events)} fill events"
-        )
+    if not buy_events:
+        skipped.append(f"round {index}: buy {buy['id']} {buy_terminal.get('status')}, no fill events")
         return fills
     filled_qty = float(buy_terminal["filled_qty"])
     sell_qty = _floor_to_increment(filled_qty, increment) if increment else filled_qty
@@ -934,59 +963,64 @@ def _run_one_roundtrip(
             f"(min {min_order_size}, increment {increment})"
         )
         return fills
+    sell_submitted_ms = now_ms()
     try:
-        return _sell_back_round(rest, sink, poller, index, symbol, sell_qty,
-                                visibility_timeout_s, skipped, fills)
+        sell, sell_note = rest.submit_sell(symbol, qty_str(sell_qty))
     except AlpacaHttpError as exc:
-        # The buy already filled, so a failed later step (a 429/5xx on the
-        # sell submission or an order-status read) cannot be reduced to a
-        # skipped note: the account would silently stay long and its cash
-        # transitions would corrupt every later round's attribution. Unwind
-        # once at the broker-stated balance; if the unwind itself fails,
-        # abort the run — the operator must know the account is not flat.
-        unwind_note = None
+        # Nothing was accepted: unwinding the filled buy once at the same
+        # floored quantity cannot double-sell. The unwind is itself an
+        # accepted order, so its terminal state is proven before the round
+        # ends — and if the unwind cannot even be submitted, the account is
+        # long and the run must stop saying so.
         try:
-            _, unwind_note = rest.submit_sell(
-                symbol, f"{sell_qty:.10f}".rstrip("0").rstrip(".")
-            )
+            unwind, _ = rest.submit_sell(symbol, qty_str(sell_qty))
         except AlpacaHttpError as unwind_exc:
             raise StreamRefused(
                 f"round {index}: sell failed ({exc}) and the unwind sell also "
                 f"failed ({unwind_exc}); the account is NOT flat — sell the "
                 f"{symbol} position manually before measuring again"
             ) from unwind_exc
-        skipped.append(
-            f"round {index}: sell failed ({exc}); unwind sold {sell_qty}"
-            + (f" ({unwind_note})" if unwind_note else "")
-        )
+        skipped.append(f"round {index}: sell failed ({exc}); unwind sell {unwind['id']} submitted")
+        try:
+            unwind_events = _await_order_fill_events(sink, unwind["id"], visibility_timeout_s)
+            unwind_terminal = _await_order_terminal(rest, unwind["id"], visibility_timeout_s)
+        except AlpacaHttpError as terminal_exc:
+            raise StreamRefused(
+                f"round {index}: unwind sell {unwind['id']} was accepted but "
+                f"its terminal status is unknown ({terminal_exc}); reconcile "
+                f"the order before measuring again"
+            ) from terminal_exc
+        if unwind_terminal is None:
+            raise StreamRefused(
+                f"round {index}: unwind sell {unwind['id']} did not reach a "
+                f"terminal state within {visibility_timeout_s}s; reconcile the "
+                f"order before measuring again"
+            )
+        for event in unwind_events:
+            fills.append(_record_fill(event, poller, visibility_timeout_s, sell_submitted_ms))
+        _await_settled_reads(poller, equal_reads=2, timeout_s=10.0)
         return fills
-
-
-def _sell_back_round(
-    rest: AlpacaRest,
-    sink: FillSink,
-    poller: AccountPoller,
-    index: int,
-    symbol: str,
-    sell_qty: float,
-    visibility_timeout_s: float,
-    skipped: list[str],
-    fills: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Submit the round's sell leg, record its fills, and settle afterwards."""
-    sell_submitted_ms = now_ms()
-    sell, sell_note = rest.submit_sell(symbol, f"{sell_qty:.10f}".rstrip("0").rstrip("."))
     if sell_note:
         skipped.append(f"round {index}: {sell_note}")
-    sell_events = _await_order_fill_events(sink, sell["id"], visibility_timeout_s)
-    sell_terminal = _await_order_terminal(rest, sell["id"], visibility_timeout_s)
+    try:
+        sell_events = _await_order_fill_events(sink, sell["id"], visibility_timeout_s)
+        sell_terminal = _await_order_terminal(rest, sell["id"], visibility_timeout_s)
+    except AlpacaHttpError as exc:
+        raise StreamRefused(
+            f"round {index}: sell {sell['id']} was accepted but its terminal "
+            f"status is unknown ({exc}); reconcile the order before measuring "
+            f"again — do not resubmit"
+        ) from exc
+    if sell_terminal is None:
+        raise StreamRefused(
+            f"round {index}: sell {sell['id']} did not reach a terminal state "
+            f"within {visibility_timeout_s}s; reconcile the order before measuring again"
+        )
     for event in sell_events:
         fills.append(_record_fill(event, poller, visibility_timeout_s, sell_submitted_ms))
-    if not sell_events or sell_terminal is None:
+    if not sell_events:
         skipped.append(
-            f"round {index}: sell {sell['id']} status "
-            f"{(sell_terminal or {}).get('status', 'unknown')}, "
-            f"{len(sell_events)} fill events"
+            f"round {index}: sell {sell['id']} {sell_terminal.get('status')}, no fill events"
         )
     # The sell's cash credit can land after its event; settle before the next
     # round so its transition never shares a read gap with the next buy's
@@ -1025,7 +1059,7 @@ def run_roundtrips(
                 fills.extend(
                     _run_one_roundtrip(
                         rest, sink, poller, index, symbol, notional_usd, increment,
-                        min_order_size, visibility_timeout_s, poll_ms, skipped,
+                        min_order_size, visibility_timeout_s, skipped,
                     )
                 )
             except AlpacaHttpError as exc:

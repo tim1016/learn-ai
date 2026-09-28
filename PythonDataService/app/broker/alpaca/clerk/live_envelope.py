@@ -73,8 +73,9 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # read answered at most 329 ms after the event (visibility at the receipt
 # instant is interval-censored, not zero), and the worst bound across every
 # run was 401 ms -- itself read-cadence quantization (reads p95 438 ms
-# apart). A read issued one grace after the fill's receipt reflects it with
-# an order of magnitude to spare (fixture:
+# apart). Every bound is an answer-time bound: the sample establishes no
+# issue-to-snapshot ordering guarantee, only that each fill's cash was
+# provably visible within one read round trip of its event (fixture:
 # ``tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json``).
 # The margin is kept at 5 s rather than tightened because that sample is
 # crypto-only, weekend, one idle account: the equity engine the envelope

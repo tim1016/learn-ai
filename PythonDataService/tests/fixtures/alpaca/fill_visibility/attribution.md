@@ -24,8 +24,9 @@ to the receipt (schema v2 classification, per the #2549 review):
 - `led_stream` — the read answered at/before the receipt: the cash was
   provably visible before the Clerk could have recorded the fill. Bound 0.
 - `resolved` — the read was issued at/after the receipt: bound =
-  issue time − receipt (the envelope's issue-time dating; the true transition
-  is somewhere in the preceding read gap, so this too is an upper bound).
+  answer time − receipt. Alpaca guarantees nothing about the snapshot's
+  as-of instant, so a cash change applied after issuance can ride inside the
+  response — only the answer time is provable.
 - `interval_censored_at_receipt` — the read was issued before the receipt
   but answered after it: the cash was visible no later than the answer and
   possibly before the receipt. Bound = answer time − receipt. A read whose

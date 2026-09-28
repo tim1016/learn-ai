@@ -182,17 +182,21 @@ notional cap, no symbol allowlist, no session restriction.
   event (the read answered 24 ms ahead of it); for the other 42 the read was
   issued before the event and answered at most 329 ms after it, so
   visibility at the receipt instant is interval-censored — provably no worse
-  than 329 ms after the event, possibly before. The worst bound observed
-  across every run was 401 ms, itself poll-cadence quantization (reads p95
-  438 ms apart), not propagation. The committed fixture
+  than 329 ms after the event, possibly before. Every measured bound is an
+  answer-time bound: Alpaca guarantees nothing about the snapshot's as-of
+  instant, so a read proves only that the cash was visible when it answered,
+  never that it was visible at the read's own issue time. The worst bound
+  observed across every run was 401 ms, itself poll-cadence quantization
+  (reads p95 438 ms apart), not propagation. The committed fixture
   (`tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json`, with
   `attribution.md`) carries the full read series so every bound is
   recomputable.
 
-  So the grace stays at 5 s. The measurement removes the feared seconds-long
-  lag on the measured path — a read issued one grace after the receipt
-  reflects the fill with an order of magnitude to spare — but it does not
-  license shrinking: the sample is crypto-only, weekend, one paper account,
+  So the grace stays at 5 s. The measurement found no seconds-long lag in
+  this sample — every fill's cash was provably visible within one read's
+  own round trip of its event — but it establishes no issue-to-snapshot
+  ordering guarantee and does not license shrinking: the sample is
+  crypto-only, weekend, one paper account,
   while the envelope gates equity ENTERs under market-hours load Alpaca's
   docs still refuse to bound. Five seconds remains an order of magnitude
   over everything observed, under one 15 s sync interval, so a fill stays

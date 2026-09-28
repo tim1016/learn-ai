@@ -22,14 +22,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from measure_fill_to_cash_visibility import (
     AccountPoller,
+    AlpacaHttpError,
     CashReading,
     FillEvent,
     FillSink,
+    StreamRefused,
     _await_order_fill_events,
     _await_settled_reads,
     _classify_visibility,
     _correlate_passive_fills,
     _floor_to_increment,
+    _run_one_roundtrip,
     baseline_cash,
     first_reflecting_read,
     normalize_raw_event,
@@ -251,12 +254,15 @@ class ClassifyVisibilityTest(unittest.TestCase):
         self.assertEqual(status, "led_stream")
         self.assertEqual(bound, 0)
 
-    def test_a_read_issued_at_or_after_the_receipt_binds_at_issue_time(self) -> None:
+    def test_a_read_issued_at_or_after_the_receipt_binds_at_answer_time(self) -> None:
+        # The snapshot's as-of instant is not guaranteed by Alpaca, so a
+        # post-receipt read proves visibility only at its ANSWER, never at
+        # its issue time (#2549 review, applied to this branch too).
         fill = _fill(receipt_at_ms=1_000)
         reading = CashReading(issued_at_ms=1_500, answered_at_ms=1_800, cash=890.0)
         status, bound = _classify_visibility(fill, reading)
         self.assertEqual(status, "resolved")
-        self.assertEqual(bound, 500)
+        self.assertEqual(bound, 800)
 
     def test_a_read_straddling_the_receipt_is_interval_censored_at_the_answer(self) -> None:
         # Issued before the receipt, answered after it: the cash may have
@@ -398,9 +404,154 @@ class CorrelatePassiveFillsTest(unittest.TestCase):
         ]
         records = _correlate_passive_fills([first, second], readings, visibility_timeout_s=30.0)
         self.assertEqual(records[0]["status"], "resolved")
-        self.assertEqual(records[0]["visibility_bound_ms"], 500)
+        self.assertEqual(records[0]["visibility_bound_ms"], 600)
         self.assertEqual(records[1]["status"], "resolved")
-        self.assertEqual(records[1]["visibility_bound_ms"], 200)
+        self.assertEqual(records[1]["visibility_bound_ms"], 300)
+
+
+class _FakeRest:
+    """Scripted AlpacaRest double: records every submission, raises on cue."""
+
+    def __init__(
+        self,
+        *,
+        buy_submit_error: AlpacaHttpError | None = None,
+        buy_status_error: AlpacaHttpError | None = None,
+        sell_submit_error: AlpacaHttpError | None = None,
+        unwind_submit_error: AlpacaHttpError | None = None,
+        sell_status_error: AlpacaHttpError | None = None,
+        unwind_status_error: AlpacaHttpError | None = None,
+        sell_never_terminal: bool = False,
+    ) -> None:
+        self.buy_submit_error = buy_submit_error
+        self.buy_status_error = buy_status_error
+        self.sell_submit_error = sell_submit_error
+        self.unwind_submit_error = unwind_submit_error
+        self.sell_status_error = sell_status_error
+        self.unwind_status_error = unwind_status_error
+        self.sell_never_terminal = sell_never_terminal
+        self.submitted: list[str] = []
+
+    def submit_order(self, order: dict) -> dict:
+        self.submitted.append("buy")
+        if self.buy_submit_error is not None:
+            raise self.buy_submit_error
+        return {"id": "buy-1", "status": "accepted"}
+
+    def submit_sell(self, symbol: str, qty: str) -> tuple[dict, str | None]:
+        first_sell = not any(call.startswith("sell") for call in self.submitted)
+        self.submitted.append(f"sell:{qty}")
+        if first_sell and self.sell_submit_error is not None:
+            raise self.sell_submit_error
+        if not first_sell and self.unwind_submit_error is not None:
+            raise self.unwind_submit_error
+        return {"id": "sell-unwind" if not first_sell else "sell-1", "status": "accepted"}, None
+
+    def get_order(self, order_id: str) -> dict:
+        if order_id == "buy-1" and self.buy_status_error is not None:
+            raise self.buy_status_error
+        if order_id == "sell-1" and self.sell_status_error is not None:
+            raise self.sell_status_error
+        if order_id == "sell-unwind" and self.unwind_status_error is not None:
+            raise self.unwind_status_error
+        if order_id == "sell-1" and self.sell_never_terminal:
+            return {"status": "pending_new"}
+        return {"status": "filled", "filled_qty": "0.0002"}
+
+
+class RoundtripFailurePolicyTest(unittest.TestCase):
+    """Never place another order while an accepted order's status is unknown.
+
+    The #2549 review's Major: catching a status-read failure and resubmitting
+    the same quantity can double-sell (or short, on a margin account), and
+    continuing past an unresolved accepted sell corrupts the next round's
+    cash attribution.
+    """
+
+    def _run(self, rest: _FakeRest) -> tuple[list[dict], list[str]]:
+        import unittest.mock as mock
+
+        sink = FillSink()
+        sink.push(
+            {
+                "event": "fill",
+                "qty": "0.0002",
+                "price": "100",
+                "side": "buy",
+                "order": {"id": "buy-1", "symbol": "BTC/USD"},
+            },
+            1_000,
+        )
+        skipped: list[str] = []
+        # The settle waits are cadence concerns, not policy; bypass their
+        # timeouts so the failure paths run in milliseconds.
+        with mock.patch(
+            "measure_fill_to_cash_visibility._await_settled_reads", return_value=False
+        ):
+            fills = _run_one_roundtrip(
+                rest, sink, _poller_with_readings(), 0, "BTC/USD", 15.0,
+                1e-9, 1e-5, 0.3, skipped,
+            )
+        return fills, skipped
+
+    def test_an_accepted_sell_with_an_unreadable_status_refuses_and_never_resells(self) -> None:
+        rest = _FakeRest(
+            sell_status_error=AlpacaHttpError(429, "/v2/orders/sell-1", {"message": "rate"})
+        )
+        with self.assertRaises(StreamRefused, msg="reconcile the order"):
+            self._run(rest)
+        sell_submissions = [call for call in rest.submitted if call.startswith("sell")]
+        self.assertEqual(sell_submissions, ["sell:0.0002"])  # no second, no unwind
+
+    def test_an_accepted_sell_that_never_reaches_terminal_refuses(self) -> None:
+        rest = _FakeRest(sell_never_terminal=True)
+        with self.assertRaises(StreamRefused, msg="terminal state"):
+            self._run(rest)
+        self.assertEqual([call for call in rest.submitted if call.startswith("sell")], ["sell:0.0002"])
+
+    def test_a_failed_sell_submission_before_acceptance_unwinds_once(self) -> None:
+        rest = _FakeRest(
+            sell_submit_error=AlpacaHttpError(403, "/v2/orders", {"message": "rejected"})
+        )
+        _fills, skipped = self._run(rest)
+        self.assertEqual(
+            [call for call in rest.submitted if call.startswith("sell")],
+            ["sell:0.0002", "sell:0.0002"],
+        )
+        self.assertTrue(any("unwind" in note for note in skipped))
+
+    def test_a_failed_sell_and_failed_unwind_refuses_naming_the_flat_breach(self) -> None:
+        rest = _FakeRest(
+            sell_submit_error=AlpacaHttpError(403, "/v2/orders", {"message": "rejected"}),
+            unwind_submit_error=AlpacaHttpError(500, "/v2/orders", {"message": "boom"}),
+        )
+        with self.assertRaises(StreamRefused, msg="NOT flat"):
+            self._run(rest)
+
+    def test_an_unwind_sell_with_an_unreadable_status_also_refuses(self) -> None:
+        rest = _FakeRest(
+            sell_submit_error=AlpacaHttpError(403, "/v2/orders", {"message": "rejected"}),
+            unwind_status_error=AlpacaHttpError(429, "/v2/orders/sell-unwind", {"message": "rate"}),
+        )
+        with self.assertRaises(StreamRefused, msg="unwind sell sell-unwind was accepted"):
+            self._run(rest)
+
+    def test_an_accepted_buy_with_an_unreadable_status_refuses(self) -> None:
+        rest = _FakeRest(
+            buy_status_error=AlpacaHttpError(429, "/v2/orders/buy-1", {"message": "rate"})
+        )
+        with self.assertRaises(StreamRefused, msg="reconcile the order"):
+            self._run(rest)
+
+    def test_a_5xx_buy_submission_refuses_because_the_order_may_exist(self) -> None:
+        rest = _FakeRest(buy_submit_error=AlpacaHttpError(503, "/v2/orders", {"message": "down"}))
+        with self.assertRaises(StreamRefused, msg="may exist"):
+            self._run(rest)
+
+    def test_a_4xx_buy_submission_propagates_for_the_round_skip(self) -> None:
+        rest = _FakeRest(buy_submit_error=AlpacaHttpError(403, "/v2/orders", {"message": "no"}))
+        with self.assertRaises(AlpacaHttpError):
+            self._run(rest)
 
 
 if __name__ == "__main__":
