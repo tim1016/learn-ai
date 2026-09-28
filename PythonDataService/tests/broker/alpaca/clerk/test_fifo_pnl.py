@@ -10,6 +10,7 @@ in-line so a quant reviewer can audit without running the code.
 from __future__ import annotations
 
 import json
+from fractions import Fraction
 from pathlib import Path
 
 from app.broker.alpaca.clerk.fifo_pnl import (
@@ -414,6 +415,54 @@ def test_duplicate_event_key_is_idempotent() -> None:
     # in project_instance_fills.  Here we verify the math on de-duped input.
     result = compute_fifo_pnl([fill_a, fill_b])
     assert _close(result.realized_pnl, 200.0)
+
+
+# ── Exact arithmetic (#2550) ──────────────────────────────────────────────────
+
+
+def test_multi_lot_partial_closes_match_exact_fraction_oracle() -> None:
+    """Fractional lots close exactly; float views are the exact values rounded once.
+
+    Independent oracle: each FIFO closure below is written by hand as an
+    exact ``Fraction`` over the recorded decimal fill values.
+      SELL 0.4 @ 10.07: 0.3 of lot1 (+0.3×0.06), 0.1 of lot2 (+0.1×0.04)
+      SELL 1.2 @ 10.11: 0.6 of lot2 (+0.6×0.08), 0.6 of lot3 (+0.6×0.14)
+      SELL 0.9 @ 9.93:  0.5 of lot3 (−0.5×0.04), then opens 0.4 short @ 9.93
+      BUY  0.1 @ 9.90:  0.1 of the short (+0.1×0.03), leaving 0.3 short
+    Binary-float FIFO drifts on every one of these closures and leaves a
+    0.30000000000000004-share short lot.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=0.3, price=10.01, ts_ms=1000),
+        _fill(side=OrderSide.BUY, qty=0.7, price=10.03, ts_ms=2000),
+        _fill(side=OrderSide.BUY, qty=1.1, price=9.97, ts_ms=3000),
+        _fill(side=OrderSide.SELL, qty=0.4, price=10.07, ts_ms=4000),
+        _fill(side=OrderSide.SELL, qty=1.2, price=10.11, ts_ms=5000),
+        _fill(side=OrderSide.SELL, qty=0.9, price=9.93, ts_ms=6000),
+        _fill(side=OrderSide.BUY, qty=0.1, price=9.90, ts_ms=7000),
+    ]
+    f = Fraction
+    closures = [
+        f("0.3") * (f("10.07") - f("10.01")),
+        f("0.1") * (f("10.07") - f("10.03")),
+        f("0.6") * (f("10.11") - f("10.03")),
+        f("0.6") * (f("10.11") - f("9.97")),
+        f("0.5") * (f("9.93") - f("9.97")),
+        f("0.1") * (f("9.93") - f("9.90")),
+    ]
+    expected = sum(closures, f(0))
+    assert expected == f("0.137")
+
+    result = compute_fifo_pnl(fills)
+
+    # Float views are bit-exact (tolerance 0): the exact value rounded once.
+    assert result.realized_pnl == float(expected)
+    assert [lot.realized_pnl for lot in result.closed_lots] == [float(value) for value in closures]
+    assert [(lot.side, lot.qty, lot.cost) for lot in result.open_lots] == [(OrderSide.SELL, 0.3, 9.93)]
+    # The exact fields are the money authority.
+    assert f(result.exact_realized_pnl) == expected
+    assert [f(lot.exact_realized_pnl) for lot in result.closed_lots] == closures
+    assert [(f(lot.exact_qty), f(lot.exact_cost)) for lot in result.open_lots] == [(f("0.3"), f("9.93"))]
 
 
 # ── Golden fixture scenarios ──────────────────────────────────────────────────

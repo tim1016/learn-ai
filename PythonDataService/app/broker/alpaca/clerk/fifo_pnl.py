@@ -18,6 +18,13 @@ Formula:
     Fees: rendered only when the broker reports them; ``None`` = "not reported",
         never $0.00.  The engine propagates ``None`` through — callers display
         the string "Fees not reported" when the field is None.
+    Arithmetic: each recorded fill quantity and price is normalized once by
+        ``money.normalize_money``; lots, closures, open valuation and totals
+        are then exact ``Decimal`` under ``money.money_context`` (inexact
+        arithmetic raises).  The ``exact_*`` fields are the money authority
+        (custody budgets read them).  Float attributes such as ``qty``,
+        ``realized_pnl`` and ``open_pnl`` are display views: the exact value
+        rounded once, never re-normalized into money.
 
 Reference:
     Standard FIFO inventory method (GAAP / IFRS).  No external software port —
@@ -34,6 +41,8 @@ Reference:
     implementation for the broker-v2 bot-panel P&L path.
     Validated against:
         PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py
+        (hand-derived fixtures at atol=1e-9 for float views; an exact
+        ``Fraction`` oracle for the ``exact_*`` fields).
 Canonical implementation: this file.
 
 Usage::
@@ -43,7 +52,8 @@ Usage::
 
     fills = project_instance_fills(sid, journal.read_all())
     result = compute_fifo_pnl(fills)
-    # result.realized_pnl  — closed lots only; may be 0.0 on no closed trades
+    # result.exact_realized_pnl — closed lots only, exact Decimal (money authority)
+    # result.realized_pnl  — its float display view; 0.0 on no closed trades
     # result.open_pnl      — None until mark_prices are supplied for ALL open symbols
     # result.marks_complete — True only when all open-lot symbols have mark coverage
     # result.fee_total     — None when any fill has fee=None ("Fees not reported")
@@ -51,16 +61,20 @@ Usage::
 
 from __future__ import annotations
 
-import math
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.contract.models import OrderSide
 
-# ── Tolerance (per numerical-rigor.md accumulated-PnL default) ───────────────
-_ZERO_ABS_TOL = 1e-9
+# ── Lot-closing share tolerance ───────────────────────────────────────────────
+# The FIFO matching rule: a lot at or below this many shares is closed, and a
+# fill remainder at or below it opens nothing.  Quantities are exact, so it
+# only absorbs dust already present in recorded fill values.
+_ZERO_ABS_TOL = Decimal("1e-9")
 
 
 # ── Internal lot record ───────────────────────────────────────────────────────
@@ -70,8 +84,8 @@ _ZERO_ABS_TOL = 1e-9
 class _Lot:
     """An open position lot (FIFO queue entry)."""
 
-    qty: float          # positive remaining share count
-    cost: float         # cost per share (entry fill price)
+    qty: Decimal        # positive remaining share count (exact)
+    cost: Decimal       # cost per share (entry fill price, exact)
     opened_at_ms: int   # int64 ms UTC
     side: OrderSide     # BUY (long lot) or SELL (short lot)
     strategy_instance_id: str
@@ -90,10 +104,15 @@ class ClosedLot:
     exit_price: float
     opened_at_ms: int     # int64 ms UTC
     closed_at_ms: int     # int64 ms UTC
-    realized_pnl: float
+    exact_realized_pnl: Decimal
     fee: float | None     # None = not reported
     entry_strategy_instance_id: str = ""
     exit_strategy_instance_id: str = ""
+
+    @property
+    def realized_pnl(self) -> float:
+        """Display view of ``exact_realized_pnl``, rounded once."""
+        return float(self.exact_realized_pnl)
 
 
 @dataclass(frozen=True)
@@ -101,19 +120,30 @@ class OpenLot:
     """One remaining open lot for open-P&L computation."""
 
     symbol: str
-    qty: float
-    cost: float           # cost per share
+    exact_qty: Decimal
+    exact_cost: Decimal   # cost per share
     opened_at_ms: int     # int64 ms UTC
     side: OrderSide
+
+    @property
+    def qty(self) -> float:
+        """Display view of ``exact_qty``, rounded once."""
+        return float(self.exact_qty)
+
+    @property
+    def cost(self) -> float:
+        """Display view of ``exact_cost``, rounded once."""
+        return float(self.exact_cost)
 
 
 @dataclass
 class PnLResult:
     """The full FIFO P&L result for one bot.
 
-    ``realized_pnl``:
-        Sum of P&L from all closed lots across the bot's lifetime.
-        ``0.0`` when no lots have been closed.
+    ``exact_realized_pnl``:
+        Exact sum of P&L from all closed lots across the bot's lifetime.
+        ``0`` when no lots have been closed.  ``realized_pnl`` is its float
+        display view.
 
     ``open_pnl``:
         ``None`` when no current mark price is available OR when any open-lot
@@ -145,12 +175,17 @@ class PnLResult:
         Remaining open lots (FIFO remainder).  Feeds the open-P&L valuation.
     """
 
-    realized_pnl: float = 0.0
+    exact_realized_pnl: Decimal = ZERO
     open_pnl: float | None = None
     marks_complete: bool = False
     fee_total: float | None = None
     closed_lots: list[ClosedLot] = field(default_factory=list)
     open_lots: list[OpenLot] = field(default_factory=list)
+
+    @property
+    def realized_pnl(self) -> float:
+        """Display view of ``exact_realized_pnl``, rounded once."""
+        return float(self.exact_realized_pnl)
 
 
 @dataclass(frozen=True)
@@ -165,11 +200,11 @@ class OpenPnLResult:
 # ── FIFO engine ───────────────────────────────────────────────────────────────
 
 
+@money_context()
 def apply_fill_to_lots(
     lots: dict[str, deque[_Lot]],
     fill: FillRecord,
     closed_out: list[ClosedLot],
-    realized_accumulator: list[float],
 ) -> None:
     """Apply one fill to the FIFO lot queues in-place.
 
@@ -184,11 +219,8 @@ def apply_fill_to_lots(
     fill:
         The new fill to apply.
     closed_out:
-        List to which newly closed ``ClosedLot`` records are appended.
-    realized_accumulator:
-        Single-element list holding the running realized P&L total.  Updated
-        in-place.  A list (not a plain float) so callers can hold a reference
-        to a mutable accumulator without boxing/unboxing.
+        List to which newly closed ``ClosedLot`` records are appended.  Their
+        exact P&L sums to the realized total, so no accumulator is needed.
 
     Formula:
         Same FIFO rules as ``compute_fifo_pnl``.  See module docstring.
@@ -198,8 +230,9 @@ def apply_fill_to_lots(
         PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
     """
     sym = fill.symbol
-    price = fill.fill_price
-    qty = fill.quantity
+    # Normalize each recorded value once; every product below is exact.
+    price = normalize_money(fill.fill_price)
+    qty = normalize_money(fill.quantity)
     ts = fill.filled_at_ms
 
     queue = lots.setdefault(sym, deque())
@@ -215,7 +248,7 @@ def apply_fill_to_lots(
                 strategy_instance_id=fill.sid,
             )
         )
-        remaining = 0.0
+        remaining = ZERO
     else:
         top_lot = queue[0]
         if fill.side == top_lot.side:
@@ -228,7 +261,7 @@ def apply_fill_to_lots(
                     strategy_instance_id=fill.sid,
                 )
             )
-            remaining = 0.0
+            remaining = ZERO
         else:
             while remaining > _ZERO_ABS_TOL and queue and queue[0].side != fill.side:
                 lot = queue[0]
@@ -240,21 +273,20 @@ def apply_fill_to_lots(
                 closed_out.append(
                     ClosedLot(
                         symbol=sym,
-                        qty=close_qty,
-                        entry_price=lot.cost,
-                        exit_price=price,
+                        qty=float(close_qty),
+                        entry_price=float(lot.cost),
+                        exit_price=float(price),
                         opened_at_ms=lot.opened_at_ms,
                         closed_at_ms=ts,
-                        realized_pnl=r_pnl,
+                        exact_realized_pnl=r_pnl,
                         fee=fill.fee,
                         entry_strategy_instance_id=lot.strategy_instance_id,
                         exit_strategy_instance_id=fill.sid,
                     )
                 )
-                realized_accumulator[0] += r_pnl
                 remaining -= close_qty
                 lot.qty -= close_qty
-                if math.isclose(lot.qty, 0.0, rel_tol=0.0, abs_tol=_ZERO_ABS_TOL):
+                if abs(lot.qty) <= _ZERO_ABS_TOL:
                     queue.popleft()
 
             if remaining > _ZERO_ABS_TOL:
@@ -269,6 +301,7 @@ def apply_fill_to_lots(
                 )
 
 
+@money_context()
 def compute_open_pnl(
     lots: dict[str, deque[_Lot]],
     mark_prices: dict[str, float],
@@ -284,14 +317,16 @@ def compute_open_pnl(
       PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
 
     ``value`` is ``None`` until every symbol with an open lot has a mark.
-    Flat state is complete and has a value of ``0.0``.
+    Flat state is complete and has a value of ``0.0``.  Each mark is
+    normalized once; the sum is exact and ``value`` rounds it once.
     """
     open_lots: list[OpenLot] = []
     symbols_with_open_lots: set[str] = set()
-    total_open_pnl = 0.0
+    total_open_pnl = ZERO
 
     for symbol, queue in lots.items():
         mark = mark_prices.get(symbol)
+        exact_mark = None if mark is None else normalize_money(mark)
         for lot in queue:
             if lot.qty <= _ZERO_ABS_TOL:
                 continue
@@ -299,17 +334,17 @@ def compute_open_pnl(
             open_lots.append(
                 OpenLot(
                     symbol=symbol,
-                    qty=lot.qty,
-                    cost=lot.cost,
+                    exact_qty=lot.qty,
+                    exact_cost=lot.cost,
                     opened_at_ms=lot.opened_at_ms,
                     side=lot.side,
                 )
             )
-            if mark is not None:
+            if exact_mark is not None:
                 signed_delta = (
-                    mark - lot.cost
+                    exact_mark - lot.cost
                     if lot.side is OrderSide.BUY
-                    else lot.cost - mark
+                    else lot.cost - exact_mark
                 )
                 total_open_pnl += signed_delta * lot.qty
 
@@ -317,7 +352,7 @@ def compute_open_pnl(
         return OpenPnLResult(value=0.0, marks_complete=True, open_lots=())
     if mark_prices.keys() >= symbols_with_open_lots:
         return OpenPnLResult(
-            value=total_open_pnl,
+            value=float(total_open_pnl),
             marks_complete=True,
             open_lots=tuple(open_lots),
         )
@@ -328,6 +363,7 @@ def compute_open_pnl(
     )
 
 
+@money_context()
 def realized_pnl_for_window(
     closed_lots: Iterable[ClosedLot],
     *,
@@ -336,8 +372,9 @@ def realized_pnl_for_window(
 ) -> float:
     """Sum canonical closed-lot P&L inside a half-open session window.
 
-    Formula: realized_window = Σ lot.realized_pnl where
-      session_open_ms <= lot.closed_at_ms < session_close_ms.
+    Formula: realized_window = Σ lot.exact_realized_pnl where
+      session_open_ms <= lot.closed_at_ms < session_close_ms, summed exactly
+      and rounded once to the returned float display value.
     Reference: same FIFO inventory method as this module; session boundaries
       are supplied by the canonical NYSE calendar.
     Canonical implementation: this file.
@@ -345,13 +382,17 @@ def realized_pnl_for_window(
       PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
       PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
     """
-    return sum(
-        lot.realized_pnl
-        for lot in closed_lots
-        if session_open_ms <= lot.closed_at_ms < session_close_ms
-    )
+    return float(sum(
+        (
+            lot.exact_realized_pnl
+            for lot in closed_lots
+            if session_open_ms <= lot.closed_at_ms < session_close_ms
+        ),
+        ZERO,
+    ))
 
 
+@money_context()
 def compute_fifo_pnl(
     fills: Iterable[FillRecord],
     *,
@@ -393,7 +434,6 @@ def compute_fifo_pnl(
     lots: dict[str, deque[_Lot]] = {}
     result = PnLResult()
     any_fee_missing = False
-    realized_acc = [0.0]
 
     for fill in fills:
         # Fee tracking
@@ -402,9 +442,9 @@ def compute_fifo_pnl(
         elif not any_fee_missing:
             result.fee_total = (result.fee_total or 0.0) + fill.fee
 
-        apply_fill_to_lots(lots, fill, result.closed_lots, realized_acc)
+        apply_fill_to_lots(lots, fill, result.closed_lots)
 
-    result.realized_pnl = realized_acc[0]
+    result.exact_realized_pnl = sum((lot.exact_realized_pnl for lot in result.closed_lots), ZERO)
 
     # Propagate fee_total honesty
     if any_fee_missing:

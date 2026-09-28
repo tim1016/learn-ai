@@ -138,12 +138,12 @@ def project_account_budget(
             fifo = compute_fifo_pnl([fill for fill in records if fill.sid == subject_id])
             if any(lot.side != OrderSide.BUY for lot in fifo.open_lots):
                 raise BudgetUnavailable("Unexplained short exposure prevents a long-only deployment budget.")
-            position_cost = sum((normalize_money(lot.qty) * normalize_money(lot.cost) for lot in fifo.open_lots), ZERO)
+            position_cost = sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO)
             pending_orders = sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO)
             budgets.append(deployment_budget(
                 strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
                 active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
-                realized_gross=fifo.realized_pnl, fees=fees.total_for(subject_id),
+                realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
                 position_cost=position_cost, pending_orders=pending_orders,
                 outstanding_cash=sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO)
                 + fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms, subject_id=subject_id),
