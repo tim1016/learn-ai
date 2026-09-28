@@ -117,6 +117,6 @@ async def test_risk_read_rejudges_new_fee_evidence_without_writing_a_hold(risk_c
     response = await client.get(f"{routes.PREFIX}/risk-limits")
     assert response.status_code == 200
     assert response.json()["entry_state"] == "unknown"
-    assert "loss evidence is incomplete" in response.json()["detail"]
+    assert "account evidence is incomplete" in response.json()["detail"]
     assert repo.custody_transitions() == before
     assert gate.latest_observation() == observation
