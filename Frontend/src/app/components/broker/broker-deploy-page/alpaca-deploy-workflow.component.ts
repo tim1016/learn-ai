@@ -154,6 +154,18 @@ function ticketOf(settings: DeployTicketSettings): AlpacaDeployTicket {
   return { ...settings, overrideAcknowledged: false, overrideReason: '' };
 }
 
+type ExitTermSettings = Pick<DeployTicketSettings, 'exitAllowanceBps' | 'bandMultiple' | 'spreadCapBps'>;
+
+/** Exit terms as the form holds them; none leaves them for the view's
+ * account defaults to seed (H3). */
+function exitTermSettings(terms: DeployBotBody['exit_terms'] | null | undefined): ExitTermSettings {
+  return {
+    exitAllowanceBps: terms?.exit_allowance_bps ?? null,
+    bandMultiple: terms?.band_multiple ?? null,
+    spreadCapBps: terms?.spread_cap_bps ?? null,
+  };
+}
+
 function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
   return {
     exitAllowanceBps: ticket.exitAllowanceBps,
@@ -950,8 +962,7 @@ export class AlpacaDeployWorkflowComponent {
         // that has them may still seed.
         if (terms) {
           this.termsSeeded = true;
-          this.ticket.update(ticket => ({ ...ticket, exitAllowanceBps: terms.exit_allowance_bps,
-            bandMultiple: terms.band_multiple, spreadCapBps: terms.spread_cap_bps }));
+          this.ticket.update(ticket => ({ ...ticket, ...exitTermSettings(terms) }));
         }
       }
       const current = untracked(this.ticket);
@@ -1091,8 +1102,6 @@ export class AlpacaDeployWorkflowComponent {
   /** Deploy again: a fresh draft from the earlier bot's sealed settings. Its
    * money and consent are never copied, and it gets its own submission key. */
   private applyPrefill(prefill: BotDeployPrefill): void {
-    const current = this.ticket();
-    const terms = prefill.exit_terms ?? null;
     this.receipt.set(null);
     this.frozenCommand.set(null);
     this.clearAdmission();
@@ -1105,25 +1114,20 @@ export class AlpacaDeployWorkflowComponent {
         sizingPreset: prefill.sizing.preset ?? 'safe_canary',
         quantity: prefill.sizing.quantity ?? 1,
         parameters: { ...prefill.parameters },
-        // Terms the earlier bot never recorded in full start from this
-        // account's defaults for new bots.
-        exitAllowanceBps: terms?.exit_allowance_bps ?? current.exitAllowanceBps,
-        bandMultiple: terms?.band_multiple ?? current.bandMultiple,
-        spreadCapBps: terms?.spread_cap_bps ?? current.spreadCapBps,
+        // Terms the earlier bot never recorded start from this account's
+        // defaults for new bots.
+        ...exitTermSettings(prefill.exit_terms ?? this.currentView()?.default_exit_terms),
       },
       prefill.source_strategy_instance_id,
     ));
   }
 
-  /** Clear: back to a fresh form on this account's default strategy, and
-   * the earlier bot is no longer named. */
+  /** Clear: back to a fresh form on this account's default strategy and
+   * its defaults for new bots, and the earlier bot is no longer named. */
   protected async clearPrefill(): Promise<void> {
-    const current = this.ticket();
     this.restoreDraft(this.freshDraft({
       ...EMPTY_DEPLOY_SETTINGS,
-      exitAllowanceBps: current.exitAllowanceBps,
-      bandMultiple: current.bandMultiple,
-      spreadCapBps: current.spreadCapBps,
+      ...exitTermSettings(this.currentView()?.default_exit_terms),
     }));
     const view = this.currentView();
     const strategy = view?.strategies.find((candidate) => candidate.selectable) ?? view?.strategies[0];

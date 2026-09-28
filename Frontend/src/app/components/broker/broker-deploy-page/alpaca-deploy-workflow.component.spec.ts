@@ -857,10 +857,15 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
 
     expect(screen.queryByText(/Prefilled from/)).toBeNull();
     await vi.waitFor(() => expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy());
+    // The fresh form's exit terms are the account's defaults, never the replaced bot's 15/3/40.
+    expect(within(stepRegion('How')).getByText(
+      'Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life',
+    )).toBeTruthy();
     await chooseMoney();
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
     expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
+    expect(submittedBody(service).exit_terms).toEqual(DEPLOY_VIEW.default_exit_terms);
   });
 
   it('Clear keeps a lost Deploy’s key until its status is read', async () => {
