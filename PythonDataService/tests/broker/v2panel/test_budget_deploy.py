@@ -19,10 +19,12 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
+    AccountMoneyView,
     BudgetDeployCommandReceipt,
     DeploymentBudgetInput,
     DeploymentBudgetPreview,
     DeploymentBudgetView,
+    MoneySegment,
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
@@ -357,11 +359,11 @@ async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority:
     assert _segments(view) == [("bot", "view", "200.00", 2_000), ("free", "free to deploy", "800.00", 8_000)]
     assert (view.total_usd, view.cash_usd, view.in_bots_usd, view.free_to_deploy_usd) == ("1000.00", "1000.00", "200.00", "800.00")
     assert (view.held_by_stopped_usd, view.outside_bots_usd, view.account_charges_usd) == ("0.00", "0.00", "0.00")
-    assert (view.settling_usd, view.account_shortfall_usd, view.stopped_holding_count) == ("0.00", "0.00", 0)
+    assert (view.settling_usd, view.account_shortfall_usd, view.stopped_holding_count) == ("0.00", None, 0)
     assert (view.equity_usd, view.today_pnl_usd, view.open_pnl_usd, view.open_pnl_detail) == ("1000.00", "0.00", "0.00", None)
     parts = view.segments[0].parts
     assert parts is not None and (parts.in_shares_usd, parts.pending_usd, parts.free_usd, parts.free_bps) == ("0.00", "0.00", "200.00", 10_000)
-    assert view.segments[0].shortfall_usd == "0.00" and view.observed_at_ms == NOON
+    assert view.segments[0].shortfall_usd is None and view.observed_at_ms == NOON
     assert (view.segments[0].palette_index, view.segments[1].palette_index) == (0, None)
     assert view.detail == "Cash plus shares at the price paid."
 
@@ -465,6 +467,40 @@ async def test_an_overdrawn_account_draws_its_bar_and_reports_the_shortfall(auth
     assert view.state == "ready" and view.account_shortfall_usd == "50.00"
     assert _segments(view) == [("bot", "view", "200.00", 10_000), ("free", "free to deploy", "0.00", 0)]
     assert (view.total_usd, view.free_to_deploy_usd) == ("150.00", "0.00")
+
+
+def test_a_shortfall_is_stated_only_where_something_is_short() -> None:
+    """A legend never reads "short of next entry $0.00": no shortfall is absent."""
+    from app.broker.alpaca.clerk.account_money import account_money, money_bar
+    from app.broker.alpaca.clerk.budgets import account_budget, deployment_budget
+
+    def bot(sid: str, position: str) -> object:
+        return deployment_budget(strategy_instance_id=sid, committed_cents=100_000, active=True, realized_gross="0",
+                                 fees=Decimal(0), position_cost=Decimal(position), pending_orders=Decimal(0))
+
+    # "slipped" filled $5.01 beyond its $1,000; "steady" is within its budget.
+    budget = account_budget(cash="7990", deployments=[bot("slipped", "1005.01"), bot("steady", "764.71")],
+                            order_claims=Decimal(0), fee_claims=Decimal(0))
+    bar = money_bar(account_money(budget, unseen_fills=Decimal(0), unseen_sales=Decimal(0), holdings=(),
+                                  registration_order=("slipped", "steady")))
+    slipped, steady = (budget_deploy._segment_view(segment) for segment in bar.segments[:2])
+
+    assert (slipped.strategy_instance_id, slipped.shortfall_usd) == ("slipped", "5.01")
+    assert (steady.strategy_instance_id, steady.shortfall_usd) == ("steady", None)
+    with pytest.raises(ValidationError, match="only when something is short"):
+        MoneySegment.model_validate({**steady.model_dump(), "shortfall_usd": "0.00"})
+    with pytest.raises(ValidationError, match="only when the account is overdrawn"):
+        AccountMoneyView.model_validate({**_ready_money_view().model_dump(), "account_shortfall_usd": "0.00"})
+
+
+def _ready_money_view() -> AccountMoneyView:
+    return AccountMoneyView(
+        state="ready", detail="Cash plus shares at the price paid.", world="real_paper", account_id="PA1",
+        observed_at_ms=NOON, total_usd="1.00", cash_usd="1.00", free_to_deploy_usd="1.00", in_bots_usd="0.00",
+        held_by_stopped_usd="0.00", outside_bots_usd="0.00", account_charges_usd="0.00", settling_usd="0.00",
+        stopped_holding_count=0, open_pnl_usd="0.00",
+        segments=(MoneySegment(kind="free", label="free to deploy", amount_usd="1.00", share_bps=10_000),),
+    )
 
 
 async def test_open_pnl_is_canonical_fifo_or_withheld_with_its_reason(authority: tuple) -> None:

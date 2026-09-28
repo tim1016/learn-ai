@@ -29,6 +29,7 @@ import { laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
 /** How often the header re-reads the account's money, its account read and
  * its Clerk status — the shared reads its tabs render too. Carried over from
@@ -83,6 +84,7 @@ type WorkspaceAccountStatus =
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,
+    TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-account-workspace.component.html',
   styleUrl: './alpaca-account-workspace.component.scss',
@@ -194,6 +196,20 @@ export class AlpacaAccountWorkspaceComponent {
    * pages renders too. Every figure is a backend-authored string; the header
    * adds nothing up and never shows an unknown as $0. */
   protected readonly money = this.accountData.moneyState;
+
+  /** Alpaca's own Equity and Today when the money read cannot draw the bar
+   * but its reading knew them — a stale or refused bar never blanks the
+   * broker's figures. They carry the instant they were read, which the header
+   * states, since without the bar beside them nothing else dates them. `null`
+   * for a ready read (its figures are the full row) and for one that knows
+   * neither. */
+  protected readonly brokerReading = computed(() => {
+    const state = this.money();
+    if (state.kind !== 'unavailable' || state.view === null) return null;
+    const { equity_usd: equity = null, today_pnl_usd: today = null, observed_at_ms: observedAtMs = null } = state.view;
+    if (observedAtMs === null || (equity === null && today === null)) return null;
+    return { equity, today, observedAtMs };
+  });
 
   private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
 

@@ -1,32 +1,17 @@
 import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import type { MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
+import { botHues } from '../v2-panel/lib/bot-hue';
+import type { AccountMoneyView, MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
 
 /** Where the bar is drawn: an account's Home, a Deploy or bot page, a bot
  * row's budget strip, or an Accounts card / Wall tile. */
 export type MoneyBarSize = 'home' | 'detail' | 'row' | 'mini';
 
-/** The bot hues, in palette order. Colour is never the only carrier: the
- * legend names every slice with its amount. */
-const BOT_HUES = [
-  'var(--chart-series-blue)',
-  'var(--chart-series-amber)',
-  'var(--chart-series-pink)',
-  'var(--chart-series-green)',
-  'var(--chart-series-purple)',
-  'var(--chart-series-orange)',
-] as const;
-
-/** Which of `BOT_HUES` a bot slice takes.
- *
- * The backend's per-bot palette slot, when the segment carries one, so a bot
- * keeps its hue on every bar it appears in (Home, its row, its page) however
- * the other bots come and go. Until it does, the slice's place among this
- * bar's bot slices — stable within one bar, not across bars. */
-function botPaletteSlot(_segment: MoneySegment, botOrdinal: number): number {
-  return botOrdinal;
-}
+/** What an account's bar carries beside it, never as a slice (PRD #2560 D6):
+ * what the claims exceed the account by, when they do, and its open P&L — or
+ * the backend's reason there is none. */
+export type MoneyBarNotes = Pick<AccountMoneyView, 'account_shortfall_usd' | 'open_pnl_usd' | 'open_pnl_detail'>;
 
 interface DrawnSlice {
   readonly key: string;
@@ -42,9 +27,11 @@ interface DrawnSlice {
  * each slice is drawn as `flex: <bps> 1 0`, so proportions come from the
  * layout engine with no percentage computed here. Every kind has its own
  * pattern — bot slices shaded for shares, entry orders and free budget;
- * stopped striped; outside dotted; charges solid grey; NEW marching; free
- * dashed — and the legend names each slice with its amount, visibly at the
- * `home` and `detail` sizes and for assistive technology at every size.
+ * stopped striped; outside dotted; charges solid grey; settling upright
+ * pinstripes; NEW marching; free dashed — and the legend names each slice
+ * with its amount, visibly at the `home` and `detail` sizes and for assistive
+ * technology at every size. A part the backend did not send (a shortfall
+ * where nothing is short) is not stated at all.
  */
 @Component({
   selector: 'app-money-bar',
@@ -60,15 +47,19 @@ export class MoneyBarComponent {
   readonly size = input<MoneyBarSize>('detail');
   /** The legend's accessible name. */
   readonly caption = input('Where the money is');
+  /** The account's notes beside the bar — pass the `AccountMoneyView` itself.
+   * Each one is stated only when the backend sent it. */
+  readonly notes = input<MoneyBarNotes | null>(null);
 
   protected readonly legendVisible = computed(() => this.size() === 'home' || this.size() === 'detail');
 
   protected readonly slices = computed<readonly DrawnSlice[]>(() => {
-    let bots = 0;
-    return this.segments().map((segment) => ({
+    const segments = this.segments();
+    const hues = botHues(segments);
+    return segments.map((segment, index) => ({
       key: `${segment.kind}:${segment.strategy_instance_id ?? ''}`,
       segment,
-      hue: segment.kind === 'bot' ? BOT_HUES[botPaletteSlot(segment, bots++) % BOT_HUES.length] : null,
+      hue: hues[index],
     }));
   });
 }

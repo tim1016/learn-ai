@@ -30,6 +30,11 @@
             <span class="lane-card__figure lane-card__figure--end">
               Free to deploy <strong>{{ money.view.free_to_deploy_usd | currency: 'USD' }}</strong>
             </span>
+            @if (money.view.account_shortfall_usd; as shortfall) {
+              <span class="lane-card__figure lane-card__figure--shortfall">
+                Claims exceed the account by <strong>{{ shortfall | currency: 'USD' }}</strong>
+              </span>
+            }
           </span>
           <app-money-bar class="lane-card__bar" size="mini" [segments]="money.view.segments ?? []" [caption]="barCaption()" />
         } @else {

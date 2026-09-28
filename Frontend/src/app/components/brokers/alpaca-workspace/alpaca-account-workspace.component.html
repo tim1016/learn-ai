@@ -29,6 +29,22 @@
           </div>
         </dl>
       } @else {
+        @if (brokerReading(); as reading) {
+          <dl class="account-workspace__figures">
+            <div>
+              <dt>Equity</dt>
+              <dd>{{ reading.equity ? (reading.equity | currency: 'USD') : 'Unavailable' }}</dd>
+            </div>
+            <div>
+              <dt>Today</dt>
+              <dd>{{ reading.today ? (reading.today | currency: 'USD') : 'Unavailable' }}</dd>
+            </div>
+            <div>
+              <dt>Read at</dt>
+              <dd><app-timestamp-display [value]="reading.observedAtMs" mode="local" /></dd>
+            </div>
+          </dl>
+        }
         <p class="account-workspace__money-reason">
           {{ header.text }}
           @if (header.nextStep; as nextStep) { {{ nextStep }} }

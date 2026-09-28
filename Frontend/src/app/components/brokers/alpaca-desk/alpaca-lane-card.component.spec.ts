@@ -107,8 +107,7 @@ describe('AlpacaLaneCardComponent', () => {
 
   it('reads every count from one backend field and adds nothing up', async () => {
     await renderCard(countedLane({ running_count: 0, dry_run_count: 3, attention_count: 0 }), {
-      getAccountMoney: () =>
-        Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, segments: fakeAccountMoney().segments?.filter((segment) => segment.kind !== 'stopped') })),
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, stopped_holding_count: 0 })),
     });
 
     expect(await screen.findByText('0 running')).toBeTruthy();
@@ -116,6 +115,47 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.queryByText(/stopped, still holding/)).toBeNull();
     expect(screen.getByText('3 Dry Run')).toBeTruthy();
     expect(screen.getByText('All clear')).toBeTruthy();
+  });
+
+  it('takes the stopped-still-holding count from the money read, never from counting its slices', async () => {
+    // The bar carries one stopped slice; the backend's count is what is said.
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, stopped_holding_count: 3 })),
+    });
+
+    expect(await screen.findByText('3 stopped, still holding')).toBeTruthy();
+  });
+
+  it('says the stopped-still-holding count is unknown while the money cannot be read', async () => {
+    await renderCard(countedLane(), { getAccountMoney: () => Promise.resolve(unavailableAccountMoney('Wait for a fresh reading.')) });
+
+    expect(await screen.findByText('Stopped holdings unknown')).toBeTruthy();
+    expect(screen.queryByText(/stopped, still holding/)).toBeNull();
+  });
+
+  it('states an overdrawn account’s shortfall as the backend authored it', async () => {
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, account_shortfall_usd: '50.00' })),
+    });
+
+    const shortfall = await screen.findByText(/Claims exceed the account by/);
+    expect(shortfall.textContent?.replace(/\s+/g, ' ').trim()).toBe('Claims exceed the account by $50.00');
+  });
+
+  it('states no shortfall for an account that is not overdrawn', async () => {
+    await renderCard();
+
+    await screen.findByText(/Free to deploy/);
+    expect(screen.queryByText(/Claims exceed the account/)).toBeNull();
+  });
+
+  it('says an attention count the directory omitted is unknown, never zero', async () => {
+    const lane = countedLane();
+    const { attention_count: _omitted, ...summary } = lane.provider_summary ?? {};
+    await renderCard({ ...lane, provider_summary: summary });
+
+    expect(screen.getByText('Attention unknown')).toBeTruthy();
+    expect(screen.queryByText('All clear')).toBeNull();
   });
 
   it('says a count the lane did not report is unknown, never zero', async () => {

@@ -95,6 +95,12 @@
   text-align: right;
 }
 
+/* An overdrawn account: its own full-width line, stated in words. */
+.lane-card__figure--shortfall {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+}
+
 .lane-card__figure strong {
   font-family: var(--font-mono);
   font-size: 1rem;

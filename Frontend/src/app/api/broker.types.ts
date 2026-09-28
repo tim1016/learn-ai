@@ -8001,7 +8001,7 @@ export interface components {
          *     Python authors every dollar string and every width. When ``ready``, the
          *     segments sum exactly (in cents) to ``total_usd`` plus
          *     ``account_shortfall_usd`` (what the bots' and orders' claims exceed the
-         *     account by; "0.00" unless overdrawn), their widths to 10000 basis points,
+         *     account by; absent unless overdrawn), their widths to 10000 basis points,
          *     and ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.
          *     Otherwise the bar's figures are absent and ``detail`` names the reason --
          *     an unknown is never shown as $0 -- while the broker's own ``equity_usd``
@@ -19460,8 +19460,10 @@ export interface components {
          * @description One place the account's money is, in display order on the money bar.
          *
          *     ``label`` is the legend's words for the slice; ``share_bps`` its width.
-         *     ``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``
-         *     and ``still_claimed_usd`` to a stopped bot that still holds money.
+         *     ``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent
+         *     beyond its balance -- absent, never "0.00", when nothing is short;
+         *     ``released_usd`` and ``still_claimed_usd`` to a stopped bot that still
+         *     holds money.
          *     ``palette_index`` is a bot's stable colour slot (its registration order
          *     on the account), the same on every surface that draws that bot.
          *     ``settling`` is sale proceeds on their way into cash: not yet free to

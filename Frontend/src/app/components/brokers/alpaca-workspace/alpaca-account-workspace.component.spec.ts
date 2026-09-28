@@ -27,6 +27,7 @@ import {
   UNPOLLED_LANE_STATE,
   type LaneVerdictState,
 } from '../../../services/alpaca-live-verdict.service';
+import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
@@ -389,6 +390,30 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(await screen.findByText(/No daily loss limit is set for this account/)).toBeTruthy();
     expect(screen.queryByText('Free to deploy')).toBeNull();
     expect(screen.queryByText(/\$0\.00/)).toBeNull();
+  });
+
+  it('keeps Alpaca’s Equity and Today, dated, when the bar cannot be drawn', async () => {
+    await renderWorkspace({
+      money: () => Promise.resolve({
+        ...unavailableAccountMoney('A manual order is still working, so this account’s money cannot be drawn yet.'),
+        account_id: TEST_ACCOUNT_ID,
+        equity_usd: '100012.40',
+        today_pnl_usd: '-3.20',
+        observed_at_ms: 1_700_000_000_000,
+      }),
+    });
+
+    const figure = async (term: string) =>
+      (await screen.findByText(term, { selector: 'dt' })).nextElementSibling?.textContent?.trim();
+    expect(await figure('Equity')).toBe('$100,012.40');
+    expect(await figure('Today')).toBe('-$3.20');
+    const readAt = (await screen.findByText('Read at', { selector: 'dt' })).nextElementSibling;
+    expect(readAt?.querySelector('app-timestamp-display')?.textContent?.trim()).toBe(
+      formatTimestampDisplay(1_700_000_000_000, { mode: 'local' }),
+    );
+    expect(screen.getByText(/A manual order is still working/)).toBeTruthy();
+    expect(screen.queryByText('Free to deploy')).toBeNull();
+    expect(screen.queryByText('Cash', { selector: 'dt' })).toBeNull();
   });
 
   it('says a failed money read failed rather than showing nothing', async () => {

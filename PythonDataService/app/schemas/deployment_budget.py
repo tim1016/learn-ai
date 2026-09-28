@@ -77,8 +77,10 @@ class MoneySegment(BaseModel):
     """One place the account's money is, in display order on the money bar.
 
     ``label`` is the legend's words for the slice; ``share_bps`` its width.
-    ``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``
-    and ``still_claimed_usd`` to a stopped bot that still holds money.
+    ``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent
+    beyond its balance -- absent, never "0.00", when nothing is short;
+    ``released_usd`` and ``still_claimed_usd`` to a stopped bot that still
+    holds money.
     ``palette_index`` is a bot's stable colour slot (its registration order
     on the account), the same on every surface that draws that bot.
     ``settling`` is sale proceeds on their way into cash: not yet free to
@@ -104,8 +106,10 @@ class MoneySegment(BaseModel):
             raise ValueError("only a bot or stopped slice names a bot")
         if (self.palette_index is not None) != (bot or stopped):
             raise ValueError("a bot or stopped slice, and only one, carries its bot's palette index")
-        if (self.parts is not None, self.shortfall_usd is not None) != (bot, bot):
+        if (self.parts is not None) != bot or (self.shortfall_usd is not None and not bot):
             raise ValueError("parts and shortfall_usd belong to a running bot's slice")
+        if self.shortfall_usd is not None and _cents(self.shortfall_usd) <= 0:
+            raise ValueError("a shortfall is stated only when something is short")
         if (self.released_usd is not None, self.still_claimed_usd is not None) != (stopped, stopped):
             raise ValueError("released_usd and still_claimed_usd belong to a stopped bot's slice")
         return self
@@ -117,7 +121,7 @@ class AccountMoneyView(BaseModel):
     Python authors every dollar string and every width. When ``ready``, the
     segments sum exactly (in cents) to ``total_usd`` plus
     ``account_shortfall_usd`` (what the bots' and orders' claims exceed the
-    account by; "0.00" unless overdrawn), their widths to 10000 basis points,
+    account by; absent unless overdrawn), their widths to 10000 basis points,
     and ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.
     Otherwise the bar's figures are absent and ``detail`` names the reason --
     an unknown is never shown as $0 -- while the broker's own ``equity_usd``
@@ -151,11 +155,13 @@ class AccountMoneyView(BaseModel):
 
     @model_validator(mode="after")
     def conserves_every_dollar(self) -> AccountMoneyView:
-        figures = (self.total_usd, self.cash_usd, self.free_to_deploy_usd, self.in_bots_usd,
-                   self.held_by_stopped_usd, self.outside_bots_usd, self.account_charges_usd,
-                   self.settling_usd, self.account_shortfall_usd, self.stopped_holding_count)
+        headline = (self.total_usd, self.cash_usd, self.free_to_deploy_usd, self.in_bots_usd,
+                    self.held_by_stopped_usd, self.outside_bots_usd, self.account_charges_usd,
+                    self.settling_usd, self.stopped_holding_count)
+        shortfall = self.account_shortfall_usd
         if self.state != "ready":
-            if self.segments or any(value is not None for value in (*figures, self.open_pnl_usd, self.open_pnl_detail)):
+            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail)
+            if self.segments or any(value is not None for value in (*headline, *notes)):
                 raise ValueError("a money read that cannot draw its bar carries a reason, never bar figures")
             if self.state == "legacy" and (self.equity_usd, self.today_pnl_usd, self.observed_at_ms) != (None, None, None):
                 raise ValueError("a legacy money read carries only its Settings action")
@@ -163,12 +169,13 @@ class AccountMoneyView(BaseModel):
                 raise ValueError("broker figures carry the instant they were observed")
             return self
         total = self.total_usd
-        shortfall = self.account_shortfall_usd
-        if total is None or shortfall is None or any(value is None for value in figures) or self.observed_at_ms is None or not self.segments:
+        if total is None or any(value is None for value in headline) or self.observed_at_ms is None or not self.segments:
             raise ValueError("a ready money read carries every headline figure and its segments")
+        if shortfall is not None and _cents(shortfall) <= 0:
+            raise ValueError("an account shortfall is stated only when the account is overdrawn")
         if (self.open_pnl_usd is None) == (self.open_pnl_detail is None):
             raise ValueError("open P&L is either a figure or the reason there is none")
-        if sum(_cents(segment.amount_usd) for segment in self.segments) != _cents(total) + _cents(shortfall):
+        if sum(_cents(segment.amount_usd) for segment in self.segments) != _cents(total) + (0 if shortfall is None else _cents(shortfall)):
             raise ValueError("the money bar's segments must sum exactly to total_usd plus account_shortfall_usd")
         if sum(segment.share_bps for segment in self.segments) != FULL_BAR_BPS:
             raise ValueError("the money bar's widths must sum to 10000 basis points")

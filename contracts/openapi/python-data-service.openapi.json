@@ -102,7 +102,7 @@
       },
       "AccountMoneyView": {
         "additionalProperties": false,
-        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd`` plus\n``account_shortfall_usd`` (what the bots' and orders' claims exceed the\naccount by; \"0.00\" unless overdrawn), their widths to 10000 basis points,\nand ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.\nOtherwise the bar's figures are absent and ``detail`` names the reason --\nan unknown is never shown as $0 -- while the broker's own ``equity_usd``\nand ``today_pnl_usd`` stay whenever they are known.",
+        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd`` plus\n``account_shortfall_usd`` (what the bots' and orders' claims exceed the\naccount by; absent unless overdrawn), their widths to 10000 basis points,\nand ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.\nOtherwise the bar's figures are absent and ``detail`` names the reason --\nan unknown is never shown as $0 -- while the broker's own ``equity_usd``\nand ``today_pnl_usd`` stay whenever they are known.",
         "properties": {
           "account_charges_usd": {
             "anyOf": [
@@ -26643,7 +26643,7 @@
       },
       "MoneySegment": {
         "additionalProperties": false,
-        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``\nand ``still_claimed_usd`` to a stopped bot that still holds money.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
+        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent\nbeyond its balance -- absent, never \"0.00\", when nothing is short;\n``released_usd`` and ``still_claimed_usd`` to a stopped bot that still\nholds money.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
         "properties": {
           "amount_usd": {
             "title": "Amount Usd",

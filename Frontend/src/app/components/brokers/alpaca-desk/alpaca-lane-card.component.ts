@@ -68,7 +68,7 @@ type LaneCardState =
  * Every dollar and width is the account-money read's (PRD #2560 D12); the
  * running, Dry Run and attention counts are one field each of the lane's
  * directory summary, and the stopped-still-holding count is the money read's
- * own stopped slices. The card adds nothing up. Each read is this card's own
+ * `stopped_holding_count`. The card adds nothing up. Each read is this card's own
  * `resource()` against this lane's frozen target: one account's failed read
  * is that card's alone and leaves every sibling card whole (FR-093).
  *
@@ -206,20 +206,18 @@ export class AlpacaLaneCardComponent {
 
   /** Running and Dry Run counts, each one field of the lane's directory
    * summary, and the stopped bots still holding money — the money read's own
-   * stopped slices. A count the lane did not report is said to be unknown,
-   * never shown as zero. */
+   * `stopped_holding_count`. A count the backend did not report is said to be
+   * unknown, never shown as zero (or left out, as a zero is). */
   protected readonly botCounts = computed<readonly string[]>(() => {
     const summary = this.lane().provider_summary;
     const running = summary?.running_count ?? null;
     const dryRun = summary?.dry_run_count ?? null;
     const money = this.cardMoney();
-    const holding = money.kind === 'ready'
-      ? (money.view.segments ?? []).filter((segment) => segment.kind === 'stopped').length
-      : 0;
+    const holding = money.kind === 'ready' ? money.view.stopped_holding_count ?? null : null;
     if (running === null || dryRun === null) return ['Bot counts unavailable'];
     return [
       `${running} running`,
-      ...(holding > 0 ? [`${holding} stopped, still holding`] : []),
+      ...(holding === null ? ['Stopped holdings unknown'] : holding > 0 ? [`${holding} stopped, still holding`] : []),
       `${dryRun} Dry Run`,
     ];
   });

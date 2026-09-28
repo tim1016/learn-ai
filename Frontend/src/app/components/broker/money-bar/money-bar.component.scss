@@ -69,6 +69,18 @@
   background: var(--text-muted);
 }
 
+/* Sale proceeds on their way into cash: upright pinstripes, unlike any other
+   kind's pattern, so the slice is never told apart by colour alone. Sky is a
+   registered chart-series token, >= 3:1 on the surface
+   (chart-series-color-tokens.spec.ts). */
+.money-bar__slice--settling {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--chart-series-sky) 0 2px,
+    color-mix(in srgb, var(--chart-series-sky) 35%, var(--bg-sunken)) 2px 5px
+  );
+}
+
 .money-bar__slice--new {
   background: repeating-linear-gradient(
     135deg,
@@ -135,4 +147,18 @@
   padding-left: calc(12px + var(--space-2));
   font-size: var(--fs-xs);
   color: var(--text-subtle);
+}
+
+.money-bar__notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.money-bar__note--shortfall {
+  color: var(--text-primary);
+  font-weight: 600;
 }

@@ -443,7 +443,7 @@ def _money_view(
         free_to_deploy_usd=dollars(bar.cents_of("free")), in_bots_usd=dollars(bar.cents_of("bot")),
         held_by_stopped_usd=dollars(bar.cents_of("stopped")), outside_bots_usd=dollars(bar.cents_of("outside")),
         account_charges_usd=dollars(bar.cents_of("charges")), settling_usd=dollars(bar.cents_of("settling")),
-        account_shortfall_usd=dollars(bar.shortfall_cents), stopped_holding_count=bar.count_of("stopped"),
+        account_shortfall_usd=_shortfall_usd(bar.shortfall_cents), stopped_holding_count=bar.count_of("stopped"),
         open_pnl_usd=open_pnl, open_pnl_detail=open_pnl_detail,
         segments=tuple(_segment_view(segment) for segment in bar.segments),
     )
@@ -512,11 +512,20 @@ def _segment_view(segment: BarSegment) -> MoneySegment:
         kind=segment.kind, strategy_instance_id=segment.strategy_instance_id, label=_segment_label(segment),
         amount_usd=dollars(segment.cents), share_bps=segment.bps,
         parts=None if segment.parts is None else _parts_view(segment.parts),
-        shortfall_usd=None if segment.shortfall_cents is None else dollars(segment.shortfall_cents),
+        shortfall_usd=_shortfall_usd(segment.shortfall_cents),
         released_usd=None if segment.released_cents is None else dollars(segment.released_cents),
         still_claimed_usd=None if segment.still_claimed_cents is None else dollars(segment.still_claimed_cents),
         palette_index=segment.palette_index,
     )
+
+
+def _shortfall_usd(cents: int | None) -> str | None:
+    """A shortfall in dollars, or ``None`` when nothing is short.
+
+    Absent rather than "0.00", so a legend states a shortfall only where there
+    is one -- the browser never compares dollar strings to hide a zero.
+    """
+    return None if cents is None or cents == 0 else dollars(cents)
 
 
 def _parts_view(parts: BarParts) -> MoneyParts:
