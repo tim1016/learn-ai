@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from decimal import Decimal, Inexact, localcontext
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.money import (
     cents_required,
     cents_spendable,
     consent_cents,
+    display_cents,
     dollars,
     money_context,
     normalize_money,
@@ -48,9 +49,7 @@ from app.services.market_liveness import prepared_top_of_book
 
 def display_dollars(amount: Decimal) -> str:
     """Display only; this rounded value never feeds custody admission."""
-    with money_context(), localcontext() as context:
-        context.traps[Inexact] = False
-        return str(amount.quantize(Decimal("0.01")))
+    return dollars(display_cents(amount))
 
 
 def _primary(account_id: str) -> ActiveClerkRuntime:
