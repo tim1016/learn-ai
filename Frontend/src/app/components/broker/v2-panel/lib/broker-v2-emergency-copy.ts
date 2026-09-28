@@ -85,7 +85,7 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   STREAM_HEALTH_HOLD: {
     label: 'Stream-health hold',
     explanation:
-      'A market-data or execution channel is unhealthy. New submits are paused account-wide.',
+      'A market-data or execution channel is unhealthy. New submits are held account-wide.',
   },
   SUBMIT_GATE: {
     label: 'Submit gate',
@@ -94,12 +94,12 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   UNEXPLAINED_ORDER_HOLD: {
     label: 'Unexplained-order hold',
     explanation:
-      'An order this account did not submit was seen in the journal. New submits are paused account-wide.',
+      'An order this account did not submit was seen in the journal. New submits are held account-wide.',
   },
   UNKNOWN_HOLD: {
     label: 'Hold active; cause unrecognised',
     explanation:
-      "The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause.",
+      "The Clerk holds this account against new entries under a cause this build cannot name. New submits are held account-wide until it clears. Read the Clerk's own hold record for the cause.",
   },
   blocked: {
     label: 'Blocked',
