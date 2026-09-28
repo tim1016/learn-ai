@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Literal
 
 import asyncpg
 
@@ -226,11 +227,12 @@ def _runner() -> BotTaskRegistry:
     return registry
 
 
-#: The submission keys whose Deploy this process is sending right now. Each
-#: key is sent once at a time: a concurrent resend is refused rather than
-#: allowed to name or start a second bot, and the recovery read answers
-#: ``in_flight`` for exactly these.
-_SENDING: set[str] = set()
+#: The Deploys this process is sending right now, by submission key, with the
+#: bot each has named so far (``None`` until its claim). Each key is sent once
+#: at a time: a concurrent resend is refused rather than allowed to name or
+#: start a second bot, and the recovery read answers ``in_flight`` for exactly
+#: these, named or not.
+_SENDING: dict[str, DeploySubmission | None] = {}
 
 #: The two refusals that settle nothing about a key's first Deploy — a second
 #: copy while it is being sent, and the key resent with other settings. A
@@ -250,11 +252,11 @@ def _sending(submission_key: str) -> Iterator[None]:
             http_status=409,
             reason_code=SUBMISSION_IN_FLIGHT,
         )
-    _SENDING.add(submission_key)
+    _SENDING[submission_key] = None
     try:
         yield
     finally:
-        _SENDING.discard(submission_key)
+        del _SENDING[submission_key]
 
 
 def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) -> str:
@@ -346,6 +348,7 @@ async def deploy_alpaca_paper_bot(
         # key keeps the name it was first given and the runner's own
         # identity fences judge a resend.
         claim = _claim_bot_name(ledger, account_id, request, renew=earlier if consent is not None else None)
+        _SENDING[request.submission_key] = claim
         sid = claim.strategy_instance_id
         try:
             started = await registry.deploy_with_admission(
@@ -396,11 +399,17 @@ async def deploy_alpaca_paper_bot(
     )
 
 
-#: The recovery read's words for a key whose Deploy has not committed.
+#: The recovery read's words for a key whose Deploy has not committed, and
+#: for one still being sent before it has named its bot.
 _UNCOMMITTED_COPY: dict[str, tuple[str, str, str]] = {
     "in_flight": (
         "{sid} is being deployed now",
         "Nothing is committed for it yet.",
+        "Check again in a moment; checking never starts a second bot.",
+    ),
+    "unnamed": (
+        "This Deploy is being sent now",
+        "Its bot is not named yet, and nothing is committed for it.",
         "Check again in a moment; checking never starts a second bot.",
     ),
     "not_committed": (
@@ -411,29 +420,44 @@ _UNCOMMITTED_COPY: dict[str, tuple[str, str, str]] = {
 }
 
 
+def _uncommitted(
+    status: Literal["in_flight", "not_committed"], submission_key: str, claim: DeploySubmission | None,
+) -> DeploySubmissionUncommitted:
+    message, explanation, next_action = _UNCOMMITTED_COPY[status if claim is not None else "unnamed"]
+    return DeploySubmissionUncommitted(
+        status=status, submission_key=submission_key,
+        strategy_instance_id=None if claim is None else claim.strategy_instance_id,
+        claimed_at_ms=None if claim is None else claim.claimed_at_ms,
+        message=message if claim is None else message.format(sid=claim.strategy_instance_id),
+        explanation=explanation, next_action=next_action,
+    )
+
+
 async def deploy_submission_status(
     account_id: str, submission_key: str,
 ) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted | None:
     """The recovery read: what one Deploy submission did, by its key.
 
-    The committed Deploy's receipt; otherwise the name the key holds and
-    whether this process is still sending it; ``None`` for a key never
-    claimed. With no bot runner there is no ledger to read, so the read is
-    refused (503) rather than answered.
+    A key this process is sending is ``in_flight`` before anything else is
+    read -- from the moment its Deploy arrives, named or not, so no read ever
+    tells a client that a Deploy still running started nothing. Otherwise the
+    committed Deploy's receipt, or the name the key claimed and never
+    committed; ``None`` only for a key never claimed and not being sent. With
+    no bot runner there is no ledger to read, so the read is refused (503)
+    rather than answered.
     """
-    claim = DeploySubmissionLedger(_runner().artifacts_root).by_key(submission_key)
-    if claim is None:
-        return None
-    receipt = await _committed_receipt(account_id, claim)
-    if receipt is not None:
-        return receipt
-    status = "in_flight" if submission_key in _SENDING else "not_committed"
-    message, explanation, next_action = _UNCOMMITTED_COPY[status]
-    return DeploySubmissionUncommitted(
-        status=status, submission_key=submission_key, strategy_instance_id=claim.strategy_instance_id,
-        claimed_at_ms=claim.claimed_at_ms, message=message.format(sid=claim.strategy_instance_id),
-        explanation=explanation, next_action=next_action,
-    )
+    ledger = DeploySubmissionLedger(_runner().artifacts_root)
+    if submission_key not in _SENDING:
+        claim = ledger.by_key(submission_key)
+        if claim is None:
+            return None
+        receipt = await _committed_receipt(account_id, claim)
+        if receipt is not None:
+            return receipt
+        # A resend of the key may have begun while custody was read.
+        if submission_key not in _SENDING:
+            return _uncommitted("not_committed", submission_key, claim)
+    return _uncommitted("in_flight", submission_key, _SENDING[submission_key])
 
 
 async def preview_alpaca_paper_start_admission(

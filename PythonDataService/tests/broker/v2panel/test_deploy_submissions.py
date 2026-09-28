@@ -28,7 +28,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import AdmittedBotStart, set_bot_task_registry
 from app.services.bot_runner_errors import UnknownBotError
-from app.services.broker_v2_panel import budget_deploy, deploy_submissions
+from app.services.broker_v2_panel import budget_deploy, deploy_submissions, panel_deploy
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
     DeploySubmission,
@@ -495,6 +495,48 @@ async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_and_a_res
     assert resent.status_code == 409 and resent.json()["detail"]["message"] == "This Deploy is already being sent."
     assert resent.json()["detail"]["reason_code"] == "deploy_submission_in_flight"
     assert sent.status_code == 201 and sent.json()["strategy_instance_id"] == DEPLOYED_SID
+    assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID]
+
+
+async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_before_it_names_its_bot(
+    budgeted, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The checks before the claim (view, validation, consent) are the slow part of a Deploy.
+
+    A read in that window must never answer "nothing started": the client
+    would free the key and a second Deploy could start beside this one.
+    """
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    view = panel_deploy.get_alpaca_paper_deploy_view
+
+    async def slow_view(*args: object, **kwargs: object) -> object:
+        entered.set()
+        await release.wait()
+        return await view(*args, **kwargs)
+
+    monkeypatch.setattr(panel_deploy, "get_alpaca_paper_deploy_view", slow_view)
+
+    async with _client(budgeted.app) as client:
+        sending = asyncio.create_task(client.post(_BOTS, json=_BUDGETED))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        in_flight = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+        release.set()
+        sent = await sending
+        recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert in_flight.status_code == 200, in_flight.text
+    assert in_flight.json() == {
+        "status": "in_flight",
+        "submission_key": _BODY["submission_key"],
+        "strategy_instance_id": None,
+        "claimed_at_ms": None,
+        "message": "This Deploy is being sent now",
+        "explanation": "Its bot is not named yet, and nothing is committed for it.",
+        "next_action": "Check again in a moment; checking never starts a second bot.",
+    }
+    assert sent.status_code == 201 and sent.json()["strategy_instance_id"] == DEPLOYED_SID
+    assert recovered.status_code == 200 and recovered.json() == sent.json()
     assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID]
 
 

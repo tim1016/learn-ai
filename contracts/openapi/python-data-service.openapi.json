@@ -14153,14 +14153,21 @@
       },
       "DeploySubmissionUncommitted": {
         "additionalProperties": false,
-        "description": "The recovery read's answer for a key that named a bot whose Deploy has not committed.\n\n``status`` is what this clerk knows, never a guess: ``in_flight`` while\nthis process is sending that Deploy now; ``not_committed`` when nothing\nis sending it and custody holds no commit for the name -- nothing was set\naside. A committed Deploy answers with its ``BudgetDeployCommandReceipt``\ninstead, and a key never claimed is a 404.",
+        "description": "The recovery read's answer for a key whose Deploy has not committed.\n\n``status`` is what this clerk knows, never a guess: ``in_flight`` while\nthis process is sending that Deploy now, whether or not it has named its\nbot yet; ``not_committed`` when nothing is sending it and custody holds no\ncommit for the name it claimed -- nothing was set aside. A committed\nDeploy answers with its ``BudgetDeployCommandReceipt`` instead, and a key\nnever claimed and not being sent is a 404.",
         "properties": {
           "claimed_at_ms": {
-            "format": "int64",
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Claimed At Ms",
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At Ms"
           },
           "explanation": {
             "title": "Explanation",
@@ -14183,8 +14190,15 @@
             "type": "string"
           },
           "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "submission_key": {
             "title": "Submission Key",

@@ -14126,20 +14126,18 @@ export interface components {
         };
         /**
          * DeploySubmissionUncommitted
-         * @description The recovery read's answer for a key that named a bot whose Deploy has not committed.
+         * @description The recovery read's answer for a key whose Deploy has not committed.
          *
          *     ``status`` is what this clerk knows, never a guess: ``in_flight`` while
-         *     this process is sending that Deploy now; ``not_committed`` when nothing
-         *     is sending it and custody holds no commit for the name -- nothing was set
-         *     aside. A committed Deploy answers with its ``BudgetDeployCommandReceipt``
-         *     instead, and a key never claimed is a 404.
+         *     this process is sending that Deploy now, whether or not it has named its
+         *     bot yet; ``not_committed`` when nothing is sending it and custody holds no
+         *     commit for the name it claimed -- nothing was set aside. A committed
+         *     Deploy answers with its ``BudgetDeployCommandReceipt`` instead, and a key
+         *     never claimed and not being sent is a 404.
          */
         DeploySubmissionUncommitted: {
-            /**
-             * Claimed At Ms
-             * Format: int64
-             */
-            claimed_at_ms: number;
+            /** Claimed At Ms */
+            claimed_at_ms: number | null;
             /** Explanation */
             explanation: string;
             /** Message */
@@ -14152,7 +14150,7 @@ export interface components {
              */
             status: "in_flight" | "not_committed";
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id: string | null;
             /** Submission Key */
             submission_key: string;
         };
