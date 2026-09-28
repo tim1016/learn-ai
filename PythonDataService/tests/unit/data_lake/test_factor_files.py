@@ -94,7 +94,8 @@ def test_one_dividend_event_uses_prior_session_close():
     assert event[0] == "20251218"
     # Reference price is that session's RTH close.
     assert Decimal(event[3]) == Decimal("680.00")
-    # price_factor = 1 - cash * split_factor / reference_price (10 dp).
+    # price_factor = 1 - cash / reference_price — raw cash on the raw close
+    # (#2479; a later split no longer rescales an earlier dividend).
     expected_pf = (Decimal("1") - Decimal("1.81") / Decimal("680.00")).quantize(Decimal("0.0000000001"))
     assert Decimal(event[1]) == expected_pf
     # End anchor is unadjusted.

@@ -21,14 +21,25 @@ under the (false) belief that LEAN ignores the column — see the
 cross-engine parity-matrix incident where a 6-month SPY backtest ran
 only ~35 days.
 
-Math mirrors LEAN's own ``FactorFileGenerator``: walking corporate
-actions newest-to-oldest,
+Math (#2479): walking corporate actions newest-to-oldest,
 
   reference_price = close of the trading session before the ex-date
-  price_factor    = next_factor * (1 - cash_amount * split_factor / reference_price)
+  price_factor    = next_factor * (1 - cash_amount / reference_price)
 
 and each split contributes ``split_from / split_to`` to the cumulative
-split factor.
+split factor. The dividend term prices **raw cash on the raw close**,
+exactly as QuantConnect's own published factor files encode it (the
+vendored ``references/lean/7986ed0…`` AAPL file: its 2020-08-06/2020-08-28
+row pair makes the 2020-08-07 $0.82 dividend
+``0.9949942 / 0.9967882 = 1 − 0.82 / 455.61``). LEAN's ToolBox
+``FactorFileGenerator.CalculateNextDividendFactor`` instead multiplies the
+cash by the cumulative later-split factor; that input convention belongs to
+a split-adjusted dividend feed, which Polygon's raw ``cash_amount`` is not,
+and porting it verbatim made a later split rescale every earlier dividend
+day (~0.135 pp each) and made LEAN raw-mode backtests pay ``cash × S``
+($0.205 instead of $0.82 for AAPL). See
+``docs/references/lean-factor-file-dividend-pricing.md`` and the golden
+fixture ``tests/fixtures/golden/lean-factor-file-aapl/``.
 
 The builder emits exactly the actions its :class:`FactorFilePlan` keeps
 (those inside a covered span, below), between two anchor rows dated at
@@ -60,15 +71,11 @@ session) scales every bar of a span by the same factor, so it cancels from
 every in-span ratio; omitting it is exact for ratios, and it could not be
 priced anyway (its reference session was never captured).
 
-One exception is inherited from the dividend formula above, not from
-coverage: a dividend's factor multiplies its cash by the cumulative split
-factor of the splits after it *in the file*, so a split in a later span
-rescales an earlier span's dividend-day ratio. That is LEAN's ToolBox
-generator verbatim, but QuantConnect's own factor files encode the raw/raw
-ratio (``1 - cash / reference_close``; see
-``tests/data_lake/test_factor_files_coverage.py::test_a_later_split_rescales_an_earlier_dividend_under_the_ported_formula``
-for the AAPL evidence) — an open numerical question for the owner, pinned
-there rather than silently changed here.
+A dividend's factor prices raw cash on the raw prior close (#2479), so a
+split in a later span — or a later split anywhere in the file — no longer
+rescales an earlier span's dividend-day ratio: every in-span ratio is
+exactly the product of the actions between the two bars, on the
+latest-known basis.
 
 The one thing a span does **not** promise is the absolute adjusted level:
 bars are on the basis of the last covered session, not of today, and a
@@ -193,7 +200,7 @@ def build_factor_file_bytes(
             )
         if isinstance(ev, DividendEvent):
             cash = Decimal(str(ev.cash_amount))
-            price_factor = price_factor * (Decimal(1) - cash * split_factor / reference_price)
+            price_factor = price_factor * (Decimal(1) - cash / reference_price)
         else:
             split_factor = split_factor * (Decimal(str(ev.split_from)) / Decimal(str(ev.split_to)))
         event_rows.append((row_date, price_factor, split_factor, reference_price))

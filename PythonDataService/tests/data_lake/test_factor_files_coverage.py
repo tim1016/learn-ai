@@ -268,10 +268,6 @@ def test_actions_in_a_capture_gap_leave_each_spans_ratios_as_that_span_alone() -
     differ only in the 10-dp quantization of cumulative factors. Each factor
     here is >= ~0.32, so it carries <= ~1.6e-10 relative rounding error and
     a ratio of two <= ~3.2e-10 — review measured <= 8e-11.
-
-    Span B holds no split on purpose: under the ported dividend formula a
-    later split rescales an earlier dividend's ratio (pinned below as an open
-    question), which is not what this test is about.
     """
     span_a = expected_sessions(date(2024, 3, 1), date(2024, 6, 28))
     span_b = expected_sessions(date(2024, 8, 1), date(2024, 12, 31))
@@ -304,20 +300,16 @@ def test_actions_in_a_capture_gap_leave_each_spans_ratios_as_that_span_alone() -
         assert ratios(both, span) == pytest.approx(alone, abs=1e-9, rel=0)
 
 
-def test_a_later_split_rescales_an_earlier_dividend_under_the_ported_formula() -> None:
-    """Pins a known, reported discrepancy — not an endorsement (#2452 report).
-
-    ``build_factor_file_bytes`` prices a dividend as ``1 - cash * split_factor
-    / reference_close`` with the cumulative split factor of the splits *after*
-    it, exactly as LEAN's ToolBox ``FactorFileGenerator.CalculateNextDividendFactor``
-    does at the pinned commit. Our reference close is raw, and QuantConnect's
-    own factor file for AAPL at that commit encodes the raw/raw ratio instead
-    (the 2020-08-07 $0.82 dividend before the 2020-08-31 4:1 split:
-    0.9949942 / 0.9967882 = 0.998200 = 1 - 0.82 / 455.61, not 0.999550).
-    So a split captured after a window rescales that window's dividend-day
-    ratio. Changing the formula is an owner decision; until then this test
-    makes the dependence explicit.
-    """
+def test_a_later_split_leaves_an_earlier_dividends_ratio_unchanged() -> None:
+    """#2479 flips the #2452 pin: a dividend is priced as raw cash on the
+    raw prior close (``1 - cash / reference_close``), so a split captured
+    after a dividend — later in the same file — no longer rescales that
+    dividend day's ratio. The ported ToolBox term
+    ``cash * split_factor / close`` (a split-adjusted feed's input
+    convention, not Polygon's raw ``cash_amount``) had made the ratio move
+    from ``1 - 1.75 / 100`` to ``1 - 1.75 * 0.5 / 100``; QuantConnect's own
+    published factor files encode the raw/raw ratio, pinned by the golden
+    fixture ``tests/fixtures/golden/lean-factor-file-aapl/``."""
     narrow = _day_over_day_ratios(_IN_WINDOW_SPLITS, _IN_WINDOW_DIVIDENDS, _NARROW_SESSIONS)
     with_later_split = _day_over_day_ratios(
         [*_IN_WINDOW_SPLITS, _split(date(2025, 6, 10), 1, 2)], _IN_WINDOW_DIVIDENDS, _WIDE_SESSIONS
@@ -325,7 +317,7 @@ def test_a_later_split_rescales_an_earlier_dividend_under_the_ported_formula() -
     dividend_day = _NARROW_SESSIONS.index(date(2024, 9, 20)) - 1
 
     assert narrow[dividend_day] == pytest.approx(1 - 1.75 / 100, abs=1e-9, rel=0)
-    assert with_later_split[dividend_day] == pytest.approx(1 - 1.75 * 0.5 / 100, abs=1e-9, rel=0)
+    assert with_later_split[dividend_day] == pytest.approx(1 - 1.75 / 100, abs=1e-9, rel=0)
 
 
 # ---------------------------------------------------------------------------
