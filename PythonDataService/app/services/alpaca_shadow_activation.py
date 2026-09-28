@@ -32,7 +32,7 @@ from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 @dataclass
 class ShadowActivationRefused(RuntimeError):
     message: str
-    next_action: str = "Refresh Configuration and resolve the account evidence before activating Shadow."
+    next_action: str = "Reload Settings and resolve the account evidence before activating Shadow."
     reason: str = "shadow_activation_refused"
 
     def __str__(self) -> str:

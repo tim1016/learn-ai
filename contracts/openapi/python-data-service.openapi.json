@@ -706,6 +706,10 @@
             ],
             "title": "Hold Session Start Ms"
           },
+          "limit_missing": {
+            "title": "Limit Missing",
+            "type": "boolean"
+          },
           "loss_fraction": {
             "anyOf": [
               {
@@ -745,7 +749,8 @@
           "loss_usd",
           "applied_at_ms",
           "entry_state",
-          "detail"
+          "detail",
+          "limit_missing"
         ],
         "title": "AccountRiskStateResponse",
         "type": "object"

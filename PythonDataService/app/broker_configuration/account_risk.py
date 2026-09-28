@@ -14,12 +14,14 @@ from app.schemas.broker_configuration import AccountRiskApplyRequest, AccountRis
 
 logger = logging.getLogger(__name__)
 
+_NO_LIMIT_HERE = "No daily loss limit is set for this account, so new entries are refused. Set one below and apply it."
+
 
 def _require_runtime(runtime: ActiveClerkRuntime | None) -> ActiveClerkRuntime:
     if runtime is None or runtime.sqlite_repository is None or runtime.envelope_sync is None:
         raise BrokerConfigurationError(
             "This account's risk authority is unavailable.",
-            next_step="Activate this account in Configuration, then reload risk limits.",
+            next_step="Connect this account under Broker connection in Settings, then reload the daily loss limit.",
         )
     return runtime
 
@@ -39,7 +41,9 @@ def read_account_risk_state(
         detail = {
             "held": "A standing loss hold still blocks new entries. Applying looser limits does not clear it.",
             "ready": "These limits apply to new entries immediately. Existing bot exit terms stay fixed.",
-            "unknown": readiness.detail,
+            # Settings is where the missing limit is set, so its own read says
+            # so in place rather than pointing the owner back at this page.
+            "unknown": _NO_LIMIT_HERE if readiness.limit_missing else readiness.detail,
         }[state]
         return AccountRiskStateResponse(
             account_id=repo.account_id, risk_revision=0 if policy is None else policy.revision,
@@ -47,7 +51,7 @@ def read_account_risk_state(
             loss_fraction=None if limits is None else limits.loss_fraction,
             loss_usd=None if limits is None else limits.loss_usd,
             applied_at_ms=None if policy is None else policy.applied_at_ms,
-            entry_state=state, detail=detail,
+            entry_state=state, detail=detail, limit_missing=readiness.limit_missing,
             hold_loss_limit_usd=None if cause is None else cause.loss_limit_usd,
             hold_session_start_ms=None if cause is None else cause.day_start_ms,
             hold_policy_revision=None if cause is None else cause.policy_revision,

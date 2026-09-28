@@ -1,18 +1,49 @@
-<section class="budget-authority" aria-labelledby="budget-authority-title">
-  <h3 id="budget-authority-title">Deployment budgets</h3>
-  @if (state.isLoading()) { <p role="status">Reading this account's deployment authority…</p> }
-  @else if (state.error()) { <p role="alert">Deployment authority is unavailable. Refresh before changing it.</p> }
-  @else if (view(); as current) {
-    <p>{{ current.detail }}</p>
-    <p>Account: <strong>{{ current.account_id }}</strong></p>
-    @if (current.state === 'legacy') {
-      <p>{{ current.active_run_count }} active run(s) will be stopped. Existing positions, orders and unsettled charges stay visible and recoverable.</p>
-      <p>After the switch, review a dollar budget and Deploy afresh. Old trading permission does not become a budget.</p>
-      <button type="button" [disabled]="!canApply()" [attr.aria-busy]="busy()" (click)="apply()">{{ busy() ? 'Switching to budgets…' : 'Stop bots and use budgets' }}</button>
+@if (view(); as current) {
+  @if (current.state === 'budget') {
+    <p #budgetsOn class="budgets-on" tabindex="-1">
+      <strong>Budgets are on.</strong> Every bot gets its own dollar budget when you deploy it.
+    </p>
+  } @else {
+    <section class="budgets" aria-labelledby="budgets-title">
+      <h3 id="budgets-title">Switch this account to budgets</h3>
+      <p>A one-time step. {{ current.detail }}</p>
+      <dl class="budgets__facts">
+        <div><dt>Bots that will stop</dt><dd>{{ current.active_run_count }}</dd></div>
+        <div><dt>Positions, orders and fees</dt><dd>stay visible and recoverable</dd></div>
+      </dl>
+      @if (confirming()) {
+        <div class="budgets__confirm" role="group" aria-labelledby="budgets-confirm-title">
+          <h4 #confirmHeading id="budgets-confirm-title" tabindex="-1">Switch to budgets now?</h4>
+          <p>This cannot be undone. {{ stopsCopy() }} Afterwards every bot needs a fresh Deploy
+            with its own dollar budget; old trading permission never becomes a budget.</p>
+          <div class="budgets__actions">
+            <button type="button" class="budgets__confirm-button" [disabled]="!canApply()"
+              [attr.aria-busy]="busy()" (click)="apply()">
+              {{ busy() ? 'Switching to budgets…' : 'Stop bots and switch to budgets' }}
+            </button>
+            <button type="button" [disabled]="busy()" (click)="cancel()">Keep the current setup</button>
+          </div>
+        </div>
+      } @else {
+        <button #opener type="button" [disabled]="!canApply()" (click)="review()">Switch to budgets…</button>
+      }
+    </section>
+  }
+} @else {
+  <section class="budgets" aria-labelledby="budgets-title">
+    <h3 id="budgets-title">Budgets</h3>
+    @if (state.error()) {
+      <p role="alert">Whether this account uses budgets could not be read.
+        <button type="button" (click)="state.reload()">Try again</button></p>
+    } @else if (state.isLoading()) {
+      <p role="status">Reading whether this account uses budgets…</p>
     } @else {
-      <p role="status">Budget-backed Deploy is enabled for this account.</p>
+      <p>Waiting for this account's connection.</p>
     }
-  } @else { <p>Waiting for the selected account's current connection.</p> }
-  @if (refusal(); as error) { <app-configuration-refusal [refusal]="error" (reloadRequested)="state.reload()" /> }
-  <button type="button" [disabled]="busy() || state.isLoading()" (click)="state.reload()">Refresh deployment authority</button>
-</section>
+  </section>
+}
+@if (refusal(); as error) {
+  <div #refusalRegion tabindex="-1">
+    <app-configuration-refusal [refusal]="error" (reloadRequested)="state.reload()" />
+  </div>
+}

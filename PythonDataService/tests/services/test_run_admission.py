@@ -866,7 +866,7 @@ def _arming(state: str, *, reason_code: str | None = None, observed_at_ms: int =
         state=state,
         reason_code=reason_code,
         explanation={"ARMED": "The instance is armed.", "NOT_ARMED": "The instance has never been armed.", "UNREADABLE": "The arming ledger does not verify."}[state],
-        next_step=None if state == "ARMED" else "Review Budget authority upgrade in Configuration.",
+        next_step=None if state == "ARMED" else "Switch this account to budgets in Settings.",
         observed_at_ms=observed_at_ms,
     )
 
@@ -908,7 +908,7 @@ def test_a_not_armed_live_launch_is_admitted_and_says_every_enter_will_refuse() 
     assert decision.allowed is True
     assert decision.reason_code == "START_ADMITTED"
     assert ARMING_REQUIRED_ADMITTED_NOTE in decision.explanation
-    assert decision.next_step is not None and "Budget authority upgrade" in decision.next_step
+    assert decision.next_step is not None and "switch this account to budgets" in decision.next_step
 
 
 def test_an_armed_or_not_applicable_launch_carries_no_arming_note() -> None:

@@ -50,10 +50,10 @@ def _readiness(runtime: ActiveClerkRuntime | None, *, held: bool) -> tuple[int, 
 
 
 _READINESS_COPY: dict[DeploymentReadiness, str] = {
-    "not_applicable": "Activate this account in Configuration before deploying a bot.",
-    "upgrade_required": "Review the Budget authority upgrade in Configuration before deploying a new bot.",
+    "not_applicable": "Activate this account in Settings before deploying a bot.",
+    "upgrade_required": "Switch this account to budgets in Settings before deploying a new bot.",
     "risk_not_observed": "Current risk evidence is unavailable. New entries remain blocked until it is observed.",
-    "loss_hold": "The account is in loss hold. Clear it in Configuration after recovery; reducing exits remain available.",
+    "loss_hold": "The account is in loss hold. Clear it in Settings after recovery; reducing exits remain available.",
     "ready": "Budgeted Deploy is available. Every new run needs its own reviewed budget; Live also requires explicit consent.",
 }
 
@@ -93,7 +93,7 @@ def alpaca_live_verdict(
     if settings is None:
         return AlpacaLiveVerdict(**{**common, "deployment_readiness": "not_applicable"},
             final_verdict="unknown", headline="Alpaca is not configured",
-            detail="No valid account configuration is loaded. Open Configuration to select an account.")
+            detail="No valid account configuration is loaded. Open Settings to select an account.")
     if agreement == "disagreed" or (settings.is_live and agreement != "agreed"):
         return AlpacaLiveVerdict(**{**common, "deployment_readiness": "not_applicable"},
             final_verdict="unknown", headline="Account mode is not verified",

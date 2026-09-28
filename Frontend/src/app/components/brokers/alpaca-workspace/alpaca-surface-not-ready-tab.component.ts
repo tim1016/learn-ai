@@ -45,7 +45,7 @@ type SurfaceRefusal =
  * A not-ready account keeps its workspace (ADR 0064, FR-096): the header and
  * the tab strip stay, and the tab itself says exactly why the surface is
  * closed — the lane's lifecycle, a missing account binding, or a missing
- * capability — and points at Configuration, the one tab a lane can serve
+ * capability — and points at Settings, the one tab a lane can serve
  * before it has an account. It renders in place and never retargets: no
  * redirect to another lane, no redirect to the account list. A lane that has
  * become servable while the operator sat here links straight to its canonical
@@ -103,12 +103,12 @@ export class AlpacaSurfaceNotReadyTabComponent {
     );
   });
 
-  protected readonly configurationRoute = computed(() => {
+  protected readonly settingsRoute = computed(() => {
     const lane = this.lane();
     return lane !== null && lane.capabilities.includes('configuration_manage')
       ? accountWorkspaceTabRoute(
           { broker: lane.broker, clerkId: lane.clerk_id, accountId: null },
-          'configuration',
+          'settings',
         )
       : null;
   });

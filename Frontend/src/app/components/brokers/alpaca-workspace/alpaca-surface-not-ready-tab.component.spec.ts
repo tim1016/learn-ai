@@ -6,7 +6,7 @@ import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-
 import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
 
 describe('AlpacaSurfaceNotReadyTabComponent', () => {
-  it('explains a lane that is not ready, and keeps configuration reachable', async () => {
+  it('explains a lane that is not ready, and keeps Settings reachable', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-offline', surface: 'bots' },
       providers: [
@@ -28,8 +28,8 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
     expect(screen.getByText(/This lane is Starting,/i)).toBeTruthy();
     expect(screen.getByText(/no other lane is substituted/i)).toBeTruthy();
     expect(
-      screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
-    ).toBe('/brokers/alpaca/clerks/clerk-offline/configuration');
+      screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href'),
+    ).toBe('/brokers/alpaca/clerks/clerk-offline/settings');
     // It used to be a standalone page with its own "back to the chooser"
     // navigation. Inside the workspace the header and the tab strip are that
     // navigation, so the only link this tab adds is the way forward.
@@ -55,8 +55,8 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
 
     expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
     expect(
-      screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
-    ).toBe('/brokers/alpaca/clerks/clerk-unbound/configuration');
+      screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href'),
+    ).toBe('/brokers/alpaca/clerks/clerk-unbound/settings');
   });
 
   it('explains a lane without the surface capability, through receiptLabel', async () => {
@@ -105,6 +105,6 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
     });
 
     expect(screen.getByText(/does not list clerk lane clerk-unknown/i)).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Open lane configuration' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open Settings' })).toBeNull();
   });
 });

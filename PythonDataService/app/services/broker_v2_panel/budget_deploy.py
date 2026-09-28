@@ -132,17 +132,17 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
         else:
             with repo.write_fence():
                 if repo.budget_authority_version() < 2:
-                    raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
+                    raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
                 sync = runtime.envelope_sync
                 if sync is None:
-                    raise BudgetUnavailable("Wait for account cash and risk observations in Configuration.")
+                    raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
                 risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
                 if not risk.allowed:
                     raise BudgetUnavailable(risk.detail)
                 snapshot = sync.risk_snapshot()
                 observation = risk.observation
                 if observation is None or snapshot.policy is None:
-                    raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
+                    raise BudgetUnavailable("Set a daily loss limit in Settings and wait for fresh cash and risk evidence.")
                 # One read under the fence: the bar's free to deploy IS this
                 # preview's unreserved cash, by construction.
                 money = _read_account_money(repo, observation)

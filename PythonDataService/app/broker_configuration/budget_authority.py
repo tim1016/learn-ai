@@ -17,7 +17,7 @@ from app.services.lane_quiesce import stop_all_bots_on_lane
 
 def _require_runtime(runtime: ActiveClerkRuntime | None) -> ActiveClerkRuntime:
     if runtime is None or runtime.sqlite_repository is None or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade):
-        raise BrokerConfigurationError("The account custody authority is unavailable.", next_step="Activate or restore the account in Configuration, then retry.")
+        raise BrokerConfigurationError("The account custody authority is unavailable.", next_step="Activate or restore the account under Broker connection in Settings, then retry.")
     return runtime
 
 
@@ -32,13 +32,13 @@ def read_budget_authority(runtime: ActiveClerkRuntime | None) -> BudgetAuthority
             authorization_version=version, review_token=authority_review_token(repo),
             active_run_count=conn.execute("SELECT COUNT(*) FROM runs WHERE state='ACTIVE'").fetchone()[0],
             detail=("Fresh Deploys require dollar budgets and current consent. Historical grants cannot authorize trading." if version == 2 else
-                    "Switching to budgets stops the lane's bots and reconciles custody. Existing positions, orders and fees remain recoverable. Then review fresh dollars and terms in Deploy."),
+                    "Switching to budgets stops this account's bots and checks its orders against Alpaca. Positions, orders and fees stay visible and recoverable. Then deploy each bot afresh with its own dollar budget."),
         )
 
 
 def _require_current_selection(service: BrokerConfigurationService, runtime: ActiveClerkRuntime) -> None:
     if get_active_clerk_runtime() is not runtime:
-        raise RevisionConflict("The account authority changed during the upgrade.", next_step="Reload Configuration and review the current account.")
+        raise RevisionConflict("The account authority changed during the upgrade.", next_step="Reload Settings and review the current account.")
     selection = service.selection()
     if selection.effective_account_id is None or runtime.account_id not in {selection.effective_account_id, f"shadow:{selection.effective_account_id}"}:
         raise RevisionConflict("The selected account changed during the upgrade.")
@@ -76,7 +76,7 @@ async def apply_budget_authority(service: BrokerConfigurationService, runtime: A
                 try:
                     commit_budget_authority_cutover(repo, actor=actor, reviewed_token=request.review_token, stop_receipt=receipt.receipt_id)
                 except BudgetUnavailable as exc:
-                    raise BrokerConfigurationError(str(exc), next_step="Reload Configuration and resolve the remaining Stop evidence before retrying.") from exc
+                    raise BrokerConfigurationError(str(exc), next_step="Reload Settings and resolve the remaining Stop evidence before retrying.") from exc
                 if runtime.envelope_sync is not None:
                     runtime.envelope_sync.refresh_arming()
                 return read_budget_authority(runtime)

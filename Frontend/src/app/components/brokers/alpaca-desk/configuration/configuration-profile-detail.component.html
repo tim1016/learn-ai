@@ -1,5 +1,5 @@
 <section class="detail" aria-label="Open configuration profile">
-  <h2 class="detail__heading">Open profile</h2>
+  <h4 class="detail__heading">Open profile</h4>
   <header class="detail__header">
     <form class="detail__inline" (submit)="$event.preventDefault(); submitRename()">
       <label>
@@ -44,7 +44,7 @@
   }
 
   <form class="detail__revision" (submit)="$event.preventDefault(); submitRevision()">
-    <h3>Save the next revision</h3>
+    <h5>Save the next revision</h5>
     <p class="detail__hint">
       Revisions are immutable, so an edit writes the next one. Saving stages nothing and
       applies nothing; the approved account is not carried across a content change.
