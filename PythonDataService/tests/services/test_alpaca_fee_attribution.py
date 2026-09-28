@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
 from app.broker.contract.models import OrderSide
-from app.services.alpaca_fee_attribution import FeeCharge, FeeFill, apportion_cents, attribute_session_fees
+from app.services.alpaca_fee_attribution import (
+    FeeCharge,
+    FeeFill,
+    apportion_cents,
+    attribute_session_fees,
+    collapse_deliveries,
+)
 
 D = Decimal
 DAY = date(2026, 9, 8)
@@ -179,6 +186,28 @@ def test_duplicate_delivery_is_one_charge_and_conflict_fails_closed() -> None:
     assert result.known and result.total_for("a") == D("0.05")
     assert result.shares[0].observed_at_ms == 100
     assert not _attribute([_fill("a")], [charge, FeeCharge("fee", D("0.06"), 200)]).known
+
+
+def test_duplicate_delivery_keeps_the_first_seen_copy_in_recorded_order() -> None:
+    """One identity rule for every fee-evidence reader (PRD #2540, #2550 review).
+
+    Deliveries arrive in recorded (custody sequence) order. The first copy is
+    the recognized one even when a later redelivery carries an earlier clock
+    stamp, so polling can never move a charge's observation boundary.
+    """
+    first, later = FeeCharge("fee", D("0.05"), 200), FeeCharge("fee", D("0.05"), 100)
+    collapsed = collapse_deliveries(
+        [first, later], identity=lambda charge: charge.charge_id,
+        economics=lambda charge: replace(charge, observed_at_ms=0),
+    )
+    assert collapsed.unique == {"fee": first} and not collapsed.conflicts
+    result = _attribute([_fill("a")], [first, later])
+    assert result.known and [share.observed_at_ms for share in result.shares] == [200]
+    conflict = FeeCharge("fee", D("0.06"), 300)
+    assert collapse_deliveries(
+        [first, later, conflict], identity=lambda charge: charge.charge_id,
+        economics=lambda charge: replace(charge, observed_at_ms=0),
+    ).conflicts == {"fee": (first, conflict)}
 
 
 def test_proven_order_link_and_explicit_fill_coverage_charge_once() -> None:

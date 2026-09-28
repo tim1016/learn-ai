@@ -33,6 +33,7 @@ from app.services.alpaca_fee_attribution import (
     FeeFill,
     UnattributedCharge,
     attribute_session_fees,
+    collapse_activity_deliveries,
 )
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
@@ -214,27 +215,25 @@ def custody_fee_attribution(
     )
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
     covered_days: set[date] = set()
-    conflicting: set[date] = set()
-    all_activities: dict[str, BrokerActivity] = {}
     undated: dict[str, BrokerActivity] = {}
-    # Preserve oldest observation of each activity so repeated polling never
-    # turns an already recognized fee back into an unrecognized cash claim.
+    # Recorded order keeps each activity's first observation, so repeated
+    # polling never turns a recognized fee back into an unrecognized claim.
+    collapsed = collapse_activity_deliveries(
+        activity for snapshot in snapshots for activity in snapshot.activities
+    )
+    conflicting = {
+        et_date_at_ms(copy.occurred_at_ms)
+        for copies in collapsed.conflicts.values()
+        for copy in copies
+        if copy.occurred_at_ms is not None
+    }
+    for activity in collapsed.unique.values():
+        if activity.occurred_at_ms is None:
+            if activity.activity_type in {"FEE", "FILL", "PARTIAL_FILL"}:
+                undated[activity.activity_id] = activity
+            continue
+        by_date[et_date_at_ms(activity.occurred_at_ms)][activity.activity_id] = activity
     for snapshot in snapshots:
-        for activity in snapshot.activities:
-            prior = all_activities.get(activity.activity_id)
-            if prior is not None:
-                if prior.model_dump(exclude={"observed_at_ms"}) != activity.model_dump(exclude={"observed_at_ms"}):
-                    for at in (prior.occurred_at_ms, activity.occurred_at_ms):
-                        if at is not None:
-                            conflicting.add(et_date_at_ms(at))
-                continue
-            all_activities[activity.activity_id] = activity
-            if activity.occurred_at_ms is None:
-                if activity.activity_type in {"FEE", "FILL", "PARTIAL_FILL"}:
-                    undated[activity.activity_id] = activity
-                continue
-            day = et_date_at_ms(activity.occurred_at_ms)
-            by_date[day][activity.activity_id] = activity
         oldest = min(
             (row.occurred_at_ms for row in snapshot.activities if row.occurred_at_ms is not None), default=None
         )

@@ -38,6 +38,7 @@ from app.schemas.alpaca_fee_reconciliation import (
     PredictedSessionFees,
     SessionFeeReconciliation,
 )
+from app.services.alpaca_fee_attribution import collapse_activity_deliveries
 from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
@@ -149,16 +150,11 @@ def _observed_total(fee_rows: Sequence[BrokerActivity]) -> Decimal | None:
     """The day's charge as a positive amount, or ``None`` when it cannot be known."""
     if not fee_rows or any(row.net_amount is None for row in fee_rows):
         return None
-    unique: dict[str, BrokerActivity] = {}
-    for row in fee_rows:
-        prior = unique.get(row.activity_id)
-        # Duplicate delivery is one charge; conflicting copies fail closed.
-        # Same identity rule as the canonical fee-evidence fold: observation
-        # time is delivery metadata, every other field is economic identity.
-        if prior is not None and prior.model_dump(exclude={"observed_at_ms"}) != row.model_dump(exclude={"observed_at_ms"}):
-            return None
-        unique[row.activity_id] = row
-    return -sum((normalize_money(row.net_amount) for row in unique.values()), _ZERO)
+    # Duplicate delivery is one charge; conflicting copies fail closed.
+    collapsed = collapse_activity_deliveries(fee_rows)
+    if collapsed.conflicts:
+        return None
+    return -sum((normalize_money(row.net_amount) for row in collapsed.unique.values()), _ZERO)
 
 
 def _unobserved_reason(
