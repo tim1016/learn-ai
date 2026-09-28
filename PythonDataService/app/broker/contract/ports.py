@@ -94,7 +94,9 @@ class BrokerActivityEvidencePort(Protocol):
     ``page_token`` resumes a previous read's ``next_page_token`` so a busy
     account's history is walked in bounded steps instead of never.
     ``after_ms`` bounds the walk to one window: rows older than it are left
-    out, and reaching one completes the read.
+    out, and the read completes on a short page or on the dated page after
+    the one that crossed the window's start -- the page that confirms nothing
+    in-window lies further back. A walk that is out of order raises instead.
     """
 
     async def read_activity_evidence(

@@ -47,7 +47,7 @@ async function renderCard(
   deployIntent = false,
   siblings: LaneDescriptor[] = [],
 ) {
-  const getAccountMoney = vi.fn(doubles.getAccountMoney ?? (() => Promise.resolve(fakeAccountMoney())));
+  const getAccountMoney = vi.fn(doubles.getAccountMoney ?? (() => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))));
   const readDeskState = vi.fn(
     doubles.readDeskState
       ?? (() => Promise.resolve({ headline: 'Select an Alpaca account to activate this lane' })),
@@ -127,7 +127,9 @@ describe('AlpacaLaneCardComponent', () => {
   });
 
   it('says the stopped-still-holding count is unknown while the money cannot be read', async () => {
-    await renderCard(countedLane(), { getAccountMoney: () => Promise.resolve(unavailableAccountMoney('Wait for a fresh reading.')) });
+    await renderCard(countedLane(), {
+      getAccountMoney: () => Promise.resolve({ ...unavailableAccountMoney('Wait for a fresh reading.'), account_id: TEST_ACCOUNT_ID }),
+    });
 
     expect(await screen.findByText('Stopped holdings unknown')).toBeTruthy();
     expect(screen.queryByText(/stopped, still holding/)).toBeNull();
@@ -169,7 +171,10 @@ describe('AlpacaLaneCardComponent', () => {
   it('shows why an account has no money figures in the backend’s own words, never $0', async () => {
     await renderCard(countedLane(), {
       getAccountMoney: () =>
-        Promise.resolve(unavailableAccountMoney('No daily loss limit is set for this account, so new entries are refused. Set one in Settings.')),
+        Promise.resolve({
+          ...unavailableAccountMoney('No daily loss limit is set for this account, so new entries are refused. Set one in Settings.'),
+          account_id: TEST_ACCOUNT_ID,
+        }),
     });
 
     expect(await screen.findByText(/No daily loss limit is set for this account/)).toBeTruthy();
@@ -184,6 +189,14 @@ describe('AlpacaLaneCardComponent', () => {
     expect(reason.textContent).toContain('It is read again automatically');
     // The counts still land: they are the directory's, not the failed read's.
     expect(screen.getByText('2 running')).toBeTruthy();
+  });
+
+  it('refuses money another account’s Clerk returned, never renders its figures', async () => {
+    await renderCard(countedLane(), { getAccountMoney: () => Promise.resolve(fakeAccountMoney({ account_id: '0XOTHERACCOUNT' })) });
+
+    expect(await screen.findByText(/Account money could not be read\./)).toBeTruthy();
+    expect(screen.queryByText(/Account money \$100,000\.00/)).toBeNull();
+    expect(screen.queryByRole('list', { name: /money is/ })).toBeNull();
   });
 
   it('says a refused money read in the backend’s words, with its next step', async () => {

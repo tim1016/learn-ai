@@ -66,12 +66,17 @@ def _transfer_activity_may_overlap_window(
     )
 
 
-def _transfer_page_crossed_window(
+def _activity_page_crossed_window(
     activities: list[BrokerActivity],
     *,
     after_ms: int,
 ) -> bool:
-    """Whether a newest-first page proves all later pages predate the window."""
+    """Whether a newest-first page's oldest row falls on an ET date before the window's.
+
+    Dates, not instants: a date-only row is anchored at ET midnight and may
+    have occurred any time that day. Crossing is necessary, not sufficient --
+    completion also needs the next page to confirm the order held past it.
+    """
     if not activities:
         return False
     oldest = activities[-1]
@@ -123,16 +128,18 @@ def _validate_transfer_payload(payload: object) -> None:
         )
 
 
-def _transfer_page_oldest_ms(
+def _activity_page_oldest_ms(
     activities: list[BrokerActivity],
     *,
     previous_page_oldest_ms: int | None,
 ) -> int | None:
     """Validate newest-first ordering and return the page's oldest instant.
 
-    An undated row already makes day P&L unknown. It also prevents the date
-    boundary from proving pagination complete, so callers continue until a
-    short page instead of trusting an order that cannot be checked.
+    Raises when a page, or its first row against the previous page's oldest,
+    is out of order: the window boundary cannot be proven from such a walk.
+    An undated row cannot be placed at all, so its page returns ``None`` and
+    proves nothing; callers continue until a short page (or their page bound)
+    instead of trusting an order that cannot be checked.
     """
     occurred_at_ms = [activity.occurred_at_ms for activity in activities]
     if not occurred_at_ms or any(value is None for value in occurred_at_ms):
@@ -143,9 +150,9 @@ def _transfer_page_oldest_ms(
         and dated[0] > previous_page_oldest_ms
     ):
         raise BrokerEvidenceUnavailable(
-            "Alpaca transfer activity history was not newest-first.",
+            "Alpaca activity history was not newest-first.",
             broker=BROKER_ID,
-            detail="Transfer pagination cannot prove the prior-close boundary.",
+            detail="Activity pagination cannot prove the window's start boundary.",
         )
     return dated[-1]
 
@@ -307,7 +314,7 @@ class AlpacaBroker:
                         broker=BROKER_ID,
                         detail="A transfer row could not be mapped to the broker contract.",
                     ) from exc
-                page_oldest_ms = _transfer_page_oldest_ms(
+                page_oldest_ms = _activity_page_oldest_ms(
                     mapped,
                     previous_page_oldest_ms=previous_page_oldest_ms,
                 )
@@ -336,7 +343,7 @@ class AlpacaBroker:
                     break
                 boundary_crossed_on_previous_page = (
                     page_oldest_ms is not None
-                    and _transfer_page_crossed_window(
+                    and _activity_page_crossed_window(
                         mapped,
                         after_ms=after_ms,
                     )
@@ -400,8 +407,14 @@ class AlpacaBroker:
 
         ``after_ms`` reads one window instead of the whole history: it keeps
         the rows at or after that instant (and any undated row, which cannot
-        be placed outside it), and the walk is complete as soon as a
-        newest-first page reaches a dated row older than the window.
+        be placed outside it). It proves the window the way the transfer walk
+        does: pages must be newest-first, within a page and across pages, or
+        the read raises ``BrokerEvidenceUnavailable``; and it is complete on a
+        short page, or on the first fully dated page after one whose oldest
+        row falls on an ET date before the window's -- that extra page is what
+        confirms no in-window row sits further back. An undated row on a page
+        withholds the proof, so the walk goes on to a short page or its page
+        bound, where ``next_page_token`` resumes it.
         """
         return await self._activity_evidence(page_size=100, page_token=page_token, after_ms=after_ms)
 
@@ -409,19 +422,28 @@ class AlpacaBroker:
         self, *, page_size: int, page_token: str | None, after_ms: int | None = None,
     ) -> BrokerActivityEvidence:
         activities: list[BrokerActivity] = []
+        previous_page_oldest_ms: int | None = None
+        boundary_crossed_on_previous_page = False
         for _ in range(_ACTIVITY_MAX_PAGES):
             payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
             page = [adapter.from_alpaca_activity(payload) for payload in payloads]
             if after_ms is None:
                 activities.extend(page)
+                window_proven = False
             else:
+                page_oldest_ms = _activity_page_oldest_ms(
+                    page, previous_page_oldest_ms=previous_page_oldest_ms,
+                )
                 activities.extend(
                     activity for activity in page
                     if activity.occurred_at_ms is None or activity.occurred_at_ms >= after_ms
                 )
-                if any(activity.occurred_at_ms is not None and activity.occurred_at_ms < after_ms for activity in page):
-                    return BrokerActivityEvidence(activities=activities, history_complete=True)
-            if len(payloads) < page_size:
+                window_proven = boundary_crossed_on_previous_page and page_oldest_ms is not None
+                boundary_crossed_on_previous_page = page_oldest_ms is not None and _activity_page_crossed_window(
+                    page, after_ms=after_ms,
+                )
+                previous_page_oldest_ms = page_oldest_ms
+            if window_proven or len(payloads) < page_size:
                 return BrokerActivityEvidence(activities=activities, history_complete=True)
             next_token = payloads[-1].get("id")
             if not isinstance(next_token, str) or not next_token or next_token == page_token:

@@ -16,7 +16,7 @@
         @for (line of statement(); track line.label) {
           <div class="deployment-budget__line" [class.deployment-budget__line--total]="line.total">
             <dt>{{ line.label }}</dt>
-            <dd>{{ line.amount_usd | currency: 'USD' }}</dd>
+            <dd>{{ line.amount_usd | authoredUsd }}</dd>
           </div>
         }
       </dl>
@@ -29,7 +29,7 @@
           <p class="deployment-budget__fine">Open gain or loss on shares: no current price.</p>
         } @else {
           <p class="deployment-budget__fine">
-            Open gain or loss on shares: <span class="num" [class.positive]="pnl > 0" [class.negative]="pnl < 0">{{ pnl | currency: 'USD' }}</span>, counted when sold.
+            Open gain or loss on shares: <span class="num" [class.positive]="pnl > 0" [class.negative]="pnl < 0">{{ openPnlText() }}</span>, counted when sold.
           </p>
         }
       }

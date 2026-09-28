@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 
-from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerRateLimited
+from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerEvidenceUnavailable, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -154,6 +154,8 @@ class _FakePort:
         self, *, page_token: str | None = None, after_ms: int | None = None,
     ) -> BrokerActivityEvidence:
         self.evidence_calls.append({"page_token": page_token, "after_ms": after_ms})
+        if self._error is not None:
+            raise self._error
         assert self._evidence is not None
         return self._evidence
 
@@ -529,6 +531,28 @@ async def test_activity_period_continues_an_unfinished_read() -> None:
     assert response.status_code == 200
     assert response.json()["evidence"]["history_complete"] is True
     assert [call["page_token"] for call in port.evidence_calls] == ["tok-older"]
+
+
+async def test_activity_period_names_an_unprovable_walk_instead_of_failing_opaquely() -> None:
+    """An out-of-order walk reaches the owner as a named 503, never a 500 (#2569 review)."""
+    get_broker_registry().register(
+        _FakePort(
+            error=BrokerEvidenceUnavailable(
+                "Alpaca activity history was not newest-first.",
+                broker="alpaca",
+                detail="Activity pagination cannot prove the window's start boundary.",
+            ),
+        ),
+    )
+
+    response = await _get("/api/brokers/alpaca/activities/period?period=30d")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "broker": "alpaca",
+        "message": "Alpaca activity history was not newest-first.",
+        "why": "Activity pagination cannot prove the window's start boundary.",
+    }
 
 
 async def test_activity_period_requires_a_known_period() -> None:

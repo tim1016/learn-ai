@@ -24,7 +24,7 @@
         <p role="status">{{ message }}</p>
       }
       @if (report.account_unattributed_usd !== null && !report.known) {
-        <p>Account charges not yet matched to a bot: {{ report.account_unattributed_usd | currency:'USD' }}</p>
+        <p>Account charges not yet matched to a bot: {{ report.account_unattributed_usd | authoredUsd }}</p>
       }
       <div class="fee-rows">
         @for (row of rows(); track row.subject_id) {
@@ -34,10 +34,10 @@
               <code class="fee-row__ref">{{ row.order_id }}</code>
             }
             <dl>
-              <dt>Estimated</dt><dd>{{ row.estimated_usd | currency:'USD' }}</dd>
-              <dt>Settled</dt><dd>{{ row.modelled_settled_usd | currency:'USD' }}</dd>
-              <dt>Charged by Alpaca</dt><dd>{{ row.observed_usd | currency:'USD' }}</dd>
-              <dt>Total</dt><dd>{{ row.total_usd | currency:'USD' }}</dd>
+              <dt>Estimated</dt><dd>{{ row.estimated_usd | authoredUsd }}</dd>
+              <dt>Settled</dt><dd>{{ row.modelled_settled_usd | authoredUsd }}</dd>
+              <dt>Charged by Alpaca</dt><dd>{{ row.observed_usd | authoredUsd }}</dd>
+              <dt>Total</dt><dd>{{ row.total_usd | authoredUsd }}</dd>
             </dl>
           </div>
         } @empty {

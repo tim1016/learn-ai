@@ -1,8 +1,8 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 
 import type { ActivityPeriod } from '../../../api/alpaca.types';
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { BrokersService } from '../../../services/brokers.service';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
@@ -23,7 +23,7 @@ const PERIOD_SCOPE: Readonly<Record<ActivityPeriod, string>> = {
 @Component({
   selector: 'app-fee-attribution',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, TimestampDisplayComponent],
   templateUrl: './fee-attribution.component.html',
   styleUrl: './fee-attribution.component.scss',
 })

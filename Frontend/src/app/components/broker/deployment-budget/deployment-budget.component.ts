@@ -1,6 +1,6 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import { BrokerV2PanelService, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
@@ -19,7 +19,7 @@ let nextHeadingId = 0;
 @Component({
   selector: 'app-deployment-budget',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, MoneyBarComponent, TimestampDisplayComponent],
   templateUrl: './deployment-budget.component.html',
   styleUrl: './deployment-budget.component.scss',
 })
@@ -32,6 +32,11 @@ export class DeploymentBudgetComponent {
   readonly holdsShares = input(false);
   /** The bot panel's open gain or loss on shares; null when there is no current price. */
   readonly openPnl = input<number | null>(null);
+  /**
+   * The same figure as the panel formats it: a money surface hands no value
+   * to a pipe that formats numbers (PRD #2560 D12).
+   */
+  readonly openPnlText = input<string | null>(null);
 
   protected readonly headingId = `deployment-budget-heading-${nextHeadingId++}`;
   private readonly service = inject(BrokerV2PanelService);

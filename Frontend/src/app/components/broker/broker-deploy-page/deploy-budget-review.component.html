@@ -9,14 +9,14 @@
     @if (facts.risk_limits_summary) { <p>{{ facts.risk_limits_summary }}</p> }
     <dl>
       <div><dt>World / account</dt><dd>{{ worldLabels[facts.world] }} · {{ facts.custody_account_id }}</dd></div>
-      <div><dt>Unreserved cash</dt><dd>{{ (facts.unreserved_usd === null || facts.unreserved_usd === undefined) ? 'Unknown' : (facts.unreserved_usd | currency:'USD') }}</dd></div>
-      <div><dt>Minimum for one position</dt><dd>{{ (facts.minimum_budget_usd === null || facts.minimum_budget_usd === undefined) ? 'Unknown' : (facts.minimum_budget_usd | currency:'USD') }}</dd></div>
-      @if (facts.estimated_price_usd !== null && facts.estimated_price_usd !== undefined) { <div><dt>Estimated entry price</dt><dd>{{ facts.estimated_price_usd | currency:'USD' }}</dd></div> }
+      <div><dt>Unreserved cash</dt><dd>{{ (facts.unreserved_usd === null || facts.unreserved_usd === undefined) ? 'Unknown' : (facts.unreserved_usd | authoredUsd) }}</dd></div>
+      <div><dt>Minimum for one position</dt><dd>{{ (facts.minimum_budget_usd === null || facts.minimum_budget_usd === undefined) ? 'Unknown' : (facts.minimum_budget_usd | authoredUsd) }}</dd></div>
+      @if (facts.estimated_price_usd !== null && facts.estimated_price_usd !== undefined) { <div><dt>Estimated entry price</dt><dd>{{ facts.estimated_price_usd | authoredUsd }}</dd></div> }
     </dl>
     @if (facts.observed_at_ms !== null && facts.observed_at_ms !== undefined) { <p>Money observed <app-timestamp-display [value]="facts.observed_at_ms" mode="local" /></p> }
     <div class="shortcuts" aria-label="Budget shortcuts">
       @for (shortcut of facts.shortcuts; track shortcut.key) {
-        <button type="button" [disabled]="disabled() || reviewing()" (click)="choose(shortcut.amount_usd)" [title]="shortcut.explanation">{{ shortcut.label }} · {{ shortcut.amount_usd | currency:'USD' }}</button>
+        <button type="button" [disabled]="disabled() || reviewing()" (click)="choose(shortcut.amount_usd)" [title]="shortcut.explanation">{{ shortcut.label }} · {{ shortcut.amount_usd | authoredUsd }}</button>
         <small>{{ shortcut.explanation }}</small>
       }
     </div>
@@ -31,7 +31,7 @@
   @if (failure(); as error) { <p role="alert">{{ error }}</p> }
   @if (reviewView(); as review) {
     @if (review.state === 'ready' && review.review_token) {
-      <p role="status">Reviewed budget: <strong>{{ draft().amount | currency:'USD' }}</strong>. Account risk revision {{ review.risk_revision }}.</p>
+      <p role="status">Reviewed budget: <strong>{{ draft().amount | authoredUsd }}</strong>. Account risk revision {{ review.risk_revision }}.</p>
       @if (review.confirmation_text; as confirmation) {
         <label for="budget-live-confirmation">Confirm Live deployment by typing <code>{{ confirmation }}</code></label>
         <input id="budget-live-confirmation" type="text" autocomplete="off" [formField]="fields.confirmation" />
