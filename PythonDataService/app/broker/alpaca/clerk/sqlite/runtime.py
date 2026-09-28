@@ -157,11 +157,10 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
-from app.schemas.market_liveness import TopOfBookQuote
 from app.services.market_liveness import (
     MarketEntryPolicy,
-    get_market_liveness_store,
     market_liveness_fact,
+    prepared_top_of_book,
 )
 from app.services.session_authority import SessionAuthorityState
 
@@ -300,7 +299,7 @@ class SqliteAlpacaClerkFacade:
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
         # states the quote directly.
-        self._quote_source = quote_source or _live_top_of_book
+        self._quote_source = quote_source or prepared_top_of_book
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -1684,13 +1683,6 @@ def _durable_decision_id(decision_id: str) -> str:
         return decision_id
     encoded = base64.urlsafe_b64encode(decision_id.encode("utf-8")).rstrip(b"=")
     return f"{_ENCODED_DECISION_PREFIX}{encoded.decode('ascii')}"
-
-
-def _live_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
-    """Prepare explicit limit-price demand, then read its current receipt."""
-    store = get_market_liveness_store()
-    store.request_symbol(symbol, now_ms=now_ms)
-    return store.top_of_book(symbol, now_ms=now_ms)
 
 
 def _is_working_order(order: OrderResource) -> bool:

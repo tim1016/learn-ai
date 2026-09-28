@@ -1,5 +1,5 @@
 import { CurrencyPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, resource, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, output, resource, signal, untracked } from '@angular/core';
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
 
 import { extractServerMessage } from '../operation-error';
@@ -12,6 +12,14 @@ export interface ReviewedDeploymentBudget {
   readonly context: string;
   readonly budget: DeploymentBudgetInput;
 }
+
+/**
+ * A price wait is transient: each review asks IBKR for the instrument, and its
+ * quote lands with a later market-data snapshot. Re-check a bounded number of
+ * times; "Refresh money" stays the manual retry after that.
+ */
+const PRICE_RECHECK_DELAY_MS = 2_000;
+const PRICE_RECHECK_LIMIT = 15;
 
 /** The review context includes both the frozen lane and all material terms. */
 export function budgetReviewContext(target: ResourceTarget, body: DeployBotBody): string {
@@ -61,6 +69,7 @@ export class DeployBudgetReviewComponent {
     return completed?.context === this.context() && completed?.amount === this.draft().amount ? completed.view : null;
   });
   protected readonly view = computed(() => this.reviewView() ?? this.initialView());
+  private readonly priceRechecks = linkedSignal({ source: this.context, computation: () => 0 });
   protected readonly ready = computed<ReviewedDeploymentBudget | null>(() => {
     const view = this.reviewView();
     const context = this.context();
@@ -82,6 +91,15 @@ export class DeployBudgetReviewComponent {
         if (prior?.context !== context || prior?.amount !== amount) this.completed.set(null);
         this.draft.update(value => value.confirmation ? { ...value, confirmation: '' } : value);
       });
+    });
+    effect(onCleanup => {
+      if (this.view()?.state !== 'awaiting_price' || this.evidence.isLoading() || this.reviewing()) return;
+      if (untracked(this.priceRechecks) >= PRICE_RECHECK_LIMIT) return;
+      const timer = setTimeout(() => {
+        this.priceRechecks.update(count => count + 1);
+        this.refresh();
+      }, PRICE_RECHECK_DELAY_MS);
+      onCleanup(() => clearTimeout(timer));
     });
   }
 

@@ -43,7 +43,7 @@ from app.schemas.deployment_budget import (
 )
 from app.services.bot_runner import UnknownBotError, get_bot_task_registry
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
-from app.services.market_liveness import get_market_liveness_store
+from app.services.market_liveness import prepared_top_of_book
 
 
 def display_dollars(amount: Decimal) -> str:
@@ -90,9 +90,14 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
     assert repo is not None
     now = repo.clock()
     try:
-        quote = get_market_liveness_store().top_of_book(symbol=request.symbol, now_ms=now)
+        quote = prepared_top_of_book(request.symbol, now)
         if quote is None:
-            raise BudgetUnavailable("Wait for a fresh IBKR price for this instrument, then review the budget.")
+            # The read above asked IBKR for this symbol; its quote arrives with
+            # a later snapshot, so the client re-checks instead of giving up.
+            return DeploymentBudgetPreview(
+                state="awaiting_price", detail="Wait for a fresh IBKR price for this instrument, then review the budget.",
+                world=world, custody_account_id=custody_id,
+            )
         requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         minimum = cents_required(requirement)
         if world == "synthetic":
@@ -279,7 +284,7 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
                 if config is None:
                     raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
                 terms = _EntryConfiguration.model_validate_json(config.config_json)
-                quote = get_market_liveness_store().top_of_book(symbol=terms.symbol, now_ms=repo.clock())
+                quote = prepared_top_of_book(terms.symbol, repo.clock())
                 if quote is None:
                     detail = "Wait for a fresh IBKR price to judge the next position's cost."
                 else:

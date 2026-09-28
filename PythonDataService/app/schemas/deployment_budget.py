@@ -47,7 +47,9 @@ class DeploymentBudgetShortcut(BaseModel):
 class DeploymentBudgetPreview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    state: Literal["ready", "unavailable"]
+    # ``awaiting_price``: the review asked IBKR for the instrument and no fresh
+    # quote has arrived yet -- transient, so the client re-checks.
+    state: Literal["ready", "unavailable", "awaiting_price"]
     detail: str
     world: AuthorityKind
     custody_account_id: str
