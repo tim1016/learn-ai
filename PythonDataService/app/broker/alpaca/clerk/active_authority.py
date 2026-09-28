@@ -348,11 +348,14 @@ async def select_synthetic_clerk_runtime(
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
     simulation_initial_cash: Decimal | None = None,
+    projection_only: bool = False,
 ) -> ActiveClerkRuntime:
     """Recover one explicit synthetic account without consulting Alpaca.
 
     The caller provides a synthetic read/trade pair.  Identity, activation and
     the opened repository must agree before a Clerk is returned.
+    A projection-only opening retains existing custody recovery, but never
+    samples simulated financial state or starts its observation cadence.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -444,8 +447,9 @@ async def select_synthetic_clerk_runtime(
             simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
         # Explicit transient consent can price the first deployment before
         # its command commits. Recovery uses the durable commitment instead.
-        await envelope_sync.tick()
-        envelope_sync.start()
+        if not projection_only:
+            await envelope_sync.tick()
+            envelope_sync.start()
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
     except Exception as exc:
