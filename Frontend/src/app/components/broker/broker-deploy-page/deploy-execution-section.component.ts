@@ -32,9 +32,8 @@ export class DeployExecutionSectionComponent {
   // Backend-authored reason this account's broker-contacting mode — Paper on
   // a paper account, Shadow or Live on a live one (ADR 0059 D2, slice 7) — is
   // unreachable for the selected strategy (#1702). `null` when it is
-  // admissible or no strategy is selected. Only one of the three is ever on
-  // offer at a time; the other two are `planned` cards this reason never
-  // reaches.
+  // admissible or no strategy is selected. The server offers one broker
+  // execution mode alongside Dry Run for the current custody world.
   readonly brokerModeUnavailableReason = input<string | null>(null);
   // Which card is this account's own broker-contacting mode — the parent's
   // `brokerMode()`. Told, not inferred: `availability` is a display state, and

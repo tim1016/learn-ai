@@ -97,7 +97,6 @@ export const DEPLOY_VIEW: DeployBotView = {
   execution_modes: [
     DRY_RUN_EXECUTION_MODE,
     { mode: 'paper', label: 'Paper', availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
-    { mode: 'live', label: 'Live', availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
   readiness_checks: [
     {
@@ -190,16 +189,6 @@ export const SHADOW_DEPLOY_VIEW: DeployBotView = {
       availability: 'available',
       explanation: 'Synthesized fills against the live account; nothing is submitted.',
     },
-    {
-      mode: 'live',
-      label: 'Live',
-      availability: 'planned',
-      // Verbatim from `paper_deploy_service._execution_modes`, the shadow
-      // world's planned-live card: shadow is a mode, not a requirement.
-      explanation:
-        'Real-money submission follows Live graduation and reviewed deployment consent; a shadow '
-        + 'rehearsal is optional (ADR 0059, amended 2026-09-09).',
-    },
   ],
 };
 
@@ -216,9 +205,8 @@ export const LIVE_DEPLOY_VIEW: DeployBotView = {
     reason_code: 'ALPACA_PAPER_DEPLOY_READY',
     headline: 'This Alpaca live account is eligible for a Clerk-governed live deployment.',
     explanation:
-      'The operator may choose Clerk-governed live execution — real-money submission for an '
-      + 'armed instance only; every ENTER of an unarmed instance is refused — or a '
-      + 'zero-broker-write Dry Run before launch.',
+      'Choose real-money execution with a reviewed budget, typed deployment consent and effective account risk limits, '
+      + 'or explore the configuration in a private Dry Run.',
     next_action: 'Complete the deployment ticket, review the summary, then deploy the bot.',
   },
   strategies: SHADOW_DEPLOY_VIEW.strategies.map((strategy) => ({
@@ -234,8 +222,8 @@ export const LIVE_DEPLOY_VIEW: DeployBotView = {
       // Verbatim from `paper_deploy_service._execution_modes`, the live
       // world's broker card.
       explanation:
-        'Orders submit real-money trades through the live Clerk for an armed instance only; '
-        + 'every ENTER of an unarmed instance is refused until an operator arms it (ADR 0059 D11).',
+        'Orders submit real-money trades through the live Clerk after typed deployment consent. '
+        + 'Every new entry must fit its budget and the effective account risk limits.',
     },
   ],
 };

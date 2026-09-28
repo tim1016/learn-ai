@@ -232,13 +232,12 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.queryByText('Strategy provenance')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Every deployment gate' })).toBeNull();
     expect(screen.queryByText('One long stock ENTER and one matching close-leg EXIT.')).toBeNull();
-    expect(screen.queryByText('Live Alpaca execution is planned.')).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
     expect(screen.getByRole('button', {
       name: 'About the trading symbol: One long stock ENTER and one matching close-leg EXIT.',
     })).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'About Live: Live Alpaca execution is planned.',
-    })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^About Live:/ })).toBeNull();
   });
 
   it('shows admission gates without a lens toggle, ready ones collapsed', async () => {
@@ -794,6 +793,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await renderWorkflow(service);
 
     expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
     const shadowRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Shadow/ });
     expect(shadowRadio.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy shadow bot' })).toBeTruthy();
@@ -823,7 +823,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(live.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/paper/i);
-    expect(document.body.textContent).not.toMatch(/shadow/i);
+    expect(document.body.textContent).not.toMatch(/shadow|armed|arming/i);
+    expect(screen.getByRole('button', {
+      name: 'About Live: Orders submit real-money trades through the live Clerk after typed deployment consent. '
+        + 'Every new entry must fit its budget and the effective account risk limits.',
+    })).toBeTruthy();
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-live-01' },
@@ -836,23 +840,13 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(body.execution_mode).toBe('live');
   });
 
-  it('leaves a planned Live card governed by availability alone when the strategy is blocked', async () => {
-    // Whole-branch Important 2: the blocked reason belongs to the card this
-    // world actually offers. On the paper world Live is `planned`, so it
-    // keeps reading Planned with its own copy — not Unavailable with Paper's
-    // blocked explanation.
+  it('shows only this account’s broker mode and its blocked strategy reason', async () => {
     const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
     await renderWorkflow(service);
 
-    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
-    const liveCard = live.closest<HTMLElement>('.mode-option');
-    if (liveCard === null) throw new Error('Live mode-option container not found');
-    expect(within(liveCard).getByText('Planned')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'About Live: Live Alpaca execution is planned.',
-    })).toBeTruthy();
-
-    // The card this world does offer still inherits the strategy's reason.
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
+    expect(screen.queryByText('Planned')).toBeNull();
     const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
     const paperCard = paper.closest<HTMLElement>('.mode-option');
     if (paperCard === null) throw new Error('Paper mode-option container not found');
