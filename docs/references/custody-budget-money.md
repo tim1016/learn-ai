@@ -7,8 +7,11 @@ This is platform accounting policy, not an external software port.
 The normalization boundary is `app/broker/alpaca/clerk/money.py`. Decimal
 strings and cents enter exactly. Legacy finite floats enter through
 `Decimal(str(value))`, before multiplication or summation. Precision already
-lost by historical SQLite REAL storage or canonical FIFO is not recoverable.
-Historical fills, hashes and FIFO matching are unchanged.
+lost by historical SQLite REAL storage is not recoverable. Canonical FIFO
+normalizes each recorded fill quantity and price once and accumulates exactly,
+so realized gross P&L and open-lot cost reach the budget as its exact `Decimal`
+fields; its float attributes are display views only. Historical fills, hashes
+and FIFO matching are unchanged.
 
 Supported input values have magnitude below 10^309 and at most 324 decimal
 places. A 1400-digit local context preserves their products and sums (including
@@ -79,8 +82,10 @@ concurrent commitment exclusion, response-loss idempotency, startup-failure
 release and mirror rebuild retaining stopped order claims. Exact decimal
 assertions use zero tolerance. These tests do not claim complete UI delivery.
 `sqlite/test_budget_claims.py` additionally proves manual cash overlap,
-missing terminal executions, partial-fill fee replacement and same-symbol
-interleaved deployment FIFO through correction and Stop.
+missing terminal executions, partial-fill fee replacement, same-symbol
+interleaved deployment FIFO through correction and Stop, and exact FIFO
+realized gain and open-lot cost at whole-cent boundaries ($0.01 bought, $0.03
+sold is exactly $0.02 spendable, not one cent less).
 
 Budget readiness and actual ENTER use `budgets.py::budget_entry_decision` to
 price the immutable next position plus the canonical BUY fee provision, compare

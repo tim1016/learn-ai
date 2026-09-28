@@ -154,7 +154,6 @@ class _CachedFifo:
     records: tuple[FillRecord, ...] = ()
     lots: dict[str, deque[_Lot]] = field(default_factory=dict)
     closed_lots: list[ClosedLot] = field(default_factory=list)
-    realized: list[float] = field(default_factory=lambda: [0.0])
     fee_total: float | None = 0.0
     fee_missing: bool = False
 
@@ -166,12 +165,11 @@ class _CachedFifo:
             self.records = ()
             self.lots = {}
             self.closed_lots = []
-            self.realized = [0.0]
             self.fee_total = 0.0
             self.fee_missing = False
 
         for record in records[len(self.records) :]:
-            apply_fill_to_lots(self.lots, record, self.closed_lots, self.realized)
+            apply_fill_to_lots(self.lots, record, self.closed_lots)
             if record.fee is None:
                 self.fee_missing = True
                 self.fee_total = None

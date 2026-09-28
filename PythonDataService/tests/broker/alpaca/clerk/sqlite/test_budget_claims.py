@@ -24,7 +24,7 @@ from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_
 from tests.broker.alpaca.clerk.sqlite.test_manual_orders import LEG_ID, OPERATOR_ID, TICKET_ID, filled_order
 
 
-def _record_sale(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key: str, price: float, at_ms: int) -> None:
+def _record_sale(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key: str, price: float, at_ms: int, quantity: float = 1) -> None:
     """As in canonical FIFO tests, record economic fills on the owned order."""
     repo.append_transition(TransitionInput(
         strategy_instance_id=accepted.command.strategy_instance_id, run_id=accepted.command.run_id,
@@ -32,7 +32,7 @@ def _record_sale(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key:
         order_ref=accepted.order_ref, transition_kind="EXECUTION_SLICE_FILLED",
         custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK", operation_state="in_progress",
         source_event_at_ms=at_ms, clerk_observed_at_ms=repo.clock(), summary_code="EXECUTION_SLICE_FILLED",
-        facts_json=ExecutionSliceFilledFacts(execution_id=key, symbol="SPY", side="SELL", slice_qty=1,
+        facts_json=ExecutionSliceFilledFacts(execution_id=key, symbol="SPY", side="SELL", slice_qty=quantity,
             slice_price=price, fee=0, fee_fidelity="reported", evidence_source="websocket", source_event_at_ms=at_ms).to_facts_json(),
     ))
 
@@ -194,6 +194,39 @@ def test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_
         stopped = repo.account_budget(cash=770, seen_before_ms=NOON + 1)
         assert stopped.available == 460
         assert {row.strategy_instance_id: row.position_cost for row in stopped.deployments} == {"a": 50, "b": 200}
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("buy_qty,buy_price,sell_qty,sell_price,realized,position_cost,spendable", [
+    # 1 x ($0.03 - $0.01) is exactly $0.02; binary float made it 0.019999999999999997.
+    (1, .01, 1, .03, Decimal("0.02"), Decimal(0), 50_002),
+    # 0.8 - 0.2 shares leaves exactly 0.6 at $10; binary float left 0.6000000000000001.
+    (.8, 10, .2, 10, Decimal(0), Decimal("6"), 49_400),
+])
+def test_budget_reads_fifo_money_exactly_at_whole_cent_boundaries(
+    tmp_path: Path, buy_qty: float, buy_price: float, sell_qty: float, sell_price: float,
+    realized: Decimal, position_cost: Decimal, spendable: int,
+) -> None:
+    """Regression (#2550): canonical FIFO feeds the budget exact money.
+
+    A float FIFO normalized after multiplication lost a real spendable cent
+    whenever the true free balance sat on a whole cent, the common case.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 50_000)
+        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a",
+            decision_id="cent-boundary", lifecycle_run_id="run-a",
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=buy_qty), reference_price=buy_price, envelope=_gate())
+        _append_slice(repo, accepted, execution_id="buy", quantity=buy_qty, price=buy_price,
+                      source_event_at_ms=NOON - 2, fee=0)
+        _record_sale(repo, accepted, key="sell", price=sell_price, at_ms=NOON - 1, quantity=sell_qty)
+        own = repo.account_budget(cash=1000, seen_before_ms=NOON + 1).deployments[0]
+        assert own.realized_gross == realized
+        assert own.position_cost == position_cost
+        assert own.free == Decimal(spendable) / 100
+        assert own.spendable_cents == spendable
     finally:
         repo.close()
 

@@ -27,14 +27,20 @@ different fill sources).
 
 ## Tolerance used and why
 
+Exact fields: equality (zero tolerance).  Float display views:
 `atol=1e-9, rtol=0` (strict float, the repository default).
 
-Justification: fill prices are broker-reported values with at most 2 decimal
-places.  All arithmetic is addition and multiplication over `float64` values
-that are small in magnitude (price × quantity).  Accumulation error is well
-below `1e-9` for realistic fill counts and sizes.  This is tighter than the
-`atol=1e-6` accumulated-PnL default because the reference is exact arithmetic,
-not a floating-point ported from a reference engine.
+Justification: the reference is exact arithmetic, and so is the
+implementation (#2550).  Each recorded fill quantity and price is normalized
+once through `money.normalize_money`; lots, closures, open valuation and totals
+accumulate in `Decimal` under `money.money_context`, where inexact arithmetic
+raises.  The `exact_*` fields (`PnLResult.exact_realized_pnl`,
+`ClosedLot.exact_realized_pnl`, `OpenLot.exact_qty` / `exact_cost`) are the
+money authority that custody budgets read.  The float attributes (`qty`,
+`cost`, `realized_pnl`, `open_pnl`) are those values rounded once for display,
+so their only error is that single rounding — well inside the historical
+`1e-9` fixtures.  The lot-closing threshold (a lot at or below `1e-9` shares
+closes) is the unchanged FIFO matching rule, now applied to exact quantities.
 
 ## Test file
 
@@ -44,7 +50,9 @@ not a floating-point ported from a reference engine.
 reversal, multi-day, fee=None propagation, fee partial-None, fee sum, empty
 fills, single open fill (no mark / with mark), short open lot open P&L,
 realized_pnl_today session filter, multi-symbol, and duplicate event_key
-idempotency.
+idempotency.  `test_multi_lot_partial_closes_match_exact_fraction_oracle`
+pins the exact fields (fractional multi-lot partial closes and a reversal)
+against an independent `Fraction` oracle and the float views bit-exactly.
 
 ## Golden fixture location
 
