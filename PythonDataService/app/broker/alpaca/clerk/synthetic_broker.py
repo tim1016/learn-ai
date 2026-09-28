@@ -5,13 +5,21 @@ model: a leg either transacts at the decision bar's close or is cancelled on
 the spot (ruling R9). Everything durable — the order WAL, the decision-bar
 binding, the position projection — is ``synthesized_orders.py``, shared with
 ``shadow_broker.py``; the position projection's provenance lives there.
+
+A recovery EXIT (the operator's safe flatten of a stopped Dry Run) has no
+decision bar: it fills at the live IBKR quote read when it is sent -- the bid
+for a sale, the ask for a purchase -- retained first as its own evidence bar.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
+
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
+from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -20,8 +28,8 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedAnchor,
     SynthesizedBarBindingError,
     SynthesizedOrderLedger,
+    observed_in_send_session,
     project_positions,
-    recovery_bar_in_send_session,
 )
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
@@ -35,9 +43,20 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
-from app.services.session_authority import session_state_at_ms
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.marketdata.feed import MarketDataBar
+from app.schemas.market_liveness import TopOfBookQuote
+from app.services.market_liveness import prepared_top_of_book
+from app.services.session_authority import order_session_state_at_ms, session_state_at_ms
+from app.services.source_bar_ledger import (
+    RECOVERY_QUOTE_PROVIDER,
+    RetainedSourceBar,
+    SourceBarConflictError,
+    SourceBarLedger,
+)
 from app.utils.timestamps import Clock, now_ms_utc
+
+logger = logging.getLogger(__name__)
+QuoteSource = Callable[[str, int], TopOfBookQuote | None]
 
 SYNTHETIC_BROKER_ID = "synthetic"
 SYNTHETIC_CAPABILITIES = BrokerCapabilities(
@@ -70,16 +89,21 @@ class SyntheticBroker:
     rather than waiting for a later bar to touch it.
 
     The Clerk remains the custody authority.  This adapter supplies the
-    broker-shaped acknowledgement and fills it needs without contacting Alpaca
-    or reading a second market-data source.
+    broker-shaped acknowledgement and fills it needs without contacting Alpaca;
+    its only prices are retained bars and, for a recovery EXIT, the live IBKR
+    quote retained as one.
     """
 
     broker_id = SYNTHETIC_BROKER_ID
 
-    def __init__(self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc) -> None:
+    def __init__(
+        self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc,
+        quote_source: QuoteSource = prepared_top_of_book,
+    ) -> None:
         self._account_id = require_synthetic_account_id(account_id)
         self._clock = clock
         self._source_bars = source_bars
+        self._quote_source = quote_source
         self._ledger: SynthesizedOrderLedger | None = (
             None
             if source_bars is None
@@ -190,38 +214,56 @@ class SyntheticBroker:
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
 
     def recovery_price_available(self, symbol: str) -> bool:
-        """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
+        """Whether a recovery EXIT for ``symbol`` sent now has a live price to fill at.
 
-        Asked before any reduction is accepted, so a Dry Run that received no
-        price this session refuses its flatten instead of recording an EXIT
-        that can never be sent.
+        Asked before any reduction is accepted, so a Dry Run with no live IBKR
+        quote refuses its flatten instead of recording an EXIT that can never
+        be sent. Reading the quote writes nothing.
         """
-        return self._recovery_bar(symbol) is not None
+        return self._recovery_quote(symbol) is not None
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
-        """Bind a recovery EXIT to the newest bar this Dry Run retained in the send session.
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
+        """Bind a recovery EXIT to the live IBKR quote read now, retained as its evidence bar.
 
         A recovery EXIT -- the operator's safe flatten, a sweep re-drive --
-        has no strategy decision bar; it is priced like the shadow world's,
-        from this instance's own newest observation. ``False`` (nothing
-        retained in this session) leaves the reduction unsent.
+        has no strategy decision bar. It fills at the quote's bid for a sale
+        and its ask for a purchase, so a Dry Run stopped yesterday sells at
+        today's price, never at a bar from an earlier session. ``False`` (no
+        fresh quote in an open session) leaves the reduction unsent.
         """
-        retained_bar = self._recovery_bar(symbol)
-        if self._ledger is None or retained_bar is None:
+        quote = self._recovery_quote(symbol)
+        if self._ledger is None or self._source_bars is None or quote is None:
+            return False
+        price = normalize_money(quote.bid if side == "sell" else quote.ask)
+        observed_at_ms = quote.observed_at_ms
+        session = order_session_state_at_ms(now_ms=observed_at_ms, extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window)
+        try:
+            retained_bar = self._source_bars.retain_recovery_quote(MarketDataBar(
+                symbol=symbol, start_ms=observed_at_ms - 1, end_ms=observed_at_ms,
+                open=price, high=price, low=price, close=price, volume=0,
+                fetched_at_ms=self._clock(), feed_id=RECOVERY_QUOTE_PROVIDER, session_phase=session.phase,
+            ))
+        except SourceBarConflictError:
+            logger.warning(
+                "simulated recovery quote could not be retained as fill evidence",
+                exc_info=True,
+                extra={"action": "simulated_recovery_quote_unretained", "account_id": self._account_id,
+                       "symbol": symbol, "client_order_id": client_order_id},
+            )
             return False
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
         return True
 
-    def _recovery_bar(self, symbol: str) -> RetainedSourceBar | None:
+    def _recovery_quote(self, symbol: str) -> TopOfBookQuote | None:
         if self._ledger is None or self._source_bars is None:
             return None
-        retained_bar = self._source_bars.latest_for_symbol(symbol)
-        in_session = recovery_bar_in_send_session(
-            retained_bar,
-            now_ms=self._clock(),
+        now_ms = self._clock()
+        quote = self._quote_source(symbol, now_ms)
+        in_session = quote is not None and observed_in_send_session(
+            start_ms=quote.observed_at_ms, end_ms=quote.observed_at_ms, now_ms=now_ms,
             extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window,
         )
-        return retained_bar if in_session else None
+        return quote if in_session else None
 
     async def submit(
         self,

@@ -113,28 +113,44 @@ def _order_lock(path: Path) -> threading.Lock:
 BarVerifier = Callable[[RetainedSourceBar], RetainedSourceBar]
 
 
+def observed_in_send_session(
+    *,
+    start_ms: int,
+    end_ms: int,
+    now_ms: int,
+    extended_window: ExtendedHoursWindow | None,
+) -> bool:
+    """Whether a price observed over ``[start_ms, end_ms]`` may price an order sent now.
+
+    Only one from the session the order goes out in: never an observation
+    from the future, from another session phase, from another trading day, or
+    while no session is open. Nothing is priced from a stale session.
+    """
+    if end_ms > now_ms:
+        return False
+    now_session = order_session_state_at_ms(now_ms=now_ms, extended_window=extended_window)
+    observed_session = order_session_state_at_ms(now_ms=start_ms, extended_window=extended_window)
+    return (
+        now_session.phase != "CLOSED"
+        and now_session.phase == observed_session.phase
+        and et_date_at_ms(now_ms) == et_date_at_ms(start_ms)
+    )
+
+
 def recovery_bar_in_send_session(
     retained_bar: RetainedSourceBar | None,
     *,
     now_ms: int,
     extended_window: ExtendedHoursWindow | None,
 ) -> TypeGuard[RetainedSourceBar]:
-    """Whether a recovery EXIT sent now may be priced from this retained bar.
+    """Whether a shadow recovery EXIT sent now may be priced from this retained bar.
 
     Strategy decisions bind their exact deciding bar. A recovery EXIT has
-    none, so both no-submit worlds price it from the newest bar the instance
-    retained -- but only one from the session the order goes out in: never a
-    bar from the future, from another session phase, from another trading
-    day, or while no session is open. Nothing is priced from a stale session.
+    none, so the shadow world prices it from the newest bar the instance
+    retained, by the send-session rule (``observed_in_send_session``).
     """
-    if retained_bar is None or retained_bar.end_ms > now_ms:
-        return False
-    now_session = order_session_state_at_ms(now_ms=now_ms, extended_window=extended_window)
-    bar_session = order_session_state_at_ms(now_ms=retained_bar.start_ms, extended_window=extended_window)
-    return (
-        now_session.phase != "CLOSED"
-        and now_session.phase == bar_session.phase
-        and et_date_at_ms(now_ms) == et_date_at_ms(retained_bar.start_ms)
+    return retained_bar is not None and observed_in_send_session(
+        start_ms=retained_bar.start_ms, end_ms=retained_bar.end_ms, now_ms=now_ms, extended_window=extended_window,
     )
 
 
@@ -372,6 +388,7 @@ __all__ = [
     "SynthesizedLedgerTransactionError",
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
+    "observed_in_send_session",
     "project_positions",
     "recovery_bar_in_send_session",
     "single_ledger_verifier",

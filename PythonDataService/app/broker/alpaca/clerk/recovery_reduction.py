@@ -184,12 +184,12 @@ RECOVERY_LIMIT_PRICE_INVALID = LegRefusal(
 SIMULATED_RECOVERY_PRICE_UNAVAILABLE = LegRefusal(
     reason_code="SIMULATED_RECOVERY_PRICE_UNAVAILABLE",
     explanation=(
-        "This Dry Run received no price for this symbol in the current session, so its "
+        "There is no live IBKR price for this symbol right now, so this Dry Run's "
         "simulated sale cannot be priced honestly. Nothing was sold."
     ),
     next_step=(
-        "Its simulated shares hold no real money and never touch the account. A stopped "
-        "Dry Run can be flattened only in the session it last received a price in."
+        "Its simulated shares hold no real money and never touch the account. Wait for "
+        "this symbol's IBKR quote while a trading session is open, then flatten again."
     ),
 )
 

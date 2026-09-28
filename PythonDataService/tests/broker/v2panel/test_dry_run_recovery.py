@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -34,9 +33,15 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.marketdata.feed import MarketDataBar
 from app.routers import alpaca_clerk_sqlite
-from app.schemas.alpaca_clerk_sqlite import RecoveryActionCheckRequest
+from app.schemas.alpaca_clerk_sqlite import (
+    ExtendedLimitConfirmationRequest,
+    RecoveryActionCheckRequest,
+    RecoveryActionExecuteRequest,
+)
 from app.schemas.broker_v2_panel import BotPanelView, PanelAction, PanelActionRequest
 from app.schemas.deployment_budget import DeployBudgetConsent, DeploymentBudgetView
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
+from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel import budget_deploy, panel_data_source, panel_scope
@@ -54,7 +59,18 @@ from tests.broker.v2panel.fixtures import ACCT
 SID = "live-dry-dv-spy-0928"
 SIM_ACCOUNT = f"sim:{SID}"
 NEXT_SESSION_NOON = et_minute_of_day_ms(date(2026, 9, 9), 12 * 60)
+NEXT_SESSION_PRE_MARKET = et_minute_of_day_ms(date(2026, 9, 9), 8 * 60)
 _BAR_CLOSE = Decimal("600.00")
+
+
+def _publish_quote(at_ms: int, *, bid: float, ask: float) -> None:
+    """Publish one fresh IBKR SPY book to the real process store, as the status source does."""
+    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
+        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=at_ms, connection_changed_at_ms=at_ms,
+        symbol_statuses=(), quotes=(
+            TopOfBookQuote(symbol="SPY", bid=bid, ask=ask, source="ibkr.market_data.status", observed_at_ms=at_ms),
+        ),
+    ), now_ms=at_ms)
 
 
 class _AlpacaThatMustNeverBeCalled:
@@ -129,6 +145,7 @@ async def crashed_dry_run(
     """A Dry Run that bought 1 simulated SPY at $600 and then crashed, runtime released."""
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
+    market_liveness.reset_market_liveness_store_for_testing()
     clock = _TestClock(NOON)
     alpaca = _AlpacaThatMustNeverBeCalled()
     get_broker_registry().register(alpaca)  # type: ignore[arg-type]
@@ -150,7 +167,7 @@ async def crashed_dry_run(
         await authority.ensure_recoverable()
         runtime = get_clerk_runtime(SIM_ACCOUNT)
         assert runtime is not None and runtime.clerk is not None
-        runtime.clerk._quote_source = lambda _symbol, _now: SimpleNamespace(ask=_BAR_CLOSE)
+        _publish_quote(NOON, bid=float(_BAR_CLOSE), ask=float(_BAR_CLOSE))
         await runtime.clerk.register_strategy_run(binding)
         bars = authority.source_bars()
         try:
@@ -173,6 +190,8 @@ async def crashed_dry_run(
         await authority.release_if_unused()
         assert get_clerk_runtime(SIM_ACCOUNT) is None
         clock.value = NOON + 30 * 60_000
+        # IBKR's live SPY book half an hour after the crash.
+        _publish_quote(clock.value, bid=601.25, ask=601.30)
         yield _World(alpaca=alpaca, real=real, clock=clock)
     finally:
         await close_synthetic_clerk_runtimes()
@@ -181,6 +200,7 @@ async def crashed_dry_run(
         real_repo.close()
         reset_broker_registry_for_testing()
         reset_idempotency_store_for_testing()
+        market_liveness.reset_market_liveness_store_for_testing()
 
 
 def _statement(view: DeploymentBudgetView) -> list[tuple[str, str]]:
@@ -237,14 +257,16 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     assert "simulated sale" in flattened.message.lower() and "alpaca" in flattened.message.lower()
     panel = await _panel()
     assert panel.exposure == {}
-    assert [(fill.side, fill.quantity, fill.price) for fill in panel.recent_fills][:1] == [("sell", 1.0, 600.0)]
+    # Sold at IBKR's live bid when the flatten went out, never at the last bar the bot saw.
+    assert [(fill.side, fill.quantity, fill.price) for fill in panel.recent_fills][:1] == [("sell", 1.0, 601.25)]
     money = await budget_deploy.budget_view(ACCT, SID)
     # Flat with nothing claimed, the bot is finished: its whole balance, net of
     # the sale's fees, is released at once and it has no slice left (review A1).
     assert (money.state, money.headline) == ("ready", "Stopped · fully released")
+    # $1,000 + the $1.25 gain on the sale - $0.04 of modelled fees.
     assert _statement(money)[-4:] == [
-        ("Balance", "999.96"),
-        ("Released at stop", "999.96"),
+        ("Balance", "1001.21"),
+        ("Released at stop", "1001.21"),
         ("Still in shares, at cost", "0.00"),
         ("Still in entry orders", "0.00"),
     ]
@@ -253,18 +275,39 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     crashed_dry_run.clock.value = NEXT_SESSION_NOON
     money = await budget_deploy.budget_view(ACCT, SID)
     assert (money.state, money.headline) == ("ready", "Stopped · fully released")
-    assert _statement(money)[-3] == ("Released at stop", "999.96")
+    assert _statement(money)[-3] == ("Released at stop", "1001.21")
     assert crashed_dry_run.alpaca.calls == []
 
 
-async def test_a_dry_run_with_no_price_this_session_refuses_its_flatten_before_recording_an_exit(
+async def test_a_dry_run_stopped_yesterday_flattens_at_todays_live_bid(
     crashed_dry_run: _World,
 ) -> None:
-    """A simulated sale is priced only from a bar the Dry Run received this session.
+    """Review A3: a crash nobody noticed until the next session left the shares
+    unsellable forever. The sale is priced from the quote IBKR shows now."""
+    crashed_dry_run.clock.value = NEXT_SESSION_NOON
+    _publish_quote(NEXT_SESSION_NOON, bid=598.10, ask=598.20)
+    panel = await _panel()
+    await _run(panel, "reconcile_now", "reconcile-next-day")
+    panel = await _panel()
 
-    A day after the crash nothing can price it honestly, so both the prepared
-    plan and the execute refuse in plain words -- before any EXIT exists that
-    could never be sent, and without a false "the broker rejected it".
+    flattened = await _run(panel, "execute_safe_flatten", "flatten-next-day")
+
+    assert flattened.applied
+    panel = await _panel()
+    assert panel.exposure == {}
+    assert [(fill.side, fill.quantity, fill.price) for fill in panel.recent_fills][:1] == [("sell", 1.0, 598.1)]
+    money = await budget_deploy.budget_view(ACCT, SID)
+    assert (money.headline, money.segment) == ("Stopped · fully released", None)
+    assert crashed_dry_run.alpaca.calls == []
+
+
+async def test_a_dry_run_with_no_live_quote_refuses_its_flatten_before_recording_an_exit(
+    crashed_dry_run: _World,
+) -> None:
+    """With no IBKR quote nothing can price the simulated sale honestly, so
+    both the prepared plan and the execute refuse in plain words -- before any
+    EXIT exists that could never be sent, and without a false "the broker
+    rejected it". The price is never guessed.
     """
     crashed_dry_run.clock.value = NEXT_SESSION_NOON
     panel = await _panel()
@@ -283,10 +326,54 @@ async def test_a_dry_run_with_no_price_this_session_refuses_its_flatten_before_r
     with pytest.raises(ActionNotAvailableError) as refused:
         await _run(panel, "execute_safe_flatten", "flatten-next-day")
 
-    assert "no price" in str(refused.value) and "broker" not in str(refused.value)
+    assert "no live IBKR price" in str(refused.value) and "broker" not in str(refused.value)
     panel = await _panel()
     assert panel.exposure == {"SPY": 1.0}
     assert not _action(panel, "discharge_attributed_residue").enabled
+    assert crashed_dry_run.alpaca.calls == []
+
+
+async def _execute_through_the_recovery_route(
+    confirmed: ExtendedLimitConfirmationRequest | None = None,
+):
+    panel = await _panel()
+    await _run(panel, "reconcile_now", f"reconcile-route-{confirmed is not None}")
+    panel = await _panel()
+    return await alpaca_clerk_sqlite.execute_bot_recovery_action(
+        ACCT, SID, RecoveryActionExecuteRequest(
+            action_id="execute_safe_flatten",
+            concurrency_token=_action(panel, "execute_safe_flatten").concurrency_token,
+            extended_limit=confirmed,
+        ),
+    )
+
+
+async def test_the_bot_recovery_route_sells_a_dry_run_at_market_without_touching_alpaca(
+    crashed_dry_run: _World,
+) -> None:
+    executed = await _execute_through_the_recovery_route()
+
+    assert executed.applied
+    panel = await _panel()
+    assert panel.exposure == {}
+    assert [(fill.side, fill.price) for fill in panel.recent_fills][:1] == [("sell", 601.25)]
+    assert crashed_dry_run.alpaca.calls == []
+
+
+async def test_the_bot_recovery_route_sells_a_dry_run_pre_market_at_its_confirmed_limit(
+    crashed_dry_run: _World,
+) -> None:
+    crashed_dry_run.clock.value = NEXT_SESSION_PRE_MARKET
+    _publish_quote(NEXT_SESSION_PRE_MARKET, bid=598.10, ask=598.40)
+
+    executed = await _execute_through_the_recovery_route(ExtendedLimitConfirmationRequest(
+        limit_price=598.10, quote_observed_at_ms=NEXT_SESSION_PRE_MARKET,
+    ))
+
+    assert executed.applied
+    panel = await _panel()
+    assert panel.exposure == {}
+    assert [(fill.side, fill.price) for fill in panel.recent_fills][:1] == [("sell", 598.1)]
     assert crashed_dry_run.alpaca.calls == []
 
 
