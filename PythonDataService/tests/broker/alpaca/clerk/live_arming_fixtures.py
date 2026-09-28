@@ -19,11 +19,6 @@ from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import shadow_account_id_for_live_account
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationRecord, ShadowActivationStore
-from app.broker.alpaca.clerk.shadow_receipt import (
-    ShadowReceipt,
-    ShadowReceiptSession,
-    ShadowReceiptStore,
-)
 from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
@@ -209,37 +204,6 @@ def record_sealed_binding(
     return seal
 
 
-def seal_receipt(
-    artifacts_root: Path,
-    *,
-    configured_signal_hash: str,
-    live_account_id: str = LIVE_ACCT,
-    strategy_instance_id: str = ARMING_SID,
-    sessions: int = 1,
-    written_at_ms: int = ARMED_AT_MS - _ONE_DAY_MS,
-) -> ShadowReceipt:
-    """One shadow receipt that is current for this instance's configured signal."""
-    receipt = ShadowReceipt.create(
-        live_account_id=live_account_id,
-        strategy_instance_id=strategy_instance_id,
-        configured_signal_hash=configured_signal_hash,
-        twin_account_id="PA-TWIN-ARM",
-        twin_strategy_instance_id=f"{strategy_instance_id}-twin",
-        required_sessions=sessions,
-        # Ascending session opens: the oldest rehearsal day first, ending the
-        # day before the receipt was written, exactly as a real gate emits them.
-        sessions=tuple(
-            ShadowReceiptSession(
-                session_open_ms=written_at_ms - _ONE_DAY_MS * (sessions - index),
-                shadow_run_id=f"{strategy_instance_id}-run-1",
-                reconciliation_sha256="e" * 64,
-            )
-            for index in range(sessions)
-        ),
-        written_at_ms=written_at_ms,
-    )
-    ShadowReceiptStore(artifacts_root).append(receipt)
-    return receipt
 
 
 def arming_ready(
@@ -252,12 +216,6 @@ def arming_ready(
     if not ShadowActivationStore(artifacts_root).account_ids():
         activate_shadow_fence(artifacts_root)
     seal = record_sealed_binding(live_state_root, strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
-    seal_receipt(
-        artifacts_root,
-        configured_signal_hash=seal.configured_signal_hash,
-        strategy_instance_id=strategy_instance_id,
-        sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
-    )
     return seal
 
 
@@ -269,6 +227,5 @@ __all__ = [
     "live_settings",
     "paper_settings",
     "record_sealed_binding",
-    "seal_receipt",
     "sealed_program",
 ]

@@ -81,7 +81,7 @@ async def _full_lifecycle(client: AsyncClient) -> list[str]:
                 "display_name": "Live — secrets check",
                 "credential_slot": "alpaca_live_primary",
                 "endpoint_mode": "live",
-                "live_envelope": LIVE_ENVELOPE_PAYLOAD,
+                "live_envelope": {key: value for key, value in LIVE_ENVELOPE_PAYLOAD.items() if key not in {"shadow_sessions", "arming_max_sessions"}},
             },
         )
     )

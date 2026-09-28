@@ -82,35 +82,24 @@ class _Response(BaseModel):
 
 
 class LiveEnvelopePayload(BaseModel):
-    """The six values, named exactly as ``LiveEnvelopeValues`` names them.
+    """The four current account bounds; retired session counts are rejected.
 
-    The mapping to the dataclass is an identity, so no rename layer can drift
-    (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
-    field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
-    every path into storage, which is where the rule actually lives.
-
-    ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
-    mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
-    before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
-    by-name ``int`` check downstream would never see the boolean it exists to
-    refuse — a real-money session count silently minted from ``true``. Strict
-    ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
-    accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
-    ``float`` annotation does with ``5000``.
+    Historical revisions retain their full hash-bearing representation in storage.
+    The configuration API projects only the fields a trader can currently edit.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     loss_fraction: float = Field(gt=0, lt=1, allow_inf_nan=False)
     loss_usd: float = Field(gt=0, allow_inf_nan=False)
-    shadow_sessions: int = Field(ge=1)
-    arming_max_sessions: int = Field(ge=1)
     xh_entry_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
     xh_exit_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
 
     @classmethod
     def from_record(cls, envelope: ValidatedLiveEnvelope | None) -> LiveEnvelopePayload | None:
-        return None if envelope is None else cls(**envelope.to_mapping())
+        return None if envelope is None else cls(
+            **{field: getattr(envelope, field) for field in cls.model_fields}
+        )
 
 
 class PaperXhAllowancesPayload(BaseModel):

@@ -22,12 +22,13 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     select_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
 from app.services.alpaca_live_envelope import clear_loss_hold
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_authority_fixtures import compose_live
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
@@ -39,8 +40,32 @@ from tests.broker.alpaca.clerk.sqlite.conftest import TODAY_OPEN, _observe_forei
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _Broker
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import (
     NOW_MS,
-    _arm,
 )
+
+
+def _arm(
+    artifacts_root: Path,
+    *,
+    envelope: object = TEST_ENVELOPE_VALUES,
+    armed_at_ms: int = NOW_MS,
+) -> LiveArmingRecord:
+    """Append one arming record straight to the ledger.
+
+    The ceremony that mints these has its own tests; what is under test here is
+    what the *runtime* does with a record that exists.
+    """
+    record = LiveArmingRecord.create(
+        live_account_id=LIVE_ACCT,
+        strategy_instance_id="spy-bot",
+        seal_hash="a" * 64,
+        configured_signal_hash="b" * 64,
+        shadow_receipt_sha256="c" * 64,
+        envelope=envelope,  # type: ignore[arg-type]
+        armed_at_ms=armed_at_ms,
+        max_sessions=20,
+    )
+    LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).append(record)
+    return record
 
 
 @pytest.fixture()

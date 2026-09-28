@@ -32,7 +32,6 @@ from app.broker.alpaca.active_binding import (
 )
 from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
 from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import (
@@ -49,6 +48,7 @@ from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWi
 from app.broker.contract.models import OrderSide, OrderType
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import to_ms_utc
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 
 _ET = ZoneInfo("America/New_York")
 _DAY = date(2026, 9, 2)
@@ -184,7 +184,7 @@ def test_a_disarm_does_not_unseal_the_allowance(tmp_path: Path) -> None:
     """A disarm row carries no envelope, so it never becomes the pricing document."""
     _bind(clerk_dir=tmp_path)
     _arm(tmp_path)
-    LiveArmingLedger(tmp_path, live_account_id=_ACCOUNT).revoke_latest(
+    LiveArmingLedger(tmp_path, live_account_id=_ACCOUNT).append_disarm_fixture(
         _SID, disarmed_at_ms=_ARMED_AT_MS + 1_000
     )
 

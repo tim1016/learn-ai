@@ -198,7 +198,7 @@ def test_the_retired_envelope_set_matches_the_canonical_required_set() -> None:
     If a seventh envelope value were ever added there, this module would keep
     importing six and the cutover would silently drop one.
     """
-    assert set(_LIVE_REQUIRED_FIELDS) == set(ENVELOPE_FIELD_BY_SETTING)
+    assert set(_LIVE_REQUIRED_FIELDS) == set(ENVELOPE_FIELD_BY_SETTING) - {"live_shadow_sessions", "live_arming_max_sessions"}
 
 
 def _constraints(field: object) -> list[str]:
@@ -246,7 +246,8 @@ def test_the_imported_envelope_hashes_to_the_legacy_one(
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
 
-    canonical_sha = LiveEnvelopeValues.from_settings(AlpacaSettings(_env_file=None)).sha
+    configured = AlpacaSettings(_env_file=None)
+    canonical_sha = LiveEnvelopeValues(**{field: getattr(configured, setting) for setting, field in ENVELOPE_FIELD_BY_SETTING.items()}).sha
     legacy = _values()
     imported = ValidatedLiveEnvelope.from_mapping(
         {

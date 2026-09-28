@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED, LiveArmingRecord
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -20,6 +19,7 @@ from app.schemas.account_authority import CustodyWorld
 from app.schemas.run_admission import ArmingAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.live_arming_admission import live_arming_admission_fact
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.live_arming_fixtures import ARMED_AT_MS, live_settings, record_sealed_binding
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
 
@@ -125,7 +125,7 @@ def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(tmp_pat
     assert fact is not None
     assert fact.state == "NOT_ARMED"
     assert fact.reason_code == LIVE_ARMING_REQUIRED
-    assert fact.next_step is not None and "manage_alpaca_arming" in fact.next_step
+    assert fact.next_step is not None and "Budget authority upgrade" in fact.next_step
     assert fact.observed_at_ms == NOW
 
 

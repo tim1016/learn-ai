@@ -46,12 +46,10 @@ _BASE_URL_BY_MODE: dict[str, str] = {
     "live": "https://api.alpaca.markets",
 }
 
-# The envelope and ceremony settings a live boot must carry (ADR 0059 D4).
+# The current monetary bounds required by a live configuration.
 _LIVE_REQUIRED_FIELDS: tuple[str, ...] = (
     "live_loss_fraction",
     "live_loss_usd",
-    "live_shadow_sessions",
-    "live_arming_max_sessions",
     "live_xh_entry_bps",
     "live_xh_exit_bps",
 )

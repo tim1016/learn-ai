@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-import app.broker.alpaca.clerk.live_arming_ledger as ledger_module
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INSTANCE_UNSEALED,
-    LIVE_ARMING_NOT_ARMED,
     LiveArmingInvalid,
     LiveArmingRecord,
     LiveArmingRefused,
@@ -23,11 +19,11 @@ from app.broker.alpaca.clerk.live_arming import (
     instance_ids,
     latest_arming,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LIVE_ARMING_FILENAME, LiveArmingLedger
+from app.broker.alpaca.clerk.live_arming_ledger import LIVE_ARMING_FILENAME
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.services.session_authority import et_minute_of_day_ms
-from app.utils.advisory_lock import try_advisory_file_lock
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 
 ACCOUNT = "9LIVE0001"
 OTHER_ACCOUNT = "9LIVE0002"
@@ -165,13 +161,6 @@ def test_a_foreign_accounts_row_is_ignored_rather_than_answered_for(tmp_path: Pa
     assert instance_ids(ledger.records()) == (SID,)
 
 
-def test_appending_another_accounts_record_is_refused_before_the_write(tmp_path: Path) -> None:
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-
-    with pytest.raises(LiveArmingInvalid, match="belongs to another live account"):
-        ledger.append(_armed(account=OTHER_ACCOUNT))
-
-    assert not ledger.path.exists()
 
 
 def test_a_symlinked_ledger_is_refused_on_both_read_and_append(tmp_path: Path) -> None:
@@ -182,8 +171,6 @@ def test_a_symlinked_ledger_is_refused_on_both_read_and_append(tmp_path: Path) -
 
     with pytest.raises(LiveArmingInvalid, match="must be a regular file"):
         ledger.records()
-    with pytest.raises(LiveArmingInvalid, match="must be a regular file"):
-        ledger.append(_armed())
 
 
 def test_a_tampered_row_is_refused_rather_than_read(tmp_path: Path) -> None:
@@ -212,78 +199,10 @@ def test_a_row_with_no_recognised_kind_is_refused(tmp_path: Path) -> None:
         ledger.records()
 
 
-def test_revoking_reads_and_appends_under_one_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deciding what is revoked and writing the revocation are one transaction.
-
-    Split across two lock acquisitions, a concurrent re-arm lands between them
-    and ``revokes_record_sha256`` names a record that is no longer the latest;
-    two concurrent disarms both succeed. The effective state and the audit
-    evidence then disagree about a real-money permission.
-
-    ``flock`` binds to the open file description, so a second ``open`` in this
-    same process is a genuine second contender: each probe below would acquire
-    the lock if it were not already held across both halves.
-    """
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-    armed = _armed()
-    ledger.append(armed)
-    observed: list[tuple[str, bool]] = []
-    real_read = ledger_module.read_canonical_jsonl_objects
-    real_append = ledger_module.append_canonical_jsonl_line
-
-    def _probing_read(path: Path, *, invalid: type[ValueError], label: str) -> list[Mapping[str, Any]]:
-        with try_advisory_file_lock(path) as acquired:
-            observed.append(("read", acquired))
-        return real_read(path, invalid=invalid, label=label)
-
-    def _probing_append(path: Path, payload: dict, *, invalid: type[ValueError], label: str) -> None:
-        with try_advisory_file_lock(path) as acquired:
-            observed.append(("append", acquired))
-        real_append(path, payload, invalid=invalid, label=label)
-
-    monkeypatch.setattr(ledger_module, "read_canonical_jsonl_objects", _probing_read)
-    monkeypatch.setattr(ledger_module, "append_canonical_jsonl_line", _probing_append)
-    revocation = ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS + 1)
-
-    assert observed == [("read", False), ("append", False)]
-    assert revocation.revokes_record_sha256 == armed.record_sha256
-    assert revocation.disarmed_at_ms == FRIDAY_MS + 1
 
 
-def test_revoking_an_instance_with_no_arming_row_refuses_and_writes_nothing(tmp_path: Path) -> None:
-    """The same refusal on a never-armed instance and on an already-revoked one."""
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-
-    with pytest.raises(LiveArmingRefused) as caught:
-        ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS)
-    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
-    assert not ledger.path.exists()
-
-    ledger.append(_armed())
-    ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS + 1)
-    with pytest.raises(LiveArmingRefused) as second:
-        ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS + 2)
-
-    assert second.value.reason_code == LIVE_ARMING_NOT_ARMED
-    assert [type(row) for row in ledger.records()] == [LiveArmingRecord, LiveDisarmRecord]
 
 
-def test_a_refused_revoke_on_a_fresh_root_creates_no_arming_directory(tmp_path: Path) -> None:
-    """A refusal must precede the lock, so it leaves no trace on disk.
-
-    ``advisory_file_lock`` mkdirs the ledger's parent directory (and would
-    create the sibling ``.live_arming.jsonl.lock`` file) before any guard
-    inside the ``with`` block can run. A ledger file that does not exist yet
-    cannot hold an arming row to revoke, so ``revoke_latest`` must refuse
-    before taking the lock at all -- not just before writing a row.
-    """
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-
-    with pytest.raises(LiveArmingRefused) as caught:
-        ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS)
-
-    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
-    assert not (tmp_path / "accounts" / "arming").exists()
 
 
 def test_discover_finds_the_one_account_whose_ledger_names_the_instance(tmp_path: Path) -> None:
@@ -337,24 +256,15 @@ def test_discover_refuses_when_two_accounts_armed_the_same_instance(tmp_path: Pa
     assert ACCOUNT in str(caught.value) and OTHER_ACCOUNT in str(caught.value)
 
 
-def test_the_append_holds_the_advisory_lock_across_the_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two writers appending at once must not interleave a row.
 
-    ``flock`` binds to the open file description, so a second ``open`` in this
-    same process is a genuine second contender: if the lock were not held here,
-    the probe below would acquire it.
-    """
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-    observed: list[bool] = []
-    real_append = ledger_module.append_canonical_jsonl_line
 
-    def _probe(path: Path, payload: dict, *, invalid: type[ValueError], label: str) -> None:
-        with try_advisory_file_lock(path) as acquired:
-            observed.append(acquired)
-        real_append(path, payload, invalid=invalid, label=label)
+def test_production_ledger_has_no_mutating_arming_interface(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger as ReadOnlyLedger
 
-    monkeypatch.setattr(ledger_module, "append_canonical_jsonl_line", _probe)
-    ledger.append(_armed())
-
-    assert observed == [False], "append must hold the advisory lock while it writes"
-    assert len(ledger.records()) == 1
+    ledger = ReadOnlyLedger(tmp_path, live_account_id=ACCOUNT)
+    assert not any(hasattr(ledger, name) for name in ("append", "append_once_for_plan", "revoke_latest"))
+    fixture = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
+    fixture.append(_armed())
+    before = fixture.path.read_bytes()
+    assert ledger.latest(SID) == _armed()
+    assert fixture.path.read_bytes() == before

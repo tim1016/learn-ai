@@ -186,12 +186,12 @@ CORPUS_UNCOVERED_NEXT_STEP = (
     "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
 )
 ARMING_NEXT_STEP = (
-    "Arm this instance with scripts.manage_alpaca_arming plan, then apply; until then the "
-    "Clerk refuses every ENTER it makes."
+    "Open Configuration and review the Budget authority upgrade. Then deploy a fresh run "
+    "with its own budget and Live consent; historical grants cannot be renewed."
 )
 ARMING_REQUIRED_ADMITTED_NOTE = (
-    "The instance is not armed: this launch may run and manage exposure, and every ENTER "
-    "it makes is refused until an operator arms it (ADR 0059 D11)."
+    "This legacy run has no current entry permission. Reducing recovery remains available; "
+    "review Budget authority upgrade in Configuration before a fresh Deploy."
 )
 
 

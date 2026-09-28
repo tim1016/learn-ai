@@ -39,7 +39,7 @@ _ENVIRONMENT_SETTINGS = {
 
 def _settings_envelope() -> LiveEnvelopeValues:
     """The envelope exactly as ``AlpacaSettings`` builds it today."""
-    return LiveEnvelopeValues.from_settings(AlpacaSettings(**_ENVIRONMENT_SETTINGS))
+    return LiveEnvelopeValues(**LIVE_ENVELOPE_PAYLOAD)
 
 
 def _live_profile(service: BrokerConfigurationService) -> str:
@@ -229,20 +229,22 @@ def test_the_request_dto_refuses_exactly_what_the_validated_type_refuses(
 
 def test_the_request_dto_still_widens_an_integer_to_a_float() -> None:
     """What ``AlpacaSettings``' ``float`` annotation does with ``5000``."""
-    payload = LiveEnvelopePayload(**{**LIVE_ENVELOPE_PAYLOAD, "loss_usd": 5_000})
+    payload = LiveEnvelopePayload(**{**{key: value for key, value in LIVE_ENVELOPE_PAYLOAD.items() if key not in {"shadow_sessions", "arming_max_sessions"}}, "loss_usd": 5_000})
 
     assert type(payload.loss_usd) is float
-    assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == _settings_envelope().sha
+    assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == LiveEnvelopeValues.from_settings(AlpacaSettings(**_ENVIRONMENT_SETTINGS)).sha
 
 
-def test_response_dto_carries_the_same_six_values(service: BrokerConfigurationService) -> None:
+def test_response_dto_projects_only_current_fields_without_rewriting_history(service: BrokerConfigurationService) -> None:
     profile_id = _live_profile(service)
 
     stored = service.read_revision(profile_id, 1).live_envelope
     payload = LiveEnvelopePayload.from_record(stored)
 
     assert payload is not None
-    assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == _settings_envelope().sha
+    assert stored.sha == _settings_envelope().sha
+    assert set(payload.model_dump()) == {"loss_fraction", "loss_usd", "xh_entry_bps", "xh_exit_bps"}
+    assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == LiveEnvelopeValues.from_settings(AlpacaSettings(**_ENVIRONMENT_SETTINGS)).sha
 
 
 def test_reverting_effective_envelope_does_not_revive_an_invalidated_arming(
@@ -251,8 +253,8 @@ def test_reverting_effective_envelope_does_not_revive_an_invalidated_arming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A → B → A persists a refusal without changing historical ledger bytes."""
-    from app.broker.alpaca.clerk import live_arming_ceremony
-    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+    from app.broker.alpaca.clerk import live_arming_history
+    from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 
     account_id = "9LIVE0001"
     instance_id = "ema-live-1"
@@ -282,13 +284,13 @@ def test_reverting_effective_envelope_does_not_revive_an_invalidated_arming(
         ),
     )
     monkeypatch.setattr(
-        live_arming_ceremony,
+        live_arming_history,
         "instance_seal_hashes",
-        lambda **_: {instance_id: live_arming_ceremony.InstanceSeal("a" * 64, "b" * 64)},
+        lambda **_: {instance_id: live_arming_history.InstanceSeal("a" * 64, "b" * 64)},
     )
 
     def status() -> str:
-        return live_arming_ceremony.account_arming(
+        return live_arming_history.account_arming(
             live_account_id=account_id,
             artifacts_root=clerk_dir,
             live_state_root=clerk_dir / "test-bindings",

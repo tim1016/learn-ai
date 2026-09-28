@@ -9,8 +9,9 @@ Formula: ``sessions_used = trading_session_count(ET date of armed_at_ms, ET date
 Reference: ADR 0059 Decision 3; design rulings R1, R2, R4, R5, R6, R12 in
   ``docs/superpowers/specs/2026-09-09-live-slice-6-arming-ceremony-design.md``.
 Canonical implementation: this file. The ledger that stores these records is
-  ``live_arming_ledger.py``; the ceremony that mints them is
-  ``live_arming_ceremony.py``; the calendar is ``app/lean_sidecar/trading_calendar.py``.
+  ``live_arming_ledger.py`` (read-only). ``live_arming_history.py`` interprets
+  old grants before explicit Budget authority cutover. The calendar is
+  ``app/lean_sidecar/trading_calendar.py``. No production writer mints new grants.
 Validated against: ``tests/broker/alpaca/clerk/test_live_arming.py``.
 
 Nothing here touches a broker, a database, a file or a clock: every function is

@@ -1,50 +1,21 @@
-"""The immutable runtime binding a worker resolves once (contract §7).
+"""Resolve one immutable profile revision without environment fallback.
 
-:func:`resolve_runtime_context` takes a profile revision's **non-secret**
-values plus the name of a credential slot, and returns one frozen
-:class:`AlpacaRuntimeContext`. That context is what Package D hands to broker,
-client, stream and Clerk construction instead of each of them reaching for the
-process-wide environment singleton.
-
-Two design rules earn their keep here.
-
-**Validation is not re-implemented.** ADR 0060 Decision 6 requires the domain
-checks that live only in ``AlpacaSettings`` today — ``loss_fraction`` in (0, 1),
-``loss_usd`` > 0, both counts ``int`` ≥ 1, both bps in [0, 10000), everything
-finite — to move into *one* validated type that is the only constructor of
-``LiveEnvelopeValues`` from stored data. Rather than restate those bounds in a
-second model (two authorities that would drift), the resolved context builds an
-``AlpacaSettings`` from explicit keyword arguments and lets it validate. So
-``LiveEnvelopeValues.from_settings`` remains the single construction site, and
-a stored revision and an environment-configured one produce a bit-identical
-``sha`` by construction rather than by a matching pair of validators.
-
-**Type fidelity is checked before Pydantic sees the value.** Pydantic's lax
-mode coerces ``True`` → ``1`` and ``"3"`` → ``3``, which would silently accept a
-row that violates the contract's §2.4 fidelity rule. :func:`resolve_runtime_context`
-therefore asks each stored value for its Python type by name first — using the
-same ``type(value) is int`` test ``live_arming`` applies to a sealed record —
-and refuses anything else as ``revision_incomplete``. An ``int`` supplied for a
-``float`` field is accepted and normalised to ``float``, which is precisely the
-"convert explicitly on load" the contract asks for.
-
-What this module deliberately does **not** take: an API base URL (derived from
-mode, contract §2.3), an environment-variable name, the Clerk directory, or the
-optional shared market-status service address. The last two are deployment
-bootstrap and stay environment reads inside ``AlpacaSettings``, so a profile
-can neither relocate the custody volume nor redirect the authenticated internal
-status request.
+Current profiles carry four monetary fields. Historical revisions retain both
+retired integer session counts solely to reconstruct their original sealed
+identity. Types are checked before settings validation, and a current revision
+explicitly clears old environment counts rather than inheriting them.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, get_type_hints
+from typing import Final, Literal
 
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.live_envelope import (
+    CURRENT_ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_SETTINGS_FIELDS,
     LiveEnvelopeValues,
 )
@@ -71,11 +42,7 @@ LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = tuple(
 # a hand-listed split would drift silently if a field's type changed or a
 # seventh were added, and drift here changes the ``sha`` — which every arming
 # record already in an operator's ledger is sealed over (contract §2.4).
-_INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(
-    name
-    for name, hint in get_type_hints(LiveEnvelopeValues).items()
-    if hint is int
-)
+_INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(("shadow_sessions", "arming_max_sessions"))
 
 # What a revision with no live envelope hands ``AlpacaSettings``: every live
 # field explicitly ``None``, so a stale ``ALPACA_LIVE_*`` in the environment
@@ -132,7 +99,8 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float |
     """
     supplied = set(live_envelope)
     expected = set(LIVE_ENVELOPE_FIELDS)
-    missing = sorted(expected - supplied)
+    current = {field for field, _ in CURRENT_ENVELOPE_SETTINGS_FIELDS}
+    missing = sorted(current - supplied)
     if missing:
         raise RevisionIncomplete("its live envelope is missing " + ", ".join(missing))
     unexpected = sorted(supplied - expected)
@@ -142,8 +110,12 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float |
             + ", ".join(unexpected)
         )
 
+    if supplied not in (current, expected):
+        raise RevisionIncomplete("its historical envelope must carry both retired session counts")
     values: dict[str, float | int] = {}
     for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
+        if field not in live_envelope:
+            continue
         value = live_envelope[field]
         if field in _INTEGER_ENVELOPE_FIELDS:
             if not is_exactly_int(value):
@@ -238,7 +210,7 @@ def resolve_runtime_context(
 ) -> AlpacaRuntimeContext:
     """Resolve one profile revision into an immutable runtime binding.
 
-    ``live_envelope`` carries the six values under ``LiveEnvelopeValues``' own
+    ``live_envelope`` carries four current or six historical values under ``LiveEnvelopeValues``' own
     field names, or is ``None`` on a paper revision that declares none. A
     ``live`` endpoint mode without a complete envelope is refused as
     ``revision_incomplete`` (422) — the profile-world equivalent of today's
@@ -262,7 +234,7 @@ def resolve_runtime_context(
         # which is ADR 0059's environment-source rule — exactly the rule
         # ADR 0060 supersedes — and contract §6 renders ``message`` verbatim.
         raise RevisionIncomplete(
-            "a live revision carries all six live envelope values and this one "
+            "a live revision carries all four live envelope monetary values and this one "
             "carries none"
         )
 
@@ -277,7 +249,7 @@ def resolve_runtime_context(
     credentials = resolve_credentials(credential_slot, environment=environment)
     envelope_settings: Mapping[str, float | int | None] = _ABSENT_ENVELOPE_SETTINGS
     if live_envelope is not None:
-        envelope_settings = _envelope_settings(live_envelope)
+        envelope_settings = {**_ABSENT_ENVELOPE_SETTINGS, **_envelope_settings(live_envelope)}
     elif paper_xh_allowances is not None:
         envelope_settings = {
             **_ABSENT_ENVELOPE_SETTINGS,
@@ -309,7 +281,10 @@ def resolve_runtime_context(
         settings=settings,
         credentials=credentials,
         live_envelope=(
-            None if live_envelope is None else LiveEnvelopeValues.from_settings(settings)
+            None if live_envelope is None else LiveEnvelopeValues(**{
+                field: getattr(settings, settings_field)
+                for field, settings_field in ENVELOPE_SETTINGS_FIELDS if field in live_envelope
+            })
         ),
         account_pin=account_pin,
         profile_id=profile_id,

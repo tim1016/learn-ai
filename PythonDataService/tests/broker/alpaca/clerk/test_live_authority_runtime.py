@@ -33,7 +33,6 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_MODE_DISAGREEMENT,
     LiveArmingRecord,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_authority import (
     LIVE_CONTROL_UNAUTHENTICATED,
     select_live_clerk_runtime,
@@ -48,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import OrderSide
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_arming_fixtures import record_sealed_binding
 from tests.broker.alpaca.clerk.live_authority_fixtures import (

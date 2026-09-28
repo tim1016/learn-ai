@@ -7,7 +7,7 @@ registered migrations applied inside one transaction. It is **not** part of any
 account's custody database and shares no table with one.
 
 Column types are load-bearing on one table. ``profile_revisions`` stores the
-four live-envelope floats as ``REAL`` and the two session counts as
+historical live-envelope floats as ``REAL`` and the two retired session counts as
 ``INTEGER``; ``NUMERIC`` is banned here because ``decimal.Decimal`` cannot
 reach ``LiveEnvelopeValues.sha`` (ADR 0060 Decision 6). The load path converts
 explicitly through ``ValidatedLiveEnvelope`` rather than trusting type
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -59,7 +59,7 @@ _PAPER_XH_EXIT_COLUMN = (
 # The pin is the one write a revision admits, and only from unbound. Every
 # other column, and every delete, is refused. ``IS NOT`` rather than ``<>`` so
 # a NULL envelope column compares correctly.
-_REVISION_CONTENT_IMMUTABLE_TRIGGER = """\
+_V4_REVISION_CONTENT_IMMUTABLE_TRIGGER = """\
 CREATE TRIGGER trg_profile_revisions_content_immutable
 BEFORE UPDATE ON profile_revisions
 FOR EACH ROW WHEN
@@ -85,6 +85,25 @@ FOR EACH ROW WHEN
 BEGIN
     SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
 END"""
+
+# New revisions use one four-field document. Legacy six-column revisions stay
+# untouched, including their content hashes. Both representations cannot coexist.
+_CURRENT_ENVELOPE_COLUMN = """current_live_envelope_json TEXT CHECK (
+    current_live_envelope_json IS NULL OR (
+        json_valid(current_live_envelope_json)
+        AND json_type(current_live_envelope_json) = 'object'
+        AND endpoint_mode = 'live'
+        AND live_loss_fraction IS NULL AND live_loss_usd IS NULL
+        AND live_shadow_sessions IS NULL AND live_arming_max_sessions IS NULL
+        AND live_xh_entry_bps IS NULL AND live_xh_exit_bps IS NULL
+        AND paper_xh_entry_bps IS NULL AND paper_xh_exit_bps IS NULL
+    )
+)"""
+_REVISION_CONTENT_IMMUTABLE_TRIGGER = _V4_REVISION_CONTENT_IMMUTABLE_TRIGGER.replace(
+    "    OR OLD.content_sha256 IS NOT NEW.content_sha256",
+    "    OR OLD.current_live_envelope_json IS NOT NEW.current_live_envelope_json\n"
+    "    OR OLD.content_sha256 IS NOT NEW.content_sha256",
+)
 
 SCHEMA_DDL = f"""\
 -- ============================================================
@@ -159,6 +178,7 @@ CREATE TABLE profile_revisions (
     {_PAPER_XH_ENTRY_COLUMN},
     {_PAPER_XH_EXIT_COLUMN},
     default_exit_terms_json TEXT,
+    {_CURRENT_ENVELOPE_COLUMN},
     PRIMARY KEY (profile_id, revision),
     -- A live revision carries the whole envelope or none of it; a paper
     -- revision may carry none. Six-way all-or-nothing, in the schema.
@@ -325,6 +345,11 @@ END""",
     ),
     3: (
         "ALTER TABLE profile_revisions ADD COLUMN default_exit_terms_json TEXT",
+        "DROP TRIGGER trg_profile_revisions_content_immutable",
+        _V4_REVISION_CONTENT_IMMUTABLE_TRIGGER,
+    ),
+    4: (
+        f"ALTER TABLE profile_revisions ADD COLUMN {_CURRENT_ENVELOPE_COLUMN}",
         "DROP TRIGGER trg_profile_revisions_content_immutable",
         _REVISION_CONTENT_IMMUTABLE_TRIGGER,
     ),

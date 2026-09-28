@@ -1,6 +1,11 @@
 # Alpaca live arming — the ceremony, the ledger, and the lapse
 
-**Status:** canonical for ADR 0059 slice 6 (2026-09-09). Lineage: live.
+**Status:** historical design, superseded by PRD #2540 / #2547 (2026-09-27).
+Standalone arming API, fleet operations and CLI are removed. After the explicit
+Budget authority cutover, only a fresh Deploy with a reviewed budget and Live
+consent can authorize a new run. Old JSONL grants remain read-only, and their
+original hashes and predecessor facts are preserved. The description below is
+retained as provenance for those records; its former commands are not available.
 
 ## What it is
 

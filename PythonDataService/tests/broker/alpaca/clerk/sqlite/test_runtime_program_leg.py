@@ -834,7 +834,7 @@ async def test_new_start_without_explicit_exit_terms_is_refused(tmp_path: Path) 
 
 def test_legacy_upgrade_uses_refreshed_live_seal_once(tmp_path: Path, monkeypatch) -> None:
     from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
-    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+    from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
     from tests.broker.alpaca.clerk.test_live_arming import _armed
 
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)

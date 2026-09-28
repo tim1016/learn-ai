@@ -48,7 +48,6 @@ from app.routers import (
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
-    alpaca_live_arming,
     alpaca_live_graduation,
     backtest_runs,
     baselines,
@@ -583,7 +582,7 @@ async def _service_lifespan(
             # imports the runner's binding repository, and the clerk layer must
             # never learn the runner's root. Resolved per call, so a bot deployed
             # after boot is seen without a restart.
-            from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+            from app.broker.alpaca.clerk.live_arming_history import instance_seal_hashes
 
             def _alpaca_instance_seals(live_account_id: str) -> dict[str, str]:
                 return {
@@ -1306,10 +1305,6 @@ if _ROLE_RUNS_CLERK:
 if _ROLE_RUNS_CLERK:
     app.include_router(
         alpaca_live_graduation.router,
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
-    app.include_router(
-        alpaca_live_arming.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
 # Aggregated bot gallery wall (S4 — snapshot + SSE stream across every

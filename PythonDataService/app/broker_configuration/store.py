@@ -13,6 +13,7 @@ cannot both create or both upgrade.
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 from collections.abc import Iterator
@@ -70,6 +71,7 @@ _REVISION_COLUMN_NAMES: tuple[str, ...] = (
     *(column for _, column in _ENVELOPE_COLUMNS),
     *(column for _, column in _PAPER_ALLOWANCE_COLUMNS),
     "default_exit_terms_json",
+    "current_live_envelope_json",
     "content_sha256",
     "complete",
     "author_owner_id",
@@ -423,6 +425,7 @@ class ProfilesStore:
 
     def insert_revision(self, conn: sqlite3.Connection, revision: ProfileRevision) -> None:
         envelope = revision.live_envelope
+        legacy_envelope = envelope if envelope is not None and envelope.shadow_sessions is not None else None
         allowances = revision.paper_xh_allowances
         values: dict[str, Any] = {
             "profile_id": revision.profile_id,
@@ -434,12 +437,16 @@ class ProfilesStore:
             "account_pinned_at_ms": revision.account_pinned_at_ms,
             "default_exit_terms_json": (None if revision.default_exit_terms is None
                                         else revision.default_exit_terms.model_dump_json()),
+            "current_live_envelope_json": (
+                json.dumps(envelope.to_mapping(), sort_keys=True, separators=(",", ":"))
+                if envelope is not None and legacy_envelope is None else None
+            ),
             "content_sha256": revision.content_sha256,
             "complete": int(revision.complete),
             "author_owner_id": revision.author_owner_id,
             "created_at_ms": revision.created_at_ms,
             **{
-                column: (None if envelope is None else getattr(envelope, field))
+                column: (None if legacy_envelope is None else getattr(legacy_envelope, field))
                 for field, column in _ENVELOPE_COLUMNS
             },
             **{
@@ -645,6 +652,8 @@ def _revision_from_row(row: sqlite3.Row) -> ProfileRevision:
         # affinity: this is the read path ADR 0060 Decision 6 pins.
         else ValidatedLiveEnvelope.from_mapping(stored)
     )
+    if row["current_live_envelope_json"] is not None:
+        envelope = ValidatedLiveEnvelope.from_mapping(json.loads(row["current_live_envelope_json"]))
     stored_allowances = {field: row[column] for field, column in _PAPER_ALLOWANCE_COLUMNS}
     allowances = (
         None

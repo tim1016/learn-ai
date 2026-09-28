@@ -8,16 +8,10 @@ from typing import NoReturn
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import app.routers.brokers as brokers_router
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
     set_active_clerk_runtime,
-)
-from app.broker.alpaca.clerk.shadow_receipt import (
-    ShadowReceipt,
-    ShadowReceiptSession,
-    ShadowReceiptStore,
 )
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.errors import BrokerAccountModeDisagreement
@@ -84,7 +78,8 @@ async def test_a_paper_verdict_never_resolves_the_legacy_ibkr_bindings_root(
     def _refuses() -> NoReturn:
         raise ValueError("legacy IBKR settings are invalid")
 
-    monkeypatch.setattr(brokers_router, "live_artifacts_root", _refuses)
+    import app.broker.ibkr.config as ibkr_config
+    monkeypatch.setattr(ibkr_config, "live_artifacts_root", _refuses)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/brokers/alpaca/live-verdict", headers=_headers())
@@ -119,12 +114,12 @@ async def test_live_settings_with_refused_clerk_serve_live_unarmed(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["final_verdict"] == "live-unarmed"
+    assert body["final_verdict"] == "live"
     assert body["observed_account_id"] == "9LIVE0001"
-    assert body["armed_instance_count"] == 0
+    assert "armed_instance_count" not in body
 
 
-async def test_shadow_authority_with_a_receipt_serves_shadow_complete(
+async def test_shadow_authority_ignores_old_receipts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     for name, value in {
@@ -135,20 +130,8 @@ async def test_shadow_authority_with_a_receipt_serves_shadow_complete(
         "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
     }.items():
         monkeypatch.setenv(name, value)
-    ShadowReceiptStore(tmp_path).append(
-        ShadowReceipt.create(
-            live_account_id="9LIVE0001",
-            strategy_instance_id="ema-shadow-1",
-            configured_signal_hash="a" * 64,
-            twin_account_id="PA-TEST",
-            twin_strategy_instance_id="ema-paper-1",
-            required_sessions=1,
-            sessions=(
-                ShadowReceiptSession(session_open_ms=1_000, shadow_run_id="run-1", reconciliation_sha256="b" * 64),
-            ),
-            written_at_ms=1_700_000_000_000,
-        )
-    )
+    # Historical receipt files are not consulted by current account readiness.
+    (tmp_path / "shadow_receipts.jsonl").write_text("corrupt historical evidence\n")
     set_active_clerk_runtime(
         ActiveClerkRuntime(
             authority_kind="shadow", account_id="shadow:9LIVE0001", account_authority_kind="shadow"
@@ -161,7 +144,8 @@ async def test_shadow_authority_with_a_receipt_serves_shadow_complete(
     assert response.status_code == 200
     body = response.json()
     assert body["clerk_authority"] == "shadow"
-    assert body["shadow_state"] == "complete"
+    assert body["final_verdict"] == "shadow"
+    assert "shadow_state" not in body
 
 
 async def test_invalid_settings_serve_unknown_not_500(monkeypatch: pytest.MonkeyPatch) -> None:

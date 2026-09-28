@@ -95,8 +95,6 @@ def test_live_mode_without_every_required_value_is_refused() -> None:
     for name in (
         "ALPACA_LIVE_LOSS_FRACTION",
         "ALPACA_LIVE_LOSS_USD",
-        "ALPACA_LIVE_SHADOW_SESSIONS",
-        "ALPACA_LIVE_ARMING_MAX_SESSIONS",
         "ALPACA_LIVE_XH_ENTRY_BPS",
         "ALPACA_LIVE_XH_EXIT_BPS",
     ):
@@ -105,9 +103,9 @@ def test_live_mode_without_every_required_value_is_refused() -> None:
 
 def test_live_mode_names_only_the_missing_values() -> None:
     partial = dict(_LIVE_REQUIRED)
-    partial.pop("live_arming_max_sessions")
+    partial.pop("live_xh_exit_bps")
 
-    with pytest.raises(ValidationError, match="ALPACA_LIVE_ARMING_MAX_SESSIONS") as info:
+    with pytest.raises(ValidationError, match="ALPACA_LIVE_XH_EXIT_BPS") as info:
         AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **partial)
 
     assert "ALPACA_LIVE_LOSS_FRACTION" not in str(info.value)
@@ -249,3 +247,9 @@ def test_the_envelope_domains_admit_every_value_the_settings_load() -> None:
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
 
     assert envelope_domain_violation(LiveEnvelopeValues.from_settings(settings)) is None
+
+
+def test_live_current_configuration_requires_no_retired_session_counts() -> None:
+    current = {key: value for key, value in _LIVE_REQUIRED.items() if key not in {"live_shadow_sessions", "live_arming_max_sessions"}}
+    configured = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **current)
+    assert configured.is_live

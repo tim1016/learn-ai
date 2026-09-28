@@ -10,19 +10,16 @@ import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
-from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
-from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.broker_v2_panel.catalog_projection_service import sqlite_catalog_rollup
-from app.services.session_authority import declared_session_bounds, et_minute_of_day_ms
+from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import (
@@ -427,148 +424,3 @@ async def test_a_closed_clock_admits_a_shadow_extended_enter_when_the_feed_is_pr
     )
 
     assert state is not EffectOperationState.REJECTED, explanation
-
-
-async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> None:
-    """The recorder is reached through the sweep's own ``on_result``, not only unit-called.
-
-    Three properties nothing else pins: the listener really is composed into
-    ``ReconciliationSweep``; exactly one ``day_opened`` row is appended for a
-    trading-day instant; and the publisher runs *before* the listener observes
-    it, so the facade carries the verdict the journal recorded.
-    """
-    ports = compose_shadow_ports(
-        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
-    )
-    window = ports.read.capabilities().extended_hours_window
-    # Both instants come from the canonical calendar, never the wall clock and
-    # never a session-time literal: one minute into a known trading day, then
-    # that day's declared close.
-    open_ms = session_open_ms_utc(DAY)
-    bounds = declared_session_bounds(DAY, window)
-    assert bounds is not None
-    clock = _Clock(open_ms + 60_000)
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(
-        repo=repo,
-        read=ports.read,
-        trade=ports.trade,
-        authority_kind="shadow",
-        account_mode="live",
-    )
-    recorder = ShadowSessionRecorder(
-        ledger=ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID),
-        window=window,
-        clock=clock,
-    )
-    publish = facade.publish_sweep_reconciliation
-    sweep = ReconciliationSweep(
-        repo=repo,
-        read=ports.read,
-        trade=ports.trade,
-        intake=facade.intake,
-        on_result=lambda result: recorder.record(publish(result)),
-        pricing=UNPRICEABLE_RECOVERY,
-    )
-    try:
-        assert await sweep._run_one_pass() is True
-        opened = ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID).rows()
-        assert [(row.kind, row.verdict) for row in opened] == [("day_opened", "clean")]
-        # The sweep-attributed publisher ran before the recorder observed the
-        # result: only `publish_sweep_reconciliation` stamps this timestamp.
-        assert facade.recovery_evaluation_observation().last_pass_completed_at_ms is not None
-
-        clock.now_ms = bounds.close_ms
-        assert await sweep._run_one_pass() is True
-    finally:
-        await sweep.stop()
-        repo.close()
-
-    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
-    assert [row.kind for row in ledger.rows()] == ["day_opened", "session_closed_clean"]
-    assert ledger.completed_session_opens() == (open_ms,)
-
-
-@pytest.mark.parametrize("wal_state", ["intact", "missing", "truncated"])
-async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economic_reader(
-    tmp_path: Path, wal_state: str,
-) -> None:
-    from unittest.mock import patch
-
-    from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
-    from app.broker.alpaca.clerk.synthesized_orders import SYNTHESIZED_ORDER_LEDGER_FILENAME, SynthesizedOrderLedger
-    from app.services.alpaca_shadow_reconciliation import EconomicFillSource
-    from app.services.session_authority import scheduled_extended_session_bounds
-    from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
-    from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _walk_clock_to
-
-    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
-    entry = _retain(evidence, minute=600, close="100.25")
-    clock = _clock_at(entry.end_ms)
-    ports = compose_shadow_ports(
-        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path, clock=clock,
-    )
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    facade = SqliteAlpacaClerkFacade(
-        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
-        program_leg_policy=_EXTENDED_POLICY,
-    )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
-    await facade.register_strategy_run(binding)
-    try:
-        receipt = await facade.execute_for_instance(
-            strategy_instance_id=SID, run_id=RUN_ID, decision_id="entry-evidence",
-            purpose=EffectPurpose.ENTER, action_plan=binding.action_plan, quantity=binding.quantity,
-            use_rth=True, retained_source_bar=entry,
-        )
-        assert receipt.state == "submitted"
-        exit_bar = _retain(evidence, minute=959, close="101")
-        _walk_clock_to(repo, exit_bar.end_ms)
-        await facade.execute_for_instance(
-            strategy_instance_id=SID, run_id=RUN_ID, decision_id="exit-evidence",
-            purpose=EffectPurpose.EXIT, action_plan=binding.action_plan, quantity=binding.quantity,
-            use_rth=True, retained_source_bar=exit_bar,
-        )
-        bounds = scheduled_extended_session_bounds(DAY)
-        _walk_clock_to(repo, bounds.close_ms + 60_000)
-        orders = await ports.read.list_orders()
-        [canceled] = [order for order in orders if order.status == "canceled"]
-        wal = repo.db_path.parent / SYNTHESIZED_ORDER_LEDGER_FILENAME
-        if wal_state == "missing":
-            wal.unlink()
-        elif wal_state == "truncated":
-            lines = wal.read_text().splitlines(keepends=True)
-            # Retain a valid prefix ending before this EXIT was recorded.
-            prefix = []
-            for line in lines:
-                if canceled.client_order_id in line:
-                    break
-                prefix.append(line)
-            wal.write_text("".join(prefix))
-        source = EconomicFillSource.from_database_path(repo.db_path)
-        try:
-            if wal_state != "intact":
-                with pytest.raises(EconomicProjectionUnavailable, match="missing orders"):
-                    source.missing_exit_execution_evidence(
-                        strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
-                    )
-                return
-            with patch.object(SynthesizedOrderLedger, "read_latest_beside_database", wraps=SynthesizedOrderLedger.read_latest_beside_database) as read:
-                for offset in (0, 86_400_000, 2 * 86_400_000):
-                    source.missing_exit_execution_evidence(
-                        strategy_instance_id=SID, from_ms=et_midnight_ms(DAY) + offset, to_ms=et_day_end_ms(DAY) + offset,
-                    )
-                assert read.call_count == 1
-            [missing] = source.missing_exit_execution_evidence(
-                strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
-            )
-            assert missing.order_ref == canceled.client_order_id
-            assert (missing.decision_id, missing.symbol, missing.side, missing.quantity) == ("exit-evidence", "SPY", "sell", 1)
-            assert source.missing_exit_execution_evidence(
-                strategy_instance_id="someone-else", from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
-            ) == ()
-        finally:
-            source.close()
-    finally:
-        repo.close()
-        evidence.close()

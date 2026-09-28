@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, select_active_clerk_runtime
-from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+from app.broker.alpaca.clerk.live_arming_history import instance_seal_hashes
 from app.broker.alpaca.clerk.live_authority import InstanceSealsForAccount
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord

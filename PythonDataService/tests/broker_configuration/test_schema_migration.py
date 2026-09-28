@@ -270,3 +270,53 @@ def test_foreign_keys_are_enforced(clerk_dir: Path) -> None:
             )
     finally:
         store.close()
+
+
+def test_v4_upgrade_keeps_old_hashes_and_separates_new_four_field_revisions(clerk_dir: Path, clock: FrozenClock) -> None:
+    from app.broker_configuration.envelope import FLOAT_FIELDS, ValidatedLiveEnvelope
+    from app.broker_configuration.service import revision_content_sha256
+    from tests.broker_configuration.test_paper_extended_hours_allowances import _service, _v2_database
+
+    _v2_database(clerk_dir)
+    path = profiles_database_path(clerk_dir)
+    with sqlite3.connect(path) as conn:
+        for version in (2, 3):
+            for statement in schema.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("UPDATE configuration_meta SET schema_version = 4")
+        before = conn.execute("SELECT profile_id, revision, content_sha256 FROM profile_revisions ORDER BY profile_id, revision").fetchall()
+    service = _service(clerk_dir, clock)
+    try:
+        profile = next(p for p in service.list_profiles() if p.display_name == "Live — primary")
+        legacy = service.read_revision(profile.profile_id, 1)
+        assert legacy.live_envelope.shadow_sessions is not None
+        assert revision_content_sha256(credential_slot=legacy.credential_slot, endpoint_mode="live", live_envelope=legacy.live_envelope) == legacy.content_sha256
+        current = ValidatedLiveEnvelope.from_mapping({name: getattr(legacy.live_envelope, name) for name in FLOAT_FIELDS})
+        new = service.create_revision(profile.profile_id, expected_revision=1, credential_slot=legacy.credential_slot, endpoint_mode="live", live_envelope=current)
+        assert new.revision == 2
+        assert new.content_sha256 != legacy.content_sha256
+        assert service.read_revision(profile.profile_id, 1) == legacy
+        assert service.read_revision(profile.profile_id, 2).live_envelope.to_mapping() == current.to_mapping()
+    finally:
+        service.close()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT profile_id, revision, content_sha256 FROM profile_revisions WHERE revision = 1 ORDER BY profile_id, revision").fetchall() == before
+        row = conn.execute("SELECT live_loss_fraction, live_loss_usd, live_shadow_sessions, live_arming_max_sessions, live_xh_entry_bps, live_xh_exit_bps, current_live_envelope_json FROM profile_revisions WHERE revision=2").fetchone()
+        assert row[:6] == (None,) * 6
+        assert row[6] is not None
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute("UPDATE profile_revisions SET current_live_envelope_json = '{}' WHERE revision = 2")
+        # A direct writer cannot install both sources of truth, even on INSERT.
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            columns = [r[1] for r in conn.execute("PRAGMA table_info(profile_revisions)")]
+            values = list(conn.execute("SELECT * FROM profile_revisions WHERE revision=2").fetchone())
+            values[columns.index("revision")] = 3
+            for name, value in (("live_loss_fraction", .05), ("live_loss_usd", 5000.), ("live_shadow_sessions", 1), ("live_arming_max_sessions", 20), ("live_xh_entry_bps", 10.), ("live_xh_exit_bps", 10.)):
+                values[columns.index(name)] = value
+            conn.execute(f"INSERT INTO profile_revisions VALUES ({','.join('?' for _ in values)})", values)
+    reopened = ProfilesStore.open(clerk_dir=clerk_dir)
+    try:
+        assert reopened.read_revision(profile.profile_id, 1) == legacy
+        assert reopened.read_revision(profile.profile_id, 2).live_envelope == current
+    finally:
+        reopened.close()

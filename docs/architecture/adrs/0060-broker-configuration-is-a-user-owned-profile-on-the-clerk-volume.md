@@ -221,3 +221,31 @@ The observation carries the execution watermark taken before the broker read.
 New execution/correction evidence invalidates its unrealized mark until another
 coherent read, preventing closed P&L from being counted twice. These checks
 never prevent custody from recording executions or reducing risk.
+
+
+### 2026-09-27 amendment — current four-field profiles and historical fidelity (#2547)
+
+Current configuration accepts only `loss_fraction`, `loss_usd`, `xh_entry_bps`
+and `xh_exit_bps`. Session-count and expiring-arming controls are retired; the
+request schema rejects both old count keys. New Live runs acquire their own
+reviewed budget and consent through Deploy after Budget authority cutover.
+
+Profiles schema 5 adds a nullable four-field envelope document. A database CHECK
+prohibits that document beside any of the legacy six scalar values or Paper
+allowances. The existing revision immutability trigger also guards the new
+column. There is one representation per revision, never a second mutable home
+for its limits. The migration adds the column without rewriting existing rows,
+revisions, selections, foreign keys or content hashes.
+
+The historical six-field decoder retains exact numeric types, both retired
+counts and the original hash calculation. Its read-only arming ledger still
+verifies original records. Configuration projects only the four editable values;
+saving them creates a new revision and cannot rewrite an old revision's identity.
+Current runtime resolution explicitly clears stale session-count environment
+values. The legacy import reader remains capable of decoding the old six-field
+configuration for recovery and historical verification.
+
+`test_schema_migration.py` proves a v4 upgrade preserves hashes and pinned
+selections, a new four-field revision survives reopen, the database refuses two
+simultaneous representations, and the current document is immutable. Historical
+seal tests continue to verify original record digests; no golden hash is updated.
