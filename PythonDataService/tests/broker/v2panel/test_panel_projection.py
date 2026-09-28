@@ -83,8 +83,9 @@ from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAgg
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
+    open_pnl_fields,
     program_build_view_from_run_evidence,
-    select_primary_action_by_lens,
+    select_primary_action,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     _recent_fill_view,
@@ -98,6 +99,7 @@ from tests.broker.v2panel.fixtures import (
     SID,
     decision_receipt,
     fill_entry,
+    home_facts,
     intent_entry,
     reconciliation_entry,
     submit_acked_entry,
@@ -837,6 +839,31 @@ def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
         repo.close()
 
 
+def test_sqlite_adapter_carries_the_bots_sealed_exit_terms(tmp_path: Path) -> None:
+    """The bot page's Exit terms fold reads the custody seal itself, never a
+    profile default (PRD #2504, #2560)."""
+    from app.schemas.exit_terms import ExitTermsInput
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path, clock=_monotonic_test_clock(_NOW))
+    try:
+        terms = ExitTermsInput(exit_allowance_bps=25, band_multiple=2, spread_cap_bps=50).seal()
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1", exit_terms=terms)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            projection = reader.bot_snapshot(SID)
+        finally:
+            reader.close()
+        assert projection is not None
+
+        adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection, repository=repo)
+        unsealed = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection)
+    finally:
+        repo.close()
+
+    assert adapted.exit_terms == terms
+    assert unsealed.exit_terms is None
+
+
 def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist(
     tmp_path: Path,
 ) -> None:
@@ -1024,6 +1051,66 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
     ]
 
 
+@pytest.mark.parametrize(
+    ("open_pnl", "expected_usd", "expected_direction"),
+    [
+        (-3.254, "-3.25", "loss"),
+        # Half-even display cents: 12.405 shows as 12.40, never re-rounded in the browser.
+        (12.405, "12.40", "gain"),
+        # A loss smaller than half a cent shows as 0.00, and reads flat, not red.
+        (-0.004, "0.00", "flat"),
+        (0.0, "0.00", "flat"),
+    ],
+)
+def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
+    open_pnl: float, expected_usd: str, expected_direction: str,
+) -> None:
+    projection = _rail_projection(orders=())
+    economics = EconomicSnapshot(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 3_600_000,
+        session_close_ms=_NOW + 3_600_000,
+        recent_fills=(),
+        fills_today=0,
+        exposure={"SPY": 1.0},
+        realized_pnl_today=0.0,
+        open_pnl=open_pnl,
+        marks_complete=True,
+        mark_observed_at_ms={"SPY": _NOW},
+        fee_fidelity="reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW,
+    )
+
+    adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
+
+    assert (adapted.open_pnl, adapted.open_pnl_usd, adapted.open_pnl_direction) == (
+        open_pnl, expected_usd, expected_direction,
+    )
+    wire = adapted.model_dump(mode="json")
+    assert (wire["open_pnl_usd"], wire["open_pnl_direction"]) == (expected_usd, expected_direction)
+
+
+def test_open_pnl_without_a_price_has_no_words_either() -> None:
+    base = _panel(_status(running=True), _clerk_status(), [])
+
+    assert (base.open_pnl, base.open_pnl_usd, base.open_pnl_direction) == (None, None, None)
+    assert adapt_sqlite_panel(base, _rail_projection(orders=())).open_pnl_usd is None
+
+
+def test_open_pnl_words_cannot_drift_from_the_figure() -> None:
+    payload = _panel(_status(running=True), _clerk_status(), []).model_dump()
+    payload.update(open_pnl=4.5)
+
+    with pytest.raises(ValidationError, match="open_pnl_usd"):
+        BotPanelView.model_validate(payload)
+    payload.update(open_pnl_fields(4.5))
+    assert BotPanelView.model_validate(payload).open_pnl_usd == "4.50"
+
+
 def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:
     projection = replace(
         _rail_projection(orders=()),
@@ -1074,6 +1161,7 @@ def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> N
         projections={SID: projection},
         economic_rollups={SID: economics},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].exposure == {}
@@ -1124,6 +1212,7 @@ def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
         projections={SID: projection},
         economic_rollups={SID: economics},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].status_label == "Crashed"
@@ -1995,7 +2084,28 @@ def test_stop_outcome_copy_distinguishes_approved_carryover() -> None:
     assert "durable checkpoint" in panel.health.duty_outcome.explanation
 
 
-@pytest.mark.parametrize("reason_code", ["TypeError", "FEED_DEATH"])
+def test_a_crash_the_feed_caused_says_the_feed_stopped() -> None:
+    """Hurdle H29: a run the market-data feed killed read "not a market-data
+    health verdict" while its log said the feed died."""
+    status = _status(running=False).model_copy(
+        update={
+            "duty_outcome": BotDutyOutcomeView(
+                kind="CRASHED", reason_code="FEED_DEATH", recorded_at_ms=_NOW, run_id="run-1",
+            ),
+        }
+    )
+
+    outcome = _panel(status, _clerk_status(), []).health.duty_outcome
+
+    assert outcome is not None
+    assert outcome.label == "Crashed: market data stopped"
+    assert outcome.explanation == (
+        "The IBKR market-data feed stopped delivering bars, so the run ended rather than decide without them."
+    )
+    assert "not a market-data" not in outcome.explanation
+
+
+@pytest.mark.parametrize("reason_code", ["TypeError", "RuntimeError"])
 def test_crash_copy_is_source_neutral_and_not_a_market_data_verdict(
     reason_code: str,
 ) -> None:
@@ -2321,7 +2431,7 @@ def _action(panel, action_id):
     return next(a for a in panel.actions if a.action_id == action_id)
 
 
-# ── primary_action_by_lens policy (#1665) ────────────────────────────────────
+# ── primary_action policy (#1665, PRD #2560 D2) ──────────────────────────────
 
 
 def _health(*, running: bool, desired_state: str = "RUNNING") -> BotHealthCard:
@@ -2376,90 +2486,78 @@ def _recovery_capability(action_id: str, *, primary: bool, available: bool = Tru
     )
 
 
-def test_select_primary_action_by_lens_stopped_resumable() -> None:
-    selection = select_primary_action_by_lens([_stub_action("stop", enabled=False)], _health(running=False))
-
-    assert selection.trader is None
-    assert selection.operator is None
-
-
-def test_select_primary_action_by_lens_running_stoppable() -> None:
-    selection = select_primary_action_by_lens([_stub_action("stop")], _health(running=True))
-
-    assert selection.trader == "stop"
-    assert selection.operator == "stop"
+def test_select_primary_action_stopped_bot_has_none() -> None:
+    """A stopped bot's page offers Deploy again, which is navigation, not a
+    panel command."""
+    assert select_primary_action([_stub_action("stop", enabled=False)], _health(running=False)) is None
 
 
-def test_select_primary_action_by_lens_blocked_action_still_referenced() -> None:
-    """A disabled lifecycle action is still the reference; ``enabled`` only
-    gates the button, not whether the banner may point at it (matches the
-    pre-existing behavior of the frontend's retired ``primaryLifecycleAction``,
-    and ADR 0027's ``wait`` disposition — a block is allowed to name its
-    control without offering a fake, always-enabled button)."""
-    selection = select_primary_action_by_lens(
-        [_stub_action("stop", enabled=False)],
+def test_select_primary_action_running_stoppable() -> None:
+    assert select_primary_action([_stub_action("stop")], _health(running=True)) == "stop"
+
+
+def test_select_primary_action_running_sqlite_bot_stops_its_decisions() -> None:
+    """A SQLite-activated bot never gets a plain ``stop`` back while running:
+    its stop is the recovery executor's ``stop_bot_decisions``, and that is
+    the page's one primary command."""
+    selection = select_primary_action(
+        [_stub_action("reconcile_now"), _stub_action("stop_bot_decisions")],
         _health(running=True),
     )
 
-    assert selection.trader == "stop"
-    assert selection.operator == "stop"
+    assert selection == "stop_bot_decisions"
 
 
-def test_select_primary_action_by_lens_missing_action_fails_closed() -> None:
-    """No Trader-visible lifecycle action is presented: both references are
-    ``None`` rather than guessing from `health` alone."""
-    selection = select_primary_action_by_lens([], _health(running=False))
+def test_select_primary_action_blocked_action_still_referenced() -> None:
+    """A disabled lifecycle action is still the reference; ``enabled`` only
+    gates the button, not whether the page may point at it (ADR 0027's
+    ``wait`` disposition — a block is allowed to name its control without
+    offering a fake, always-enabled button)."""
+    assert select_primary_action([_stub_action("stop", enabled=False)], _health(running=True)) == "stop"
 
-    assert selection.trader is None
-    assert selection.operator is None
+
+def test_select_primary_action_missing_action_fails_closed() -> None:
+    """Nothing presented: ``None`` rather than a guess from ``health``."""
+    assert select_primary_action([], _health(running=True)) is None
 
 
-def test_select_primary_action_by_lens_recovery_primary_never_becomes_trader_reference() -> None:
-    """The one deterministic Operator precedence rule (#1665): a recovery
-    capability marked primary outranks the routine lifecycle command for the
-    Operator lens, but can never leak into the Trader lens even when the
-    Trader-visible lifecycle action is also presented alongside it."""
-    selection = select_primary_action_by_lens(
+def test_select_primary_action_recovery_cure_outranks_the_lifecycle_command() -> None:
+    """The one precedence rule (#1665, ADR 0027): the bot's recovery cure
+    outranks the routine lifecycle command."""
+    selection = select_primary_action(
         [_stub_action("stop"), _stub_action("resolve_execution_coverage")],
         _health(running=True),
         recovery_primary_action_id="resolve_execution_coverage",
     )
 
-    assert selection.trader == "stop"
-    assert selection.operator == "resolve_execution_coverage"
+    assert selection == "resolve_execution_coverage"
 
 
-def test_select_primary_action_by_lens_dangling_recovery_primary_falls_back() -> None:
-    """A recovery-primary id that is not actually presented (stale evidence,
-    a caller bug) must never leak through as a dangling reference — Operator
-    falls back to the same lifecycle candidate as Trader."""
-    selection = select_primary_action_by_lens(
+def test_select_primary_action_dangling_recovery_primary_falls_back() -> None:
+    """A recovery-primary id that is not presented (stale evidence, a caller
+    bug) never leaks through as a dangling reference."""
+    selection = select_primary_action(
         [_stub_action("stop")],
         _health(running=True),
         recovery_primary_action_id="resolve_execution_coverage",
     )
 
-    assert selection.trader == "stop"
-    assert selection.operator == "stop"
+    assert selection == "stop"
 
 
-def test_build_panel_populates_primary_action_by_lens_for_stopped_resumable_bot() -> None:
+def test_build_panel_populates_no_primary_action_for_stopped_bot() -> None:
     panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
 
-    assert panel.primary_action_by_lens.trader is None
-    assert panel.primary_action_by_lens.operator is None
+    assert panel.primary_action is None
 
 
-def test_build_panel_populates_primary_action_by_lens_for_running_stoppable_bot() -> None:
+def test_build_panel_populates_primary_action_for_running_stoppable_bot() -> None:
     panel = _panel(_status(running=True), _clerk_status(), [])
 
-    assert panel.primary_action_by_lens.trader == "stop"
-    assert panel.primary_action_by_lens.operator == "stop"
+    assert panel.primary_action == "stop"
 
 
-def test_build_panel_populates_primary_action_by_lens_for_blocked_bot() -> None:
-    """An account-held, stopped bot still names Resume as its reference —
-    only ``enabled`` reflects the block; the reference itself is stable."""
+def test_build_panel_populates_no_primary_action_for_blocked_stopped_bot() -> None:
     panel = _panel(
         _status(running=False),
         _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
@@ -2468,21 +2566,14 @@ def test_build_panel_populates_primary_action_by_lens_for_blocked_bot() -> None:
     )
 
     assert panel.mission_verdict.state == "blocked"
-    assert "resume" not in {a.action_id for a in panel.actions}
-    assert panel.primary_action_by_lens.trader is None
-    assert panel.primary_action_by_lens.operator is None
+    assert panel.primary_action is None
 
 
-def test_sqlite_adapter_recovery_primary_selects_operator_reference_without_leaking_to_trader() -> None:
-    """#1665: the audience-aware precedence, exercised through the real
-    SQLite adapter path. A running, SQLite-activated bot never gets a plain
-    ``stop`` back (only the Operator-only ``stop_bot_decisions`` capability
-    survives activation while running), so the Trader reference must fail
-    closed to ``None`` — it must never fall back to the Operator-only
-    recovery action id. Also proves the retained
-    ``readiness_checks[].evidence['primary']`` diagnostic marker can never
-    disagree with the Operator reference, since both derive from the same
-    ``RecoveryCapability.primary`` flag."""
+def test_sqlite_adapter_recovery_cure_is_the_primary_action() -> None:
+    """#1665 through the real SQLite adapter path: the custody policy's
+    primary capability is the page's primary command, and the retained
+    ``readiness_checks[].evidence['primary']`` marker names the same action,
+    since both derive from the one ``RecoveryCapability.primary`` flag."""
     base = _panel(_status(running=True), _clerk_status(), [])
     projection = replace(
         _rail_projection(orders=()),
@@ -2494,44 +2585,86 @@ def test_sqlite_adapter_recovery_primary_selects_operator_reference_without_leak
 
     adapted = adapt_sqlite_panel(base, projection)
 
-    assert adapted.primary_action_by_lens.trader is None
-    assert adapted.primary_action_by_lens.operator == "resolve_execution_coverage"
+    assert adapted.primary_action == "resolve_execution_coverage"
     primary_check = next(
         check for check in adapted.readiness_checks if check.evidence.get("primary") is True
     )
-    assert primary_check.operation == adapted.primary_action_by_lens.operator
+    assert primary_check.operation == adapted.primary_action
 
 
-def test_sqlite_adapter_falls_back_to_lifecycle_when_no_recovery_action_is_primary() -> None:
-    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+def test_sqlite_adapter_running_bot_without_a_cure_primaries_its_stop() -> None:
+    """An always-available Reconcile wins the policy's priority on a healthy
+    running bot, but it is not this bot's cure: the page's primary command is
+    the bot's stop, never a routine refresh."""
+    base = _panel(_status(running=True), _clerk_status(), [])
     projection = replace(
         _rail_projection(orders=()),
-        recovery_actions=(_recovery_capability("reconcile_now", primary=False),),
+        recovery_actions=(
+            _recovery_capability("reconcile_now", primary=True),
+            _recovery_capability("stop_bot_decisions", primary=False),
+        ),
     )
 
     adapted = adapt_sqlite_panel(base, projection)
 
-    assert adapted.primary_action_by_lens.trader is None
-    assert adapted.primary_action_by_lens.operator is None
-    assert all(check.evidence.get("primary") is not True for check in adapted.readiness_checks)
+    assert adapted.primary_action == "stop_bot_decisions"
 
 
-def test_primary_action_by_lens_rejects_operator_only_action_as_trader_reference() -> None:
-    """Schema-level defense in depth: the model validator itself must refuse
-    to construct a ``BotPanelView`` whose Trader reference is an
-    Operator-only action, independent of any policy-function test above."""
+def test_sqlite_adapter_stopped_bot_without_a_cure_has_no_primary_action() -> None:
+    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    projection = replace(
+        _rail_projection(orders=()),
+        recovery_actions=(_recovery_capability("reconcile_now", primary=True),),
+    )
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert adapted.primary_action is None
+
+
+def test_sqlite_adapter_stopped_bot_still_holding_shares_has_no_primary_action() -> None:
+    """Review B4 (H29/H30): a crashed bot holding a ``CUSTODY_SUBJECT``
+    uncertainty got "Reconcile now" as its header action, beside the
+    stranded-position warning's Flatten. Its page offers that one action;
+    the header offers none."""
+    uncertainty = ProjectedUncertainty(
+        uncertainty_id="uncertainty:stranded",
+        scope="CUSTODY_SUBJECT",
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID,
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="The bot stopped while holding shares",
+        explanation="1 SPY is still held.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Reconcile, then flatten.",
+        observed_at_ms=_NOW - 1_000,
+        evidence_age_ms=1_000,
+        evidence_refs=(),
+    )
+    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    holding = replace(
+        _rail_projection(orders=()),
+        positions=_held(1.0),
+        uncertainties=(uncertainty,),
+        recovery_actions=(_recovery_capability("reconcile_now", primary=True),),
+    )
+
+    adapted = adapt_sqlite_panel(base, holding)
+    flat = adapt_sqlite_panel(base, replace(holding, positions=()))
+
+    assert adapted.exposure == {"SPY": 1.0}
+    assert adapted.primary_action is None
+    # Positive control: the same stopped bot, flat, keeps Reconcile as its cure.
+    assert flat.primary_action == "reconcile_now"
+
+
+def test_primary_action_rejects_a_dangling_reference() -> None:
     base = _panel(_status(running=True), _clerk_status(), [])
     payload = base.model_dump()
-    payload["primary_action_by_lens"] = {"trader": "resolve_execution_coverage", "operator": None}
-
-    with pytest.raises(ValidationError):
-        BotPanelView.model_validate(payload)
-
-
-def test_primary_action_by_lens_rejects_dangling_operator_reference() -> None:
-    base = _panel(_status(running=True), _clerk_status(), [])
-    payload = base.model_dump()
-    payload["primary_action_by_lens"] = {"trader": None, "operator": "resolve_execution_coverage"}
+    payload["primary_action"] = "resolve_execution_coverage"
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
@@ -2739,7 +2872,7 @@ def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() 
     projection = replace(_exposure_projection(orders=()), positions=_held(3.0), authority_health="degraded_to_mirror")
 
     assert _notices(_refused_panel(), projection) == [
-        ("position_unverified", "Position could not be verified; check the broker")
+        ("position_unverified", "Position could not be verified")
     ]
 
 
@@ -2757,7 +2890,7 @@ def test_every_abnormal_end_reports_reconciled_exposure(kind: str, reason: str, 
     if exposure == "held":
         expected.append(("position_unmanaged", "Bot is not managing this position"))
     if exposure == "unknown":
-        expected.append(("position_unverified", "Position could not be verified; check the broker"))
+        expected.append(("position_unverified", "Position could not be verified"))
     if working_entry:
         expected.append(("entry_order_working", "An entry order is still working"))
     assert notices == expected
@@ -2833,7 +2966,7 @@ def test_a_stale_position_after_a_crash_is_unverified(age_ms: int) -> None:
         projection.latest_reconciliation, attempted_at_ms=_NOW - age_ms,
     ))
     assert _notices(_refused_panel("CRASHED"), projection) == [
-        ("position_unverified", "Position could not be verified; check the broker")
+        ("position_unverified", "Position could not be verified")
     ]
 
 

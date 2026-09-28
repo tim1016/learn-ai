@@ -1,0 +1,41 @@
+<details class="home-finished">
+  <summary><strong>Finished</strong> ({{ bots().length }}) · flat, all money returned</summary>
+  @if (rows().length === 0) {
+    <p class="home-finished__empty">No finished bots yet.</p>
+  } @else {
+    <table class="home-finished__table">
+      <caption class="home-finished__sr-only">Finished bots</caption>
+      <thead>
+        <tr>
+          <th scope="col">Bot</th>
+          <th scope="col">Ended</th>
+          <th scope="col" class="home-finished__num">Trades</th>
+          <th scope="col" class="home-finished__num">Result</th>
+          <th scope="col"><span class="home-finished__sr-only">Action</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of rows(); track row.bot.strategy_instance_id) {
+          <tr>
+            <td><a class="home-finished__sid" [routerLink]="row.page">{{ row.bot.strategy_instance_id }}</a></td>
+            <td>
+              @if (row.bot.ended_at_ms !== null && row.bot.ended_at_ms !== undefined) {
+                <app-timestamp-display [value]="row.bot.ended_at_ms" mode="local" />
+              } @else {
+                not recorded
+              }
+            </td>
+            <td class="home-finished__num">{{ row.bot.trade_count ?? 'unknown' }}</td>
+            <td class="home-finished__num">
+              {{ (row.bot.final_result_usd | authoredUsd) ?? 'unknown' }}
+            </td>
+            <td>
+              <a class="home-finished__again" [routerLink]="row.again.commands" [queryParams]="row.again.queryParams"
+                 [attr.aria-label]="row.againLabel">Deploy again</a>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</details>

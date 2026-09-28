@@ -28,10 +28,6 @@ export type CohortFlattenView = components['schemas']['CohortFlattenView'];
 export type CohortFlattenCohort = components['schemas']['CohortFlattenCohort'];
 export type CohortFlattenLeg = components['schemas']['CohortFlattenLeg'];
 export type CohortFlattenRequest = components['schemas']['CohortFlattenRequest'];
-export type CohortArchiveView = components['schemas']['CohortArchiveView'];
-export type CohortArchiveCohort = components['schemas']['CohortArchiveCohort'];
-export type CohortArchiveLeg = components['schemas']['CohortArchiveLeg'];
-export type CohortArchiveRequest = components['schemas']['CohortArchiveRequest'];
 /** The batch outcome both cohort actions report. */
 export type CohortActionResult = components['schemas']['CohortActionResult'];
 export type CohortLegResult = components['schemas']['CohortLegResult'];
@@ -66,7 +62,7 @@ export type StationView = components['schemas']['StationView'];
 export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
-export type PrimaryActionByLens = components['schemas']['PrimaryActionByLens'];
+export type ExitTerms = components['schemas']['ExitTerms'];
 
 /**
  * `authority_kind` names the exact Clerk account authority (real Paper vs

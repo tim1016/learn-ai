@@ -1,6 +1,7 @@
 import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
+import { homeRedirectGuard } from "./fleet/home-redirect.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>
@@ -339,24 +340,23 @@ export const routes: Routes = [
     // ── The account workspace (ADR 0064 Decision 1, PRD §13/FR-092) ─────────
     // One account is one place: the account header and its tabs are this
     // parent, and each tab is a child, so moving between them never
-    // re-creates the header or the shared account read. The canonical URLs
-    // are unchanged — Overview is still the bare account URL — and
-    // `:clerkId`/`:accountId` reach every child through the router's
-    // `paramsInheritanceStrategy: 'always'` (see `app.config.ts`).
+    // re-creates the header or the shared account read. Home is the bare
+    // account URL, and `:clerkId`/`:accountId` reach every child through the
+    // router's `paramsInheritanceStrategy: 'always'` (see `app.config.ts`).
     //
-    // The shell sits at the CLERK level, not the account level, because two of
-    // its four tabs name no account: Settings is lane-scoped wherever it
-    // is opened from (FR-092), and a lane with no confirmed account still
-    // keeps its workspace, with Bots and Gallery explaining in place why they
-    // cannot open (FR-096). `accounts/:accountId` is a componentless child
+    // The shell sits at the CLERK level, not the account level, because a
+    // lane can be open without an account: Settings is lane-scoped
+    // wherever it is opened from (FR-092), and a lane with no confirmed
+    // account still keeps its workspace, with its Home explaining in place
+    // why it cannot open (FR-096). `accounts/:accountId` is a componentless child
     // that adds account identity to the tabs that have one, so both cases
     // render under one header rather than two near-identical shells.
     //
     // Full-bleed on the PARENT, not on one tab: the header and the tab strip
     // are the workspace's own chrome and must sit at the same place on every
     // tab. Declaring it per tab gave the shell's page inset to some tabs and
-    // not others, which moved the header ~24px when the operator switched to
-    // Gallery. Each tab now owns whatever inset its own content wants.
+    // not others, which moved the header ~24px when the operator switched
+    // tabs. Each tab now owns whatever inset its own content wants.
     path: 'brokers/alpaca/clerks/:clerkId',
     data: { fullBleed: true, broker: 'alpaca' },
     loadComponent: () =>
@@ -382,60 +382,37 @@ export const routes: Routes = [
         pathMatch: 'full',
       },
       {
-        // The lane-scoped Bots tab: the in-place explanation for why this
-        // lane's roster cannot open (not ready, unbound, or without the
+        // The lane's Home when it has no confirmed account to serve one: the
+        // in-place explanation of why (not ready, unbound, or without the
         // capability), plus its way to Settings. Never redirected to
         // another lane (FR-096).
-        path: 'bots',
-        data: { surface: 'bots' },
+        path: 'home',
         loadComponent: () =>
           import(
             './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component'
           ).then((m) => m.AlpacaSurfaceNotReadyTabComponent),
       },
-      {
-        // The Gallery twin of the lane-scoped tab above.
-        path: 'gallery',
-        data: { surface: 'gallery' },
-        loadComponent: () =>
-          import(
-            './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component'
-          ).then((m) => m.AlpacaSurfaceNotReadyTabComponent),
-      },
+      // Bots and Gallery merged into Home (PRD #2560); their lane-scoped
+      // bookmarks land on the lane's Home.
+      { path: 'bots', canActivate: [homeRedirectGuard('list')], children: [] },
+      { path: 'gallery', canActivate: [homeRedirectGuard('wall')], children: [] },
       {
         // The account-scoped tabs. Componentless: it contributes account
         // identity to the URL, not a second shell under the first.
         path: 'accounts/:accountId',
         children: [
           {
-            // One bot's own page — inside the workspace, under the tab it was
-            // opened from (ADR 0064 Decision 1). Declared BEFORE the Bots tab
-            // it nests under: `bots` would otherwise match first and leave the
-            // bot identity unconsumed, and relying on the router backtracking
-            // between siblings is not worth the doubt when declaring the
-            // longer path first settles it.
+            // One bot's own page — inside the workspace, under Home.
             path: 'bots/:sid',
             loadComponent: () =>
               import(
                 './components/broker/v2-panel/panel-shell/bot-panel-shell.component'
               ).then((m) => m.BotPanelShellComponent),
           },
-          {
-            path: 'bots',
-            loadComponent: () =>
-              import(
-                './components/broker/v2-panel/bots-list-page/bots-list-page.component'
-              ).then((m) => m.BotsListPageComponent),
-          },
-          {
-            // The wall stays edge to edge under the workspace header — as
-            // every tab now does, from the workspace's `fullBleed` above.
-            path: 'gallery',
-            loadComponent: () =>
-              import(
-                './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
-              ).then((m) => m.BotGalleryPageComponent),
-          },
+          // Overview, Bots and Gallery merged into Home (PRD #2560): the old
+          // tabs' bookmarks land on it, Gallery as its Wall view.
+          { path: 'bots', canActivate: [homeRedirectGuard('list')], children: [] },
+          { path: 'gallery', canActivate: [homeRedirectGuard('wall')], children: [] },
           {
             // Activity — the account's history and records (PRD #2560):
             // Today / 30D / 60D money, fees per bot, orders and cash moves,
@@ -456,11 +433,11 @@ export const routes: Routes = [
               ).then((m) => m.AlpacaDeployTabComponent),
           },
           {
-            // Overview — the empty child, so the account's own URL opens it.
+            // Home — the empty child, so the account's own URL opens it.
             path: '',
             loadComponent: () =>
-              import('./components/brokers/alpaca-desk/alpaca-desk.component').then(
-                (m) => m.AlpacaDeskComponent,
+              import('./components/brokers/alpaca-home/alpaca-home.component').then(
+                (m) => m.AlpacaHomeComponent,
               ),
           },
         ],

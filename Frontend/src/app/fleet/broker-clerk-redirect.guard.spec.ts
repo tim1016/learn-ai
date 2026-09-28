@@ -23,6 +23,7 @@ describe('brokerClerkRedirectGuard', () => {
   function runGuard(
     params: Record<string, string>,
     fleet: Pick<FleetDirectoryService, 'ensureLoaded' | 'laneForAccount'>,
+    suffix: '/bots' | '/gallery' = '/bots',
   ) {
     TestBed.configureTestingModule({
       providers: [
@@ -31,7 +32,7 @@ describe('brokerClerkRedirectGuard', () => {
       ],
     });
     const route = routeFor(params);
-    const guard = brokerClerkRedirectGuard('/bots');
+    const guard = brokerClerkRedirectGuard(suffix);
     const state = TestBed.inject(Router).routerState.snapshot;
     return runInInjectionContext(TestBed.inject(Injector), () =>
       guard(route, state),
@@ -49,8 +50,23 @@ describe('brokerClerkRedirectGuard', () => {
 
     if (!(result instanceof UrlTree)) throw new Error('Exact lane did not redirect.');
     expect(ensureLoaded).toHaveBeenCalledOnce();
+    // Bots merged into the account's Home (PRD #2560).
     expect(TestBed.inject(Router).serializeUrl(result)).toBe(
-      `/brokers/alpaca/clerks/${lane.clerk_id}/accounts/${lane.provider_summary?.confirmed_account_id}/bots`,
+      `/brokers/alpaca/clerks/${lane.clerk_id}/accounts/${lane.provider_summary?.confirmed_account_id}`,
+    );
+  });
+
+  it('lands an old Gallery bookmark on Home\'s Wall', async () => {
+    const lane = testLane();
+    const result = await runGuard(
+      { broker: 'alpaca', accountId: lane.provider_summary?.confirmed_account_id ?? '' },
+      { ensureLoaded: vi.fn(() => Promise.resolve({ observed_at_ms: 1, clerks: [lane] })), laneForAccount: vi.fn(() => lane) },
+      '/gallery',
+    );
+
+    if (!(result instanceof UrlTree)) throw new Error('Exact lane did not redirect.');
+    expect(TestBed.inject(Router).serializeUrl(result)).toBe(
+      `/brokers/alpaca/clerks/${lane.clerk_id}/accounts/${lane.provider_summary?.confirmed_account_id}?view=wall`,
     );
   });
 

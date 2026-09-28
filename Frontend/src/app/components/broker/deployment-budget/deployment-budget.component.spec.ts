@@ -1,45 +1,323 @@
-import { render, screen } from '@testing-library/angular';
+import { signal } from '@angular/core';
+import { render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
+import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
-import { BrokerV2PanelService, type DeploymentBudgetView } from '../v2-panel/lib/broker-v2-panel.service';
-import { DeploymentBudgetComponent } from './deployment-budget.component';
+import { BrokerV2PanelService, type DeploymentBudgetView, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
+import { type BotOpenPnl, DeploymentBudgetComponent } from './deployment-budget.component';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
-const VIEW: DeploymentBudgetView = {
-  state: 'ready', detail: 'Stopped. Cancellation is still pending.', strategy_instance_id: 'stopped-a', world: 'real_paper',
-  committed_usd: '1000.00', realized_gross_usd: '-10.00', fees_usd: '0.03', position_cost_usd: '0.00',
-  pending_orders_usd: '600.00', free_usd: '0.00', released_usd: '389.97', outstanding_cash_usd: '600.00',
-  shortfall_usd: '0.00', entry_eligible: false, observed_at_ms: 1_800_000_000_000,
+
+const RUNNING: DeploymentBudgetView = {
+  state: 'ready', headline: 'Holding its position', detail: 'Its next entry waits until this position is sold.',
+  strategy_instance_id: 'spy-ema-a', world: 'real_paper', entry_eligible: false,
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '12.40' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '1012.37', total: true },
+    { label: 'In shares, at cost', amount_usd: '764.71' },
+    { label: 'Waiting in entry orders', amount_usd: '0.00' },
+    { label: 'Free to trade', amount_usd: '247.66' },
+    { label: 'Short of its next entry', amount_usd: '0.00' },
+  ],
+  segment: {
+    kind: 'bot', strategy_instance_id: 'spy-ema-a', label: 'spy-ema-a', amount_usd: '1012.37', share_bps: 10000, palette_index: 0,
+    parts: { in_shares_usd: '764.71', in_shares_bps: 7554, pending_usd: '0.00', pending_bps: 0, free_usd: '247.66', free_bps: 2446 },
+  },
+  note: 'The budget limits new entries. Market fills and losses can go past it.',
+  observed_at_ms: 1_800_000_000_000,
 };
 
-describe('deployment money evidence', () => {
-  it('keeps released cash separate from cash still claimed after Stop', async () => {
-    await render(DeploymentBudgetComponent, { inputs: { target: TARGET, strategyInstanceId: 'stopped-a' },
-      providers: [{ provide: BrokerV2PanelService, useValue: { getBudget: vi.fn().mockResolvedValue(VIEW) } }] });
-    await screen.findByText('Stopped. Cancellation is still pending.');
-    expect(screen.getByText('Cash released').nextElementSibling?.textContent).toBe('$389.97');
-    expect(screen.getByText('Cash still claimed by orders, fills or fees').nextElementSibling?.textContent).toBe('$600.00');
-    expect(screen.getByText(/Budget or account risk unavailable/)).toBeTruthy();
+const STOPPED_SEGMENT: MoneySegment = {
+  kind: 'stopped', strategy_instance_id: 'spy-ema-b', label: 'held by stopped bot spy-ema-b', amount_usd: '670.43',
+  share_bps: 10000, released_usd: '319.54', still_claimed_usd: '0.00', palette_index: 1,
+};
+
+/** Python's stopped statement: released, still in shares and still in entry
+ * orders add up to its balance, and its slice is the one Home draws. */
+const STOPPED: DeploymentBudgetView = {
+  state: 'ready', headline: 'Stopped · still holds shares',
+  detail: 'Its free budget was released when it stopped. The money in its shares comes back when they are sold.',
+  strategy_instance_id: 'spy-ema-b', world: 'real_paper', entry_eligible: false,
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '-10.00' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '989.97', total: true },
+    { label: 'Released at stop', amount_usd: '319.54' },
+    { label: 'Still in shares, at cost', amount_usd: '670.43' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+  ],
+  segment: STOPPED_SEGMENT,
+  note: null,
+  observed_at_ms: 1_800_000_000_000,
+};
+
+/** A stopped bot whose shares cost more than its balance: Python names the overspend. */
+const OVERSPENT: DeploymentBudgetView = {
+  ...STOPPED,
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '-400.00' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '599.97', total: true },
+    { label: 'Released at stop', amount_usd: '0.00' },
+    { label: 'Still in shares, at cost', amount_usd: '670.43' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+    { label: 'Over its budget by', amount_usd: '70.46' },
+  ],
+  segment: { ...STOPPED_SEGMENT, released_usd: '0.00' },
+};
+
+/** Stopped, flat and with nothing still claimed: it holds no money, so no slice. */
+const FINISHED: DeploymentBudgetView = {
+  ...STOPPED,
+  headline: 'Stopped · fully released',
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '-10.00' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '989.97', total: true },
+    { label: 'Released at stop', amount_usd: '989.97' },
+    { label: 'Still in shares, at cost', amount_usd: '0.00' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+  ],
+  segment: null,
+};
+
+const UNAVAILABLE: DeploymentBudgetView = {
+  state: 'unavailable', headline: "This bot's money is unavailable",
+  detail: 'Wait for fresh account cash and risk evidence. The original commitment is retained.',
+  strategy_instance_id: 'spy-ema-a', world: 'real_paper', committed_usd: '1000.00',
+};
+
+const LEGACY: DeploymentBudgetView = {
+  state: 'legacy', headline: 'This bot has no budget',
+  detail: 'This earlier deployment has no budget. Stop and reconcile it, then review a fresh Deploy.',
+  strategy_instance_id: 'spy-ema-a', world: 'real_paper',
+};
+
+interface CardInputs {
+  readonly holdsShares?: boolean;
+  /** The panel's authored open gain or loss, as the page shell passes it. */
+  readonly openPnl?: BotOpenPnl | null;
+}
+
+/** The panel's open P&L as Python authors it. */
+function openPnl(usd: string | null, direction: BotOpenPnl['open_pnl_direction'] = null): BotOpenPnl {
+  return { open_pnl_usd: usd, open_pnl_direction: direction };
+}
+
+/** Rendered where the bot page puts it — inside a landmark — with the page shell's bindings. */
+async function renderCard(getBudget: ReturnType<typeof vi.fn>, inputs: CardInputs = {}) {
+  const revision = signal(1);
+  const result = await render(
+    `<main aria-label="Bot"><app-deployment-budget [target]="target" strategyInstanceId="spy-ema-a" [revision]="revision()"
+      [holdsShares]="holdsShares" [openPnl]="openPnl" /></main>`,
+    {
+      imports: [DeploymentBudgetComponent],
+      componentProperties: {
+        target: TARGET, revision,
+        holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null,
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }],
+    },
+  );
+  return { ...result, revision };
+}
+
+function statementRows(): [string, string, boolean][] {
+  const card = screen.getByRole('region', { name: "This bot's money" });
+  const list = card.querySelector('dl');
+  if (list === null) throw new Error('the statement is not rendered');
+  return Array.from(list.querySelectorAll('.deployment-budget__line')).map((row) => [
+    row.querySelector('dt')?.textContent?.trim() ?? '',
+    row.querySelector('dd')?.textContent?.trim() ?? '',
+    row.classList.contains('deployment-budget__line--total'),
+  ]);
+}
+
+function slices(container: Element): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('.money-bar__track > .money-bar__slice'));
+}
+
+function parts(container: Element): [string, string][] {
+  return Array.from(container.querySelectorAll<HTMLElement>('.money-bar__part'))
+    .map((part) => [part.className, part.style.flexGrow]);
+}
+
+async function expectAxeClean(): Promise<void> {
+  const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+  expect(results.violations).toEqual([]);
+}
+
+describe("This bot's money", () => {
+  it('shows a running bot’s statement verbatim, in order, with Balance as its total', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
+
+    await screen.findByText('Holding its position');
+    expect(screen.getByText('Its next entry waits until this position is sold.')).toBeTruthy();
+    expect(statementRows()).toEqual([
+      ['Budget set aside at deploy', '$1,000.00', false],
+      ['Realized gains and losses', '$12.40', false],
+      ['Fees', '-$0.03', false],
+      ['Balance', '$1,012.37', true],
+      ['In shares, at cost', '$764.71', false],
+      ['Waiting in entry orders', '$0.00', false],
+      ['Free to trade', '$247.66', false],
+      ['Short of its next entry', '$0.00', false],
+    ]);
+    expect(screen.getByText('The budget limits new entries. Market fills and losses can go past it.')).toBeTruthy();
+    expect(container.querySelector('app-timestamp-display')).not.toBeNull();
+    expect(screen.queryByText(/Budget (and|or) account risk/)).toBeNull();
+    expect(screen.queryByText(/Stopped does not mean flat/)).toBeNull();
+    expect(screen.queryByText('Paper')).toBeNull();
   });
 
-  it('names the readiness claim as budget and risk only', async () => {
-    await render(DeploymentBudgetComponent, { inputs: { target: TARGET, strategyInstanceId: 'active-a' },
-      providers: [{ provide: BrokerV2PanelService, useValue: { getBudget: vi.fn().mockResolvedValue({
-        ...VIEW, entry_eligible: true, detail: 'Budget and risk cover the next position. Order-time strategy and session checks still apply.',
-      }) } }] });
-    await screen.findByText(/Order-time strategy and session checks still apply/);
-    expect(screen.getByText(/Budget and account risk ready/)).toBeTruthy();
-    expect(screen.queryByText(/Entries eligible/)).toBeNull();
+  it('draws the running bot’s slice exactly as Python wrote it — Home’s slice, shaded by its parts', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
+    await screen.findByText('Holding its position');
+
+    const drawn = slices(container);
+    expect(drawn.map((slice) => [slice.className, slice.style.flexGrow])).toEqual([
+      ['money-bar__slice money-bar__slice--bot', '10000'],
+    ]);
+    expect(parts(container)).toEqual([
+      ['money-bar__part money-bar__part--shares', '7554'],
+      ['money-bar__part money-bar__part--pending', '0'],
+      ['money-bar__part money-bar__part--free', '2446'],
+    ]);
+    const legend = screen.getByRole('list', { name: "This bot's slice" });
+    expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
+      .toBe('spy-ema-a $1,012.37 in shares $764.71 · in entry orders $0.00 · free $247.66');
   });
 
-  it('shows unknown amounts and refreshes for a new custody revision', async () => {
-    const getBudget = vi.fn().mockResolvedValue({ ...VIEW, state: 'unavailable', detail: 'Fee evidence is incomplete.', free_usd: null });
-    const { fixture } = await render(DeploymentBudgetComponent, { inputs: { target: TARGET, strategyInstanceId: 'stopped-a', revision: 1 },
-      providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }] });
-    await screen.findByText('Fee evidence is incomplete.');
-    expect(screen.getByText('Free budget').nextElementSibling?.textContent).toBe('Unknown');
-    fixture.componentRef.setInput('revision', 2);
+  it('shows a stopped bot’s released and still-held money adding up to its balance, with Home’s striped slice', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED));
+
+    await screen.findByText('Stopped · still holds shares');
+    expect(statementRows()).toEqual([
+      ['Budget set aside at deploy', '$1,000.00', false],
+      ['Realized gains and losses', '-$10.00', false],
+      ['Fees', '-$0.03', false],
+      ['Balance', '$989.97', true],
+      ['Released at stop', '$319.54', false],
+      ['Still in shares, at cost', '$670.43', false],
+      ['Still in entry orders', '$0.00', false],
+    ]);
+    expect(slices(container).map((slice) => [slice.className, slice.style.flexGrow])).toEqual([
+      ['money-bar__slice money-bar__slice--stopped', '10000'],
+    ]);
+    expect(parts(container)).toEqual([]);
+    const legend = screen.getByRole('list', { name: "This bot's slice" });
+    expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
+      .toBe('held by stopped bot spy-ema-b $670.43 released $319.54 · still claimed $0.00');
+  });
+
+  it('names what a stopped bot spent beyond its balance, only when Python says it did', async () => {
+    await renderCard(vi.fn().mockResolvedValue(OVERSPENT));
+
+    await screen.findByText('Stopped · still holds shares');
+    expect(statementRows().slice(3)).toEqual([
+      ['Balance', '$599.97', true],
+      ['Released at stop', '$0.00', false],
+      ['Still in shares, at cost', '$670.43', false],
+      ['Still in entry orders', '$0.00', false],
+      ['Over its budget by', '$70.46', false],
+    ]);
+  });
+
+  it('draws no slice for a finished bot, which holds no money', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(FINISHED));
+
+    await screen.findByText('Stopped · fully released');
+    expect(container.querySelector('app-money-bar')).toBeNull();
+    expect(statementRows()).toContainEqual(['Released at stop', '$989.97', false]);
+  });
+
+  it.each([['unavailable', UNAVAILABLE], ['legacy', LEGACY]])('shows only the headline and detail when the money is %s', async (_state, view) => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('4.50', 'gain') });
+
+    await screen.findByText(view.headline);
+    expect(screen.getByText(view.detail)).toBeTruthy();
+    expect(container.querySelector('app-money-bar')).toBeNull();
+    expect(container.querySelector('dl')).toBeNull();
+    expect(screen.queryByText('Unknown')).toBeNull();
+    expect(screen.queryByText(/Open gain or loss/)).toBeNull();
+    expect(screen.queryByText(/Budget (and|or) account risk/)).toBeNull();
+  });
+
+  it('notes the open gain or loss on shares apart from the bar, in Python’s own dollars', async () => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl('-3.25', 'loss') });
+
+    const note = await screen.findByText(/Open gain or loss on shares:/);
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe('Open gain or loss on shares: -$3.25, counted when sold.');
+    expect(note.querySelector('.num.negative')?.textContent).toBe('-$3.25');
+  });
+
+  it.each([
+    ['gain', '12.40', '$12.40', 'positive'],
+    ['loss', '-0.01', '-$0.01', 'negative'],
+    ['flat', '0.00', '$0.00', null],
+  ] as const)('colours the open gain or loss by Python’s direction (%s), never by reading the number', async (direction, usd, shown, tone) => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl(usd, direction) });
+
+    const note = await screen.findByText(/Open gain or loss on shares:/);
+    const amount = note.querySelector<HTMLElement>('.num');
+    expect(amount?.textContent).toBe(shown);
+    expect([amount?.classList.contains('positive'), amount?.classList.contains('negative')])
+      .toEqual([tone === 'positive', tone === 'negative']);
+  });
+
+  it('says there is no current price when the open gain or loss is unknown', async () => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl(null) });
+
+    expect(await screen.findByText('Open gain or loss on shares: no current price.')).toBeTruthy();
+  });
+
+  it('has no open gain or loss note when it holds no shares', async () => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: openPnl('7.00', 'gain') });
+
+    await screen.findByText('Holding its position');
+    expect(screen.queryByText(/Open gain or loss/)).toBeNull();
+  });
+
+  it('reads the money again for a new revision', async () => {
+    const getBudget = vi.fn().mockResolvedValue(RUNNING);
+    const { fixture, revision } = await renderCard(getBudget);
+    await screen.findByText('Holding its position');
+
+    revision.set(2);
     await fixture.whenStable();
+
     expect(getBudget).toHaveBeenCalledTimes(2);
+    expect(getBudget).toHaveBeenLastCalledWith(TARGET, 'spy-ema-a');
+  });
+
+  it('says so when the money cannot be read, and reads again on Refresh', async () => {
+    const getBudget = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(RUNNING);
+    await renderCard(getBudget);
+
+    expect((await screen.findByRole('alert')).textContent).toBe("This bot's money could not be read.");
+    await userEvent.click(screen.getByRole('button', { name: "Refresh this bot's money" }));
+
+    expect(await screen.findByText('Holding its position')).toBeTruthy();
+    expect(getBudget).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: "Refresh this bot's money" })).toBeTruthy();
+  });
+
+  it('says it is reading while the money is on its way', async () => {
+    await renderCard(vi.fn().mockReturnValue(new Promise<DeploymentBudgetView>(() => undefined)));
+
+    expect(screen.getByRole('status').textContent).toBe("Reading this bot's money…");
+  });
+
+  it.each([['running', RUNNING], ['stopped', STOPPED]])('has no detectable accessibility violations when %s', async (_name, view) => {
+    await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('12.50', 'gain') });
+    await screen.findByText(view.headline);
+
+    await expectAxeClean();
   });
 });

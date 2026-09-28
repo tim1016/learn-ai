@@ -18,7 +18,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.v2panel.vocabulary import (
-    TRADER_LIFECYCLE_ACTION_IDS,
     ActionId,
     ChannelState,
     DesiredState,
@@ -38,6 +37,7 @@ from app.schemas.account_authority import (
     account_authority_agrees,
 )
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -141,13 +141,23 @@ class PanelAction(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+BotGroup = Literal["running", "holding", "finished", "dry_run"]
+"""Where a bot sits on its account's Home (PRD #2560 D5/D7).
+
+``running`` trades the account's money; ``holding`` is stopped with position
+cost or still-claimed money above zero; ``finished`` is stopped, flat and with
+nothing still claimed; ``dry_run`` trades simulated cash and never the
+account's money."""
+
+
 class BotCatalogView(BaseModel):
     """One roster row: bot status + slice-0 rollups (§5).
 
     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
     (incremental cache). ``needs_attention`` and ``status_label`` drive the
     attention-first sort and the closed status vocabulary. No journal scan per
-    request.
+    request. ``group`` places the row on Home; a row's money is never here --
+    Home joins it from the account-money read by ``strategy_instance_id``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -180,6 +190,28 @@ class BotCatalogView(BaseModel):
     # the same server-authored guard/token contract as panel actions so the
     # roster never performs a full-panel preflight before a mutation.
     row_action: PanelAction | None = None
+    group: BotGroup
+    # The world this bot trades in, worded once (PRD #2560 D4), e.g.
+    # "PAPER · practice money" or "DRY RUN · simulated cash".
+    world_label: str
+    # When a stopped bot's run ended (its last lifecycle transition).
+    ended_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # A Finished bot's whole life: its executions, and its result -- realized
+    # P&L less fees, what its balance gained over its budget. ``None`` when the
+    # fee evidence cannot vouch for it: never shown as $0.
+    trade_count: int | None = Field(default=None, ge=0)
+    final_result_usd: str | None = None
+    # A Dry Run's simulated starting cash (its consent amount); never the
+    # account's money.
+    simulated_cash_usd: str | None = None
+
+    @model_validator(mode="after")
+    def carries_its_group_facts(self) -> BotCatalogView:
+        if (self.trade_count is not None or self.final_result_usd is not None) and self.group != "finished":
+            raise ValueError("only a finished bot carries a whole-life result")
+        if self.simulated_cash_usd is not None and self.group != "dry_run":
+            raise ValueError("only a Dry Run carries simulated cash")
+        return self
 
 
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
@@ -395,28 +427,6 @@ class TransactionRail(BaseModel):
     stations: list[StationView]
 
 
-class PrimaryActionByLens(BaseModel):
-    """The one backend-selected banner action for each lens (issue #1665).
-
-    ``trader`` is restricted to the closed
-    ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-    (``stop``); an Operator-only recovery
-    capability can never reach it. ``operator`` also considers those same
-    lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
-    action takes precedence when one is available — the audience-aware
-    precedence rule authored once by
-    ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
-    Either reference is ``None``, never a guess, when nothing currently
-    qualifies; the frontend renders no banner action in that case rather than
-    deriving one from ``health``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    trader: ActionId | None
-    operator: ActionId | None
-
-
 class MissionVerdictView(BaseModel):
     """Backend-authored answer to whether this bot can perform its mission now."""
 
@@ -583,6 +593,10 @@ class MarketPulseView(BaseModel):
     observed_at_ms: int
 
 
+# Which way a bot's open P&L points at its displayed cents: colour only.
+OpenPnlDirection = Literal["gain", "loss", "flat"]
+
+
 class BotPanelView(BaseModel):
     """The full 5s-poll panel projection for one bot (§7).
 
@@ -639,9 +653,15 @@ class BotPanelView(BaseModel):
     journal_tail_ref: str
     journal_tail_seq: int | None
     actions: list[PanelAction]
-    # The one backend-selected banner action per lens (issue #1665). Neither
-    # Angular banner may derive a primary action from ``health`` any more.
-    primary_action_by_lens: PrimaryActionByLens
+    # The one backend-selected command for this bot's page (issue #1665; the
+    # per-lens pair collapsed to one with the lens itself, PRD #2560 D2).
+    # ``None``, never a guess, when nothing qualifies: the page then derives
+    # no primary command from ``health``. Authored by
+    # ``panel_projection_service.select_primary_action``.
+    primary_action: ActionId | None
+    # This bot's sealed exit terms (PRD #2504), or ``None`` for a bot whose
+    # custody holds no seal (a pre-seal or non-SQLite registration).
+    exit_terms: ExitTerms | None = None
     readiness_checks: list[ReadinessCheckView]
     # Server-authored presentation aggregate. Consumers render these counts
     # verbatim so every surface reports the same command-gate posture.
@@ -656,31 +676,31 @@ class BotPanelView(BaseModel):
     fills_today: int | None
     realized_pnl_today: float | None
     open_pnl: float | None
+    # ``open_pnl`` as the owner reads it: Python-authored whole-cent dollars
+    # (PRD #2560 D12), and its direction at those cents -- colour only, the
+    # sign is in the string. Both ``None`` exactly when ``open_pnl`` is.
+    # Authored by ``panel_projection_service.open_pnl_fields``.
+    open_pnl_usd: str | None
+    open_pnl_direction: OpenPnlDirection | None
 
     @model_validator(mode="after")
-    def _primary_action_by_lens_is_coherent(self) -> BotPanelView:
-        """Fail closed on a dangling or audience-incompatible reference.
+    def _open_pnl_is_authored_with_its_figure(self) -> BotPanelView:
+        """Fail closed on a figure without its words, or words without a figure."""
+        known = {self.open_pnl is None, self.open_pnl_usd is None, self.open_pnl_direction is None}
+        if len(known) != 1:
+            raise ValueError("open_pnl, open_pnl_usd and open_pnl_direction must all be known or all be None")
+        return self
 
-        Every non-``None`` lens reference must name an action present in
-        ``actions`` (no dangling reference), and the Trader reference must
-        additionally be one of the closed Trader-visible lifecycle action ids
-        — an Operator-only recovery capability can never become the Trader
-        banner's primary command (issue #1665).
-        """
-        action_ids = {action.action_id for action in self.actions}
-        trader_ref = self.primary_action_by_lens.trader
-        if trader_ref is not None and (
-            trader_ref not in TRADER_LIFECYCLE_ACTION_IDS or trader_ref not in action_ids
-        ):
+    @model_validator(mode="after")
+    def _primary_action_is_presented(self) -> BotPanelView:
+        """Fail closed on a dangling reference: the primary command must be
+        one of the presented ``actions`` (issue #1665)."""
+        if self.primary_action is not None and self.primary_action not in {
+            action.action_id for action in self.actions
+        }:
             raise ValueError(
-                f"primary_action_by_lens.trader={trader_ref!r} must reference a "
-                "Trader-visible lifecycle action present in `actions`"
-            )
-        operator_ref = self.primary_action_by_lens.operator
-        if operator_ref is not None and operator_ref not in action_ids:
-            raise ValueError(
-                f"primary_action_by_lens.operator={operator_ref!r} must reference "
-                "an action present in `actions`"
+                f"primary_action={self.primary_action!r} must reference an action "
+                "present in `actions`"
             )
         return self
 
@@ -823,82 +843,6 @@ class CohortFlattenView(BaseModel):
     account_id: str
     cohorts: list[CohortFlattenCohort]
     observed_at_ms: int
-
-
-class CohortArchiveLeg(BaseModel):
-    """One archivable roster member with its executability facts (ADR 0047)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    strategy_instance_id: str
-    enabled: bool
-    revision: int | None
-    concurrency_token: str | None
-    # First blocker headline when archive is presented but refused; ``None``
-    # when armed. A bot the operator cannot yet archive still appears, with
-    # the reason — a surface that hid them would look like the roster had
-    # fewer bots than it does.
-    blocker_headline: str | None
-
-
-class CohortArchiveCohort(BaseModel):
-    """One (strategy_key, symbol) group of archivable members."""
-
-    model_config = ConfigDict(frozen=True)
-
-    strategy_key: str
-    strategy_label: str
-    symbol: str
-    legs: list[CohortArchiveLeg]
-    enabled_count: int
-
-
-class CohortArchiveView(BaseModel):
-    """Backend-authored cohort-archive presentation (ADR 0052)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    account_id: str
-    cohorts: list[CohortArchiveCohort]
-    observed_at_ms: int
-
-
-class CohortArchiveLegRequest(BaseModel):
-    """One leg the operator confirmed — echoes the presented action facts.
-
-    Carries no ``action_id``: this endpoint archives, and nothing else. A
-    client that could name the action could reach a different mutation
-    through a surface whose confirmation copy described archiving.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=96)
-    revision: int = Field(ge=0)
-    concurrency_token: str = Field(min_length=1, max_length=128)
-
-
-class CohortArchiveRequest(BaseModel):
-    """Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    idempotency_key: str = Field(min_length=1, max_length=64)
-    reason: str | None = Field(default=None, max_length=512)
-    legs: list[CohortArchiveLegRequest] = Field(min_length=1, max_length=256)
-
-    @model_validator(mode="after")
-    def _legs_are_unique_and_keys_fit(self) -> CohortArchiveRequest:
-        sids = [leg.strategy_instance_id for leg in self.legs]
-        if len(set(sids)) != len(sids):
-            raise ValueError("cohort legs must name distinct bots")
-        for leg in self.legs:
-            if len(self.idempotency_key) + 1 + len(leg.strategy_instance_id) > 128:
-                raise ValueError(
-                    "idempotency_key plus strategy_instance_id exceeds the "
-                    "per-leg idempotency identity budget of 128 characters"
-                )
-        return self
 
 
 class CohortFlattenLegRequest(BaseModel):
@@ -1156,21 +1100,53 @@ class ChartHistoryResponse(BaseModel):
 # ── §Lane attention (one lane's bell items, #2228) ───────────────────────────
 
 
+LaneAttentionKind = Literal[
+    "account",
+    "hold",
+    "channel",
+    "out_of_sync",
+    "exit",
+    "uncertainty",
+    "stopped_holding",
+    "position_unverified",
+    "legacy_budget",
+]
+"""What one attention line is about (PRD #2560 "Home composition")."""
+
+LaneAttentionDestination = Literal["bot", "activity", "settings"]
+"""Where an attention line's fix lives, inside the account's workspace: the
+line's own bot page, Activity's order records and recovery, or Settings."""
+
+
+class LaneAttentionAction(BaseModel):
+    """An attention line's one fix: a link into the account's workspace.
+
+    ``bot`` opens the page of the item's own bot, so an item with that
+    destination always names one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1)
+    destination: LaneAttentionDestination
+
+
 class LaneAttentionItem(BaseModel):
     """One condition currently needing the operator on this lane (#2228).
 
-    ``condition_id`` is the uncertainty id — stable across polls, so the bell
-    dedupes by it and an item disappears exactly when the underlying episode
-    resolves. The narrow v1 set: active uncertainties only, which includes
-    ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+    ``condition_id`` is stable across polls, so the bell dedupes by it and an
+    item disappears exactly when its condition resolves: the uncertainty id
+    for an episode, or a key naming the bot or account fact otherwise. Every
+    item has one backend-authored ``headline`` and exactly one ``action``
+    (PRD #2560): only what the owner must act on is listed.
     """
 
     model_config = ConfigDict(frozen=True)
 
     condition_id: str
     reason_code: str
-    kind: str = "uncertainty"
-    action_label: str = "Open bot"
+    kind: LaneAttentionKind
+    action: LaneAttentionAction
     severity: str
     strategy_instance_id: str | None = None
     # From the episode's cause facts where the condition names one (an
@@ -1181,6 +1157,12 @@ class LaneAttentionItem(BaseModel):
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
     recovery_status: RecoveryStatusResponse | None = None
+
+    @model_validator(mode="after")
+    def a_bot_link_names_its_bot(self) -> LaneAttentionItem:
+        if self.action.destination == "bot" and self.strategy_instance_id is None:
+            raise ValueError("an attention line that opens a bot page must name its bot")
+        return self
 
 
 class LaneAttentionRead(BaseModel):

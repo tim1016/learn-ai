@@ -25,7 +25,7 @@ const RECEIPT: BudgetDeployReceipt = {
 
 const BOT_LINK = {
   commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'spy-ema-20260929-0931'],
-  queryParams: { from: 'bots' },
+  queryParams: {},
 };
 
 describe('DeployLaunchReceiptComponent', () => {
@@ -45,7 +45,7 @@ describe('DeployLaunchReceiptComponent', () => {
     expect(screen.getByText('First deployed')).toBeTruthy();
     expect(screen.queryByText('Replaces')).toBeNull();
     expect(screen.getByRole('link', { name: 'Open spy-ema-20260929-0931' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-ema-20260929-0931?from=bots');
+      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-ema-20260929-0931');
     // H12: the legacy bot-control path is gone.
     expect(screen.queryByRole('link', { name: 'Open bot control' })).toBeNull();
   });

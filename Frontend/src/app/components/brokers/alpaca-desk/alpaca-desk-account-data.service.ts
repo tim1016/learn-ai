@@ -14,16 +14,16 @@ import { resourceTarget, sameResourceTarget } from '../../../fleet/resource-targ
 import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 
-/** One account read shared by the account workspace's header, its Overview
- * tab's active lens, and the Deploy tab — so the operator's equity, the
+/** One account read shared by the account workspace's header, its Home and
+ * the Deploy tab — so the operator's equity, the
  * account the header names, and the account a command is minted against all
  * come from the same confirmed read rather than three of them.
  *
  * `clerkStatus` is the same rule applied to the Clerk↔broker reconciliation
- * read: the workspace's sync indicator and `AlpacaHoldBannerComponent` both
- * name this account's hold and reconciliation state, so both read the one
- * resource here rather than each polling `getClerkStatus` on its own (#2185
- * — the same fact was read three times on one screen).
+ * read: Activity's sync check names this account's reconciliation state from
+ * the one resource here, which the workspace re-reads on its poll, rather
+ * than polling `getClerkStatus` on its own (#2185 — the same fact was once
+ * read three times on one screen).
  *
  * `money` is the account-money read (PRD #2560 D12): the header's Free to
  * deploy, Cash, Equity and Today, and every money bar on the account's
@@ -42,8 +42,8 @@ export class AlpacaDeskAccountDataService {
   /** The account this desk reads.
    *
    * The URL names it on every account-scoped tab, and that is the only answer
-   * those tabs ever take. The workspace's lane-scoped tabs — Settings and
-   * the not-ready Bots and Gallery (FR-092) — name no account at all, and for
+   * those tabs ever take. The workspace's lane-scoped tabs — Settings and a
+   * not-ready Home (FR-092) — name no account at all, and for
    * those the lane's own confirmed binding is the account the header is about:
    * Settings stays lane-scoped and renders inside the workspace from the
    * lane's confirmed account (ADR 0064, FR-092).

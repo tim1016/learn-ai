@@ -1,12 +1,11 @@
-/** The account workspace's URL vocabulary (ADR 0064 Decision 1).
+/** The account workspace's URL vocabulary (ADR 0064 Decision 1, PRD #2560).
  *
- * One broker account is one place: an account header over Overview, Bots,
- * Gallery, Activity and Settings tabs, and the header's Deploy page. Which
- * account that is, which tab is open,
- * and — on a bot's own page — which tab it was opened from, is carried by the
- * URL alone (nothing remembers a last-used account, FR-091), so deciding all
- * three is a pure function of the URL and lives here rather than in a service
- * every surface would have to inject.
+ * One broker account is one place: an account header over its Home,
+ * Activity and Settings tabs, and the header's Deploy page. Which account
+ * that is, which tab is open, and which bot's page is open under Home is
+ * carried by the URL alone (nothing remembers a last-used account, FR-091),
+ * so deciding all three is a pure function of the URL and lives here rather
+ * than in a service every surface would have to inject.
  *
  * Three consumers share it: the workspace shell (which tab to mark current,
  * where each tab and the account switcher lead), `app-menu`'s
@@ -21,17 +20,9 @@
 
 import { LENS_QUERY_PARAM } from '../shared/lens/lens';
 
-/** The workspace's tabs, in the order they are presented. */
-export type AccountWorkspaceTab =
-  | 'overview'
-  | 'bots'
-  | 'gallery'
-  | 'activity'
-  | 'settings'
-  | 'deploy';
-
-/** The tabs a bot's page can be opened from, and therefore belongs to. */
-export type AccountWorkspaceOriginTab = Extract<AccountWorkspaceTab, 'bots' | 'gallery'>;
+/** The workspace's tabs, in the order they are presented. Home is the
+ * account's money and its bots: Overview, Bots and Gallery merged (D1, D3). */
+export type AccountWorkspaceTab = 'home' | 'activity' | 'settings' | 'deploy';
 
 /** One tab's identity and its operator-facing name. */
 export interface AccountWorkspaceTabDescriptor {
@@ -42,9 +33,7 @@ export interface AccountWorkspaceTabDescriptor {
 /** The one place a tab is named: the tab strip renders these and the window
  * title composes from them, so a tab can never pick up a second name. */
 const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>> = {
-  overview: 'Overview',
-  bots: 'Bots',
-  gallery: 'Gallery',
+  home: 'Home',
   activity: 'Activity',
   settings: 'Settings',
   deploy: 'Deploy a bot',
@@ -56,12 +45,15 @@ const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>
  * keeps its routed `deploy` URL, its title and its explain-in-place
  * behaviour. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['overview', 'bots', 'gallery', 'activity', 'settings'] as const
+  ['home', 'activity', 'settings'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
-/** The query parameter a link to a bot's page stamps with the tab it left.
- * Written by the Gallery tiles and the roster's links, read back here. */
-export const ORIGIN_TAB_QUERY_PARAM = 'from';
+/** Home's query parameter for how its bots are shown: `wall` as chart tiles,
+ * anything else (or nothing) as the List. */
+export const HOME_VIEW_QUERY_PARAM = 'view';
+
+/** The value of `HOME_VIEW_QUERY_PARAM` that shows the Wall. */
+export const HOME_WALL_VIEW = 'wall';
 
 /** Deploy again's query parameter (PRD #2560): `deploy?from=<sid>` opens
  * Deploy pre-filled from that bot's sealed settings, never its money or
@@ -73,26 +65,19 @@ export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
   return ACCOUNT_WORKSPACE_TAB_LABELS[tab];
 }
 
-/** The tab a bot's page was opened from, from the stamp its link carried.
- * Anything the URL does not name — a pasted link, a bookmark, an unknown
- * value — belongs to Bots. */
-export function accountWorkspaceOriginTab(stamp: string | null): AccountWorkspaceOriginTab {
-  return stamp === 'gallery' ? 'gallery' : 'bots';
-}
-
 /** Which account a URL is inside, which of its tabs is open, and whether a
- * bot's own page is open under that tab. */
+ * bot's own page is open under Home. */
 export interface AccountWorkspaceLocation {
   readonly broker: string;
   readonly clerkId: string;
-  /** `null` on the lane-scoped URLs — Settings and the not-ready Bots and
-   * Gallery tabs — which name no account at all (FR-092). The workspace shell
-   * resolves the lane's confirmed account for those; the URL cannot. */
+  /** `null` on the lane-scoped URLs — Settings and a not-ready Home —
+   * which name no account at all (FR-092). The workspace shell resolves the
+   * lane's confirmed account for those; the URL cannot. */
   readonly accountId: string | null;
   readonly tab: AccountWorkspaceTab;
-  /** The bot whose page is open under `tab`, or `null` when the tab itself is
-   * open. A bot's page is not a fifth tab: it belongs to the tab it was opened
-   * from, which is what keeps that tab highlighted while it is open. */
+  /** The bot whose page is open under Home, or `null` when a tab itself is
+   * open. A bot's page is not a tab of its own: it belongs to Home, which is
+   * what keeps Home highlighted while it is open. */
   readonly botSid: string | null;
 }
 
@@ -119,20 +104,19 @@ export interface AccountWorkspaceLink {
 
 /**
  * The account-scoped workspace URLs: broker, clerk and account identity
- * (FR-092), optionally followed by the tab's own segment and — under Bots —
- * one bot's own page. Overview is the bare account URL, so the canonical URLs
- * are unchanged by the workspace.
+ * (FR-092), optionally followed by Activity's or Deploy's segment or one bot's
+ * own page (`bots/:sid`). Home is the bare account URL.
  */
 const ACCOUNT_WORKSPACE_URL =
-  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(bots|gallery|activity|deploy)(?:\/([^/]+))?)?$/;
+  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(activity|deploy)|\/bots\/([^/]+))?$/;
 
 /**
  * The lane-scoped workspace URLs: Settings, which stays clerk-scoped
- * wherever it is opened from (FR-092), and the Bots and Gallery tabs of a lane
- * with no account to serve them, which explain in place why they cannot open
- * and never redirect to another lane (FR-096).
+ * wherever it is opened from (FR-092), and the Home of a lane with no account
+ * to serve it, which explains in place why it cannot open and never
+ * redirects to another lane (FR-096).
  */
-const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(settings|bots|gallery)$/;
+const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(settings|home)$/;
 
 /**
  * The workspace `url` is inside, or `null` when it is not a workspace URL at
@@ -143,19 +127,12 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
 
   const account = ACCOUNT_WORKSPACE_URL.exec(path);
   if (account !== null) {
-    const [, broker, clerkId, accountId, surface, sid] = account;
-    // Only Bots nests a further segment. `…/gallery/anything` addresses
-    // nothing, so it is outside the workspace rather than a Gallery tab with a
-    // stray tail.
-    if (sid !== undefined && surface !== 'bots') return null;
+    const [, broker, clerkId, accountId, segment, sid] = account;
     return {
       broker: decodeURIComponent(broker),
       clerkId: decodeURIComponent(clerkId),
       accountId: decodeURIComponent(accountId),
-      tab:
-        sid === undefined
-          ? tabOfSegment(surface)
-          : accountWorkspaceOriginTab(queryOf(url).get(ORIGIN_TAB_QUERY_PARAM)),
+      tab: segment === 'activity' || segment === 'deploy' ? segment : 'home',
       botSid: sid === undefined ? null : decodeURIComponent(sid),
     };
   }
@@ -167,7 +144,7 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
     broker: decodeURIComponent(broker),
     clerkId: decodeURIComponent(clerkId),
     accountId: null,
-    tab: tabOfSegment(surface),
+    tab: surface === 'settings' ? 'settings' : 'home',
     botSid: null,
   };
 }
@@ -190,63 +167,63 @@ export function accountWorkspaceLens(url: string): string | null {
  *
  * Settings is always lane-scoped — it is the one tab a lane can serve
  * before it has a confirmed account, which is what makes it the way out of an
- * unbound lane. Bots and Gallery have a lane-scoped address too: the tab that
- * explains why it cannot open. Overview, Activity and Deploy are the account's
- * own pages and its own action — each needs a confirmed account to target — so
- * none has a lane-scoped address, and they are the tabs an accountless
- * workspace cannot offer.
+ * unbound lane. Home always has an address: on a lane with no confirmed
+ * account it is the page that explains why it cannot open (FR-096). Activity
+ * and Deploy are the account's own history and its own action — each needs a
+ * confirmed account to target — so an accountless workspace offers neither:
+ * Activity's tab is inert and the header shows no "Deploy a bot" button.
  */
 export function accountWorkspaceTabRoute(
   address: AccountWorkspaceAddress,
   tab: AccountWorkspaceTab,
 ): readonly string[] | null {
   if (tab === 'settings') return settingsRoute(address);
-  if (tab === 'bots' || tab === 'gallery') return accountWorkspaceOriginTabRoute(address, tab);
-  if (address.accountId === null) return null;
-  return tab === 'overview' ? workspaceRoute(address) : [...workspaceRoute(address), tab];
+  if (tab === 'home') return accountWorkspaceHomeRoute(address);
+  return address.accountId === null ? null : [...workspaceRoute(address), tab];
 }
 
-/**
- * The same tab route, narrowed to the two tabs a bot's page can be opened
- * from.
- *
- * Both of those tabs have an address whether or not the workspace has a
- * confirmed account — the lane-scoped one explains in place why it cannot open
- * (FR-096) — so this route always resolves, and a caller that only ever asks
- * for an origin tab needs no null guard for a case it cannot reach.
- */
-export function accountWorkspaceOriginTabRoute(
-  address: AccountWorkspaceAddress,
-  origin: AccountWorkspaceOriginTab,
-): readonly string[] {
-  return [...workspaceRoute(address), origin];
+/** Home's route: the account's own URL, or the lane's not-ready Home. */
+export function accountWorkspaceHomeRoute(address: AccountWorkspaceAddress): readonly string[] {
+  return address.accountId === null ? [...workspaceRoute(address), 'home'] : workspaceRoute(address);
 }
 
-/**
- * The link that opens one bot's page, stamped with the tab it was opened from.
- *
- * The stamp is what makes a bot's page belong to a tab: it keeps that tab
- * highlighted while the page is open and points the page's way back at it. A
- * link that carries no stamp — a pasted URL, a bookmark — belongs to Bots.
- */
+/** The link that opens one bot's page, which belongs to Home. */
 export function accountWorkspaceBotRoute(
   account: BoundAccountWorkspaceAddress,
   sid: string,
-  origin: AccountWorkspaceOriginTab,
 ): AccountWorkspaceLink {
-  return {
-    // A bot's page is the Bots tab's own URL plus the bot. The tab it was
-    // *opened* from is the stamp below, never a second path — which is what
-    // lets a Gallery-opened bot keep Gallery highlighted at a `…/bots/…` URL.
-    commands: [...workspaceRoute(account), 'bots', sid],
-    queryParams: { [ORIGIN_TAB_QUERY_PARAM]: origin },
-  };
+  return { commands: [...workspaceRoute(account), 'bots', sid], queryParams: {} };
+}
+
+/** Where an attention line's fix lives (`LaneAttentionAction.destination`). */
+export type AccountWorkspaceFixDestination = 'bot' | 'activity' | 'settings';
+
+/**
+ * The link to an attention line's fix: the line's own bot page, Activity's
+ * order records and recovery, or Settings — lane-scoped wherever it is
+ * opened from. `null` only for a bot fix naming no bot, which the backend
+ * never sends.
+ */
+export function accountWorkspaceFixRoute(
+  account: BoundAccountWorkspaceAddress,
+  destination: AccountWorkspaceFixDestination,
+  sid: string | null,
+): AccountWorkspaceLink | null {
+  switch (destination) {
+    case 'bot':
+      return sid === null ? null : accountWorkspaceBotRoute(account, sid);
+    case 'activity':
+      return { commands: [...workspaceRoute(account), 'activity'], queryParams: {} };
+    case 'settings':
+      return { commands: settingsRoute(account), queryParams: {} };
+  }
 }
 
 /**
- * Deploy again for one bot: the account's Deploy page, pre-filled from it.
- * The bot's page offers this for a stopped bot (PRD #2560); Deploy reads the
- * query and asks the backend for that bot's sealed settings.
+ * Deploy again for one ended bot: the account's Deploy page, pre-filled from
+ * it. Home's Finished rows and a stopped bot's page offer it (PRD #2560);
+ * Deploy reads the query and asks the backend for that bot's sealed settings,
+ * never its money or consent.
  */
 export function accountWorkspaceDeployAgainRoute(
   account: BoundAccountWorkspaceAddress,
@@ -259,21 +236,19 @@ export function accountWorkspaceDeployAgainRoute(
 }
 
 /**
- * Where opening an account from *outside* any workspace lands: its Overview,
- * the account's own page — or Settings, the one tab a lane with no
+ * Where opening an account from *outside* any workspace lands: its Home, the
+ * account's own page — or Settings, the one tab a lane with no
  * confirmed account can serve, which is where binding it happens anyway.
  *
  * The account list's cards and the shell's account badges both open an
- * account cold, so both ask this rather than each re-deriving the fallback;
- * `accountWorkspaceSwitchRoute` makes the same substitution for the tab it is
- * carrying across. Every caller passes the lane's confirmed account whenever
- * it has one, whatever else that lane can report about itself — the
- * substitution turns on the account alone. One account therefore has one
- * front door wherever it is opened from, and a lane with no confirmed account
- * can never be addressed at an Overview it has none for (FR-092).
+ * account cold, so both ask this rather than each re-deriving the fallback.
+ * Every caller passes the lane's confirmed account whenever it has one,
+ * whatever else that lane can report about itself — the substitution turns on
+ * the account alone. One account therefore has one front door wherever it is
+ * opened from (FR-092).
  */
 export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): readonly string[] {
-  return tabRouteOrSettings(address, 'overview');
+  return address.accountId === null ? settingsRoute(address) : workspaceRoute(address);
 }
 
 /**
@@ -307,9 +282,9 @@ export function accountWorkspaceBadgeRoute(
  * chosen account, keeping the operator's lens perspective.
  *
  * A bot's page is never carried across — the chosen account need not run that
- * bot — so a switch from one lands on Bots. An account the chosen lane has not
- * confirmed has no Overview to open either; Settings is the one tab it
- * can serve, and binding it is what the operator has to do there anyway.
+ * bot — so a switch from one lands on Home. An account the chosen lane has not
+ * confirmed has no Deploy either; Settings is the tab it can serve for
+ * that, and binding it is what the operator has to do there anyway.
  *
  * Nothing that was open *over* the workspace travels: the destination's query
  * is built from `lens` alone rather than merged from the current URL, so an
@@ -321,19 +296,19 @@ export function accountWorkspaceSwitchRoute(
   target: Omit<AccountWorkspaceAddress, 'broker'>,
   lens: string | null,
 ): AccountWorkspaceLink {
-  const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'bots';
+  const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'home';
   const destination: AccountWorkspaceAddress = {
     broker: from.broker,
     clerkId: target.clerkId,
     accountId: target.accountId,
   };
-  const commands = tabRouteOrSettings(destination, tab);
+  const commands = accountWorkspaceTabRoute(destination, tab) ?? settingsRoute(destination);
   return { commands, queryParams: lensQuery(lens) };
 }
 
 /**
  * The window title inside a workspace (ADR 0064 Decision 6): what is open,
- * then the account it is open on — "Gallery · Paper".
+ * then the account it is open on — "Home · Paper".
  *
  * `accountName` is the account's *name* (`laneDisplayNameText`), never its
  * Paper/Live mode. The two are separate facts that only coincide while a lane
@@ -354,9 +329,9 @@ function laneRoute(broker: string, clerkId: string): string[] {
   return ['/brokers', broker, 'clerks', clerkId];
 }
 
-/** The workspace's own URL, which every tab but Settings extends: the
- * account's page where the workspace has a confirmed account, the lane's where
- * it does not (FR-092). */
+/** The workspace's own URL, which Home and Deploy extend: the account's page
+ * where the workspace has a confirmed account, the lane's where it does not
+ * (FR-092). */
 function workspaceRoute(address: AccountWorkspaceAddress): string[] {
   const lane = laneRoute(address.broker, address.clerkId);
   return address.accountId === null ? lane : [...lane, 'accounts', address.accountId];
@@ -368,29 +343,10 @@ function settingsRoute(address: AccountWorkspaceAddress): string[] {
   return [...laneRoute(address.broker, address.clerkId), 'settings'];
 }
 
-/** A tab's route, or Settings when the address cannot offer that tab —
- * the one substitution every cold-open and every switch makes identically. */
-function tabRouteOrSettings(
-  address: AccountWorkspaceAddress,
-  tab: AccountWorkspaceTab,
-): readonly string[] {
-  return accountWorkspaceTabRoute(address, tab) ?? settingsRoute(address);
-}
-
 /** The destination's query, built from the lens alone — never merged from the
  * URL being left, so nothing open *over* a workspace travels with a move. */
 function lensQuery(lens: string | null): Readonly<Record<string, string>> {
   return lens === null ? {} : { [LENS_QUERY_PARAM]: lens };
-}
-
-/** The tab one URL segment names; the absent segment is Overview. */
-function tabOfSegment(segment: string | undefined): AccountWorkspaceTab {
-  if (segment === 'bots') return 'bots';
-  if (segment === 'gallery') return 'gallery';
-  if (segment === 'activity') return 'activity';
-  if (segment === 'settings') return 'settings';
-  if (segment === 'deploy') return 'deploy';
-  return 'overview';
 }
 
 /** `url`'s query parameters, empty when it carries none. */

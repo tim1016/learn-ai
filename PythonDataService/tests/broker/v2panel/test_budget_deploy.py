@@ -30,7 +30,7 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
-from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel import bot_custody, budget_deploy
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -38,7 +38,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
 @pytest.mark.parametrize(("model", "field", "payload"), [
     (DeploymentBudgetPreview, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", custody_account_id="PAPER")),
-    (DeploymentBudgetView, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
+    (DeploymentBudgetView, "observed_at_ms", dict(state="ready", headline="Ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
     (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
         run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
@@ -116,7 +116,8 @@ def authority(tmp_path, monkeypatch):
     gate.publish(observation)
     runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=_Sync(gate, observation, snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
-    monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: None)
+    monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: runtime)
+    monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: None)
     monkeypatch.setattr(budget_deploy, "get_broker_configuration_service", lambda: SimpleNamespace(owner=lambda: SimpleNamespace(owner_id="server-owner")))
     market_liveness.reset_market_liveness_store_for_testing()
     _publish_book(("SPY", 100.001))
@@ -233,7 +234,7 @@ def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: t
     _publish_book(("SPY", 200))
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "200.01 USD" in view.detail
-    assert view.free_usd == "200.00"
+    assert ("Free to trade", "200.00", False) in _statement(view)
     _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
@@ -330,8 +331,10 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
 
         recovered = registry()
         assert recovered.bindings_for_broker("alpaca") == []
-        monkeypatch.setattr(budget_deploy, "_primary", lambda account: SimpleNamespace(sqlite_repository=primary_repo))
-        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: recovered)
+        primary = SimpleNamespace(sqlite_repository=primary_repo)
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: primary)
+        monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: primary)
+        monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: recovered)
 
         receipt = await budget_deploy.command_receipt("PARENT", _submitted(sid))
 
@@ -385,6 +388,8 @@ async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority:
     assert view.segments[0].shortfall_usd is None and view.observed_at_ms == NOON
     assert (view.segments[0].palette_index, view.segments[1].palette_index) == (0, None)
     assert view.detail == "Cash plus shares at the price paid."
+    # Deploy would admit a new bot: nothing refuses beside the bar.
+    assert view.deploy_refusal is None
 
 
 async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
@@ -444,6 +449,7 @@ async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(auth
     assert view.state == "ready" and view.free_to_deploy_usd == "800.00"
     assert (view.equity_usd, view.today_pnl_usd) == ("1000.00", "0.00")
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
+    assert view.deploy_refusal is not None
 
 
 async def test_a_stale_reading_is_unavailable_never_zero(authority: tuple) -> None:
@@ -577,6 +583,11 @@ async def test_an_account_without_risk_limits_still_shows_its_money_while_deploy
         repo.close()
     assert view.state == "ready" and _segments(view) == [("free", "free to deploy", "1000.00", 10_000)]
     assert preview.state == "unavailable" and preview.money_after is None
+    # Slice 1 review condition (#2562): free to deploy must not look
+    # spendable while Deploy refuses, so the money read carries the refusal
+    # in the preview's own words, for Home to state beside the bar.
+    assert view.deploy_refusal == preview.detail
+    assert "daily loss limit" in view.deploy_refusal
 
 
 async def test_an_account_not_switched_to_budgets_reads_legacy_with_its_settings_action(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -619,8 +630,7 @@ async def test_a_dry_run_budget_never_appears_on_the_accounts_money(authority: t
         await dry.clerk.register_strategy_run(binding)
         # Positive control: the Dry Run's own authority holds a real budget.
         assert dry.sqlite_repository.deployment_budget(sid)["committed_cents"] == 50_000
-        monkeypatch.setattr(budget_deploy, "get_clerk_runtime", get_clerk_runtime)
-        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: registry)
+        monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: registry)
 
         after = await budget_deploy.account_money_view(repo.account_id)
     finally:
@@ -647,7 +657,7 @@ async def test_shadow_draws_its_bar_from_its_own_shadow_pool(tmp_path, monkeypat
     assert _segments(view) == [("free", "free to deploy", "2500.00", 10_000)]
 
 
-async def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bot_budget_read_carries_the_same_slice_home_draws(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, runtime, _ = _committed_view(authority)
     segment = (await budget_deploy.account_money_view(repo.account_id)).segments[0]
     calls: list[int] = []
@@ -657,7 +667,8 @@ async def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(auth
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.state == "ready" and view.parts == segment.parts
+    # Review A2/B1: the bot page draws Home's own slice, only widened to fill its bar.
+    assert view.state == "ready" and view.segment == segment.model_copy(update={"share_bps": 10_000})
     # Review A5: one readiness judgement per read, even without admission.
     assert len(calls) == 1
 
@@ -700,3 +711,173 @@ async def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_pr
     assert view.equity_usd == "1000.00"
     assert any(getattr(record, "action", None) == "account_money_unconserved" for record in caplog.records)
     assert preview.state == "ready" and preview.money_after is not None and preview.money_after.state == "unavailable"
+
+
+# ── This bot's money: the bot page's statement (PRD #2560 slice 3) ──────────
+
+
+def _statement(view: DeploymentBudgetView) -> list[tuple[str, str, bool]]:
+    return [(line.label, line.amount_usd, line.total) for line in view.statement]
+
+
+def test_a_running_bot_reads_its_money_as_a_statement(authority: tuple) -> None:
+    _, runtime, _ = _committed_view(authority)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert (view.headline, view.entry_eligible) == ("Ready for its next entry", True)
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("In shares, at cost", "0.00", False),
+        ("Waiting in entry orders", "0.00", False),
+        ("Free to trade", "200.00", False),
+        # One SPY at $100.001 plus its modelled BUY fee costs $100.02.
+        ("Short of its next entry", "0.00", False),
+    ]
+    assert view.note == "The budget limits new entries. Market fills and losses can go past it."
+
+
+def test_a_bot_short_of_its_next_entry_says_by_how_much(authority: tuple) -> None:
+    _, runtime, _ = _committed_view(authority)
+    _publish_book(("SPY", 200))
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.headline == "Its next entry waits" and "200.01 USD" in view.detail
+    assert _statement(view)[-1] == ("Short of its next entry", "0.01", False)
+
+
+def test_holding_a_position_reads_as_holding_never_as_a_fault(authority: tuple) -> None:
+    """Hurdle H25: a bot simply holding its position read "Budget or account
+    risk unavailable" and "a fresh ENTER waits for a proved EXIT to flat"."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="holding",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="holding-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and not view.entry_eligible
+    assert (view.headline, view.detail) in {
+        ("Holding its position", "Its next entry waits until this position is sold."),
+        ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
+    }
+    words = f"{view.headline} {view.detail}".lower()
+    assert all(fault not in words for fault in ("unavailable", "enter ", "exit ", "clerk"))
+    assert ("In shares, at cost", "100.00", False) in _statement(view)
+    assert ("Free to trade", "100.00", False) in _statement(view)
+
+
+def test_a_dry_run_bot_shows_its_own_money_after_a_fill_without_account_evidence(tmp_path) -> None:
+    """Hurdle H27: once a Dry Run's simulated buy filled, every figure read
+    "Unknown" under "Fresh account evidence ... unavailable". Its money is its
+    committed starting cash less what its fills spent: no mark and no account
+    observation is needed to show it."""
+    from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
+    from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID
+    from tests.broker.alpaca.clerk.sqlite.test_simulated_account import _deploy, _enter, _fill
+
+    repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    try:
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=Decimal(1000))
+        gate = _deploy(repo, projection, cents=100_000)
+        _fill(repo, _enter(repo, gate), key="simulated-buy", side="BUY", quantity=2, price=100)
+        # No price has arrived since the fill and no observation is published:
+        # the feed is down, or the bot is stopped.
+        runtime = SimpleNamespace(account_authority_kind="synthetic", sqlite_repository=repo,
+                                  envelope_sync=SimpleNamespace(envelope=LiveEnvelopeGate(values=None, custody_is_simulated=True)))
+
+        view = budget_deploy._budget_view(runtime, DAY_PNL_SID)
+    finally:
+        repo.close()
+
+    assert view.state == "ready" and view.world == "synthetic"
+    assert "account evidence" not in view.detail.lower()
+    # The simulated BUY of 2 carries its modelled CAT fee, a cent at most.
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "1000.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "-0.01", False),
+        ("Balance", "999.99", True),
+        ("In shares, at cost", "200.00", False),
+        ("Waiting in entry orders", "0.00", False),
+        ("Free to trade", "799.99", False),
+    ]
+
+
+def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(authority: tuple) -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="view", lifecycle_run_id="view-run", clock=repo.clock)
+    # Cash observed after the fill, so its cost is in cash and nothing waits.
+    repo.clock.advance(10_000)
+    runtime.envelope_sync.reading = replace(gate.latest_observation(), observed_at_ms=repo.clock(), cash_available_usd=900)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and not view.entry_eligible
+    assert view.headline == "Stopped · still holds shares"
+    assert view.detail == "Its free budget was released when it stopped. The money in its shares comes back when they are sold."
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("Released at stop", "100.00", False),
+        ("Still in shares, at cost", "100.00", False),
+        ("Still in entry orders", "0.00", False),
+    ]
+    assert view.note is None
+    assert view.segment is not None and (view.segment.kind, view.segment.amount_usd, view.segment.released_usd) == (
+        "stopped", "100.00", "100.00",
+    )
+
+
+def _cents(amount_usd: str) -> int:
+    return int(Decimal(amount_usd) * 100)
+
+
+def test_a_stopped_bots_lines_add_up_to_its_balance_when_a_fee_is_fractional(authority: tuple) -> None:
+    """Review A1: rounded on their own, the stopped lines missed Balance by a
+    cent whenever a fee was fractional, and named fee cash the account owes as
+    the bot's money "waiting"."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="held-fill", quantity=1, price=100.005, source_event_at_ms=NOON, fee=0.0049)
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="view", lifecycle_run_id="view-run", clock=repo.clock)
+    repo.clock.advance(10_000)
+    runtime.envelope_sync.reading = replace(gate.latest_observation(), observed_at_ms=repo.clock(), cash_available_usd=899.9901)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    lines = dict((label, amount) for label, amount, _ in _statement(view))
+    assert (lines["Balance"], lines["Released at stop"], lines["Still in shares, at cost"], lines["Still in entry orders"]) == (
+        "200.00", "100.00", "100.00", "0.00",
+    )
+    held = ("Released at stop", "Still in shares, at cost", "Still in entry orders")
+    assert sum(_cents(lines[label]) for label in held) == _cents(lines["Balance"])
+    assert "Over its budget by" not in lines
+    assert view.segment is not None and view.segment.released_usd == lines["Released at stop"]

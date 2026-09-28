@@ -8,6 +8,7 @@ import time
 from dataclasses import fields
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -856,6 +857,10 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
 
+        def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
+            # A bot on the account's own authority, not a Dry Run's.
+            return SimpleNamespace(mode="trade", broker=broker)
+
         async def stop_after_durable_clerk_stop(
             self,
             broker: str,
@@ -912,6 +917,10 @@ async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> N
     class _RecordingRegistry:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
+
+        def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
+            # A bot on the account's own authority, not a Dry Run's.
+            return SimpleNamespace(mode="trade", broker=broker)
 
         async def stop_after_durable_clerk_stop(
             self,

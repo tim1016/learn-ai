@@ -125,7 +125,8 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
     journal_tail_ref: '/api/brokers/alpaca/accounts/PA9/bots/spy-momentum-01/journal',
     journal_tail_seq: null,
     actions: [],
-    primary_action_by_lens: { trader: null, operator: null },
+    primary_action: null,
+    exit_terms: null,
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,
@@ -136,6 +137,8 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
     fills_today: 0,
     realized_pnl_today: 0,
     open_pnl: null,
+    open_pnl_usd: null,
+    open_pnl_direction: null,
     ...overrides,
   };
 }
@@ -178,7 +181,7 @@ export function fakeCatalogBot(overrides: Partial<BotCatalogView> = {}): BotCata
     strategy_label: 'Deployment Validation',
     mode: 'trade',
     status_label: 'Working',
-    status_explanation: 'Running under Account Clerk custody.',
+    status_explanation: 'Running · no position',
     exposure: {},
     fills_today: 2,
     realized_pnl_today: realized,
@@ -186,6 +189,8 @@ export function fakeCatalogBot(overrides: Partial<BotCatalogView> = {}): BotCata
     day_pnl: realized === null && open === null ? null : (realized ?? 0) + (open ?? 0),
     last_activity_at_ms: 1_700_000_000_000,
     needs_attention: false,
+    group: 'running',
+    world_label: 'PAPER · practice money',
     ...overrides,
   };
 }

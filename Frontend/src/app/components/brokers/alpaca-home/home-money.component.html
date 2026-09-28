@@ -1,0 +1,27 @@
+@let money = state();
+<section class="home-money" aria-labelledby="home-money-title">
+  <header class="home-money__head">
+    <h2 id="home-money-title" class="home-money__title">Where the money is</h2>
+    @if (money.kind === 'ready') {
+      <span class="home-money__total">{{ money.view.total_usd | authoredUsd }}</span>
+      <span class="home-money__sub">{{ money.view.detail }}</span>
+    }
+  </header>
+
+  @if (money.kind === 'ready') {
+    @if (money.view.deploy_refusal; as refusal) {
+      <p class="home-money__refusal" role="note">
+        <strong>New bots can't be deployed on this money right now.</strong> {{ refusal }}
+        @if (settingsRoute(); as settings) {
+          <a [routerLink]="settings">Open Settings</a>
+        }
+      </p>
+    }
+    <app-money-bar [segments]="money.view.segments ?? []" [notes]="money.view" size="home" caption="Where the money is" />
+  } @else {
+    <p class="home-money__reason" role="status">
+      {{ money.text }}
+      @if (money.nextStep; as nextStep) { {{ nextStep }} }
+    </p>
+  }
+</section>

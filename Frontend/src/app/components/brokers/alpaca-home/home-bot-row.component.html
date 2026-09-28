@@ -1,0 +1,58 @@
+@let bot = entry().bot;
+@let slice = entry().slice;
+<div class="home-row__name">
+  <span class="home-row__id">
+    @if (hue(); as hue) {
+      <span class="home-row__swatch" [style.background]="hue" aria-hidden="true"></span>
+    }
+    <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  </span>
+  <span class="home-row__meta">
+    {{ bot.strategy_label }} · <app-asset-identity class="home-row__symbol" [symbol]="bot.symbol" size="xs" />
+  </span>
+</div>
+
+<div class="home-row__status">
+  @if (bot.group === 'dry_run') {
+    <span class="home-row__chip">{{ bot.world_label }}</span>
+  }
+  <span>{{ bot.status_explanation }}</span>
+</div>
+
+<div class="home-row__money">
+  @if (bot.group === 'dry_run') {
+    <span class="home-row__caption">
+      simulated starting cash
+      {{ (bot.simulated_cash_usd | authoredUsd) ?? 'not recorded' }}
+    </span>
+  } @else if (slice) {
+    <app-money-bar [segments]="strip()" size="row" [caption]="stripCaption()" />
+    @if (slice.parts; as parts) {
+      <span class="home-row__caption">
+        balance {{ slice.amount_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
+        @if (slice.shortfall_usd; as shortfall) {
+          · <strong>short of next entry {{ shortfall | authoredUsd }}</strong>
+        }
+      </span>
+    } @else {
+      <span class="home-row__caption">
+        held {{ slice.amount_usd | authoredUsd }} · released {{ slice.released_usd | authoredUsd }}
+      </span>
+    }
+  } @else {
+    <span class="home-row__caption">Money not shown: the account's money bar is unavailable.</span>
+  }
+</div>
+
+<div class="home-row__pnl">
+  <span class="home-row__figure">{{ pnl().value }}</span>
+  <span class="home-row__caption">{{ pnl().caption }}</span>
+</div>
+
+<app-home-bot-action
+  class="home-row__action"
+  [bot]="bot"
+  [account]="account()"
+  [pending]="pending()"
+  (stopRequested)="stopRequested.emit($event)"
+/>

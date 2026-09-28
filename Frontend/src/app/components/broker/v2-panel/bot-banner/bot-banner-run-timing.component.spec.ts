@@ -42,30 +42,21 @@ function fakeRun(overrides: Partial<BotRunView> = {}): BotRunView {
 async function renderStrip(
   runState: CurrentRunState = EMPTY_CURRENT_RUN_STATE,
   health: BotHealthCard = HEALTH,
-  operator = false,
 ) {
   return render(BotBannerRunTimingComponent, {
-    inputs: { runState, health, operator },
+    inputs: { runState, health },
   });
 }
 
 describe('BotBannerRunTimingComponent', () => {
-  it('shows the trader lens only Started/Ended, never the strategy-activity clocks', async () => {
-    await renderStrip({ run: fakeRun(), loading: false, failed: false }, HEALTH, false);
-
-    expect(screen.getByText('Started')).toBeTruthy();
-    expect(screen.getByText('Running')).toBeTruthy();
-    expect(screen.queryByText('Last bar')).toBeNull();
-    expect(screen.queryByText('Last decision')).toBeNull();
-  });
-
-  it('shows the operator lens the last strategy bar and last decision, with a stale flag', async () => {
+  it('shows Started/Ended with the last strategy bar and last decision, and a stale flag', async () => {
     await renderStrip(
       { run: fakeRun(), loading: false, failed: false },
       { ...HEALTH, decision_stale: true },
-      true,
     );
 
+    expect(screen.getByText('Started')).toBeTruthy();
+    expect(screen.getByText('Running')).toBeTruthy();
     expect(
       screen.getByText(formatTimestampDisplay(HEALTH.last_bar_at_ms, { granularity: 'time' })),
     ).toBeTruthy();
@@ -79,7 +70,6 @@ describe('BotBannerRunTimingComponent', () => {
     await renderStrip(
       { run: fakeRun(), loading: false, failed: false },
       { ...HEALTH, last_decision_at_ms: null, decision_stale: true },
-      true,
     );
 
     expect(screen.queryByText('Stale')).toBeNull();
@@ -91,7 +81,6 @@ describe('BotBannerRunTimingComponent', () => {
       inputs: {
         runState: { run: null, loading: false, failed: true },
         health: HEALTH,
-        operator: false,
       },
       on: { retryRequested: () => { retried.called = true; } },
     });
@@ -102,13 +91,13 @@ describe('BotBannerRunTimingComponent', () => {
   });
 
   it('names a refresh failure distinctly from an initial load failure', async () => {
-    await renderStrip({ run: fakeRun(), loading: false, failed: true }, HEALTH, false);
+    await renderStrip({ run: fakeRun(), loading: false, failed: true }, HEALTH);
 
     expect(screen.getByText(/Run timing could not be refreshed\./)).toBeTruthy();
   });
 
   it('shows no retry notice while the run resource is healthy', async () => {
-    await renderStrip({ run: fakeRun(), loading: false, failed: false }, HEALTH, false);
+    await renderStrip({ run: fakeRun(), loading: false, failed: false }, HEALTH);
 
     expect(screen.queryByRole('button', { name: 'Retry run timing' })).toBeNull();
   });

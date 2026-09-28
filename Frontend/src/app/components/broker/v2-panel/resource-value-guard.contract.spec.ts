@@ -16,8 +16,8 @@
  * `dual-pane-chart/dual-pane-chart.component.ts`'s
  * `this.supportedIndicatorResource.value()?.names` — and this spec fails,
  * listing each as `<relative-path>::<identifier>`. The fix (`hasValue() ?
- * value() : null`, the pattern `bot-triage-detail.component.html`'s `journal`
- * binding already uses) is what makes it pass again. The class scan's own
+ * value() : null`, the form `panel-shell/bot-panel-shell.component.html`'s
+ * `histChart` binding now takes) is what makes it pass again. The class scan's own
  * fixture case below pins that it still fires.
  *
  * Scope: identifiers each component declares as a resource

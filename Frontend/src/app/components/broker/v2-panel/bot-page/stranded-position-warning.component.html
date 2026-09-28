@@ -1,0 +1,62 @@
+<section class="stranded" aria-labelledby="stranded-title">
+  <h3 id="stranded-title" class="stranded__title">
+    <span aria-hidden="true">⚠</span> {{ heading() }}
+  </h3>
+
+  @if (dutyOutcome(); as outcome) {
+    <p class="stranded__outcome">
+      <strong>{{ outcome.label }}</strong>
+      @if (outcome.explanation) { <span>{{ outcome.explanation }}</span> }
+    </p>
+    <app-exposure-notices [notices]="outcome.exposure_notices ?? []" />
+  }
+
+  @if (position(); as held) {
+    <div class="stranded__actions">
+      <button
+        #flattenButton
+        type="button"
+        class="stranded__flatten"
+        [disabled]="pending() || confirming()"
+        (click)="openConfirm()"
+      >Flatten…</button>
+      <span class="stranded__fine">Deploy again starts a new bot with its own budget. It never takes over these shares.</span>
+    </div>
+
+    @if (confirming()) {
+      <div class="stranded__confirm" role="group" aria-labelledby="flatten-confirm-title">
+        <p id="flatten-confirm-title"><strong>Sell {{ held.quantity }} {{ held.symbol }}?</strong></p>
+        @if (dryRun()) {
+          <p>
+            The position is checked in this bot's simulated account first. The sale is simulated at
+            the live IBKR price; nothing is sent to Alpaca. Outside regular trading hours you set a
+            limit price first.
+          </p>
+        } @else {
+          <p>
+            The position is checked with Alpaca first. During regular trading hours the shares are sold
+            at market. Outside them you set a limit price before anything is sent. When the sale fills,
+            its money returns to free to deploy.
+          </p>
+        }
+        <div class="stranded__confirm-actions">
+          <button #confirmButton type="button" class="stranded__sell" [disabled]="pending()" (click)="confirm(held)">
+            Sell {{ held.quantity }} {{ held.symbol }}
+          </button>
+          <button type="button" (click)="cancel()">Cancel</button>
+        </div>
+      </div>
+    }
+  }
+
+  @if (steps(); as progress) {
+    <ol class="stranded__steps" aria-label="Flatten progress" aria-live="polite">
+      @for (step of progress; track step.id) {
+        <li [attr.data-state]="step.state">
+          <strong>{{ step.label }}: {{ stateText[step.state] }}</strong>
+          @if (step.message) { <span>{{ step.message }}</span> }
+        </li>
+      }
+    </ol>
+  }
+</section>

@@ -146,13 +146,14 @@ describe('DualPaneChartComponent', () => {
     localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
-  it('renders the concise Live and 15m Delayed source tabs', async () => {
+  it('names each source tab for the feed that draws it', async () => {
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
-    expect(screen.getByRole('tab', { name: 'Live' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: '15m Delayed' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Live · IBKR' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' })).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: /15m Delayed/ })).toBeNull();
   });
 
   it('uses the shared asset identity for the chart symbol', async () => {
@@ -170,6 +171,8 @@ describe('DualPaneChartComponent', () => {
     expect(identity).not.toBeNull();
     expect(screen.getByText('NVDA')).toBeTruthy();
     expect(identity?.querySelector('img')?.getAttribute('src')).toContain('/nvidia.svg');
+    expect(screen.getByText('IBKR · last bar')).toBeTruthy();
+    expect(screen.queryByText('Polygon snapshot')).toBeNull();
   });
 
   it('shows overlay notice when liveNotices are provided', async () => {
@@ -270,7 +273,7 @@ describe('DualPaneChartComponent', () => {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
-    screen.getByRole('tab', { name: '15m Delayed' }).click();
+    screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }).click();
     fixture.detectChanges();
 
     for (const timeframe of ['1m', '15m', '30m', '1h', '1D']) {
@@ -290,7 +293,7 @@ describe('DualPaneChartComponent', () => {
       },
     });
 
-    screen.getByRole('tab', { name: '15m Delayed' }).click();
+    screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }).click();
     fixture.detectChanges();
 
     expect(screen.getByText(/Polygon returned 1 of 2800 requested calculation candles/))
@@ -305,7 +308,7 @@ describe('DualPaneChartComponent', () => {
       on: { historyTimeframeChange: onHistoryTimeframeChange },
     });
 
-    screen.getByRole('tab', { name: '15m Delayed' }).click();
+    screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }).click();
     fixture.detectChanges();
     screen.getByRole('button', { name: '15m' }).click();
     expect(onHistoryTimeframeChange).toHaveBeenCalledWith('15m');
@@ -348,7 +351,7 @@ describe('DualPaneChartComponent', () => {
       'SPY', liveBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
     ));
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
       'SPY', oneMinuteBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
     ));
@@ -388,7 +391,7 @@ describe('DualPaneChartComponent', () => {
     await user.click(trendButtons[trendButtons.length - 1]);
     await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
 
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
       'SPY', indicatorBars, [expect.objectContaining({ name: 'ema' })],
@@ -418,7 +421,7 @@ describe('DualPaneChartComponent', () => {
     await user.click(trendButtons[trendButtons.length - 1]);
     await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
 
     await fixture.whenStable();
     expect(chartMocks.calculateIndicators).not.toHaveBeenCalledWith(

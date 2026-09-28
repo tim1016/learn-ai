@@ -1,0 +1,21 @@
+@if (unknown()) {
+  <p class="home-attention__unknown" role="status">
+    What needs you on this account could not be read just now. This is not the same as nothing
+    needing you; it is read again in a few seconds.
+  </p>
+} @else if (lines().length > 0) {
+  <ul class="home-attention" aria-label="Needs attention">
+    @for (line of lines(); track line.item.condition_id) {
+      <li class="home-attention__line" [class.home-attention__line--blocking]="line.severity === 'Blocking'">
+        <span class="home-attention__icon" aria-hidden="true">!</span>
+        <span class="home-attention__severity">{{ line.severity }}</span>
+        <span class="home-attention__headline">{{ line.item.headline }}</span>
+        @if (line.fix; as fix) {
+          <a class="home-attention__fix" [routerLink]="fix.commands" [queryParams]="fix.queryParams">
+            {{ line.item.action.label }}
+          </a>
+        }
+      </li>
+    }
+  </ul>
+}

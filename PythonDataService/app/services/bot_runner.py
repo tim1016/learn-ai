@@ -1702,12 +1702,13 @@ class BotTaskRegistry:
         self,
         binding: BrokerBotBinding,
     ) -> AsyncIterator[ActiveClerkRuntime]:
-        """Temporarily compose an inactive Dry Run authority for a read projection.
+        """Temporarily compose an inactive Dry Run authority for one request.
 
         A stopped synthetic run still has durable custody evidence that must
-        remain visible in Broker V2. A panel read may therefore reopen its
-        sealed authority, but it releases a runtime it composed solely for
-        that read once the projection has finished.
+        remain visible in Broker V2 and recoverable inside its simulator. A
+        panel read, or a recovery action it presents, may therefore reopen its
+        sealed authority, but a runtime composed solely for that request is
+        released once the request has finished.
         """
         if binding.mode != "dry_run":
             raise ValueError("Only a Dry Run binding has a synthetic authority.")

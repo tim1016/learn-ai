@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.money import display_cents, dollars, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
     ActionId,
@@ -38,7 +39,6 @@ from app.schemas.broker_v2_panel import (
     MarketPulseView,
     MissionVerdictView,
     PanelAction,
-    PrimaryActionByLens,
     ReadinessCheckView,
     RecentDecisionView,
     RecentFillView,
@@ -106,6 +106,13 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "once its bars arrive clean.",
     ),
     **WARMUP_REFUSAL_COPY,
+    # A crash the market-data feed caused says so (hurdle H29): the generic
+    # crash copy disclaims any market-data verdict, which here is the cause.
+    "FEED_DEATH": (
+        "Crashed: market data stopped",
+        "The IBKR market-data feed stopped delivering bars, so the run ended rather "
+        "than decide without them.",
+    ),
 }
 
 
@@ -678,47 +685,58 @@ def _mission_verdict(
     )
 
 
-def _lifecycle_candidate_action_id(health: BotHealthCard) -> ActionId | None:
-    """The one Trader-visible lifecycle action id implied by ``health`` alone.
-
-    Mirrors the pre-#1665 frontend ``primaryLifecycleAction`` state machine,
-    narrowed to the closed ``TRADER_LIFECYCLE_ACTION_IDS`` set. Whether that
-    action is actually presented for this bot is checked by the caller.
-    """
-    return "stop" if health.running else None
+#: A running bot's stop command, most specific first: the runner's plain
+#: ``stop``, or -- on a SQLite-activated bot, where only the recovery
+#: executor's stop survives activation while running -- ``stop_bot_decisions``.
+_RUNNING_STOP_ACTION_IDS: tuple[ActionId, ...] = ("stop", "stop_bot_decisions")
 
 
-def select_primary_action_by_lens(
+def select_primary_action(
     actions: list[PanelAction],
     health: BotHealthCard,
     *,
-    recovery_primary_action_id: str | None = None,
-) -> PrimaryActionByLens:
-    """Author the one backend-selected banner action for each lens (#1665).
+    holds_position: bool = False,
+    recovery_primary_action_id: ActionId | None = None,
+) -> ActionId | None:
+    """Author the one backend-selected command for this bot's page (#1665).
 
-    Trader is always the Trader-visible lifecycle action implied by
-    ``health`` (Stop for a running deployment), and only when that action is currently
-    presented — a missing action fails closed to ``None`` rather than
-    guessing. Operator prefers a SQLite recovery capability marked
-    ``primary`` (``recovery_primary_action_id``); that is the one precedence
-    rule this policy applies (ADR 0027 audience-aware selection): an active
-    account-custody recovery need always outranks the routine lifecycle
-    command, because the routine command may not even reflect the bot's true
-    blocked state (a running bot under an engaged recovery has no plain
-    ``stop`` — only ``stop_bot_decisions``, an Operator-only capability).
-    Operator falls back to the same lifecycle candidate as Trader when no
-    recovery capability is primary right now.
+    A stopped bot that still holds shares has none: its page's stranded-position
+    warning owns the one action there, Flatten, and no other command may sit
+    beside it in the header (PRD #2560; review B4). Otherwise one precedence
+    rule (ADR 0027): a recovery capability the custody policy marks as this
+    bot's cure outranks the routine lifecycle command, because the routine
+    command may not even reflect the bot's true state. The caller passes only
+    a *diagnostic* recovery primary -- one that is this bot's cure, not an
+    always-available refresh. Otherwise a running bot's primary command is its
+    stop, and a stopped bot has none: its page offers Deploy again, which is
+    navigation, not a panel command. A candidate that is not presented fails
+    closed to ``None`` rather than being guessed from ``health``.
     """
+    if not health.running and holds_position:
+        return None
     action_ids = {action.action_id for action in actions}
-    lifecycle_candidate = _lifecycle_candidate_action_id(health)
-    trader = lifecycle_candidate if lifecycle_candidate in action_ids else None
-    recovery_primary_is_presented = (
-        recovery_primary_action_id is not None and recovery_primary_action_id in action_ids
-    )
-    operator: ActionId | None = (
-        recovery_primary_action_id if recovery_primary_is_presented else trader  # type: ignore[assignment]
-    )
-    return PrimaryActionByLens(trader=trader, operator=operator)
+    if recovery_primary_action_id is not None and recovery_primary_action_id in action_ids:
+        return recovery_primary_action_id
+    if not health.running:
+        return None
+    return next((action_id for action_id in _RUNNING_STOP_ACTION_IDS if action_id in action_ids), None)
+
+
+def open_pnl_fields(open_pnl: float | None) -> dict[str, object]:
+    """A bot's open P&L with the words the owner reads it in (PRD #2560 D12).
+
+    The one writer of ``BotPanelView.open_pnl_usd`` and
+    ``open_pnl_direction``: half-even display cents through the canonical
+    money helpers, and the direction those cents point, so a loss that rounds
+    to "0.00" reads flat rather than red. ``None`` for all three when the
+    figure is unknown (no current price).
+    """
+    if open_pnl is None:
+        return {"open_pnl": None, "open_pnl_usd": None, "open_pnl_direction": None}
+    with money_context():
+        cents = display_cents(normalize_money(open_pnl))
+    direction = "gain" if cents > 0 else "loss" if cents < 0 else "flat"
+    return {"open_pnl": open_pnl, "open_pnl_usd": dollars(cents), "open_pnl_direction": direction}
 
 
 def build_panel(
@@ -895,7 +913,7 @@ def build_panel(
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         actions=actions,
-        primary_action_by_lens=select_primary_action_by_lens(actions, health),
+        primary_action=select_primary_action(actions, health),
         readiness_checks=readiness_checks,
         readiness_ready_count=readiness_ready_count,
         readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
@@ -905,5 +923,5 @@ def build_panel(
         recent_fills=fill_views,
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
-        open_pnl=open_pnl,
+        **open_pnl_fields(open_pnl),
     )

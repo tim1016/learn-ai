@@ -5,7 +5,6 @@ import {
   input,
   output,
 } from '@angular/core';
-import { Tooltip } from 'primeng/tooltip';
 import {
   Accordion,
   AccordionContent,
@@ -39,6 +38,11 @@ interface ReadinessControl {
   readonly tone: PanelActionTone;
 }
 
+/**
+ * The bot page's Checks fold body (#2563): every command gate, ready or
+ * blocked, with the command it gates beside it. The fold's summary is the
+ * heading, so this renders only the list.
+ */
 @Component({
   selector: 'app-operator-readiness',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -49,7 +53,6 @@ interface ReadinessControl {
     AccordionPanel,
     PanelActionButtonComponent,
     ReceiptLabelPipe,
-    Tooltip,
   ],
   templateUrl: './operator-readiness.component.html',
   styleUrl: './operator-readiness.component.scss',
@@ -57,10 +60,9 @@ interface ReadinessControl {
 export class OperatorReadinessComponent {
   readonly panel = input.required<BotPanelView>();
   /**
-   * The Operator lens's backend-selected banner action
-   * (`primary_action_by_lens.operator`, issue #1665). Its gate remains
-   * visible below; the accordion row for this exact operation is suppressed
-   * here to avoid duplicating the banner's control.
+   * The backend-selected header action (`primary_action`, issues #1665 and
+   * #2563). Its gate remains visible below; the accordion row for this exact
+   * operation is suppressed here to avoid duplicating the header's control.
    */
   readonly bannerActionId = input<ActionId | null>(null);
   readonly actionPending = input(false);
@@ -68,8 +70,8 @@ export class OperatorReadinessComponent {
 
   /**
    * A gate's blocker may name its own cure (stale recovery evidence is
-   * curable *here* by reconciling). This lens holds the panel, so it is the
-   * layer that can answer whether a move's anchor resolves to a presented,
+   * curable *here* by reconciling). The Checks fold holds the panel, so it is
+   * the layer that can answer whether a move's anchor resolves to a presented,
    * enabled command — and it dispatches that command through the same
    * `actionRequested` output every other control already uses.
    */

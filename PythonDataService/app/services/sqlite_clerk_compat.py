@@ -237,6 +237,66 @@ def failed_sqlite_projection(
     )
 
 
+def account_operator_posture_context(
+    projection: ClerkProjection,
+    *,
+    channel_healths: Sequence[ChannelHealth] | None,
+    account: BrokerAccountSnapshot | None,
+    custody_world: CustodyWorld | None = None,
+) -> AccountOperatorPostureContext:
+    """The one evidence cut the account's operator posture is judged on (#1664).
+
+    Shared by the Clerk status and the lane's attention read, so both judge
+    one account's eligibility identically. ``account`` naming a different
+    account than ``projection`` is an explicit identity mismatch, never a
+    blend of two accounts' facts (see ``sqlite_clerk_status``).
+    """
+    unresolved = sum(
+        _operation_requires_reconciliation(operation)
+        for operation in projection.operations
+    )
+    channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
+    # Read once and reused for both the identity expectation and the posture
+    # context, so the two can never disagree about which world this is. A
+    # caller that also states the world passes the one it read.
+    if custody_world is None:
+        custody_world = _labelled_custody_world()
+    identity_mismatch = (
+        account is not None
+        and custody_account_id_for(custody_world, account.account_id) != projection.account_id
+    )
+    if identity_mismatch:
+        logger.warning(
+            "Clerk status account read named a different account than the "
+            "active projection; reporting identity-mismatch posture",
+            extra={
+                "projection_account_id": projection.account_id,
+                "observed_account_id": account.account_id if account is not None else None,
+                "custody_world": custody_world,
+            },
+        )
+    account_usable = account is not None and not identity_mismatch
+    return AccountOperatorPostureContext(
+        authority_health=projection.authority_health,
+        uncertainty_count=len(projection.uncertainties),
+        guidance=projection.guidance,
+        recovery_actions=projection.recovery_actions,
+        # None together exactly when the account snapshot is
+        # unavailable or names the wrong account — never defaulted to a
+        # fake eligible shape. See AccountOperatorPostureContext's
+        # docstring (#1664 review).
+        account_mode=account.account_mode if account_usable else None,
+        account_status=account.account_status if account_usable else None,
+        trading_blocked=account.trading_blocked if account_usable else None,
+        account_blocked=account.account_blocked if account_usable else None,
+        account_identity_mismatch=identity_mismatch,
+        custody_world=custody_world,
+        outstanding_intents=unresolved,
+        channels_ready=channel_evaluation.ready,
+        channels_detail=_channel_evaluation_detail(channel_evaluation),
+    )
+
+
 def sqlite_clerk_status(
     projection: ClerkProjection,
     *,
@@ -274,46 +334,10 @@ def sqlite_clerk_status(
         verdict = "unexplained_order"
     else:
         verdict = "clean"
-    channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
-    # Read once and reused for both the identity expectation and the posture
-    # context, so the two can never disagree about which world this is.
     custody_world = _labelled_custody_world()
-    identity_mismatch = (
-        account is not None
-        and custody_account_id_for(custody_world, account.account_id) != projection.account_id
-    )
-    if identity_mismatch:
-        logger.warning(
-            "Clerk status account read named a different account than the "
-            "active projection; reporting identity-mismatch posture",
-            extra={
-                "projection_account_id": projection.account_id,
-                "observed_account_id": account.account_id if account is not None else None,
-                "custody_world": custody_world,
-            },
-        )
-    account_usable = account is not None and not identity_mismatch
-    posture = build_account_operator_posture(
-        AccountOperatorPostureContext(
-            authority_health=projection.authority_health,
-            uncertainty_count=len(projection.uncertainties),
-            guidance=projection.guidance,
-            recovery_actions=projection.recovery_actions,
-            # None together exactly when the account snapshot is
-            # unavailable or names the wrong account — never defaulted to a
-            # fake eligible shape. See AccountOperatorPostureContext's
-            # docstring (#1664 review).
-            account_mode=account.account_mode if account_usable else None,
-            account_status=account.account_status if account_usable else None,
-            trading_blocked=account.trading_blocked if account_usable else None,
-            account_blocked=account.account_blocked if account_usable else None,
-            account_identity_mismatch=identity_mismatch,
-            custody_world=custody_world,
-            outstanding_intents=unresolved,
-            channels_ready=channel_evaluation.ready,
-            channels_detail=_channel_evaluation_detail(channel_evaluation),
-        )
-    )
+    posture = build_account_operator_posture(account_operator_posture_context(
+        projection, channel_healths=channel_healths, account=account, custody_world=custody_world,
+    ))
     return ClerkStatus(
         broker="alpaca",
         account_id=projection.account_id,

@@ -21,8 +21,6 @@ import type {
   BotCatalogView,
   BotPanelView,
   CohortActionResult,
-  CohortArchiveRequest,
-  CohortArchiveView,
   CohortFlattenRequest,
   CohortFlattenView,
   BotPanelLiveSnapshot,
@@ -288,39 +286,12 @@ export class BrokerV2PanelService {
   }
 
   /**
-   * The archivable roster, grouped and backend-authored (ADR 0052).
-   *
-   * Fetched on demand, never polled: it builds a panel projection per
-   * candidate, which is priced for an operator opening a surface rather
-   * than for a poll loop. Deliberately outside the polled-read scheduler for the
-   * same reason — it is not one of the reads whose fan-out #1912 coalesces.
-   */
-  getCohortArchiveView(target: ResourceTarget): Promise<CohortArchiveView> {
-    return firstValueFrom(
-      this.http.get<CohortArchiveView>(operationUrl('bot_cohort_archive_read', target)),
-    );
-  }
-
-  /** Archive the named legs; every leg comes back with a typed outcome. */
-  runCohortArchive(
-    target: ResourceTarget,
-    request: CohortArchiveRequest,
-  ): Promise<CohortActionResult> {
-    return firstValueFrom(
-      this.http.post<CohortActionResult>(
-        operationUrl('bot_cohort_archive', target),
-        this.commandBody(target, 'bot_action', request),
-      ),
-    );
-  }
-
-  /**
    * The cohort-flatten presentation: (strategy, symbol) cohorts with each
    * member's presented flatten facts (ADR 0051 Decision 3).
    *
-   * Fetched on demand, never polled — like the archive view, it builds a
-   * panel projection per cohort member, priced for an operator opening a
-   * surface rather than for a poll loop.
+   * Fetched on demand, never polled: it builds a panel projection per cohort
+   * member, priced for an operator opening a surface rather than for a poll
+   * loop.
    */
   getCohortFlattenView(target: ResourceTarget): Promise<CohortFlattenView> {
     return firstValueFrom(

@@ -1,0 +1,27 @@
+@if (orderRouteMismatch(); as mismatch) {
+  <p class="order-route-notice" role="alert">{{ mismatch }}</p>
+} @else if (manualOrderNotice(); as notice) {
+  <p class="order-route-notice" role="alert">{{ notice }}</p>
+}
+
+@if (target(); as desk) {
+  <p-dialog
+    header="Create Alpaca order"
+    [visible]="orderEntryOpen()"
+    (visibleChange)="orderEntryOpen.set($event)"
+    [modal]="true"
+    [dismissableMask]="true"
+    [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
+    styleClass="alpaca-order-dialog"
+  >
+    <app-alpaca-order-entry
+      [target]="desk"
+      [fence]="fence()"
+      [initialSymbol]="orderPrefill()?.symbol ?? ''"
+      [expectedAccountId]="ticketAccountId() ?? ''"
+      [manualTicketId]="orderPrefill()?.ticketId ?? null"
+      [manualLegId]="orderPrefill()?.legId ?? null"
+      [manualCapability]="manualTicketCapability()"
+    />
+  </p-dialog>
+}

@@ -49,17 +49,9 @@
  * `class="…"` attribute carrying an eyebrow/kicker name or `uppercase` — it
  * cannot see a class-less element styled by a descendant element selector in
  * the component's own SCSS (e.g. a bare `<span>` above an `<h2>`, styled via
- * `.parent span { text-transform: uppercase; … }`). That third shape has a
- * live, undetected instance today:
- * `components/broker/v2-panel/cohort-archive/cohort-archive-drawer.component.html`
- * (a class-less `<span>Roster · …</span>` immediately above `<h2>Archive
- * finished bots</h2>`). It is not in `ALLOWED` below and this spec passes
- * green on it — recorded here so the gap is documented rather than a silent
- * pass. It is deliberately **not** added to `ALLOWED` itself: `ALLOWED` is
- * matched exactly against `offenders` below, and this shape can never
- * appear in `offenders`, so adding it there would only make the exact-set
- * assertion lie about what got detected. Whether to sweep this specific
- * site is a separate, already-disclosed decision and out of scope here.
+ * `.parent span { text-transform: uppercase; … }`). Its one known instance,
+ * the retired roster's Archive drawer, left with that drawer (PRD #2560); the
+ * gap in the guard itself remains.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';

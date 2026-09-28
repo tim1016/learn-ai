@@ -509,7 +509,7 @@ describe('AlpacaLiveBannerComponent', () => {
   });
 
   describe('as the way to its account (ADR 0064 Decision 3)', () => {
-    it("opens the account's Overview from anywhere outside a workspace", async () => {
+    it("opens the account's Home from anywhere outside a workspace", async () => {
       await renderAt('/data-lab', PAPER_LANE);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
@@ -519,8 +519,7 @@ describe('AlpacaLiveBannerComponent', () => {
 
     it.each([
       ['', ''],
-      ['/bots', '/bots'],
-      ['/gallery', '/gallery'],
+      ['/deploy', '/deploy'],
     ])('keeps the %s tab when switching from another account inside a workspace', async (
       tab,
       expected,
@@ -532,21 +531,21 @@ describe('AlpacaLiveBannerComponent', () => {
       );
     });
 
-    it("lands on the chosen account's Bots from a bot's own page", async () => {
+    it("lands on the chosen account's Home from a bot's own page", async () => {
       // The chosen account need not run that bot, so the bot's page is never
       // carried across — the same rule the in-workspace switcher follows.
-      await renderAt(`${LIVE_WORKSPACE}/bots/sid-1?from=gallery`, PAPER_LANE);
+      await renderAt(`${LIVE_WORKSPACE}/bots/sid-1`, PAPER_LANE);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}/bots`,
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
       );
     });
 
     it('carries the lens perspective across, exactly as the in-workspace switcher does', async () => {
-      await renderAt(`${LIVE_WORKSPACE}/bots?lens=operator`, PAPER_LANE);
+      await renderAt(`${LIVE_WORKSPACE}?lens=operator`, PAPER_LANE);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}/bots?lens=operator`,
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}?lens=operator`,
       );
     });
 

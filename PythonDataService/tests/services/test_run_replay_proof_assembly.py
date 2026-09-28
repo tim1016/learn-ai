@@ -22,6 +22,7 @@ from app.services.run_replay_proof import (
     to_trade_bar,
 )
 from app.services.source_bar_ledger import (
+    RECOVERY_QUOTE_PROVIDER,
     RetainedContinuityEvent,
     RetainedSourceBar,
     SourceBarLedger,
@@ -145,6 +146,24 @@ def test_replay_provider_for_requires_exactly_one_provider(tmp_path: Path) -> No
         ledger.append(_market_bar(5, feed_id="feed-b"), run_id="run-a")
         with pytest.raises(RunReplayUnavailableError):
             replay_provider_for(ledger, "SPY")  # ambiguous evidence
+    finally:
+        ledger.close(checkpoint=False)
+
+
+def test_a_retained_recovery_quote_is_no_runs_replay_evidence(tmp_path: Path) -> None:
+    """A stopped Dry Run's recovery sale retains the IBKR quote it filled at
+    (#2563 review A3); the next run of the same bot must still replay."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:bot-a")
+    try:
+        ledger.append(_market_bar(0, feed_id="ibkr"), run_id="run-a")
+        quote = _market_bar(3, feed_id=RECOVERY_QUOTE_PROVIDER)
+        retained = ledger.retain_recovery_quote(quote)
+
+        assert (retained.provider, retained.run_id) == (RECOVERY_QUOTE_PROVIDER, None)
+        assert ledger.retain_recovery_quote(quote).seq == retained.seq
+        assert replay_provider_for(ledger, "SPY") == "ibkr"
+        with pytest.raises(ValueError, match="recovery quote"):
+            ledger.retain_recovery_quote(_market_bar(4, feed_id="ibkr"))
     finally:
         ledger.close(checkpoint=False)
 

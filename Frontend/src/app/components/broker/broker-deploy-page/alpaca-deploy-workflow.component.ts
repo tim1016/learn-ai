@@ -922,7 +922,6 @@ export class AlpacaDeployWorkflowComponent {
     return accountWorkspaceBotRoute(
       { broker: target.broker, clerkId: target.clerkId, accountId: this.accountId() },
       receipt.strategy_instance_id,
-      'bots',
     );
   });
 

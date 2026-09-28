@@ -5,7 +5,7 @@
  * `CanvasRenderingContext2D` so it is directly unit-testable and reusable
  * outside a component (a future `candle-sparkline`, per
  * `docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md` §3.1/§3.2
- * risk note). The caller (`bot-tile.component`) owns the DOM canvas, resize
+ * risk note). The caller (`home-sparkline.component`) owns the DOM canvas, resize
  * observer, and pointer events; this module owns math and pixels only.
  *
  * Bars are laid out by index, not by time-scale — every column is the same
@@ -71,8 +71,8 @@ export interface CandleRendererConfig {
   readonly markerSize: number;
   readonly markerGap: number;
   /**
-   * Whether to paint the floating last-price tag. The gallery tile leaves it on
-   * (a sparkline's one glance value); the triage tape turns it off so the canvas
+   * Whether to paint the floating last-price tag. It is on by default (a
+   * sparkline's one glance value); Home's Wall tiles turn it off so the canvas
    * derives no price or session direction of its own — those are server-computed
    * (single numerical authority, CLAUDE.md #5).
    */

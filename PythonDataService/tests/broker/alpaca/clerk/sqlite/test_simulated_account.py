@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import (
     SimulatedAccountProjection,
     SimulationBaseline,
     SimulationEvidenceUnavailable,
+    private_dry_run_cash,
 )
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
@@ -350,3 +351,31 @@ async def test_synthetic_runtime_projects_transient_consent_before_the_budget_co
         assert runtime.sqlite_repository.account_risk_policy() is None
     finally:
         await runtime.close()
+
+
+def test_private_dry_run_cash_is_the_observed_cash_without_needing_a_price(tmp_path: Path) -> None:
+    """Hurdle H27: a Dry Run's own cash is the same formula ``observe``
+    publishes, and unlike ``observe`` it needs no mark for its open position."""
+    clock = _TestClock(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=clock)
+    try:
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=Decimal(1000))
+        gate = _deploy(repo, projection, cents=100_000)
+        accepted = _enter(repo, gate)
+        _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+        _fill(repo, accepted, key="sell", side="SELL", quantity=1, price=120)
+        with pytest.raises(SimulationEvidenceUnavailable, match="Fresh simulated price evidence"):
+            projection.observe(reference_cash=0, observed_at_ms=clock(), now_ms=clock())
+        unpriced = private_dry_run_cash(repo, now_ms=clock())
+        _mark(tmp_path, repo.account_id, at_ms=clock(), price=130, provider="fixture")
+        priced = projection.observe(reference_cash=0, observed_at_ms=clock(), now_ms=clock())
+    finally:
+        repo.close()
+    # 1000 - 200 + 120; today's modelled fees settle at the session boundary.
+    assert unpriced == priced.cash_available_usd == Decimal(920)
+
+
+def test_private_dry_run_cash_is_only_for_a_private_dry_run(shadow: ShadowContext) -> None:
+    repo, _, clock = shadow
+    with pytest.raises(ValueError, match="private Dry Run"):
+        private_dry_run_cash(repo, now_ms=clock())

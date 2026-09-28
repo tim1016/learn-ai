@@ -82,8 +82,6 @@ dispatch — wrong-target refuses as `clerk_account_mismatch`, never retargets).
 | `bots_catalog_read` | GET | `/accounts/{account_id}/bots/catalog` | `/api/brokers/alpaca/accounts/{account_id}/bots/catalog` | `bot_panel_read` | read |
 | `bot_create` | POST | `/accounts/{account_id}/bots` | `/api/brokers/alpaca/accounts/{account_id}/bots` | `bot_action` | one_shot |
 | `bot_admission_plan` | POST | `/accounts/{account_id}/bots/admission` | `…/bots/admission` | `deploy` | read |
-| `bot_cohort_archive_read` | GET | `/accounts/{account_id}/bots/cohort-archive` | `…/bots/cohort-archive` | `bot_panel_read` | read |
-| `bot_cohort_archive` | POST | `/accounts/{account_id}/bots/cohort-archive` | `…/bots/cohort-archive` | `bot_action` | durable_key |
 | `bot_cohort_flatten_read` | GET | `/accounts/{account_id}/bots/cohort-flatten` | `…/bots/cohort-flatten` | `bot_panel_read` | read |
 | `bot_cohort_flatten` | POST | `/accounts/{account_id}/bots/cohort-flatten` | `…/bots/cohort-flatten` | `bot_action` | durable_key |
 | `bots_deploy_read` | GET | `/accounts/{account_id}/bots/deploy` | `…/bots/deploy` | `deploy` | read |

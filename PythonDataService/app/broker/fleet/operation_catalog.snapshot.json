@@ -62,16 +62,6 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/chart/live",
       "requires_account": true
     },
-    "bot_cohort_archive": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/bots/cohort-archive",
-      "requires_account": true
-    },
-    "bot_cohort_archive_read": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/cohort-archive",
-      "requires_account": true
-    },
     "bot_cohort_flatten": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/cohort-flatten",

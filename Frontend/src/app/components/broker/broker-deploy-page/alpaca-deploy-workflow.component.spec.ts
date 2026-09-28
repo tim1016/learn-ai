@@ -869,7 +869,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(within(receipt).getByText('$1,000.00')).toBeTruthy();
     expect(within(receipt).getByText('PAPER · practice money')).toBeTruthy();
     expect(within(receipt).getByRole('link', { name: 'Open spy-dv-20260929-0931' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-dv-20260929-0931?from=bots');
+      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-dv-20260929-0931');
     expect(within(receipt).queryByText(/returned unchanged/)).toBeNull();
   });
 

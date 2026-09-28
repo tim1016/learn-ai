@@ -80,40 +80,51 @@ for the new worker to confirm its binding, then run the checks again.
 Open **Alpaca** in the top navigation bar and choose **Accounts** — the one
 Alpaca menu item (ADR 0064 Decision 2); it lists every registered account and
 does not automatically choose Paper or Live for you. Selecting an account card
-opens that account's workspace: one account header over **Overview**, **Bots**,
-**Gallery**, and **Settings** tabs.
+opens that account's workspace: one account header (free to deploy, cash,
+equity, today) over **Home**, **Activity** and **Settings** tabs (PRD #2560).
+**Deploy a bot** is a button in the account header on every tab, not a tab; it
+opens the account's Deploy page, whose URL (`.../accounts/<account>/deploy`) is
+unchanged.
 
 | What you want to see | Click path |
 |---|---|
-| Paper bot roster | **Alpaca → Accounts → Paper card → Bots tab** |
-| Live account bot roster (including Shadow bots) | **Alpaca → Accounts → card marked Live → Bots tab** |
-| Account balances and details | **Alpaca → Accounts → intended account card**; opens on the **Overview** tab |
-| Current holdings and today's buys/sells | On that account's **Overview** tab, the **Trader / Operator** switch defaults to **Trader**; read **Current positions** and **Activity** |
-| Orders, executions, and their status | On that account's **Overview** tab, switch to **Operator**, then **Transaction history**; select **Today**, **30D**, or **60D**, then **View details** on a row |
-| Longer account history | On that account's **Overview** tab, **Trader**, choose **30D** or **60D** for the portfolio chart and **Transaction history** |
-| Connection or order-recovery evidence | On that account's **Overview** tab, switch to **Operator**, then expand **Broker connection** or **Order custody & recovery** |
-| Strategy gallery and deploy targets | **Alpaca → Accounts → intended account card → Gallery tab** |
+| Paper bot roster | **Alpaca → Accounts → Paper card → Home tab**, the **Bots** section |
+| Live account bot roster (including Shadow bots) | **Alpaca → Accounts → card marked Live → Home tab**, the **Bots** section |
+| Account balances and where the money is | **Alpaca → Accounts → intended account card**; opens on **Home**: the header's figures and the money bar. Buying power and margin are under **Account details** |
+| What each bot holds | On **Home**, each bot's row; a stopped bot that still holds money is striped and offers **Flatten…** |
+| Today's buys/sells and cash moves | That account's **Activity** tab, period **Today** |
+| Orders, executions, and their status | That account's **Activity** tab: choose **Today**, **30D** or **60D**, expand **Order records and recovery**, then **Transaction history** → **View details** on a row |
+| Longer account history | That account's **Activity** tab, **30D** or **60D**, for the portfolio chart and its reconciliation |
+| Order-recovery evidence | That account's **Activity** tab → **Order records and recovery** |
+| Bots as live chart tiles | **Home → Wall** (the former Gallery tab) |
 | Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Settings tab → Broker connection** |
+| Deploy a bot | The account header's **Deploy a bot** button, on any tab |
 
-The account workspace opens on **Overview**, whose **Trader / Operator** switch
-covers that account's own positions, activity, and transaction history. Each
-bot has its own page too, reached from the **Bots** or **Gallery** tab, with the
-same **Trader / Operator** switch scoped to that bot. **Activity** reports
-broker events; **Transaction history** includes order status and execution
-evidence so you can distinguish a requested buy/sell from a completed fill. A
-strategy decision that never created an order belongs in that bot's own page,
-reached from the **Bots** tab.
+The account workspace opens on **Home**: the money bar, one line for each
+thing that needs you with its fix, and the account's bots grouped as running,
+stopped but still holding, Dry Run, and a folded **Finished** list. **List**
+and **Wall** show the same bots as rows or as chart tiles. Each bot has its
+own page, opened from its row or tile. **Activity** lists the orders and cash
+moves Alpaca reports; **Transaction history** includes order status and
+execution evidence so you can distinguish a requested buy/sell from a
+completed fill. A strategy decision that never created an order belongs in
+that bot's own page.
+
+The **Overview**, **Bots** and **Gallery** tabs, the Overview's **Trader /
+Operator** switch, and the cohort archive are historical (PRD #2560). An old
+Bots link opens Home, and an old Gallery link opens Home's Wall.
 
 The **Live** badge identifies the real-money account endpoint. Check its
 **Authority** as well: **Shadow** means simulated fills and no real orders from
-that authority. Shadow transaction history shows simulated Clerk records;
-**Trader → Today → Activity** shows broker-reported events on the real account.
-Opening a roster or desk does not arm a bot.
+that authority. Shadow transaction history shows simulated Clerk records; the
+**Activity** tab's list of orders and cash moves shows what Alpaca reports on
+the real account. Opening an account's Home does not arm a bot.
 
-If the desk says it cannot reach Alpaca, the current UI hides both perspective
-tabs until its account read succeeds. This is a loading/identity problem, not
-another menu you need to find. Likewise, a transaction-history error is not an
-empty trading history; retain the error text when diagnosing it.
+If the account header cannot show the account's money, it states why in
+place of its figures until the read succeeds, never as $0. This is a
+loading/identity problem, not another menu you need to find. Likewise, a
+transaction-history error is not an empty trading history; retain the error
+text when diagnosing it.
 
 ## 2. Account setup
 
@@ -417,7 +428,7 @@ previously refused, reissue it after fixing the stated cause. Never treat
 
 ## 5. Launch a bot
 
-1. Select the account card and open **Bots → Deploy strategy**.
+1. Select the account card and click **Deploy a bot** in the account header.
 2. Choose a strategy. **Accepted evidence** means its validation passed; it
    does not mean this account has permission to run it.
 3. If access is Off, use **Review & enable Paper** or **Review & enable Shadow**.

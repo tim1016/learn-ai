@@ -212,7 +212,7 @@ export class AlpacaLiveBannerComponent {
   /**
    * Where this badge leads (ADR 0064 Decision 3): this account, on the tab
    * the operator is already standing on when they are inside a workspace,
-   * otherwise its Overview. The resolver decides — a badge and the
+   * otherwise its Home. The resolver decides — a badge and the
    * workspace's own account switcher are the same move made from two places,
    * so they cannot land differently.
    *

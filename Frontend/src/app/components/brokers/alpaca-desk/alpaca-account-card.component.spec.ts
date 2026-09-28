@@ -51,7 +51,7 @@ describe('AlpacaAccountCardComponent', () => {
     expect(screen.getByText('Buying power')).toBeTruthy();
     expect(screen.getByText('Updated (local)')).toBeTruthy();
 
-    screen.getByRole('button', { name: 'Account details' }).click();
+    screen.getByRole('button', { name: 'More details' }).click();
     expect(screen.getByText('Portfolio value')).toBeTruthy();
   });
 

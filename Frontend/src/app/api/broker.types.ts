@@ -1547,24 +1547,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cohort-archive presentation: archivable bots grouped with per-leg executability facts (ADR 0052) */
-        get: operations["get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get"];
-        put?: never;
-        /** Archive a batch of finished bots with per-leg receipts (ADR 0052) */
-        post: operations["run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
         parameters: {
             query?: never;
@@ -2389,30 +2371,6 @@ export interface paths {
         get: operations["fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Cohort Archive Read
-         * @description Fleet-routed GET /accounts/{account_id}/bots/cohort-archive (bot_panel_read).
-         */
-        get: operations["fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get"];
-        put?: never;
-        /**
-         * Fleet Bot Cohort Archive
-         * @description Fleet-routed POST /accounts/{account_id}/bots/cohort-archive (bot_action).
-         */
-        post: operations["fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8143,6 +8101,8 @@ export interface components {
             account_shortfall_usd?: string | null;
             /** Cash Usd */
             cash_usd?: string | null;
+            /** Deploy Refusal */
+            deploy_refusal?: string | null;
             /** Detail */
             detail: string;
             /** Equity Usd */
@@ -9930,7 +9890,8 @@ export interface components {
          *     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
          *     (incremental cache). ``needs_attention`` and ``status_label`` drive the
          *     attention-first sort and the closed status vocabulary. No journal scan per
-         *     request.
+         *     request. ``group`` places the row on Home; a row's money is never here --
+         *     Home joins it from the account-money read by ``strategy_instance_id``.
          */
         BotCatalogView: {
             /** Account Id */
@@ -9944,12 +9905,21 @@ export interface components {
              * @enum {string}
              */
             desired_state: "RUNNING" | "STOPPED";
+            /** Ended At Ms */
+            ended_at_ms?: number | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
             };
             /** Fills Today */
             fills_today: number | null;
+            /** Final Result Usd */
+            final_result_usd?: string | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "running" | "holding" | "finished" | "dry_run";
             /** Last Activity At Ms */
             last_activity_at_ms: number | null;
             /**
@@ -9971,6 +9941,8 @@ export interface components {
             row_action?: components["schemas"]["PanelAction"] | null;
             /** Running */
             running: boolean;
+            /** Simulated Cash Usd */
+            simulated_cash_usd?: string | null;
             /** Status Explanation */
             status_explanation: string;
             /** Status Label */
@@ -9983,6 +9955,10 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            /** Trade Count */
+            trade_count?: number | null;
+            /** World Label */
+            world_label: string;
         };
         /**
          * BotControlAuthorityFacts
@@ -10104,6 +10080,7 @@ export interface components {
             clerk: components["schemas"]["ClerkCard"];
             /** Execution Policy */
             execution_policy: string;
+            exit_terms?: components["schemas"]["ExitTerms"] | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -10125,7 +10102,12 @@ export interface components {
             mode: "log_only" | "dry_run" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
-            primary_action_by_lens: components["schemas"]["PrimaryActionByLens"];
+            /** Open Pnl Direction */
+            open_pnl_direction: ("gain" | "loss" | "flat") | null;
+            /** Open Pnl Usd */
+            open_pnl_usd: string | null;
+            /** Primary Action */
+            primary_action: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -10814,6 +10796,21 @@ export interface components {
              * @enum {string}
              */
             world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /**
+         * BudgetStatementLine
+         * @description One line of a bot's money statement, worded and valued by Python.
+         */
+        BudgetStatementLine: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Label */
+            label: string;
+            /**
+             * Total
+             * @default false
+             */
+            total?: boolean;
         };
         /**
          * BuildFromCsvRequest
@@ -12282,78 +12279,6 @@ export interface components {
             refused_count: number;
             /** Replayed Count */
             replayed_count: number;
-        };
-        /**
-         * CohortArchiveCohort
-         * @description One (strategy_key, symbol) group of archivable members.
-         */
-        CohortArchiveCohort: {
-            /** Enabled Count */
-            enabled_count: number;
-            /** Legs */
-            legs: components["schemas"]["CohortArchiveLeg"][];
-            /** Strategy Key */
-            strategy_key: string;
-            /** Strategy Label */
-            strategy_label: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * CohortArchiveLeg
-         * @description One archivable roster member with its executability facts (ADR 0047).
-         */
-        CohortArchiveLeg: {
-            /** Blocker Headline */
-            blocker_headline: string | null;
-            /** Concurrency Token */
-            concurrency_token: string | null;
-            /** Enabled */
-            enabled: boolean;
-            /** Revision */
-            revision: number | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * CohortArchiveLegRequest
-         * @description One leg the operator confirmed — echoes the presented action facts.
-         *
-         *     Carries no ``action_id``: this endpoint archives, and nothing else. A
-         *     client that could name the action could reach a different mutation
-         *     through a surface whose confirmation copy described archiving.
-         */
-        CohortArchiveLegRequest: {
-            /** Concurrency Token */
-            concurrency_token: string;
-            /** Revision */
-            revision: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * CohortArchiveRequest
-         * @description Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5).
-         */
-        CohortArchiveRequest: {
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Legs */
-            legs: components["schemas"]["CohortArchiveLegRequest"][];
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * CohortArchiveView
-         * @description Backend-authored cohort-archive presentation (ADR 0052).
-         */
-        CohortArchiveView: {
-            /** Account Id */
-            account_id: string;
-            /** Cohorts */
-            cohorts: components["schemas"]["CohortArchiveCohort"][];
-            /** Observed At Ms */
-            observed_at_ms: number;
         };
         /**
          * CohortFlattenCohort
@@ -14234,6 +14159,17 @@ export interface components {
         /**
          * DeploymentBudgetView
          * @description All dollars are authored by Python, including display rounding.
+         *
+         *     ``headline`` and ``detail`` say where this bot's money stands in the
+         *     owner's words -- holding a position is a normal state, never worded as a
+         *     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
+         *     it, in order: a running bot's budget, results, balance and where the
+         *     balance is; a stopped bot's balance and what was released and what is
+         *     still held, which add up to that balance. It is empty unless ``state``
+         *     is ``ready``.
+         *     ``segment`` is this bot's slice exactly as the account's money bar draws
+         *     it (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of
+         *     its own; ``None`` when the bot is finished and holds no money any more.
          */
         DeploymentBudgetView: {
             /** Committed Usd */
@@ -14245,30 +14181,23 @@ export interface components {
              * @default false
              */
             entry_eligible?: boolean;
-            /** Fees Usd */
-            fees_usd?: string | null;
-            /** Free Usd */
-            free_usd?: string | null;
+            /** Headline */
+            headline: string;
+            /** Note */
+            note?: string | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
-            /** Outstanding Cash Usd */
-            outstanding_cash_usd?: string | null;
-            parts?: components["schemas"]["MoneyParts"] | null;
-            /** Pending Orders Usd */
-            pending_orders_usd?: string | null;
-            /** Position Cost Usd */
-            position_cost_usd?: string | null;
-            /** Realized Gross Usd */
-            realized_gross_usd?: string | null;
-            /** Released Usd */
-            released_usd?: string | null;
-            /** Shortfall Usd */
-            shortfall_usd?: string | null;
+            segment?: components["schemas"]["MoneySegment"] | null;
             /**
              * State
              * @enum {string}
              */
             state: "ready" | "unavailable" | "legacy";
+            /**
+             * Statement
+             * @default []
+             */
+            statement?: components["schemas"]["BudgetStatementLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /**
@@ -15354,6 +15283,23 @@ export interface components {
              * @enum {string}
              */
             rule?: "fixed_bar_count_countdown" | "level_true";
+        };
+        /**
+         * ExitTerms
+         * @description Immutable stored terms; an upgraded registration may retain an unset allowance.
+         */
+        ExitTerms: {
+            /** Band Multiple */
+            band_multiple: number;
+            /** Exit Allowance Bps */
+            exit_allowance_bps: number | null;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "deployed" | "backfilled";
+            /** Spread Cap Bps */
+            spread_cap_bps: number;
         };
         /**
          * ExitTermsInput
@@ -18163,29 +18109,42 @@ export interface components {
             runner_idle: boolean;
         };
         /**
+         * LaneAttentionAction
+         * @description An attention line's one fix: a link into the account's workspace.
+         *
+         *     ``bot`` opens the page of the item's own bot, so an item with that
+         *     destination always names one.
+         */
+        LaneAttentionAction: {
+            /**
+             * Destination
+             * @enum {string}
+             */
+            destination: "bot" | "activity" | "settings";
+            /** Label */
+            label: string;
+        };
+        /**
          * LaneAttentionItem
          * @description One condition currently needing the operator on this lane (#2228).
          *
-         *     ``condition_id`` is the uncertainty id — stable across polls, so the bell
-         *     dedupes by it and an item disappears exactly when the underlying episode
-         *     resolves. The narrow v1 set: active uncertainties only, which includes
-         *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+         *     ``condition_id`` is stable across polls, so the bell dedupes by it and an
+         *     item disappears exactly when its condition resolves: the uncertainty id
+         *     for an episode, or a key naming the bot or account fact otherwise. Every
+         *     item has one backend-authored ``headline`` and exactly one ``action``
+         *     (PRD #2560): only what the owner must act on is listed.
          */
         LaneAttentionItem: {
-            /**
-             * Action Label
-             * @default Open bot
-             */
-            action_label?: string;
+            action: components["schemas"]["LaneAttentionAction"];
             /** Condition Id */
             condition_id: string;
             /** Headline */
             headline: string;
             /**
              * Kind
-             * @default uncertainty
+             * @enum {string}
              */
-            kind?: string;
+            kind: "account" | "hold" | "channel" | "out_of_sync" | "exit" | "uncertainty" | "stopped_holding" | "position_unverified" | "legacy_budget";
             /** Reason Code */
             reason_code: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
@@ -21494,28 +21453,6 @@ export interface components {
             theta: number;
             /** Vega */
             vega: number;
-        };
-        /**
-         * PrimaryActionByLens
-         * @description The one backend-selected banner action for each lens (issue #1665).
-         *
-         *     ``trader`` is restricted to the closed
-         *     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-         *     (``stop``); an Operator-only recovery
-         *     capability can never reach it. ``operator`` also considers those same
-         *     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
-         *     action takes precedence when one is available — the audience-aware
-         *     precedence rule authored once by
-         *     ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
-         *     Either reference is ``None``, never a guess, when nothing currently
-         *     qualifies; the frontend renders no banner action in that case rather than
-         *     deriving one from ``health``.
-         */
-        PrimaryActionByLens: {
-            /** Operator */
-            operator: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
-            /** Trader */
-            trader: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
         };
         /** ProfileCloneRequest */
         ProfileCloneRequest: {
@@ -31552,78 +31489,6 @@ export interface operations {
             };
         };
     };
-    get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortArchiveView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CohortArchiveRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortActionResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
@@ -33335,80 +33200,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
