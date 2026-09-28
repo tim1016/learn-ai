@@ -310,9 +310,16 @@ class LiveEnvelopeSync:
             limit=100,
             activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
         )
-        cash_flows_stable = _cash_flow_snapshots_match(
-            cash_flows_before,
-            cash_flows_after,
+        # ``last_equity`` advances at the ET day boundary. If the account read
+        # landed on the next boundary, these transfer queries used the wrong
+        # horizon for that snapshot; classify the whole cash-flow proof as
+        # incomplete so the old observation is withdrawn immediately.
+        cash_flows_stable = (
+            day_pnl_window_start_ms(account.observed_at_ms) == day_start_ms
+            and _cash_flow_snapshots_match(
+                cash_flows_before,
+                cash_flows_after,
+            )
         )
         self._observed_account_id = account.account_id
         # Under simulated custody the broker's cash never moved, so the

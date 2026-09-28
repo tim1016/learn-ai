@@ -294,13 +294,60 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
     malformed = {
         key: value
         for key, value in {**non_trade, "activity_type": "CSD"}.items()
-        if key != "id"
+        if key != "activity_type"
     }
     broker = AlpacaBroker(
         client=_ActivitiesClient({None: [malformed]})  # type: ignore[arg-type]
     )
 
     with pytest.raises(BrokerUnavailable, match="evidence was malformed"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=25,
+            activity_type="TRANS",
+        )
+
+
+@pytest.mark.parametrize("invalid_id", [None, "", "   "])
+async def test_transfer_cursor_rejects_a_missing_or_blank_activity_id(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    invalid_id: object,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    transfer = {
+        **non_trade,
+        "id": invalid_id,
+        "activity_type": "CSD",
+    }
+    broker = AlpacaBroker(
+        client=_ActivitiesClient({None: [transfer]})  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BrokerUnavailable, match="valid activity id"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=25,
+            activity_type="TRANS",
+        )
+
+
+@pytest.mark.parametrize("status", [None, "pending"])
+async def test_transfer_cursor_rejects_a_transfer_that_is_not_executed(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    status: object,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    transfer = {
+        **non_trade,
+        "id": "unsettled",
+        "activity_type": "CSD",
+        "status": status,
+    }
+    broker = AlpacaBroker(
+        client=_ActivitiesClient({None: [transfer]})  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BrokerUnavailable, match="was not executed"):
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,

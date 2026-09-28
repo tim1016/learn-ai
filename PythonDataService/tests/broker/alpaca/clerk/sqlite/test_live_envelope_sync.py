@@ -68,6 +68,7 @@ class _Read:
         unrealized: float = 0.0,
         cash_flows: list[BrokerActivity] | None = None,
         cash_flow_reads: list[list[BrokerActivity]] | None = None,
+        account_observed_at_ms: int = NOON,
         fail: bool = False,
         fail_positions: bool = False,
         fail_unexpectedly: bool = False,
@@ -78,6 +79,7 @@ class _Read:
         self.unrealized = unrealized
         self.cash_flows = [] if cash_flows is None else cash_flows
         self.cash_flow_reads = cash_flow_reads
+        self.account_observed_at_ms = account_observed_at_ms
         self.activity_calls: list[tuple[int | None, int, str | None]] = []
         self.fail = fail
         self.fail_positions = fail_positions
@@ -107,7 +109,7 @@ class _Read:
             trading_blocked=False,
             account_blocked=False,
             created_at_ms=None,
-            observed_at_ms=NOON,
+            observed_at_ms=self.account_observed_at_ms,
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
@@ -216,6 +218,23 @@ async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
     assert observation is not None and observation.observed_at_ms == NOON
     assert observation.cash_available_usd == 100_000.0
     assert observation.last_equity_usd == 100_000.0
+
+
+async def test_a_tick_crossing_et_midnight_withdraws_the_observation(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    just_before_midnight_et = NOON + 12 * 60 * 60 * 1_000 - 1
+    just_after_midnight_et = just_before_midnight_et + 2
+    day_pnl_clock.value = just_before_midnight_et
+    sync = make_sync(
+        day_pnl_repo,
+        _Read(account_observed_at_ms=just_after_midnight_et),
+    )
+
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
 
 
 async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_spent(

@@ -82,6 +82,26 @@ def _same_activity_evidence(left: BrokerActivity, right: BrokerActivity) -> bool
     )
 
 
+def _validate_transfer_payload(payload: dict[str, object]) -> None:
+    """Require identity and finality before a transfer can affect day P&L."""
+    activity_id = payload.get("id")
+    if not isinstance(activity_id, str) or not activity_id.strip():
+        raise BrokerUnavailable(
+            "Alpaca transfer activity evidence had no valid activity id.",
+            broker=BROKER_ID,
+            detail="A transfer row cannot be identified without a nonempty broker id.",
+        )
+    if payload.get("status") != "executed":
+        raise BrokerUnavailable(
+            "An Alpaca transfer activity was not executed.",
+            broker=BROKER_ID,
+            detail=(
+                "Only definitively executed transfers can adjust account day P&L; "
+                "pending or statusless rows are unavailable evidence."
+            ),
+        )
+
+
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
@@ -227,6 +247,8 @@ class AlpacaBroker:
                     page_token=page_token,
                     **activity_filter,
                 )
+                for payload in payloads:
+                    _validate_transfer_payload(payload)
                 try:
                     mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
                 except (AttributeError, KeyError, TypeError, ValueError) as exc:

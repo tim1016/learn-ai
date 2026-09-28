@@ -192,11 +192,14 @@ notional cap, no symbol allowlist, no session restriction.
   ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
   The dedicated `TRANS` pagination continues until it proves the date boundary;
   a missing, repeated, or cyclic cursor raises instead of returning a partial
-  set. Rows that cannot be mapped and duplicate activity ids carrying different
-  economic evidence also make the read unavailable; economically identical
+  set. Rows that cannot be mapped, lack a nonblank broker id, or are not
+  definitively `executed` make the read unavailable. Duplicate activity ids
+  carrying different economic evidence do the same; economically identical
   duplicates are collapsed. Missing timestamps, missing or non-finite amounts,
   and a date-only transfer on the boundary session make `DayPnl.known` false
-  rather than turning an unclassified cash movement into profit or loss.
+  rather than turning an unclassified cash movement into profit or loss. A
+  sync tick whose account snapshot lands in a different ET loss window than
+  its transfer queries is also unknown and withdraws the prior observation.
   Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
