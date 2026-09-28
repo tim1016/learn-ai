@@ -206,14 +206,19 @@ async def test_activity_evidence_resumes_an_unfinished_walk_where_it_stopped(
     assert client.page_tokens == [None, "first-99", "second-99", "third-99"]
 
 
-async def test_windowed_activity_evidence_is_complete_once_it_reaches_the_window_start(
+async def test_windowed_activity_evidence_is_complete_one_dated_page_after_it_crosses_the_window(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
-    """A period read stops at its own start instead of walking older history (#2565)."""
+    """A period read stops one proof page past its own start, not at the first older row (#2565)."""
     trade, non_trade = load_alpaca_fixture("activities", "activities.json")
     in_window = [{**trade, "id": f"in-{i}"} for i in range(60)]
     older = [{**non_trade, "id": f"older-{i}"} for i in range(40)]
-    client = _ActivitiesClient({None: in_window + older, "older-39": [{**trade, "id": "must-not-fetch"}]})
+    fully_older = [{**non_trade, "id": f"oldest-{i}", "date": "2026-07-20"} for i in range(100)]
+    client = _ActivitiesClient({
+        None: in_window + older,
+        "older-39": fully_older,
+        "oldest-99": [{**trade, "id": "must-not-fetch"}],
+    })
 
     evidence = await AlpacaBroker(client=client).read_activity_evidence(
         after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"),
@@ -221,7 +226,75 @@ async def test_windowed_activity_evidence_is_complete_once_it_reaches_the_window
 
     assert evidence.history_complete and evidence.next_page_token is None
     assert [row.activity_id for row in evidence.activities] == [f"in-{i}" for i in range(60)]
-    assert client.page_tokens == [None]
+    assert client.page_tokens == [None, "older-39"]
+
+
+async def test_windowed_activity_evidence_refuses_an_in_window_row_after_the_crossing_page(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """Regression (#2569 review): one older row claimed completeness while a later page held an in-window row."""
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    in_window = [{**trade, "id": f"in-{i}"} for i in range(60)]
+    older = [{**non_trade, "id": f"older-{i}"} for i in range(40)]
+    client = _ActivitiesClient({None: in_window + older, "older-39": [{**trade, "id": "late-in-window"}]})
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="activity history was not newest-first"):
+        await AlpacaBroker(client=client).read_activity_evidence(
+            after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"),
+        )
+
+    assert client.page_tokens == [None, "older-39"]
+
+
+async def test_windowed_activity_evidence_crossing_at_the_page_bound_is_unfinished(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """The bound leaves no page to prove the crossing, so the read hands back its cursor (#2565)."""
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    pages = {None: [{**trade, "id": f"first-{i}"} for i in range(100)],
+        "first-99": [{**trade, "id": f"second-{i}"} for i in range(100)],
+        "second-99": [{**trade, "id": f"third-{i}"} for i in range(60)]
+        + [{**non_trade, "id": f"older-{i}"} for i in range(40)],
+        "older-39": [{**trade, "id": "must-not-fetch"}]}
+    client = _ActivitiesClient(pages)
+
+    evidence = await AlpacaBroker(client=client).read_activity_evidence(
+        after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"),
+    )
+
+    assert not evidence.history_complete and evidence.next_page_token == "older-39"
+    assert len(evidence.activities) == 260
+    assert client.page_tokens == [None, "first-99", "second-99"]
+
+
+async def test_windowed_activity_evidence_undated_row_withholds_the_crossing_proof(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """An undated row cannot be ordered, so its page proves nothing and the walk goes on (#2565)."""
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    undated = {
+        key: value
+        for key, value in {**non_trade, "id": "undated"}.items()
+        if key not in {"date", "transaction_time"}
+    }
+    crossing = (
+        [{**trade, "id": f"in-{i}"} for i in range(60)]
+        + [undated]
+        + [{**non_trade, "id": f"older-{i}"} for i in range(39)]
+    )
+    client = _ActivitiesClient({
+        None: crossing,
+        "older-38": [{**non_trade, "id": f"oldest-{i}", "date": "2026-07-20"} for i in range(100)],
+        "oldest-99": [{**non_trade, "id": "last", "date": "2026-07-19"}],
+    })
+
+    evidence = await AlpacaBroker(client=client).read_activity_evidence(
+        after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"),
+    )
+
+    assert evidence.history_complete and evidence.next_page_token is None
+    assert [row.activity_id for row in evidence.activities] == [f"in-{i}" for i in range(60)] + ["undated"]
+    assert client.page_tokens == [None, "older-38", "oldest-99"]
 
 
 async def test_windowed_activity_evidence_says_when_the_window_holds_more(
@@ -244,6 +317,8 @@ async def test_windowed_activity_evidence_says_when_the_window_holds_more(
     rest = await broker.read_activity_evidence(page_token=head.next_page_token, after_ms=window_start)
     assert rest.history_complete
     assert [row.activity_id for row in rest.activities] == ["oldest-in-window"]
+
+
 async def test_transfer_cursor_reads_every_page_until_the_window_is_complete(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
