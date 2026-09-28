@@ -1,24 +1,56 @@
-<li class="lane-card-item">
-  <a
-    class="lane-card"
-    [class.lane-card--degraded]="state().kind !== 'serving'"
-    [routerLink]="openRoute()"
-    [queryParams]="openQuery()"
-    [queryParamsHandling]="openQueryHandling()"
-  >
-    <span class="lane-card__head">
-      <span class="lane-card__label">{{ displayName().name }}</span>
-      @if (displayName().disambiguator; as disambiguator) {
-        <span class="lane-card__disambiguator">({{ disambiguator }})</span>
-      }
-    </span>
+<!-- The link is named by the account and its mode, and described by the
+     rest: a screen reader hears the choice first, then the details. -->
+<a
+  class="lane-card"
+  [class.lane-card--degraded]="state().kind !== 'serving'"
+  [attr.data-lane]="laneColour()"
+  [attr.aria-labelledby]="nameId()"
+  [attr.aria-describedby]="detailId()"
+  [routerLink]="openRoute()"
+  [queryParams]="openQuery()"
+  [queryParamsHandling]="openQueryHandling()"
+>
+  <span class="lane-card__head" [id]="nameId()">
+    <span class="lane-card__label">{{ displayName().name }}</span>
+    @if (displayName().disambiguator; as disambiguator) {
+      <span class="lane-card__disambiguator">({{ disambiguator }})</span>
+    }
     <app-alpaca-lane-mode-chip [chip]="modeChip()" />
+  </span>
+  <span class="lane-card__detail" [id]="detailId()">
     @let cardState = state();
     @switch (cardState.kind) {
       @case ('serving') {
-        <span class="lane-card__facts">
-          <span class="lane-card__equity">{{ equityLine() }}</span>
-          <span class="lane-card__bots">{{ botsLine() }}</span>
+        @let money = cardMoney();
+        @if (money.kind === 'ready') {
+          <span class="lane-card__money">
+            <span class="lane-card__figure">
+              Account money <strong>{{ money.view.total_usd | authoredUsd }}</strong>
+            </span>
+            <span class="lane-card__figure lane-card__figure--end">
+              Free to deploy <strong>{{ money.view.free_to_deploy_usd | authoredUsd }}</strong>
+            </span>
+            @if (money.view.account_shortfall_usd; as shortfall) {
+              <span class="lane-card__figure lane-card__figure--shortfall">
+                Claims exceed the account by <strong>{{ shortfall | authoredUsd }}</strong>
+              </span>
+            }
+          </span>
+          <app-money-bar class="lane-card__bar" size="mini" [segments]="money.view.segments ?? []" [caption]="barCaption()" />
+        } @else {
+          <span class="lane-card__money-reason">
+            {{ money.text }}
+            @if (money.nextStep; as nextStep) { {{ nextStep }} }
+          </span>
+        }
+        <span class="lane-card__status">
+          @for (count of botCounts(); track count) {
+            <span>{{ count }}</span>
+          }
+          <span class="lane-card__attention" [class.lane-card__attention--needs]="attention().needs">
+            @if (attention().needs) { <span aria-hidden="true">⚠</span> }
+            {{ attention().text }}
+          </span>
         </span>
       }
       @case ('lifecycle') {
@@ -30,5 +62,5 @@
         <span class="lane-card__readiness">{{ readinessLine() }}</span>
       }
     }
-  </a>
-</li>
+  </span>
+</a>

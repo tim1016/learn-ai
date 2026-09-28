@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -1777,6 +1778,18 @@ class BotTaskRegistry:
     def any_running(self) -> bool:
         """Whether this registry currently owns any live bot task."""
         return any(not managed.task.done() for managed in self._bots.values())
+
+    def running_mode_counts(self, broker: str) -> Counter[str]:
+        """How many live bot tasks ``broker`` has, by binding mode.
+
+        The task table alone -- no binding, lifecycle or desired-state file is
+        read -- so the lane can count on every heartbeat. ``running`` here is
+        exactly ``list_bots``'s ``running``: the owned task has not exited.
+        """
+        return Counter(
+            managed.binding.mode for managed in self._bots.values()
+            if managed.binding.broker == broker and not managed.task.done()
+        )
 
     def _manages_boot_recovery(self, strategy_instance_id: str) -> bool:
         """Admit Alpaca bindings and SQLite-positive pre-binding candidates."""

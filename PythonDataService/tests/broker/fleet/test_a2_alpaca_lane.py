@@ -734,29 +734,49 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
     )
 
 
-def test_summary_with_live_nickname_adds_replaces_and_removes_the_one_key() -> None:
-    """#2182 Major 3: the per-beat merge touches only `account_nickname` —
+def test_summary_with_live_facts_adds_replaces_and_removes_the_nickname() -> None:
+    """#2182 Major 3: the per-beat merge touches only the per-beat keys —
     every other key in the confirm-time snapshot passes through untouched,
     in both directions (a fresh nickname appearing, and one disappearing)."""
-    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_nickname
+    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_facts
 
     base = {"endpoint_mode": "paper", "authority_state": "real_paper"}
 
-    assert _summary_with_live_nickname(base, "Strategy lab") == {
+    assert _summary_with_live_facts(base, "Strategy lab") == {
         **base,
         "account_nickname": "Strategy lab",
     }
-    assert _summary_with_live_nickname(base, None) == base
-    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, "New name") == {
+    assert _summary_with_live_facts(base, None) == base
+    assert _summary_with_live_facts({**base, "account_nickname": "Old name"}, "New name") == {
         **base,
         "account_nickname": "New name",
     }
     # A nickname that was set and then unset (Configuration allows only
     # setting, but the merge must stay correct either way).
-    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, None) == base
+    assert _summary_with_live_facts({**base, "account_nickname": "Old name"}, None) == base
     # Not a bounded typed observation at all: nothing to merge into.
-    assert _summary_with_live_nickname("not-a-mapping", "Strategy lab") is None
-    assert _summary_with_live_nickname(None, "Strategy lab") is None
+    assert _summary_with_live_facts("not-a-mapping", "Strategy lab") is None
+    assert _summary_with_live_facts(None, "Strategy lab") is None
+
+
+def test_summary_with_live_facts_replaces_counts_and_drops_one_not_counted() -> None:
+    """PRD #2560: a count this beat could not take is absent, never a stale
+    value carried from the last beat and never a zero."""
+    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_facts
+
+    base = {"endpoint_mode": "paper", "authority_state": "real_paper", "running_count": 4, "attention_count": 2}
+    merged = _summary_with_live_facts(base, None, {"running_count": 1, "dry_run_count": 0})
+    assert merged == {"endpoint_mode": "paper", "authority_state": "real_paper", "running_count": 1, "dry_run_count": 0}
+    parsed = ProviderSummaryObservation.parse(merged)
+    assert parsed is not None and parsed.counts() == {"running_count": 1, "dry_run_count": 0}
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, True, "3", 100_001])
+def test_lane_summary_refuses_a_count_that_is_not_a_whole_bounded_number(value: object) -> None:
+    with pytest.raises(ValueError, match="attention_count"):
+        ProviderSummaryObservation.parse(
+            {"endpoint_mode": "paper", "authority_state": "real_paper", "attention_count": value}
+        )
 
 
 @pytest.mark.parametrize(
@@ -1281,6 +1301,76 @@ async def test_a_nickname_set_after_confirmation_reaches_the_next_beat_without_a
         # rebound or re-registered to pick up the rename.
         assert after.reported_binding_generation == before.reported_binding_generation
         assert after.routing_epoch == before.routing_epoch
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_every_beat_carries_the_lanes_own_counts_from_its_installed_probe(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2561 review B1/B2: ``start_heartbeat`` really sends the counts the
+    composition root's probe takes, per beat; a count the probe stops taking
+    is absent on the next beat, and nothing re-registers to carry them."""
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_report,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    counts = {"running_count": 2, "dry_run_count": 1, "attention_count": 3}
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def probe() -> dict[str, int]:
+            return dict(counts)
+
+        boot.lane_counts_probe = probe
+        await reserve_account(boot, external_account_id=account_id)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="paper",
+        )
+        clock.advance(1)
+
+        first = await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+        first_summary = ProviderSummaryObservation.parse(first.reported_summary_json)
+        assert first_summary is not None and first_summary.counts() == counts
+
+        del counts["attention_count"]
+        clock.advance(1)
+        second = await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+        second_summary = ProviderSummaryObservation.parse(second.reported_summary_json)
+        assert second_summary is not None and second_summary.counts() == {"running_count": 2, "dry_run_count": 1}
+        assert second.routing_epoch == first.routing_epoch
     finally:
         await close_fleet_lane(boot)
         service.close()

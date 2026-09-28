@@ -122,6 +122,7 @@ from app.broker.fleet.presence import (
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
 from app.broker.fleet.records import (
     _ACCOUNT_NICKNAME_MAX_CHARS,
+    LANE_COUNT_KEYS,
     LANE_QUIET_CONDITIONS,
     AccountAssignmentRecord,
     StoredLifecycleState,
@@ -199,6 +200,12 @@ LANE_QUIET_OBSERVATION_TIMEOUT_S = 5.0
 #: Produces a fresh answer, or ``None`` when the lane cannot observe its
 #: account this beat — no answer, never a "not quiet" one.
 LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
+
+#: This lane's own counts for its account card (PRD #2560), keyed as
+#: ``records.LANE_COUNT_KEYS``; a count the lane could not take is absent,
+#: never zero. Installed by the composition root, like ``LaneQuietProbe``, so
+#: the fleet lane never imports up into the services it reports on.
+LaneCountsProbe = Callable[[], Awaitable[Mapping[str, int]]]
 
 #: Stops every bot this lane runs through the lane-wide stop (#2268's
 #: ``stop_all_bots_on_lane``) and says whether every one stopped (#2351).
@@ -328,6 +335,10 @@ class FleetLaneBoot:
     #: exist; ``None`` on a lane with no clerk, which then never confirms and
     #: exits through ``force-retire``.
     lane_quiet_probe: LaneQuietProbe | None = field(default=None, repr=False)
+    #: How this lane counts its bots and attention items for its account card
+    #: (PRD #2560), read on every beat. Installed by the composition root;
+    #: ``None`` reports no counts at all -- unknown, never zero.
+    lane_counts_probe: LaneCountsProbe | None = field(default=None, repr=False)
     #: The outstanding conditions of the last answer the coordinator accepted,
     #: so the log records a change rather than repeating every beat.
     lane_quiet_outstanding: tuple[str, ...] | None = None
@@ -930,23 +941,44 @@ async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> st
     return nickname
 
 
-def _summary_with_live_nickname(
-    summary: object, nickname: str | None
+async def _guarded_lane_counts(boot: FleetLaneBoot) -> Mapping[str, int]:
+    """This lane's bot and attention counts for its account card (PRD #2560).
+
+    Read fresh every beat through the installed probe, like the nickname, and
+    just as unable to end it: a probe that fails is logged and this beat
+    reports no counts -- absent, never sent as zero.
+    """
+    if boot.lane_counts_probe is None:
+        return {}
+    try:
+        return await boot.lane_counts_probe()
+    except Exception:
+        logger.warning(
+            "Lane counts unavailable; omitting them from this beat",
+            exc_info=True, extra={"clerk_id": boot.clerk_id, "action": "lane_counts_unavailable"},
+        )
+        return {}
+
+
+def _summary_with_live_facts(
+    summary: object, nickname: str | None, counts: Mapping[str, int] | None = None,
 ) -> Mapping[str, object] | None:
-    """``summary`` with its ``account_nickname`` replaced by a fresh read.
+    """``summary`` with its per-beat facts replaced by fresh reads.
 
     Everything else in the bounded summary (``endpoint_mode``,
     ``authority_state``, ``detail``) is confirm-time state that only changes
-    on a rebind, so only this one key gets touched here — the rest is
-    whatever ``heartbeat_facts`` last computed at confirm/boot.
+    on a rebind, so only the nickname and the lane counts are touched here —
+    the rest is whatever ``heartbeat_facts`` last computed at confirm/boot. A
+    count missing from ``counts`` is removed rather than left stale.
     """
     if not isinstance(summary, Mapping):
         return None
-    refreshed = dict(summary)
+    refreshed = {key: value for key, value in summary.items() if key not in LANE_COUNT_KEYS}
     if nickname is not None:
         refreshed["account_nickname"] = nickname
     else:
         refreshed.pop("account_nickname", None)
+    refreshed.update(counts or {})
     return refreshed
 
 
@@ -1198,12 +1230,13 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 reported = boot.reported_facts
                 summary = reported.get("reported_summary")
                 account_id = reported.get("reported_account_id")
-                live_summary = _summary_with_live_nickname(
+                live_summary = _summary_with_live_facts(
                     summary,
                     await _guarded_live_nickname(
                         clerk_id=boot.clerk_id,
                         account_id=account_id if isinstance(account_id, str) else None,
                     ),
+                    await _guarded_lane_counts(boot),
                 )
                 try:
                     learned_lifecycle = await boot.presence.observe(
@@ -1426,7 +1459,8 @@ def heartbeat_facts(
     and visibly. The account's nickname (PRD #2182) is not part of this
     confirm-time snapshot — it is folded in fresh, per beat, by
     ``start_heartbeat`` (see its docstring), which is the only place that
-    ever writes ``account_nickname`` onto the outgoing summary.
+    ever writes ``account_nickname`` or the lane counts onto the outgoing
+    summary.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather

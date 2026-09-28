@@ -925,6 +925,17 @@ async def _service_lifespan(
         if fleet_lane is not None:
             fleet_lane.lane_quiet_probe = account_quiet_probe
 
+    # PRD #2560: every beat carries the lane's own bot and attention counts
+    # for its account card. The composition root installs the counter, as it
+    # does the lane-quiet probe, so the fleet lane never imports up into it.
+    if fleet_lane is not None:
+        from app.services.broker_v2_panel.lane_summary import lane_counts
+
+        async def _lane_counts() -> dict[str, int]:
+            return (await lane_counts()).reported()
+
+        fleet_lane.lane_counts_probe = _lane_counts
+
     # #2351: a lane that learns its own clerk was retired (force-retire
     # releases the account on a deadline, quiet or not) stops every bot it
     # still runs, through the same lane-wide stop an operator uses.

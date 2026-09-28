@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.account_money import AccountMoney
     from app.broker.alpaca.clerk.budgets import AccountBudget
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
@@ -790,3 +791,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             fees = self.fee_attribution(now_ms=self.clock())
             return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
+
+    def account_money(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountMoney:
+        """Where the account's money is, from the same read ``account_budget`` makes."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_money
+
+        with self._write_lock:
+            fees = self.fee_attribution(now_ms=self.clock())
+            return project_account_money(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)

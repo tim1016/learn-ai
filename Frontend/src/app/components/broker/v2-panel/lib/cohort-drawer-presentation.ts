@@ -7,7 +7,7 @@ import {
   laneFenceDrifted,
   laneFenceVerdict,
 } from '../../../../fleet/lane-fence';
-import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { resourceTarget, sameResourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
 
 export interface CohortDrawerPresentationInputs<V extends { readonly account_id: string }> {
   readonly visible: () => boolean;
@@ -16,16 +16,6 @@ export interface CohortDrawerPresentationInputs<V extends { readonly account_id:
   readonly accountId: () => string;
   /** The drawer's on-demand presentation read (never polled, ADR 0051 D3). */
   readonly load: (target: ResourceTarget) => Promise<V>;
-}
-
-function sameTarget(left: ResourceTarget, right: ResourceTarget): boolean {
-  return (
-    left.broker === right.broker &&
-    left.clerkId === right.clerkId &&
-    left.accountId === right.accountId &&
-    left.bindingGeneration === right.bindingGeneration &&
-    left.routingEpoch === right.routingEpoch
-  );
 }
 
 /**
@@ -61,7 +51,7 @@ export class CohortDrawerPresentation<V extends { readonly account_id: string }>
         routingEpoch: fence.routingEpoch,
       });
     },
-    { equal: sameTarget },
+    { equal: sameResourceTarget },
   );
 
   private started = 0;

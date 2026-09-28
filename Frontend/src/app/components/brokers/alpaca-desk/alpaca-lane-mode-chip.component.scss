@@ -16,19 +16,29 @@
   color: var(--text-color, #ddd);
 }
 
+/* The lane tokens (PRD #2560 D4): the mode is worded in full beside its
+   colour, so the colour is never the only carrier. */
 .lane-mode-chip--paper {
-  color: #b9edff;
-  border-color: #45b9e1;
+  color: #b9f3fb;
+  border-color: var(--lane-paper);
+  background: var(--lane-paper-soft);
 }
 
 .lane-mode-chip--live {
   color: #ffd0cf;
-  border-color: #f06b68;
+  border-color: var(--lane-live);
+  background: var(--lane-live-soft);
 }
 
 .lane-mode-chip--shadow {
   color: #d9caff;
-  border-color: #a78bfa;
+  border-color: var(--lane-shadow);
+  background: var(--lane-shadow-soft);
+}
+
+.lane-mode-chip--reading {
+  color: var(--text-secondary);
+  border-style: dashed;
 }
 
 .lane-mode-chip--undetermined {

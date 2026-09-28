@@ -42,6 +42,42 @@
   font-weight: var(--fw-semi);
 }
 
+/* Free to deploy, Cash, Equity and Today: backend-authored strings, one
+   reading each (PRD #2560). */
+.account-workspace__figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-6);
+  margin: 0;
+}
+
+.account-workspace__figures div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.account-workspace__figures dt {
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.account-workspace__figures dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.account-workspace__money-reason {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
 .account-workspace__actions {
   display: flex;
   align-items: center;

@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
@@ -7,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { BrokersService } from '../../../services/brokers.service';
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
 import { CurrentUrlService } from '../../../shell/current-url.service';
+import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
+import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /** `paramMap` is a `BehaviorSubject`, not a one-shot `of(...)`, so a test can
@@ -182,5 +185,73 @@ describe('AlpacaDeskAccountDataService', () => {
     TestBed.tick();
 
     expect(service.fence()).toEqual({ bindingGeneration: 9, routingEpoch: 2 });
+  });
+
+  describe('moneyState', () => {
+    function moneyService(getAccountMoney: () => Promise<unknown>, lane = testLane({ clerk_id: 'clrk_spec' })) {
+      const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] });
+      const money = vi.fn(getAccountMoney);
+      TestBed.configureTestingModule({
+        providers: [
+          directory,
+          activatedRoute('clrk_spec').provider,
+          currentUrl('clrk_spec', 'PA-TEST').provider,
+          { provide: BrokersService, useValue: { getAccount: neverAccount(), getClerkStatus: neverAccount() } },
+          { provide: BrokerV2PanelService, useValue: { getAccountMoney: money } },
+          AlpacaDeskAccountDataService,
+        ],
+      });
+      const service = TestBed.inject(AlpacaDeskAccountDataService);
+      TestBed.tick();
+      return { service, money, directory };
+    }
+
+    it('is ready with the backend’s own view', async () => {
+      const { service } = moneyService(() => Promise.resolve(fakeAccountMoney()));
+
+      await vi.waitFor(() => expect(service.moneyState().kind).toBe('ready'));
+    });
+
+    it('carries a refused read’s own reason and next step', async () => {
+      const refusal = new HttpErrorResponse({
+        status: 503,
+        error: {
+          detail: {
+            message: 'This account’s money cannot be read right now.',
+            why: 'The account’s records are still being opened.',
+            next_action: 'Open the account’s Settings to see why, then retry.',
+          },
+        },
+      });
+      const { service } = moneyService(() => Promise.reject(refusal));
+
+      await vi.waitFor(() => expect(service.moneyState().kind).toBe('unavailable'));
+      expect(service.moneyState()).toMatchObject({
+        text: 'This account’s money cannot be read right now. The account’s records are still being opened.',
+        nextStep: 'Open the account’s Settings to see why, then retry.',
+      });
+    });
+
+    it('never asks a lane that does not serve the read, and says so', () => {
+      const { service, money } = moneyService(
+        () => Promise.resolve(fakeAccountMoney()),
+        testLane({ clerk_id: 'clrk_spec', capabilities: ['account_read'] }),
+      );
+
+      expect(service.moneyState().kind).toBe('incapable');
+      expect(money).not.toHaveBeenCalled();
+    });
+
+    it('does not restart the money read when the directory refreshes an identical lane', async () => {
+      const { service, money, directory } = moneyService(() => Promise.resolve(fakeAccountMoney()));
+      await vi.waitFor(() => expect(service.moneyState().kind).toBe('ready'));
+
+      directory.rebind({ observed_at_ms: 2, clerks: [testLane({ clerk_id: 'clrk_spec' })] });
+      await directory.useValue.refresh?.();
+      TestBed.tick();
+
+      expect(service.moneyState().kind).toBe('ready');
+      expect(money).toHaveBeenCalledTimes(1);
+    });
   });
 });

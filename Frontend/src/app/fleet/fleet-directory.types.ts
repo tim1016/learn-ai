@@ -17,6 +17,13 @@ export interface LaneProviderSummary {
    * has one set. Operator prose, not a backend identifier — same footing as
    * `display_label` below, never piped through `receiptLabel`. */
   account_nickname?: string | null;
+  /** The lane's own counts for its account card (PRD #2560), reported by its
+   * clerk on every heartbeat: bots running in the lane's world, running Dry
+   * Runs, and the items needing the owner. Absent when the lane could not
+   * count one — never a zero for unknown. */
+  running_count?: number | null;
+  dry_run_count?: number | null;
+  attention_count?: number | null;
 }
 
 export interface LaneDescriptor {

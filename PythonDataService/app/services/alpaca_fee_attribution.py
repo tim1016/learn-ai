@@ -9,8 +9,9 @@ Canonical implementation: this file.
 Validated against: tests/services/test_alpaca_fee_attribution.py and
   tests/fixtures/golden/alpaca-fee-attribution/ (exact integer-cent parity).
 
-Amounts remain Decimal inside the authority. Fraction is used only to compare
-remainders exactly, so global Decimal precision cannot decide who gets a cent.
+Amounts remain Decimal inside the authority. The largest-remainder split is
+``money.apportion_units``, which compares remainders as exact fractions, so
+global Decimal precision cannot decide who gets a cent.
 Missing population, linkage or overlap evidence is an unresolved account charge,
 never a guessed deployment debit. Simulations never consume broker activities.
 """
@@ -21,10 +22,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, Inexact, localcontext
-from fractions import Fraction
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.money import money_context
+from app.broker.alpaca.clerk.money import apportion_units, money_context
 from app.broker.alpaca.regulatory_fees import (
     FeeComponent,
     FillFees,
@@ -51,6 +51,9 @@ class FeeFill:
     native_order_id: str | None = None
     reported_fee: Decimal | None = None
     observed_at_ms: int = 0
+    # When the broker executed it (int64 ms UTC); external fills carry it so
+    # the account-money read can lot them in execution order.
+    occurred_at_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -200,25 +203,18 @@ def collapse_activity_deliveries(activities: Iterable[BrokerActivity]) -> Collap
 
 @money_context()
 def apportion_cents(amount: Decimal, weights: Mapping[str, Decimal]) -> dict[str, Decimal]:
-    """Exact Hamilton shares, including deterministic signed reversal shares."""
+    """Exact Hamilton shares, including deterministic signed reversal shares.
+
+    The unit split itself is ``money.apportion_units``, the one canonical
+    largest-remainder rule; this adds only the whole-cent sign convention.
+    """
     if not amount.is_finite() or amount % CENT:
         raise ValueError("fee settlement must be finite whole cents")
-    if any(not weight.is_finite() or weight < 0 for weight in weights.values()):
-        raise ValueError("fee weights must be finite and nonnegative")
-    result = dict.fromkeys(sorted(weights), ZERO)
-    total = sum((Fraction(weight) for weight in weights.values()), Fraction())
-    if not total:
-        if amount:
-            raise ValueError("positive fee has no predicted weight")
-        return result
-    cents = int(abs(amount) / CENT)
-    quotas = {key: cents * Fraction(weight) / total for key, weight in weights.items()}
-    floors = {key: quota.numerator // quota.denominator for key, quota in quotas.items()}
-    ranked = sorted(quotas, key=lambda key: (-(quotas[key] - floors[key]), key))
-    for key in ranked[: cents - sum(floors.values())]:
-        floors[key] += 1
+    if amount and not any(weights.values()):
+        raise ValueError("positive fee has no predicted weight")
+    units = apportion_units(int(abs(amount) / CENT), weights)
     sign = -1 if amount < 0 else 1
-    return {key: Decimal(sign * floors[key]) * CENT for key in sorted(floors)}
+    return {key: Decimal(sign * cents) * CENT for key, cents in units.items()}
 
 
 def _weights(

@@ -1869,6 +1869,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/money": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Where the account's money is: the one read every money bar draws */
+        get: operations["read_account_money_scoped_api_brokers__broker__accounts__account_id__money_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
         parameters: {
             query?: never;
@@ -3303,6 +3320,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/manual-orders/{order_ref:path}/cancel (manual_orders).
          */
         post: operations["fleet_manual_order_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders__order_ref__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/money": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Account Money Read
+         * @description Fleet-routed GET /accounts/{account_id}/money (bot_panel_read).
+         */
+        get: operations["fleet_account_money_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__money_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8042,6 +8079,70 @@ export interface components {
             next_step?: string | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
+        };
+        /**
+         * AccountMoneyView
+         * @description Where one account's money is: the single read every money bar draws.
+         *
+         *     Python authors every dollar string and every width. When ``ready``, the
+         *     segments sum exactly (in cents) to ``total_usd`` plus
+         *     ``account_shortfall_usd`` (what the bots' and orders' claims exceed the
+         *     account by; absent unless overdrawn), their widths to 10000 basis points,
+         *     and ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.
+         *     Otherwise the bar's figures are absent and ``detail`` names the reason --
+         *     an unknown is never shown as $0 -- while the broker's own ``equity_usd``
+         *     and ``today_pnl_usd`` stay whenever they are known.
+         */
+        AccountMoneyView: {
+            /** Account Charges Usd */
+            account_charges_usd?: string | null;
+            /** Account Id */
+            account_id: string;
+            /** Account Shortfall Usd */
+            account_shortfall_usd?: string | null;
+            /** Cash Usd */
+            cash_usd?: string | null;
+            /** Detail */
+            detail: string;
+            /** Equity Usd */
+            equity_usd?: string | null;
+            /** Free To Deploy Usd */
+            free_to_deploy_usd?: string | null;
+            /** Held By Stopped Usd */
+            held_by_stopped_usd?: string | null;
+            /** In Bots Usd */
+            in_bots_usd?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+            /** Open Pnl Detail */
+            open_pnl_detail?: string | null;
+            /** Open Pnl Usd */
+            open_pnl_usd?: string | null;
+            /** Outside Bots Usd */
+            outside_bots_usd?: string | null;
+            /**
+             * Segments
+             * @default []
+             */
+            segments?: components["schemas"]["MoneySegment"][];
+            /** Settling Usd */
+            settling_usd?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable" | "legacy";
+            /** Stopped Holding Count */
+            stopped_holding_count?: number | null;
+            /** Today Pnl Usd */
+            today_pnl_usd?: string | null;
+            /** Total Usd */
+            total_usd?: string | null;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
         /**
          * AccountOperatorPosture
@@ -13943,6 +14044,7 @@ export interface components {
             estimated_price_usd?: string | null;
             /** Minimum Budget Usd */
             minimum_budget_usd?: string | null;
+            money_after?: components["schemas"]["AccountMoneyView"] | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
             /** Review Token */
@@ -14011,6 +14113,7 @@ export interface components {
             observed_at_ms?: number | null;
             /** Outstanding Cash Usd */
             outstanding_cash_usd?: string | null;
+            parts?: components["schemas"]["MoneyParts"] | null;
             /** Pending Orders Usd */
             pending_orders_usd?: string | null;
             /** Position Cost Usd */
@@ -19487,6 +19590,65 @@ export interface components {
              * @enum {string}
              */
             state: "ready" | "working" | "blocked" | "off_duty" | "retired";
+        };
+        /**
+         * MoneyParts
+         * @description A bot's slice, shaded. Widths are basis points of the slice itself.
+         *
+         *     They sum to 10000, or to 0 when the slice holds nothing (a flat bot
+         *     that overran its budget draws no part; its shortfall is reported).
+         */
+        MoneyParts: {
+            /** Free Bps */
+            free_bps: number;
+            /** Free Usd */
+            free_usd: string;
+            /** In Shares Bps */
+            in_shares_bps: number;
+            /** In Shares Usd */
+            in_shares_usd: string;
+            /** Pending Bps */
+            pending_bps: number;
+            /** Pending Usd */
+            pending_usd: string;
+        };
+        /**
+         * MoneySegment
+         * @description One place the account's money is, in display order on the money bar.
+         *
+         *     ``label`` is the legend's words for the slice; ``share_bps`` its width.
+         *     ``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent
+         *     beyond its balance -- absent, never "0.00", when nothing is short;
+         *     ``released_usd`` and ``still_claimed_usd`` to a stopped bot that still
+         *     holds money.
+         *     ``palette_index`` is a bot's stable colour slot (its registration order
+         *     on the account), the same on every surface that draws that bot.
+         *     ``settling`` is sale proceeds on their way into cash: not yet free to
+         *     deploy, never a shortfall.
+         */
+        MoneySegment: {
+            /** Amount Usd */
+            amount_usd: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bot" | "stopped" | "outside" | "charges" | "settling" | "new" | "free";
+            /** Label */
+            label: string;
+            /** Palette Index */
+            palette_index?: number | null;
+            parts?: components["schemas"]["MoneyParts"] | null;
+            /** Released Usd */
+            released_usd?: string | null;
+            /** Share Bps */
+            share_bps: number;
+            /** Shortfall Usd */
+            shortfall_usd?: string | null;
+            /** Still Claimed Usd */
+            still_claimed_usd?: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
         };
         /**
          * MonteCarloConfig
@@ -32040,6 +32202,40 @@ export interface operations {
             };
         };
     };
+    read_account_money_scoped_api_brokers__broker__accounts__account_id__money_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountMoneyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post: {
         parameters: {
             query?: never;
@@ -34832,6 +35028,41 @@ export interface operations {
                 "application/json": Record<string, never> | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_account_money_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__money_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

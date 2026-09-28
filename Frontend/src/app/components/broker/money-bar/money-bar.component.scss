@@ -1,0 +1,164 @@
+:host {
+  display: block;
+  --money-bar-height: 24px;
+}
+
+:host([data-size='home']) {
+  --money-bar-height: 36px;
+}
+
+:host([data-size='row']) {
+  --money-bar-height: 8px;
+}
+
+:host([data-size='mini']) {
+  --money-bar-height: 6px;
+}
+
+.money-bar__track {
+  display: flex;
+  gap: 2px;
+  height: var(--money-bar-height);
+}
+
+/* Width is the backend's basis points as flex-grow over a zero basis: exact
+   proportions with no arithmetic here. The minimum keeps a 1 bp slice
+   visible. */
+.money-bar__slice {
+  display: flex;
+  flex: 0 1 0;
+  min-width: 3px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+:host([data-size='row']) .money-bar__slice,
+:host([data-size='mini']) .money-bar__slice {
+  border-radius: 2px;
+}
+
+.money-bar__part {
+  flex: 0 1 0;
+  min-width: 0;
+}
+
+.money-bar__part--shares,
+.money-bar__swatch.money-bar__slice--bot {
+  background: var(--money-bar-hue);
+}
+
+.money-bar__part--pending {
+  background:
+    repeating-linear-gradient(135deg, var(--money-bar-hue) 0 3px, transparent 3px 7px),
+    color-mix(in srgb, var(--money-bar-hue) 22%, var(--bg-sunken));
+}
+
+.money-bar__part--free {
+  background: color-mix(in srgb, var(--money-bar-hue) 30%, var(--bg-sunken));
+}
+
+.money-bar__slice--stopped {
+  background: repeating-linear-gradient(135deg, var(--text-muted) 0 4px, var(--border-light) 4px 8px);
+}
+
+.money-bar__slice--outside {
+  background: radial-gradient(var(--text-subtle) 1px, transparent 1.5px) 0 0 / 5px 5px, var(--border-light);
+}
+
+.money-bar__slice--charges {
+  background: var(--text-muted);
+}
+
+/* Sale proceeds on their way into cash: upright pinstripes, unlike any other
+   kind's pattern, so the slice is never told apart by colour alone. Sky is a
+   registered chart-series token, >= 3:1 on the surface
+   (chart-series-color-tokens.spec.ts). */
+.money-bar__slice--settling {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--chart-series-sky) 0 2px,
+    color-mix(in srgb, var(--chart-series-sky) 35%, var(--bg-sunken)) 2px 5px
+  );
+}
+
+.money-bar__slice--new {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--accent) 0 7px,
+    color-mix(in srgb, var(--accent) 55%, var(--bg-sunken)) 7px 14px
+  );
+  box-shadow: inset 0 0 0 1px var(--accent-text);
+}
+
+.money-bar__slice--free {
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-sunken);
+}
+
+.money-bar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.money-bar__legend--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.money-bar__entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.money-bar__swatch {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.money-bar__name {
+  font-family: var(--font-mono);
+}
+
+.money-bar__amount {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.money-bar__parts {
+  flex-basis: 100%;
+  padding-left: calc(12px + var(--space-2));
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+}
+
+.money-bar__notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.money-bar__note--shortfall {
+  color: var(--text-primary);
+  font-weight: 600;
+}

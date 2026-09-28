@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
+import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
 import { BrokerV2PanelService, type DeployBotBody, type DeploymentBudgetPreview } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBudgetReviewComponent } from './deploy-budget-review.component';
 
@@ -109,6 +110,22 @@ describe('deployment budget review', () => {
     await screen.findByText('Risk limits changed. Refresh and review these dollars again.');
     expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('617.28');
     expect(reviewed.mock.calls.at(-1)?.[0]).toBeNull();
+  });
+
+  it('says an amount the backend refused as a refusal, and never counts it as reviewed', async () => {
+    const { previewBudget, reviewed } = await setup();
+    previewBudget.mockResolvedValueOnce({
+      ...FACTS, state: 'unavailable', detail: 'Only $1234.56 is unreserved. Choose a smaller budget or resolve existing claims.',
+      review_token: null, money_after: fakeAccountMoney(),
+    });
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('Only $1234.56 is unreserved. Choose a smaller budget or resolve existing claims.');
+    expect(screen.queryByText(/Reviewed budget:/)).toBeNull();
+    expect(reviewed.mock.calls.at(-1)?.[0]).toBeNull();
+    expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('5000');
   });
 
   it('re-checks a price wait on its own until the IBKR quote arrives, then stops', async () => {

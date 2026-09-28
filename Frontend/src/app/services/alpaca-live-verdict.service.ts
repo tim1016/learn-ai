@@ -54,29 +54,42 @@ interface RosterResult {
  * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
  * everywhere it is named. */
 export interface LaneModeChip {
-  readonly tone: 'paper' | 'live' | 'shadow' | 'undetermined';
+  readonly tone: 'paper' | 'live' | 'shadow' | 'reading' | 'undetermined';
   readonly mode: string;
 }
 
+/** The one wording of each account world (PRD #2560 D4): every surface that
+ * names a lane's mode says it exactly this way. */
+export const LANE_MODE_WORDING = {
+  paper: 'PAPER · practice money',
+  live: 'LIVE · real money',
+  shadow: 'SHADOW · simulated fills on your live account',
+} as const;
+
 /** Project one lane's verdict state into its compact chip form.
  *
- * A verdict that is unread, failed, or `unknown` renders the loud
- * undetermined treatment and *says the real-money assumption in its own
- * text* (decision D2, #2110/#2139 — the same fail-closed stance as the
- * pills; grey or neutral "not configured" wording is banned). The verdict
- * stays the only truth source; the chip never guesses a mode from
- * account-id shape or env (ADR 0011 §7). Shadow is the server's declared
- * simulation world, distinct from real Live custody. */
+ * Before the first read lands the chip says only that it is reading the
+ * mode (hurdle H4): a routine cold load of a Paper account must not read
+ * as a real-money warning. A verdict that failed or came back `unknown`
+ * renders the loud undetermined treatment and *says the real-money
+ * assumption in its own text* (decision D2, #2110/#2139 — the same
+ * fail-closed stance as the pills). The verdict stays the only truth
+ * source; the chip never guesses a mode from account-id shape or env
+ * (ADR 0011 §7). Shadow is the server's declared simulation world,
+ * distinct from real Live custody. */
 export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
   const verdict = state.verdict;
   switch (verdict?.final_verdict) {
     case 'paper':
-      return { tone: 'paper', mode: 'Paper money' };
+      return { tone: 'paper', mode: LANE_MODE_WORDING.paper };
     case 'live':
-      return { tone: 'live', mode: 'Live' };
+      return { tone: 'live', mode: LANE_MODE_WORDING.live };
     case 'shadow':
-      return { tone: 'shadow', mode: 'Shadow' };
+      return { tone: 'shadow', mode: LANE_MODE_WORDING.shadow };
     default:
+      if (verdict === null && state.lastError === null) {
+        return { tone: 'reading', mode: 'Reading account mode…' };
+      }
       return {
         tone: 'undetermined',
         mode: 'Mode unknown — assume real money',
