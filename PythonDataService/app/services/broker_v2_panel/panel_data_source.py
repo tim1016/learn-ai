@@ -13,6 +13,7 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.ibkr.config import live_artifacts_root
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
     BotControlAuthorityFacts,
     BotStatusView,
@@ -716,7 +718,18 @@ async def run_action(
     Recomputes the current panel revision (the guard the POST is checked
     against), then delegates to the execution service. Identity is the
     configured ``operator_identity`` — never a request field.
+
+    ``sid`` reaches the durable panel-action receipt path, so the canonical
+    instance-id pattern is enforced here — the one funnel every action
+    ``sid`` crosses (direct panel posts and cohort legs alike) — and a
+    malformed id is a clean 404, not a filesystem read. The artifact-path
+    builders apply the same pattern again; this guard is the boundary copy.
     """
+    if re.fullmatch(INSTANCE_ID_PATTERN, sid) is None:
+        raise UnknownBotError(
+            f"Bot id '{sid}' is not a valid strategy instance id.",
+            detail="Refresh the panel and retry with the bot's own commands.",
+        )
     try:
         return await _run_action_under_live_authority(
             broker, account_id, sid, request, operator_identity=operator_identity

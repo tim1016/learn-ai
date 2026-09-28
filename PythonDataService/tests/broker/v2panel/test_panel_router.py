@@ -983,6 +983,44 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
     assert second.json()["receipt_id"] == first.json()["receipt_id"]
 
 
+async def test_action_refuses_malformed_sid_before_touching_receipt_path(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed bot id is a clean 404 and never reaches the receipt path.
+
+    The durable panel-action receipt ledger keys a filesystem path by the
+    request's ``sid`` (CodeQL py/path-injection, PR #2550). The instance-id
+    guard in ``run_action`` is the boundary copy of the artifact-path
+    validators: it refuses the id before the roster or the receipt store is
+    touched. Before the guard a malformed id surfaced as a harness 500.
+    """
+    from app.services.broker_v2_panel import panel_data_source
+
+    app, _repo = api
+    seen_paths: list[Path] = []
+    real_store = panel_data_source.durable_idempotency_store_for
+
+    def spy(path: Path) -> object:
+        seen_paths.append(path)
+        return real_store(path)
+
+    monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
+    request = {
+        "action_id": "stop",
+        "revision": 1,
+        "concurrency_token": "token",
+        "idempotency_key": "malformed-sid",
+    }
+    async with _client(app) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/evil%20id/actions", json=request
+        )
+
+    assert response.status_code == 404
+    assert seen_paths == []
+
+
 async def test_live_chart_accepts_five_second_resolution(
     api,
     monkeypatch: pytest.MonkeyPatch,
