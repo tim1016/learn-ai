@@ -27,6 +27,7 @@ from app.broker.v2panel.vocabulary import (
     Phase,
     QuiesceActionId,
     ReconciliationVerdict,
+    RecordedActionId,
     StationId,
     StationState,
 )
@@ -715,17 +716,17 @@ class PanelQuiesceActionRequest(PanelActionRequest):
     action_id: QuiesceActionId  # type: ignore[assignment]
 
 
-class PanelActionResult(BaseModel):
-    """The outcome of an executed action (§11).
+class PanelActionReceipt(BaseModel):
+    """One succeeded action as a bot's durable receipt ledger holds it.
 
-    On success the caller re-polls the panel; ``applied`` distinguishes a fresh
-    application from an idempotent replay (``applied=False`` — the key was seen
-    before, the action is a no-op).
+    Read-widened: a receipt written before #2540 retired Resume, Pause and
+    Continue still decodes as history. Every new result is the narrowed
+    :class:`PanelActionResult`, so a retired id is never dispatched or returned.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    action_id: ActionId
+    action_id: RecordedActionId
     outcome: Literal["success"] = "success"
     receipt_id: str
     recorded_at_ms: int
@@ -733,6 +734,17 @@ class PanelActionResult(BaseModel):
     revision: int
     concurrency_token: str
     message: str
+
+
+class PanelActionResult(PanelActionReceipt):
+    """The outcome of an executed action (§11).
+
+    On success the caller re-polls the panel; ``applied`` distinguishes a fresh
+    application from an idempotent replay (``applied=False`` — the key was seen
+    before, the action is a no-op).
+    """
+
+    action_id: ActionId  # type: ignore[assignment]
 
 
 class PanelActionErrorResponse(BaseModel):

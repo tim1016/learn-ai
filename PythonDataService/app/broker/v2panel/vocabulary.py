@@ -153,6 +153,12 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "open_custody_timeline",
 )
 
+# Retired with Pause, Continue and Resume (#2540): no request, performer or
+# presented action can name them, but a bot's durable receipt ledger written
+# before then still does, so ledger reads widen to them and writes never do.
+RetiredActionId = Literal["resume", "pause", "continue"]
+RecordedActionId = Literal[ActionId, RetiredActionId]
+
 # The closed set of action ids the Trader banner may ever reference as its
 # primary command (issue #1665, ADR 0027 audience-aware selection). Every
 # other action id — recovery capabilities, ``retire``,
