@@ -73,3 +73,29 @@ def test_recorded_fill_fee_is_not_added_to_separate_account_claim() -> None:
     )
     before = account_budget(cash=1000, deployments=[a], order_claims=D("600.03"), fee_claims=D(0))
     assert before.available == 0
+
+
+def test_entry_affordability_uses_exact_position_and_fee_not_positive_free_cash() -> None:
+    from app.broker.alpaca.clerk.budgets import budget_entry_decision
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+
+    own = deployment_budget(strategy_instance_id="a", committed_cents=1, active=True,
+        realized_gross=0, fees=D(0), position_cost=D(0), pending_orders=D(0))
+    pool = account_budget(cash=1000, deployments=[own], order_claims=D(0), fee_claims=D(0))
+    result = budget_entry_decision(pool, strategy_instance_id="a", quantity=1, price=100, at_ms=NOON)
+    assert not result.allowed
+    assert result.required == D("100.01") and result.fee_cents == 1
+    assert "0.01 USD free" in result.detail
+
+
+def test_affordability_copy_rounds_required_cash_up_and_spendable_cash_down() -> None:
+    from app.broker.alpaca.clerk.budgets import budget_entry_decision
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+
+    own = deployment_budget(strategy_instance_id="a", committed_cents=10_001, active=True,
+        realized_gross="0.0009", fees=D(0), position_cost=D(0), pending_orders=D(0))
+    pool = account_budget(cash=1000, deployments=[own], order_claims=D(0), fee_claims=D(0))
+    result = budget_entry_decision(pool, strategy_instance_id="a", quantity=1, price="100.001", at_ms=NOON)
+    assert not result.allowed
+    assert result.required == D("100.011")
+    assert "needs 100.02 USD" in result.detail and "100.01 USD free" in result.detail

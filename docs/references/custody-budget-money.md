@@ -65,3 +65,14 @@ assertions use zero tolerance. These tests do not claim complete UI delivery.
 `sqlite/test_budget_claims.py` additionally proves manual cash overlap,
 missing terminal executions, partial-fill fee replacement and same-symbol
 interleaved deployment FIFO through correction and Stop.
+
+Budget readiness and actual ENTER use `budgets.py::budget_entry_decision` to
+price the immutable next position plus the canonical BUY fee provision, compare
+it with its own free budget, and recheck cash against all other claims. Positive
+free cash is insufficient by itself: a one-cent remainder cannot fund a $100
+position whose exact requirement is $100.01. Read-only panel risk uses
+`risk_admission.current_risk_readiness`, the same judgement wrapped by the
+commit-time writer. Repeated GETs neither withdraw an observation nor append a
+loss hold. The panel labels these budget/account-risk checks explicitly; it does
+not promise strategy, session or broker execution permission. Regressions:
+`test_budgets.py`, `test_risk_fee_evidence.py`, `v2panel/test_budget_deploy.py`.

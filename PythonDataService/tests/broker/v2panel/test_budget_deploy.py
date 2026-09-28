@@ -99,3 +99,61 @@ async def test_recovery_returns_committed_outcome_even_after_evidence_expires(au
 def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
     with pytest.raises(ValidationError):
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
+
+
+def _committed_view(authority: tuple) -> tuple:
+    repo, runtime, snapshot = authority
+    terms = _request().exit_terms.seal()
+    config = {"symbol": "SPY", "quantity": 1}
+    from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+    repo.register_strategy_instance(strategy_instance_id="view", symbol="SPY", config_hash=canonical_sha256(config),
+        config_json=canonicalize(config), exit_terms=terms)
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(snapshot.observation)
+    runtime.envelope_sync.envelope = gate
+    submit_budgeted_deploy(repo, strategy_instance_id="view", lifecycle_run_id="view-run", world="real_paper",
+        committed_cents=20_000, configuration_hash=canonical_sha256(config), exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+        risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal("100.02"))
+    return repo, runtime, gate
+
+
+def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, runtime, gate = _committed_view(authority)
+    assert budget_deploy._budget_view(runtime, "view").entry_eligible
+    before = repo.custody_transitions()
+    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: SimpleNamespace(ask=200)))
+    view = budget_deploy._budget_view(runtime, "view")
+    assert not view.entry_eligible and "200.01 USD" in view.detail
+    assert view.free_usd == "200.00"
+    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: SimpleNamespace(ask=100)))
+    gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
+    assert not budget_deploy._budget_view(runtime, "view").entry_eligible
+    assert "account cash" in budget_deploy._budget_view(runtime, "view").detail
+    assert repo.custody_transitions() == before
+
+
+def test_budget_read_rejudges_risk_without_creating_a_hold(authority: tuple) -> None:
+    repo, runtime, gate = _committed_view(authority)
+    gate.publish(replace(gate.latest_observation(), unrealized_pl_usd=-101))
+    before = repo.custody_transitions()
+    view = budget_deploy._budget_view(runtime, "view")
+    assert not view.entry_eligible and "loss limit is breached" in view.detail
+    assert repo.custody_transitions() == before
+    assert gate.latest_observation() is not None
+
+
+def test_budget_read_requires_a_fresh_price_and_observes_existing_holds(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
+    repo, runtime, _ = _committed_view(authority)
+    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: None))
+    view = budget_deploy._budget_view(runtime, "view")
+    assert not view.entry_eligible and "fresh IBKR price" in view.detail
+    assert view.committed_usd == "200.00"
+    raise_account_hold(repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, evidence_refs=["retained-loss"], cause_facts={
+        "day_start_ms": NOON-1, "day_pnl_usd": -100, "loss_limit_usd": 100, "last_equity_usd": 1000, "observed_at_ms": NOON,
+    })
+    before = repo.custody_transitions()
+    view = budget_deploy._budget_view(runtime, "view")
+    assert not view.entry_eligible and "loss hold stands" in view.detail
+    assert repo.custody_transitions() == before

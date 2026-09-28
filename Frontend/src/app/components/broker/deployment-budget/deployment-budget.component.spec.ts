@@ -19,7 +19,17 @@ describe('deployment money evidence', () => {
     await screen.findByText('Stopped. Cancellation is still pending.');
     expect(screen.getByText('Cash released').nextElementSibling?.textContent).toBe('$389.97');
     expect(screen.getByText('Cash still claimed by orders, fills or fees').nextElementSibling?.textContent).toBe('$600.00');
-    expect(screen.getByText(/New entries unavailable/)).toBeTruthy();
+    expect(screen.getByText(/Budget or account risk unavailable/)).toBeTruthy();
+  });
+
+  it('names the readiness claim as budget and risk only', async () => {
+    await render(DeploymentBudgetComponent, { inputs: { target: TARGET, strategyInstanceId: 'active-a' },
+      providers: [{ provide: BrokerV2PanelService, useValue: { getBudget: vi.fn().mockResolvedValue({
+        ...VIEW, entry_eligible: true, detail: 'Budget and risk cover the next position. Order-time strategy and session checks still apply.',
+      }) } }] });
+    await screen.findByText(/Order-time strategy and session checks still apply/);
+    expect(screen.getByText(/Budget and account risk ready/)).toBeTruthy();
+    expect(screen.queryByText(/Entries eligible/)).toBeNull();
   });
 
   it('shows unknown amounts and refreshes for a new custody revision', async () => {

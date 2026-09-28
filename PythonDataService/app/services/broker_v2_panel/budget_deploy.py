@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal, Inexact, localcontext
 
+from pydantic import BaseModel, Field, ValidationError
+
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id, synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime, get_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
-from app.broker.alpaca.clerk.budgets import entry_requirement
+from app.broker.alpaca.clerk.budgets import budget_entry_decision, entry_requirement
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
     cents_required,
@@ -24,6 +26,8 @@ from app.broker.alpaca.clerk.money import (
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -238,7 +242,20 @@ async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
         return _budget_view(runtime, sid)
 
 
+class _EntryConfiguration(BaseModel):
+    """Only custody-sealed quantity and symbol contribute to this money read."""
+    symbol: str = Field(min_length=1)
+    quantity: int = Field(strict=True, gt=0)
+
+
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    with repo._write_lock:
+        return _fenced_budget_view(runtime, sid)
+
+
+def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
     repo = runtime.sqlite_repository
     assert repo is not None
     world = runtime.account_authority_kind
@@ -247,24 +264,46 @@ def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
         return DeploymentBudgetView(state="legacy", detail="This earlier deployment has no budget. Stop and reconcile it, then review a fresh Deploy.", strategy_instance_id=sid, world=world)
     try:
         sync = runtime.envelope_sync
-        observation = None if sync is None else sync.risk_snapshot().observation
-        if observation is None:
+        if sync is None:
             raise BudgetUnavailable("Wait for fresh account cash and risk evidence. The original commitment is retained.")
+        risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+        observation = sync.envelope.fresh_observation(repo.clock())
+        if observation is None:
+            raise BudgetUnavailable(risk.detail)
         projected = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
         own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
+        eligible, detail = False, risk.detail
+        if risk.allowed:
+            capability = admit_new_exposure(repo, strategy_instance_id=sid)
+            if not capability.allowed:
+                detail = capability.why or "Resolve this deployment's custody hold before entering again."
+            else:
+                config = repo.bot_config(sid)
+                if config is None:
+                    raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
+                terms = _EntryConfiguration.model_validate_json(config.config_json)
+                quote = get_market_liveness_store().top_of_book(symbol=terms.symbol, now_ms=repo.clock())
+                if quote is None:
+                    detail = "Wait for a fresh IBKR price to judge the next position's cost."
+                else:
+                    decision = budget_entry_decision(projected, strategy_instance_id=sid,
+                        quantity=terms.quantity, price=quote.ask, at_ms=repo.clock())
+                    eligible, detail = decision.allowed, decision.detail
+                    if eligible:
+                        detail += " Account risk is current. Order-time strategy, session and execution checks still apply."
         with money_context():
             return DeploymentBudgetView(
-                state="ready", detail="Budget remains attributed to this deployment. Stop does not mean flat or fully settled.",
+                state="ready", detail=detail,
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
                 realized_gross_usd=display_dollars(own.realized_gross), fees_usd=display_dollars(own.fees),
                 position_cost_usd=display_dollars(own.position_cost), pending_orders_usd=display_dollars(own.pending_orders),
                 outstanding_cash_usd=display_dollars(own.outstanding_cash),
                 free_usd=dollars(own.spendable_cents), released_usd=dollars(max(0, cents_spendable(own.free))) if not own.active else "0.00",
                 shortfall_usd=dollars(cents_required(max(Decimal(0), -own.free))),
-                entry_eligible=own.active and own.free > 0 and projected.available >= 0,
+                entry_eligible=eligible,
                 observed_at_ms=observation.observed_at_ms,
             )
-    except (BudgetUnavailable, MoneyInputError) as exc:
+    except (BudgetUnavailable, MoneyInputError, RateNotPinnedError, ValidationError) as exc:
         return DeploymentBudgetView(state="unavailable", detail=str(exc), strategy_instance_id=sid, world=world, committed_usd=dollars(row["committed_cents"]))
 
 

@@ -17,6 +17,7 @@ from decimal import Decimal, Inexact, localcontext
 
 from app.broker.alpaca.clerk.money import (
     ZERO,
+    cash_admits,
     cents_required,
     cents_spendable,
     money_context,
@@ -116,3 +117,33 @@ def entry_requirement(*, quantity: object, price: object, at_ms: int) -> tuple[D
             settlement.traps[Inexact] = False
             fee = settle_session([prediction]).total
         return cost + fee, cents_required(fee)
+
+
+@dataclass(frozen=True)
+class BudgetEntryDecision:
+    allowed: bool
+    required: Decimal
+    fee_cents: int
+    detail: str
+
+
+@money_context()
+def budget_entry_decision(account: AccountBudget, *, strategy_instance_id: str, quantity: object, price: object, at_ms: int) -> BudgetEntryDecision:
+    """The same exact next-position cash rule for commitment and its read view.
+
+    Required dollars include the canonical BUY fee provision. Other active
+    deployments retain their positive free claims; this deployment spends its
+    own claim once. Cash projections already own order/fill/fee overlap.
+    """
+    required, fee_cents = entry_requirement(quantity=quantity, price=price, at_ms=at_ms)
+    required_display = Decimal(cents_required(required)) / 100
+    own = next((item for item in account.deployments if item.strategy_instance_id == strategy_instance_id), None)
+    if own is None or not own.active:
+        return BudgetEntryDecision(False, required, fee_cents, "This deployment is stopped. Review a fresh Deploy before creating new exposure.")
+    if required > own.free:
+        return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; this deployment has {Decimal(cents_spendable(own.free)) / 100:.2f} USD free.")
+    with money_context():
+        claims = account.active_free_claims - own.cash_claim + account.order_claims + account.fee_claims
+        if not cash_admits(cash=account.cash, claims=claims, required=required):
+            return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; account cash after other claims is {Decimal(cents_spendable(account.cash - claims)) / 100:.2f} USD.")
+    return BudgetEntryDecision(True, required, fee_cents, f"Current budget and cash cover the next position's estimated {required_display:.2f} USD including fees.")
