@@ -2,9 +2,12 @@
  * live directory read is a live defect, not a latent one. This spec is the
  * guard: no non-spec source may mint a command from a directory lookup.
  *
- * Falsifiability: run against a pre-Task-3 checkout of this branch and it
- * must list `bot-panel-shell.component.ts`, `bots-list-page.component.ts`
- * and `bot-gallery-page.component.ts` as offenders — see
+ * Falsifiability: delete the `freezeLaneFence(` call from
+ * `alpaca-home.component.ts` or `bot-panel-shell.component.ts` and this spec
+ * lists that file as an offender. Against the pre-Task-3 checkout of the
+ * #2068 branch it listed `bot-panel-shell.component.ts` and that era's roster
+ * and gallery pages (`bots-list-page.component.ts`,
+ * `bot-gallery-page.component.ts`, since retired by PRD #2560) — see
  * `docs/references/reconciliations` note for the exact command and output,
  * or the PR body for #2068.
  *
@@ -25,10 +28,10 @@ const APP_ROOT = join(__dirname, '..');
  * command (`withCommand(`) and reads the live directory
  * (`fleetDirectory.lane(` / `fleet.lane(`) also freezes it first
  * (`freezeLaneFence(`) before that read reaches `withCommand(` — whether via
- * the `linkedSignal` + `untracked()` + eager-`effect()` pattern (the panel,
- * the roster, the gallery) or a `computed()` frozen once at action-open and
- * never re-read for the command (`CohortDrawerPresentation`, shared by the cohort
- * archive and flatten drawers).
+ * the shared `openLaneFence` helper's `linkedSignal` + `untracked()` +
+ * eager-`effect()` pattern (the bot panel shell and Home) or a `computed()`
+ * frozen once at action-open and never re-read for the command
+ * (`CohortDrawerPresentation`, behind the cohort flatten drawer).
  *
  * A future entry here needs the same proof this comment demands: a real,
  * audited reason the fence cannot be frozen in that file, with a one-line

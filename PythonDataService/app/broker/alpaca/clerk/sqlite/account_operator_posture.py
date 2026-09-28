@@ -43,9 +43,12 @@ from app.schemas.operator_blocker import (
     OperatorMove,
 )
 
-# The account_desk anchor is a stable string the Alpaca operator lens
-# recognizes to open its in-place Clerk recovery panel (see
-# alpaca-operator-lens.component.ts `onBlockerMoveRequested`).
+# The account_desk anchor: a stable string naming the in-place Clerk recovery
+# panel (Frontend mirror: `ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR`). The Overview
+# operator lens that dispatched it was retired by PRD #2560; the panel now
+# lives in Activity's order records
+# (`alpaca-desk/activity/alpaca-activity-records.component.html`), where Home's
+# attention lines route, and no current surface dispatches this anchor.
 ACCOUNT_DESK_RECOVERY_ANCHOR = "account-desk-clerk-recovery"
 
 _ACCOUNT_DESK_CLERK_ANCHOR = OperatorBlockerAnchor(kind="clerk", subject_key=None)
