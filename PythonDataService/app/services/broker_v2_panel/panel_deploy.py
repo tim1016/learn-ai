@@ -58,6 +58,7 @@ from app.services.broker_v2_panel.deploy_submissions import (
 )
 from app.services.broker_v2_panel.panel_errors import (
     AccountMismatchError,
+    PanelDataError,
     PanelRunnerError,
     PanelUnavailableError,
     UnknownBotError,
@@ -234,12 +235,28 @@ def _runner() -> BotTaskRegistry:
 #: these, named or not.
 _SENDING: dict[str, DeploySubmission | None] = {}
 
-#: The two refusals that settle nothing about a key's first Deploy — a second
-#: copy while it is being sent, and the key resent with other settings. A
-#: client keeps the key and reads its recorded outcome rather than treating
-#: either as "not deployed" and starting a second bot under a new key.
+#: A second copy of a Deploy while it is being sent, and a key resent with
+#: other settings. Like every refusal not marked ``submission_settled``, each
+#: leaves the key's first Deploy to its recovery read.
 SUBMISSION_IN_FLIGHT = "deploy_submission_in_flight"
 SUBMISSION_SETTINGS_CONFLICT = "deploy_submission_settings_conflict"
+
+
+def _settled(error: PanelDataError) -> PanelDataError:
+    """Mark a Deploy refusal as settling its key (``PanelDataError.submission_settled``)."""
+    error.submission_settled = True
+    return error
+
+
+@contextmanager
+def _refusals_settle_the_key(nothing_started: bool) -> Iterator[None]:
+    """A refusal raised inside settles the key when nothing under it can have started."""
+    try:
+        yield
+    except PanelDataError as exc:
+        if nothing_started:
+            _settled(exc)
+        raise
 
 
 @contextmanager
@@ -306,7 +323,9 @@ def _claim_bot_name(
     except DeploySubmissionConflict as exc:
         raise _settings_conflict(exc) from exc
     except BotNameUnavailable as exc:
-        raise _unnamed(exc) from exc
+        # No name was published under the key, and the only claim it can hold
+        # is one read as never committed: nothing under it started.
+        raise _settled(_unnamed(exc)) from exc
 
 
 async def _committed_receipt(account_id: str, claim: DeploySubmission) -> BudgetDeployCommandReceipt | None:
@@ -329,6 +348,11 @@ async def deploy_alpaca_paper_bot(
     Deploy has passed, immediately before the commit: a Deploy refused and
     retried later is named from the retry's minute (the refused attempt's
     name stays burned).
+
+    Only a refusal raised before the claim, while nothing under the key can
+    have started, is marked ``submission_settled``: before that, the key's
+    earlier Deploy is not yet read; after it, the bot has a name and the
+    commit may have begun.
     """
     registry = _runner()
     ledger = DeploySubmissionLedger(registry.artifacts_root)
@@ -338,12 +362,16 @@ async def deploy_alpaca_paper_bot(
             existing = await _committed_receipt(account_id, earlier)
             if existing is not None:
                 return existing
-        view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-        resolved_params = _require_alpaca_deploy_request(view, request)
-        try:
-            consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
-        except BudgetUnavailable as exc:
-            raise budget_deploy.budget_error(exc) from exc
+        # The key named no bot yet, or its bot was just read as never
+        # committed. A budget-less Deploy has no commit to read, so its
+        # earlier bot may have started.
+        with _refusals_settle_the_key(earlier is None or request.budget is not None):
+            view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+            resolved_params = _require_alpaca_deploy_request(view, request)
+            try:
+                consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
+            except BudgetUnavailable as exc:
+                raise budget_deploy.budget_error(exc) from exc
         # A budget-less (pre-budget) Deploy has no commit to read, so its
         # key keeps the name it was first given and the runner's own
         # identity fences judge a resend.

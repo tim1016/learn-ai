@@ -369,12 +369,15 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
         "next_action",
         "admission",
         "reason_code",
+        "submission_settled",
     }
     assert detail["outcome"] == "conflict"
     assert detail["receipt_id"] is None
     assert detail["recorded_at_ms"] > 0
     assert "not currently selectable" in detail["message"]
     assert detail["admission"] is None
+    # A preview sends no submission, so it settles none.
+    assert detail["submission_settled"] is False
 
 
 @pytest.mark.asyncio

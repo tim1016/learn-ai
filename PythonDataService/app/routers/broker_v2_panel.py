@@ -172,6 +172,10 @@ def _raise_alpaca_deploy_error(error: panel_errors.PanelDataError) -> NoReturn:
             "reason_code": (
                 error.reason_code if isinstance(error, panel_errors.PanelRunnerError) else None
             ),
+            # Only a Deploy refusal the backend proves started nothing under
+            # its submission key frees the client to use a new key; every
+            # other answer keeps it for the recovery read.
+            "submission_settled": error.submission_settled,
         },
     ) from error
 
