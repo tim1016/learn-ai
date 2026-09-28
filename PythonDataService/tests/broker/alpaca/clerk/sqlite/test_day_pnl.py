@@ -29,6 +29,8 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, TODAY_OPEN, YESTERDAY_NOON
 
+pytestmark = pytest.mark.usefixtures("day_pnl_fees")
+
 # The ledger these tests judge -- the seeded fixtures, the two builders and the
 # clocked authority -- lives in ``conftest`` because the envelope sync suite
 # judges the same one (ADR 0059 D4).
@@ -66,7 +68,7 @@ def test_realized_counts_only_lots_closed_today_and_nets_reported_fees(
     pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=25.0), now_ms=NOON)
     assert (pnl.day_start_ms, pnl.day_end_ms) == et_day_window_ms(NOON)
     assert pnl.realized_usd == pytest.approx(100.0)
-    assert pnl.fee_usd == pytest.approx(0.05) and pnl.fee_fidelity == "reported"
+    assert pnl.fee_usd == pytest.approx(0.05) and pnl.fee_fidelity == "observed"
     assert pnl.unrealized_usd == 25.0
     assert pnl.total_usd == pytest.approx(124.95)
     assert pnl.known
@@ -109,12 +111,12 @@ def test_an_external_order_seen_today_makes_the_fact_unknown(
     assert pnl.execution_coverage == "incomplete"
 
 
-def test_an_external_order_seen_yesterday_does_not(
+def test_an_external_fill_without_complete_population_stays_unknown_after_rollover(
     day_pnl_repo: ClerkSqliteRepository,
     seeded_external_order_yesterday: None,
     reader: SqliteEconomicProjectionReader,
 ) -> None:
-    assert day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON).known
+    assert not day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON).known
 
 
 def test_net_cash_spent_is_buys_less_sells_over_every_subject(
@@ -123,13 +125,16 @@ def test_net_cash_spent_is_buys_less_sells_over_every_subject(
     assert reader.account_net_cash_spent_usd() == pytest.approx(1_000.0 - 1_100.0)
 
 
-def test_unreported_fees_net_nothing_and_say_so(
+def test_unreported_fees_use_the_canonical_provision(
     day_pnl_repo: ClerkSqliteRepository,
     seeded_round_trip_without_fees: None,
     reader: SqliteEconomicProjectionReader,
 ) -> None:
     pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
-    assert pnl.fee_usd == 0.0 and pnl.fee_fidelity == "not_reported"
+    # SELL $1100: SEC 0.0000206*1100 -> 0.03; TAF 0.000195*10 -> 0.01; CAT -> 0.01.
+    assert pnl.fee_usd == pytest.approx(0.05, abs=1e-9, rel=0)
+    assert pnl.fee_fidelity == "estimated"
+    assert pnl.total_usd == pytest.approx(99.95, abs=1e-9, rel=0)
 
 
 def _unfoldable_foreign_order(

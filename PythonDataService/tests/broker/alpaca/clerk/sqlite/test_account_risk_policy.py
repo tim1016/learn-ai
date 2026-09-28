@@ -14,7 +14,7 @@ from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.contract.models import BrokerAccountSnapshot
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, complete_fee_evidence
 from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
 
 RiskContext = tuple[ClerkSqliteRepository, LiveEnvelopeSync, _Read, _TestClock]
@@ -32,6 +32,7 @@ def _hold(repo: ClerkSqliteRepository) -> dict | None:
 async def risk_context(tmp_path: Path) -> AsyncIterator[RiskContext]:
     clock = _TestClock(NOON)
     repo = ClerkSqliteRepository.initialize(account_id="PA-RISK", artifacts_root=tmp_path, clock=clock)
+    complete_fee_evidence(repo)
     read = _Read(unrealized=-150)
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     sync = LiveEnvelopeSync(repo=repo, read=read, envelope=gate)
@@ -114,6 +115,7 @@ async def test_rollover_keeps_original_window_and_baseline(risk_context: RiskCon
 async def test_restarted_and_rebuilt_authority_preserves_policy_and_hold(tmp_path: Path) -> None:
     clock = _TestClock(NOON)
     repo = ClerkSqliteRepository.initialize(account_id="PA-RISK", artifacts_root=tmp_path, clock=clock)
+    complete_fee_evidence(repo)
     sync = LiveEnvelopeSync(repo=repo, read=_Read(unrealized=-150), envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
     await sync.observe()
     sync.apply_risk_policy(_policy(), expected_revision=0)
@@ -194,6 +196,7 @@ async def test_explicit_new_session_clear_releases_realized_loss_only_after_obli
         async def list_orders(self, *, status: str, limit: int) -> list[BrokerOrder]:
             return []
 
+    complete_fee_evidence(day_pnl_repo)
     accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="loss-before-clear")
     for identity, side, price in (("buy-loss", "BUY", 100), ("sell-loss", "SELL", 80)):
         _append_day_pnl_slice(day_pnl_repo, accepted, execution_id=identity, side=side,
@@ -206,6 +209,7 @@ async def test_explicit_new_session_clear_releases_realized_loss_only_after_obli
         assert original_hold is not None
         day_pnl_clock.advance(86_400_000)
         day_pnl_repo.revive_execution_lease()
+        complete_fee_evidence(day_pnl_repo)
         reading, quiet = await sync.observe_loss_clearance()
         assert reading.day_pnl.total_usd == 0
         assert sync.clear_observed_loss_hold(reading, quiet=quiet)[0] == "held"

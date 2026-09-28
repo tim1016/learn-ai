@@ -209,3 +209,15 @@ Immutable per-instance ExitTerms remain the sole exit pricing authority; risk
 changes do not replace working orders or mutate those seals. This amendment
 supersedes the loss-limit and exit-pricing claims in Decision 4 wherever they
 conflict with #2543 and ADR 0045's immutable ExitTerms.
+
+Risk consumes the canonical dated fee projection (#2542), including estimated
+provisions until observed charges replace them. Missing or stale fee evidence,
+incomplete execution coverage and unknown marks make P&L unknown, never zero.
+Applying a valid policy still commits it, but its receipt remains unready when
+such evidence is missing. ENTRY and budget commitment rejudge custody P&L under
+the same writer fence using the fresh broker observation; a cadence snapshot
+cannot authorize spending after new fee or execution evidence changes the risk.
+The observation carries the execution watermark taken before the broker read.
+New execution/correction evidence invalidates its unrealized mark until another
+coherent read, preventing closed P&L from being counted twice. These checks
+never prevent custody from recording executions or reducing risk.

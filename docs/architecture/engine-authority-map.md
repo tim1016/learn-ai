@@ -281,3 +281,9 @@ the same FIFO projection. Explicit clearance requires both current and retained
 limits. Profile drafts, legacy arming seals and per-instance ExitTerms do not
 replace this effective account policy. See ADR 0060’s dated amendment and
 `tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py`.
+
+Risk commitment checks (`sqlite/risk_admission.py`) consume the same canonical
+`day_pnl.py` and dated `custody_fee_attribution`, rejudging fees and coverage
+inside the custody coordinator immediately before ENTER or budget commitment.
+Unknown totals cannot admit spending. This introduces no alternate P&L or fee
+engine and does not block custody evidence or risk-reducing operations.

@@ -547,9 +547,10 @@ so they survive a broker change.
 - **Effective account risk policy** — the loss limits explicitly applied to the
   account. Draft edits have no effect; existing bot exit terms remain fixed.
 - **Day P&L** — Clerk-projected realized session P&L plus broker-observed
-  unrealized P&L. It is unknown, not zero, when an external order was seen
-  today, when the broker reports no previous-close equity, or when marks are
-  incomplete.
+  unrealized P&L, minus the canonical dated observed or estimated fees. It is
+  unknown, never zero, when execution coverage, fee population, fee evidence,
+  previous-close equity or marks are incomplete. A retained loss period uses
+  the same projection without discarding prior-session charges.
 - **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
   equities. Fees the broker charged are the truth; the schedule predicts them.
   _Avoid_: commission, trading fee, broker fee

@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.live_envelope import (
 )
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
-from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at
+from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.facts import LossHoldClearBasis
 from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation, _custody_flat, observe_account_quiet
@@ -245,6 +245,7 @@ class LiveEnvelopeSync:
         # that the answer predated, and a second ENTER spent the same cash
         # (#2441).
         observed_at_ms = self._repo.clock()
+        fill_sequence = risk_fill_sequence(self._repo)
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
@@ -267,6 +268,7 @@ class LiveEnvelopeSync:
             last_equity_usd=account.last_equity,
             unrealized_pl_usd=unrealized_pl_usd,
             position_count=len(positions),
+            risk_fill_sequence=fill_sequence,
         )
         with self._repo._write_lock:
             return self._evaluate_observation(observation, now_ms=returned_at_ms)
@@ -296,6 +298,10 @@ class LiveEnvelopeSync:
                 values, last_equity_usd=observation.last_equity_usd,
             ),
         )
+        if reading.day_pnl is not None and observation.risk_fill_sequence != risk_fill_sequence(self._repo):
+            # The position answer may precede a lot closure already included
+            # in realized P&L. Never combine those incompatible snapshots.
+            reading = replace(reading, day_pnl=replace(reading.day_pnl, execution_coverage="incomplete"))
         if reading.breached is False:
             self.envelope.publish(observation)
         else:

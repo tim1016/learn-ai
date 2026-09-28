@@ -64,7 +64,7 @@ def _unjudgeable_detail(reading: EnvelopeReading) -> str:
             "The hold stands."
         )
     return (
-        "Day P&L is unknown (an external order was seen today, or the broker "
+        "Day P&L is unknown (fees or execution coverage are incomplete, an external order was seen today, or the broker "
         "reported no previous-close equity, or a risk figure the broker "
         "reported was not a finite number). The hold stands."
     )

@@ -472,6 +472,9 @@ async def test_an_armed_live_instances_enter_passes_all_three_gates_and_reaches_
     """Consequence 7: the slice after which a real order is possible — and this is that order."""
     runtime, broker = live_runtime
     bar, seal_hash = registered_live_bot
+    from tests.broker.alpaca.clerk.sqlite.conftest import complete_fee_evidence
+
+    complete_fee_evidence(runtime.sqlite_repository)
     _arm(tmp_path, seal_hash)
     assert runtime.envelope_sync is not None and runtime.sqlite_repository is not None
     await runtime.envelope_sync.tick()

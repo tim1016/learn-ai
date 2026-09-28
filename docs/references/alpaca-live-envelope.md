@@ -400,7 +400,8 @@ staying transient at the runner.
 
 The effective loss policy is now the last explicit account risk Apply in Clerk
 custody; the original profile/arming payloads remain historical. The loss formula
-is unchanged. A held period is evaluated with the same canonical FIFO projection,
+now consumes the single dated fee projection, including estimated provisions;
+unknown fees or incomplete execution coverage make the total unknown. A held period is evaluated with the same canonical FIFO projection,
 from the hold's recorded session start through the fresh observation, using its
 original dollar limit. Same-session clearance requires recovery. A later-session
 explicit clearance additionally proves all prior obligations resolved using the
@@ -416,3 +417,14 @@ that session yields 100 USD realized and, with a 25 USD current unrealized mark,
 absolute tolerance 1e-9, relative tolerance zero to the existing float FIFO.
 Policy revision, apply/clear races, unknown facts, rollover, restart and mirror
 rebuild are tested in `tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py`.
+
+`test_risk_fee_evidence.py` independently pins the fee/risk joins: a 100,000-share
+BUY owes 100,000 × 0.000003 = 0.30 USD CAT, so 99.80 USD gross loss breaches a
+100 USD cap after the provision. A 10-share SELL at 110 USD has rounded SEC
+0.03, TAF 0.01 and CAT 0.01, total 0.05 USD. A later 0.10 USD dated observed
+settlement replaces that provision exactly once in the retained window, giving
+100 − 0.10 = 99.90 USD; a new day has zero of that prior-day result. Fee amounts
+come from the pinned regulatory schedule and sole fee attribution authority;
+this join uses `atol=1e-9, rtol=0` solely for the existing float FIFO boundary.
+Missing/stale fees, cumulative-only executions and new evidence after a healthy
+risk tick cannot admit new exposure.

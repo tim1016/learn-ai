@@ -64,6 +64,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _clock_at,
     _register_active,
     _TestClock,
+    complete_fee_evidence,
 )
 
 # The trailing-fill timeline: terminal ack, then the cash observation, then the
@@ -174,8 +175,8 @@ def _rewind_to_v12(db_path: Path) -> None:
 def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
     envelope_repo: ClerkSqliteRepository,
 ) -> None:
-    assert schema.SCHEMA_VERSION == 20
-    assert envelope_repo.control_meta_snapshot().schema_version == 20
+    assert schema.SCHEMA_VERSION >= 20
+    assert envelope_repo.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
     assert (
         envelope_repo._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
@@ -220,7 +221,7 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clo
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
     try:
-        assert reopened.control_meta_snapshot().schema_version == 20
+        assert reopened.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
         assert (
             reopened._conn.execute(
                 "SELECT name FROM sqlite_master "
@@ -293,6 +294,7 @@ def test_the_reservation_never_enters_the_hash_chain(
             account_id=ACCOUNT_ID, artifacts_root=tmp_path / name, clock=envelope_clock
         )
         try:
+            complete_fee_evidence(clerk)
             _register_active(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
             accept_enter(
                 clerk,

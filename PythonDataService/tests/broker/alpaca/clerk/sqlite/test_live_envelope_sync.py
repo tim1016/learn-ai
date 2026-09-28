@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
     LIVE_ENVELOPE_CASH_EXCEEDED,
+    LIVE_ENVELOPE_UNOBSERVED,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
     LiveEnvelopeGate,
@@ -46,6 +47,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _accept_day_pnl_enter,
     _append_day_pnl_slice,
     _TestClock,
+    complete_fee_evidence,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
@@ -133,6 +135,7 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
         simulated: bool = True,
         **loop: Any,
     ) -> LiveEnvelopeSync:
+        complete_fee_evidence(repository)
         sync = LiveEnvelopeSync(
             repo=repository,
             read=read,
@@ -276,7 +279,7 @@ async def test_an_unknown_fact_raises_nothing(
     assert record.last_equity_known is True
     assert record.external_orders_today == 1
     assert record.execution_coverage == "incomplete"
-    assert record.fee_fidelity == "reported"
+    assert record.fee_fidelity == "unknown"
 
 
 async def test_a_missing_last_equity_is_unknown(
@@ -525,7 +528,7 @@ def _fill_all_ten(
     repo: ClerkSqliteRepository, clock: _TestClock, accepted: EnterSubmission
 ) -> Callable[[], None]:
     return lambda: _append_slice(
-        repo, accepted, execution_id="exec-mid-read", quantity=10, source_event_at_ms=clock()
+        repo, accepted, execution_id="exec-mid-read", quantity=10, source_event_at_ms=clock(), fee=0.0
     )
 
 
@@ -572,7 +575,7 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     assert envelope_repo.position(first_instance[0], "SPY") == 10.0
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
     # The observation is dated when its reads were issued, not when they returned.
     assert reading.observation.observed_at_ms == T0
 
@@ -660,7 +663,7 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
     ) == pytest.approx(1_000.0)
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
 
     envelope_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
     next_tick = (await sync.observe()).observation
@@ -728,30 +731,33 @@ async def test_the_realized_day_pnl_window_ends_when_the_reads_return(
 
     assert reading.day_pnl is not None
     assert reading.day_pnl.realized_usd == pytest.approx(100.0)
+    assert not reading.day_pnl.known
+    assert reading.day_pnl.total_usd is None
     assert reading.observation.observed_at_ms == NOON
 
 
-async def test_a_losing_close_recorded_during_the_reads_raises_the_loss_hold(
+async def test_a_losing_close_during_reads_withdraws_then_raises_on_coherent_read(
     day_pnl_repo: ClerkSqliteRepository,
     day_pnl_clock: _TestClock,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    """A loss realized mid-read is judged on this tick, never published past (#2473 review).
+    """A loss realized mid-read withdraws entry until a coherent read proves it.
 
     The SELL realizes $6,000 against a $5,000 limit while the positions read
-    is in flight, and the broker answers with the position already closed.
-    With the realized window ending at the pre-read stamp the loss was in
-    neither figure: the tick published an unbreached observation and the next
-    ENTER was bounded by cash alone.
+    is in flight. That answer cannot prove whether the closed lot remains in
+    unrealized P&L, so no safe observation is published. The next coherent
+    read raises the loss hold without double-counting the closing trade.
     """
     read = _round_trip_closed_mid_read(
         day_pnl_repo, day_pnl_clock, entry_price=1_000.0, exit_price=400.0
     )
     sync = make_sync(day_pnl_repo, read, simulated=False)
 
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
     assert await sync.tick() == "hold_raised"
     hold = _hold(day_pnl_repo)
     assert hold is not None
     cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
-    assert cause.day_pnl_usd == pytest.approx(-6_000.0)
+    assert cause.day_pnl_usd == pytest.approx(-6_000.11, abs=1e-9, rel=0)
     assert sync.envelope.latest_observation() is None

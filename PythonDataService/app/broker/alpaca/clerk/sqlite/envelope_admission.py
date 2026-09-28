@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.live_envelope import (
 from app.broker.alpaca.clerk.money import MoneyInputError, cash_admits, money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     Capability,
@@ -65,14 +66,7 @@ def require_envelope_admission(
             "The ALPACA_LIVE_* environment values differ from the envelope sealed "
             "at arming; re-arm to change them.",
         )
-    observation = envelope.fresh_observation(now_ms)
-    policy = repo.account_risk_policy()
-    expected_revision = None if policy is None else policy.revision
-    if observation is None or observation.risk_revision != expected_revision:
-        raise _refuse(
-            LIVE_ENVELOPE_UNOBSERVED,
-            "No fresh broker cash observation exists; the envelope cannot bound this ENTER yet.",
-        )
+    observation = require_current_risk_admission(repo, envelope=envelope, now_ms=now_ms)
     price = leg.limit_price if leg.order_type is OrderType.LIMIT else reference_price
     if price is None:
         raise _refuse(

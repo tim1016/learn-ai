@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker_configuration.service import BrokerConfigurationService
 from app.routers import broker_configuration as routes
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, complete_fee_evidence
 from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
 from tests.broker_configuration.conftest import paper_profile
 
@@ -31,6 +31,7 @@ async def risk_client(service: BrokerConfigurationService, tmp_path: Path, monke
     service.acknowledge_effective(profile_id=profile.profile.profile_id, revision=1,
         account_id="PA-RISK", expected_selection_generation=0)
     repo = ClerkSqliteRepository.initialize(account_id="PA-RISK", artifacts_root=tmp_path / "custody", clock=_TestClock(NOON))
+    complete_fee_evidence(repo)
     read = _Read(unrealized=-150)
     sync = LiveEnvelopeSync(repo=repo, read=read, envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
     runtime = ActiveClerkRuntime(authority_kind="sqlite", envelope_sync=sync, _sqlite_repository=repo, account_id=repo.account_id)

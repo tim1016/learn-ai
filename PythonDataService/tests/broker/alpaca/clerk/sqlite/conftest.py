@@ -16,12 +16,14 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     ExecutionSliceFilledFacts,
 )
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import (
+    BrokerActivity,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
@@ -39,6 +41,12 @@ class _TestClock:
 
     def advance(self, delta_ms: int) -> None:
         self.value += delta_ms
+
+
+
+def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerActivity, ...] = ()) -> None:
+    """Explicit successful broker activity evidence, never a production fallback."""
+    record_fee_evidence(repo, activities, checked_at_ms=repo.clock(), history_complete=True)
 
 
 def _clock_at(start_ms: int) -> _TestClock:
@@ -304,6 +312,7 @@ def envelope_repo(
     clerk = ClerkSqliteRepository.initialize(
         account_id=ENVELOPE_ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
+    complete_fee_evidence(clerk)
     yield clerk
     clerk.close()
 
@@ -406,6 +415,12 @@ def day_pnl_repo(
     )
     yield clerk
     clerk.close()
+
+
+
+@pytest.fixture
+def day_pnl_fees(day_pnl_repo: ClerkSqliteRepository) -> None:
+    complete_fee_evidence(day_pnl_repo)
 
 
 def _accept_day_pnl_enter(

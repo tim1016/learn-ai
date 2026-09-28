@@ -187,6 +187,9 @@ class AccountObservation:
     unrealized_pl_usd: float
     position_count: int
     risk_revision: int | None = None
+    # Effective fill watermark before requesting broker unrealized P&L. A
+    # subsequent execution can close a lot already included in that mark.
+    risk_fill_sequence: int = 0
 
     @property
     def fills_seen_before_ms(self) -> int:

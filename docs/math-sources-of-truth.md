@@ -104,7 +104,7 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|
-| Day P&L / loss limit (account-wide realized + broker-observed unrealized P&L, net of fees; the loss hold's `min(loss_fraction × last_equity, loss_usd)` limit) | `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py` + `PythonDataService/app/broker/alpaca/clerk/live_envelope.py` | none | ADR 0059 D4 — see [alpaca-live-envelope](docs/references/alpaca-live-envelope.md) | `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_day_pnl.py`; `PythonDataService/tests/broker/alpaca/clerk/test_live_envelope.py`; `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py` | canonical; retained hold windows use the same FIFO (#2543) |
+| Day P&L / loss limit (account-wide realized + broker-observed unrealized P&L, net of fees; the loss hold's `min(loss_fraction × last_equity, loss_usd)` limit) | `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py` + `PythonDataService/app/broker/alpaca/clerk/live_envelope.py` | none | ADR 0059 D4 — see [alpaca-live-envelope](docs/references/alpaca-live-envelope.md) | `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_day_pnl.py`; `PythonDataService/tests/broker/alpaca/clerk/test_live_envelope.py`; `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py` | canonical; retained hold windows use the same FIFO and canonical dated fee attribution; incomplete fee/execution evidence is unknown (#2543) |
 
 ### Broker session and order anchoring (ADR 0059 D5)
 
