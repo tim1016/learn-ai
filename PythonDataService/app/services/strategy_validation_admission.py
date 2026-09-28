@@ -10,6 +10,7 @@ import asyncpg
 from pydantic import ValidationError
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.backtest_runs.evidence_provenance import assess_evidence_provenance
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.run_admission import StrategyValidationAdmissionFact
@@ -468,7 +469,10 @@ def _verified(
         evidence_snapshot_sha256=event.evidence_snapshot_sha256,
         verified_at_ms=observed_at_ms,
         evidence_refs=evidence_refs,
-        explanation="The active validation proof and all referenced artifacts were re-hashed for this admission.",
+        explanation=(
+            "The active validation proof and all referenced artifacts were re-hashed for this admission. "
+            + assess_evidence_provenance(None).explanation
+        ),
     )
 
 

@@ -102,6 +102,9 @@ def test_current_validation_fact_rehashes_an_accepted_proof_at_start() -> None:
     assert fact.evidence_status == "accepted"
     assert fact.event_id == "event-accepted"
     assert "strategy-validation:snapshot:" + _SHA in fact.evidence_refs
+    assert "unknown, not known affected" in fact.explanation
+    assert "Existing acceptance is preserved" in fact.explanation
+    assert fact.evidence_snapshot_sha256 == _SHA
 
 
 def test_current_validation_fact_blocks_when_a_rehashed_artifact_changes(
