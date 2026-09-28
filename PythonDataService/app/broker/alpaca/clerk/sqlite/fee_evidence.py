@@ -41,6 +41,7 @@ class FeeEvidenceFacts(BaseModel):
 
     checked_at_ms: int = Field(ge=0)
     activities: list[BrokerActivity]
+    history_complete: bool = False
 
 
 def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -49,12 +50,18 @@ def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> Non
 
 
 def record_fee_evidence(
-    repo: ClerkSqliteRepository, activities: Sequence[BrokerActivity], *, checked_at_ms: int
+    repo: ClerkSqliteRepository,
+    activities: Sequence[BrokerActivity],
+    *,
+    checked_at_ms: int,
+    history_complete: bool = False,
 ) -> bool:
     """Append changed evidence or a bounded freshness renewal under custody lock."""
     if repo.account_id.startswith(("sim:", "shadow:")):
         raise ValueError("simulated custody cannot record real broker fee activities")
-    facts = FeeEvidenceFacts(checked_at_ms=checked_at_ms, activities=list(activities))
+    facts = FeeEvidenceFacts(
+        checked_at_ms=checked_at_ms, activities=list(activities), history_complete=history_complete
+    )
     with repo._write_lock:
         row = repo._conn.execute(
             "SELECT facts_json FROM custody_transitions WHERE transition_kind = ? ORDER BY sequence DESC LIMIT 1",
@@ -66,7 +73,11 @@ def record_fee_evidence(
             # retaining periodic liveness evidence rather than identical ticks.
             current_rows = [activity.model_dump(exclude={"observed_at_ms"}) for activity in facts.activities]
             prior_rows = [activity.model_dump(exclude={"observed_at_ms"}) for activity in prior.activities]
-            if current_rows == prior_rows and checked_at_ms - prior.checked_at_ms < 30_000:
+            if (
+                current_rows == prior_rows
+                and prior.history_complete == history_complete
+                and checked_at_ms - prior.checked_at_ms < 30_000
+            ):
                 return False
         repo.append_transition(
             TransitionInput(
@@ -116,7 +127,9 @@ def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]
 
 
 @money_context()
-def custody_fee_attribution(conn: sqlite3.Connection, *, now_ms: int) -> FeeAttribution:
+def custody_fee_attribution(
+    conn: sqlite3.Connection, *, now_ms: int, from_ms: int | None = None, to_ms: int | None = None
+) -> FeeAttribution:
     """Lifetime fee projection in the caller's custody snapshot (no network).
 
     ``known`` gates new spending. Per-subject totals contain reported fill fees
@@ -156,10 +169,12 @@ def custody_fee_attribution(conn: sqlite3.Connection, *, now_ms: int) -> FeeAttr
         oldest = min(
             (row.occurred_at_ms for row in snapshot.activities if row.occurred_at_ms is not None), default=None
         )
+        if snapshot.history_complete:
+            covered_days.update(set(grouped) | set(by_date))
         if oldest is not None:
             for day in set(grouped) | set(by_date):
                 day_start = et_midnight_ms(day)
-                if oldest < day_start:
+                if snapshot.history_complete or oldest < day_start:
                     covered_days.add(day)
     external_orders = {
         row[0]
@@ -205,6 +220,9 @@ def custody_fee_attribution(conn: sqlite3.Connection, *, now_ms: int) -> FeeAttr
         set(grouped)
         | {day for day, rows in by_date.items() if any(row.activity_type == "FEE" for row in rows.values())}
     ):
+        day_start = et_midnight_ms(day)
+        if (from_ms is not None and day_start < from_ms) or (to_ms is not None and day_start >= to_ms):
+            continue
         fees = [
             FeeCharge(
                 row.activity_id,

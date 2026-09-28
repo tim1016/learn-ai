@@ -1,4 +1,5 @@
 """Custody-fenced fee attribution survives fresh observations and mirror replay."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -21,15 +22,32 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 
 
 def _activity(key: str, kind: str, at: int, amount: float = 0) -> BrokerActivity:
-    return BrokerActivity(broker="alpaca", activity_id=key, activity_type=kind,
-        category="non_trade_activity", symbol=None, side=None, quantity=None,
-        price=None, net_amount=amount, occurred_at_ms=at, observed_at_ms=NOON)
+    return BrokerActivity(
+        broker="alpaca",
+        activity_id=key,
+        activity_type=kind,
+        category="non_trade_activity",
+        symbol=None,
+        side=None,
+        quantity=None,
+        price=None,
+        net_amount=amount,
+        occurred_at_ms=at,
+        observed_at_ms=NOON,
+    )
 
 
 def _seed(repo) -> None:
     accepted = _accept_day_pnl_enter(repo, decision_id="fee-slice")
-    _append_day_pnl_slice(repo, accepted, execution_id="fractional-fill", side="BUY",
-        quantity=0.125, price=400, occurred_at_ms=YESTERDAY_NOON)
+    _append_day_pnl_slice(
+        repo,
+        accepted,
+        execution_id="fractional-fill",
+        side="BUY",
+        quantity=0.125,
+        price=400,
+        occurred_at_ms=YESTERDAY_NOON,
+    )
 
 
 def test_pending_fee_becomes_observed_once_and_old_observation_does_not_reappear(day_pnl_repo) -> None:
@@ -44,7 +62,9 @@ def test_pending_fee_becomes_observed_once_and_old_observation_does_not_reappear
     observed = custody_fee_attribution(repo._conn, now_ms=NOON)
     assert observed.known and observed.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.05")
     assert observed.unobserved_cash_claim(cash_seen_before_ms=NOON) == Decimal("0.05")
-    assert not record_fee_evidence(repo, [fee.model_copy(update={"observed_at_ms": NOON + 100}), older], checked_at_ms=NOON + 100)
+    assert not record_fee_evidence(
+        repo, [fee.model_copy(update={"observed_at_ms": NOON + 100}), older], checked_at_ms=NOON + 100
+    )
     assert observed.unobserved_cash_claim(cash_seen_before_ms=NOON + 1) == 0
 
 
@@ -63,7 +83,11 @@ def test_truncated_and_stale_reads_fail_closed_instead_of_zero(day_pnl_repo) -> 
 def test_fee_projection_is_rebuilt_from_original_evidence(tmp_path) -> None:
     clock = _clock_at(NOON)
     repo = ClerkSqliteRepository.initialize(account_id="PA-fee", artifacts_root=tmp_path, clock=clock)
-    record_fee_evidence(repo, [_activity("fee", "FEE", YESTERDAY_NOON, -0.05), _activity("old", "CSD", YESTERDAY_NOON - 86_400_000)], checked_at_ms=NOON)
+    record_fee_evidence(
+        repo,
+        [_activity("fee", "FEE", YESTERDAY_NOON, -0.05), _activity("old", "CSD", YESTERDAY_NOON - 86_400_000)],
+        checked_at_ms=NOON,
+    )
     expected = custody_fee_attribution(repo._conn, now_ms=NOON)
     original = repo.custody_transitions()
     path = repo.db_path
@@ -87,3 +111,26 @@ def test_simulated_custody_refuses_real_fee_evidence(tmp_path) -> None:
         assert custody_fee_attribution(repo._conn, now_ms=NOON).known
     finally:
         repo.close()
+
+
+def test_risk_window_uses_same_fee_projection_without_prior_days(day_pnl_repo) -> None:
+    from datetime import date
+
+    from app.utils.session_anchors import et_midnight_ms
+
+    repo = day_pnl_repo
+    _seed(repo)
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
+    prior = custody_fee_attribution(
+        repo._conn, now_ms=NOON, from_ms=et_midnight_ms(date(2026, 9, 4)), to_ms=et_midnight_ms(date(2026, 9, 5))
+    )
+    today = custody_fee_attribution(repo._conn, now_ms=NOON, from_ms=et_midnight_ms(date(2026, 9, 8)), to_ms=NOON)
+    assert prior.known and prior.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.01")
+    assert today.known and not today.shares
+
+
+def test_complete_short_provider_page_proves_a_young_account(day_pnl_repo) -> None:
+    repo = day_pnl_repo
+    _seed(repo)
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
+    assert custody_fee_attribution(repo._conn, now_ms=NOON).known
