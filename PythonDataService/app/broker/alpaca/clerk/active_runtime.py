@@ -414,6 +414,7 @@ async def compose_repository_runtime(
                     else guard_broker_read_port(envelope_read, intake=intake)
                 ),
                 envelope=live_envelope,
+                custody_read=guarded_read,
                 arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
                 arming_gate=arming_gate,
                 instance_seals=instance_seals,

@@ -42,6 +42,7 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
+from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, SID, _binding
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _Broker
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _retain
@@ -58,7 +59,7 @@ def _pinned_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteRepo
     return ClerkSqliteRepository.open(
         account_id=account_id,
         artifacts_root=artifacts_root,
-        clock=lambda: NOW_MS,
+        clock=_TestClock(NOW_MS),
     )
 
 
@@ -352,3 +353,41 @@ async def test_shadow_risk_ignores_retired_arming_bytes_and_never_records_sessio
     assert runtime.envelope_sync.envelope.sealed is None
     assert path.read_text() == "corrupt retired grant\n"
     assert not tuple(tmp_path.rglob("shadow_sessions.jsonl"))
+
+
+async def test_shadow_rollover_clearance_ignores_foreign_live_positions(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar, tmp_path: Path,
+) -> None:
+    from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+
+    runtime, broker = shadow_runtime
+    repo, sync = runtime.sqlite_repository, runtime.envelope_sync
+    append_risk_policy(repo, policy=AccountRiskPolicy(1, .05, 50, "profile", 1, "owner", NOW_MS), expected_revision=0)
+    assert await sync.tick() == "observed"
+    entered = await _enter(runtime, registered_running_bot, quantity=1)
+    assert entered.state.value == "submitted", entered.explanation
+    bars = SourceBarLedger(artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(SID))
+    try:
+        loss_bar = _retain(bars, minute=DECISION_MINUTE + 1, close="40", provider="ibkr")
+    finally:
+        bars.close()
+    clock = repo.clock
+    assert isinstance(clock, _TestClock)
+    clock.advance(loss_bar.end_ms - clock())
+    repo.revive_execution_lease()
+    broker.now_ms = loss_bar.end_ms
+    exited = await _exit(runtime, loss_bar, quantity=1)
+    assert exited.state.value == "flat", exited.explanation
+    assert await sync.tick() == "hold_raised"
+    original = sync.risk_snapshot().hold
+    assert original is not None and original.day_pnl_usd < -60
+    clock.advance(NOW_MS + 86_400_000 - clock())
+    repo.revive_execution_lease()
+    broker.now_ms = repo.clock()
+    broker.unrealized = -10_000  # A real position persists; Shadow is flat.
+    assert await broker.list_positions()
+    reading, quiet = await sync.observe_loss_clearance()
+    assert reading.day_pnl.total_usd == pytest.approx(0, abs=1e-9, rel=0)
+    assert quiet is not None and quiet.account_flat and quiet.broker_work_ended and quiet.intents_resolved
+    assert sync.clear_observed_loss_hold(reading, quiet=quiet)[0] == "cleared"

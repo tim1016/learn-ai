@@ -241,12 +241,16 @@ class LiveEnvelopeSync:
         arming_gate: ArmingGate | None = None,
         instance_seals: InstanceSeals | None = None,
         simulation: SimulatedAccountProjection | None = None,
+        custody_read: BrokerReadPort | None = None,
     ) -> None:
         if repo.account_id.startswith(("sim:", "shadow:")) and simulation is None:
             raise ValueError("Simulated custody requires its own cash and marked-risk projection")
         self._repo = repo
         self._simulation = simulation
         self._read = read
+        # Shadow borrows only reference cash from Live; its obligations belong
+        # to the guarded simulated custody port used by reconciliation.
+        self._custody_read = read if custody_read is None else custody_read
         self.envelope = envelope
         self._interval_s = interval_s
         self._sleep = sleep
@@ -386,8 +390,8 @@ class LiveEnvelopeSync:
             ),
         )
         if reading.day_pnl is not None and observation.risk_fill_sequence != risk_fill_sequence(self._repo):
-            # The position answer may precede a lot closure already included
-            # in realized P&L. Never combine those incompatible snapshots.
+            # New executions can make the observed equity/cash snapshot stale.
+            # Refresh it before authorizing further exposure.
             reading = replace(reading, day_pnl=replace(reading.day_pnl, cash_flows_known=False))
         if reading.breached is False:
             self.envelope.publish(observation)
@@ -453,7 +457,7 @@ class LiveEnvelopeSync:
         reading = await self.observe()
         snapshot = self.risk_snapshot()
         needs_reset = snapshot.hold is not None and reading.day_pnl is not None and reading.day_pnl.day_start_ms > self._held_period_start(snapshot.hold)
-        quiet = await observe_account_quiet(self._repo, self._read) if needs_reset else None
+        quiet = await observe_account_quiet(self._repo, self._custody_read) if needs_reset else None
         return reading, quiet
 
     def clear_observed_loss_hold(self, reading: EnvelopeReading, *, quiet: AccountQuietObservation | None = None) -> tuple[str, str]:
