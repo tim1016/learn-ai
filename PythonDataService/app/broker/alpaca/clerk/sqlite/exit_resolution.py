@@ -1603,7 +1603,7 @@ async def _submit_reducing_order(
                 repo,
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
-                why="Shadow recovery has no retained source bar in its send session; no order was sent.",
+                why="The simulation retained no price in this session to fill a recovery at; no order was sent.",
             )
             return None
         _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")

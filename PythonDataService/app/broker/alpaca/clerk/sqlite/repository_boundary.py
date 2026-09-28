@@ -117,7 +117,7 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         owner="_execute_presented_recovery_action",
         call="execute_recovery_action",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The HTTP recovery dispatcher receives only the active facade; its coverage-resolution branch revalidates the expected control revision inside one repository call.",
+        rationale="The HTTP recovery dispatcher receives only the selected facade (the account's, or a bot-scoped Dry Run's own sim: authority); its coverage-resolution branch revalidates the expected control revision inside one repository call.",
     ),
     ExternalRepositoryWriter(
         path="app/services/bot_trade_strategy.py",
@@ -131,7 +131,7 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         owner="execute_sqlite_panel_action",
         call="execute_recovery_action",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The panel recovery dispatcher passes the active facade through the same typed recovery-action boundary as HTTP.",
+        rationale="The panel recovery dispatcher passes the bot's selected facade (the account's, or a Dry Run's own sim: authority) through the same typed recovery-action boundary as HTTP.",
     ),
     ExternalRepositoryWriter(
         path="app/services/alpaca_sqlite_synthetic_drill_support.py",

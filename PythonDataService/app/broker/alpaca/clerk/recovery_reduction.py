@@ -181,6 +181,18 @@ RECOVERY_LIMIT_PRICE_INVALID = LegRefusal(
     next_step="Correct the limit price and confirm again.",
 )
 
+SIMULATED_RECOVERY_PRICE_UNAVAILABLE = LegRefusal(
+    reason_code="SIMULATED_RECOVERY_PRICE_UNAVAILABLE",
+    explanation=(
+        "This Dry Run received no price for this symbol in the current session, so its "
+        "simulated sale cannot be priced honestly. Nothing was sold."
+    ),
+    next_step=(
+        "Its simulated shares hold no real money and never touch the account. A stopped "
+        "Dry Run can be flattened only in the session it last received a price in."
+    ),
+)
+
 RECOVERY_SESSION_CHANGED = LegRefusal(
     reason_code="RECOVERY_SESSION_CHANGED",
     explanation=(
@@ -948,6 +960,7 @@ __all__ = [
     "RECOVERY_SPREAD_TOO_WIDE",
     "RECOVERY_SPREAD_WARNING_BPS",
     "REDUCING_ORDER_PAST_SESSION_GRACE_MS",
+    "SIMULATED_RECOVERY_PRICE_UNAVAILABLE",
     "UNPRICEABLE_RECOVERY",
     "ConfirmedRecoveryLimit",
     "ConfirmedRecoveryShape",

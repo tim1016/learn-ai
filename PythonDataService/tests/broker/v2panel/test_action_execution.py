@@ -388,10 +388,17 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
             ],
         )
 
+    async def _validated(*_args, **_kwargs) -> str:
+        return "account-1"
+
     monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
+    monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.validate_account", _validated)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: SimpleNamespace(artifacts_root=tmp_path),
+        lambda: SimpleNamespace(
+            artifacts_root=tmp_path,
+            binding_for_control=lambda *_: SimpleNamespace(mode="trade", broker="alpaca"),
+        ),
     )
 
     with pytest.raises(ActionNotAvailableError) as exc:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.broker_bots import BotProcessFact, BotStatusView
@@ -92,15 +93,20 @@ def bot_process_fact(broker: str, sid: str) -> BotProcessFact:
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
 
 
-async def clerk_status(*, symbol: str | None = None) -> ClerkStatus:
+async def clerk_status(
+    *,
+    symbol: str | None = None,
+    facade: SqliteAlpacaClerkFacade | None = None,
+) -> ClerkStatus:
+    """The Clerk card facts of ``facade`` -- a bot's own authority -- or of the account's."""
     try:
-        sqlite_status = await read_sqlite_clerk_status(symbol=symbol)
+        sqlite_status = await read_sqlite_clerk_status(symbol=symbol, facade=facade)
     except (RuntimeError, ValueError) as exc:
         raise PanelUnavailableError(str(exc)) from exc
     if sqlite_status is None:
         raise PanelUnavailableError(
-            "The activated SQLite Clerk is unavailable.",
-            detail="Restore or reactivate the account-scoped SQLite authority.",
+            "The account's Clerk is unavailable.",
+            detail="Restore the account's Clerk, then refresh.",
         )
     return sqlite_status
 

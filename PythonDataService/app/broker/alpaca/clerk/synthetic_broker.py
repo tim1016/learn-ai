@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedBarBindingError,
     SynthesizedOrderLedger,
     project_positions,
+    recovery_bar_in_send_session,
 )
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
@@ -170,6 +171,16 @@ class SyntheticBroker:
             timeframe="synthetic",
         )
 
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool:
+        """Every sim order executes entirely inside ``submit`` (ruling R9).
+
+        So the returned order is the execution itself, folded as simulated
+        evidence -- for a recovery EXIT as much as for a strategy decision.
+        Without a retained-bar ledger nothing can execute at all.
+        """
+        return self._ledger is not None
+
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
         """Bind one minted Clerk order identity to one exact retained decision bar."""
         if self._ledger is None:
@@ -177,6 +188,40 @@ class SyntheticBroker:
                 "Synthetic bar binding requires an authority-scoped retained-bar ledger."
             )
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+
+    def recovery_price_available(self, symbol: str) -> bool:
+        """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
+
+        Asked before any reduction is accepted, so a Dry Run that received no
+        price this session refuses its flatten instead of recording an EXIT
+        that can never be sent.
+        """
+        return self._recovery_bar(symbol) is not None
+
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind a recovery EXIT to the newest bar this Dry Run retained in the send session.
+
+        A recovery EXIT -- the operator's safe flatten, a sweep re-drive --
+        has no strategy decision bar; it is priced like the shadow world's,
+        from this instance's own newest observation. ``False`` (nothing
+        retained in this session) leaves the reduction unsent.
+        """
+        retained_bar = self._recovery_bar(symbol)
+        if self._ledger is None or retained_bar is None:
+            return False
+        self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+        return True
+
+    def _recovery_bar(self, symbol: str) -> RetainedSourceBar | None:
+        if self._ledger is None or self._source_bars is None:
+            return None
+        retained_bar = self._source_bars.latest_for_symbol(symbol)
+        in_session = recovery_bar_in_send_session(
+            retained_bar,
+            now_ms=self._clock(),
+            extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window,
+        )
+        return retained_bar if in_session else None
 
     async def submit(
         self,

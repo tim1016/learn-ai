@@ -56,6 +56,7 @@ from app.broker.alpaca.clerk.program_leg import (
     shape_program_leg,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
+    SIMULATED_RECOVERY_PRICE_UNAVAILABLE,
     UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryLimit,
     ConfirmedRecoveryShape,
@@ -197,8 +198,8 @@ class _DecisionBarBoundTradePort:
 
     @property
     def submission_response_is_authoritative_evidence(self) -> bool:
-        """The bound no-submit response is the complete deterministic execution."""
-        return True
+        """Binding a bar changes the price, never whose execution this is: the no-submit port says."""
+        return self._inner.submission_response_is_authoritative_evidence
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self._inner.bind_evaluated_bar(client_order_id, self._retained_bar)
@@ -789,6 +790,8 @@ class SqliteAlpacaClerkFacade:
         if len(plan.legs) != 1:
             return None
         (leg,) = plan.legs
+        if not self._trade.recovery_price_available(leg.symbol):
+            return SIMULATED_RECOVERY_PRICE_UNAVAILABLE
         now_ms = self._repo.clock()
         try:
             return price_recovery_reduction(
@@ -850,6 +853,11 @@ class SqliteAlpacaClerkFacade:
                 )
             return None
         (leg,) = plan.legs
+        if not self._trade.recovery_price_available(leg.symbol):
+            # A no-submit world with nothing to fill at refuses here, before
+            # an EXIT is accepted that could never be sent.
+            refusal = SIMULATED_RECOVERY_PRICE_UNAVAILABLE
+            raise SafeFlattenExecutionError(f"{refusal.explanation} {refusal.next_step}", refusal=refusal)
         now_ms = self._repo.clock()
         try:
             return recovery_reduction_shape(

@@ -188,6 +188,12 @@ class GuardedBrokerTradePort:
             raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
         bind(client_order_id, retained_bar)
 
+    def recovery_price_available(self, symbol: str) -> bool:
+        """Whether a no-submit port can price a recovery EXIT now; a vendor always can."""
+        self._assert_unfenced("recovery_price_available")
+        probe = getattr(self._inner, "recovery_price_available", None)
+        return True if not callable(probe) else bool(probe(symbol))
+
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
         """Bind recovery-only synthetic evidence when the inner port requires it."""
         self._assert_unfenced("bind_latest_recovery_bar")

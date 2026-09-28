@@ -34,15 +34,18 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.services.jsonl_wal import JsonlWal
+from app.services.session_authority import order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.session_anchors import et_date_at_ms
 
 # The sim world's existing file name; the shadow world writes the same shape
 # in its own custody directory, so one reader serves both.
@@ -108,6 +111,31 @@ def _order_lock(path: Path) -> threading.Lock:
 
 
 BarVerifier = Callable[[RetainedSourceBar], RetainedSourceBar]
+
+
+def recovery_bar_in_send_session(
+    retained_bar: RetainedSourceBar | None,
+    *,
+    now_ms: int,
+    extended_window: ExtendedHoursWindow | None,
+) -> TypeGuard[RetainedSourceBar]:
+    """Whether a recovery EXIT sent now may be priced from this retained bar.
+
+    Strategy decisions bind their exact deciding bar. A recovery EXIT has
+    none, so both no-submit worlds price it from the newest bar the instance
+    retained -- but only one from the session the order goes out in: never a
+    bar from the future, from another session phase, from another trading
+    day, or while no session is open. Nothing is priced from a stale session.
+    """
+    if retained_bar is None or retained_bar.end_ms > now_ms:
+        return False
+    now_session = order_session_state_at_ms(now_ms=now_ms, extended_window=extended_window)
+    bar_session = order_session_state_at_ms(now_ms=retained_bar.start_ms, extended_window=extended_window)
+    return (
+        now_session.phase != "CLOSED"
+        and now_session.phase == bar_session.phase
+        and et_date_at_ms(now_ms) == et_date_at_ms(retained_bar.start_ms)
+    )
 
 
 def single_ledger_verifier(account_id: str, source_bars: SourceBarLedger) -> BarVerifier:
@@ -345,5 +373,6 @@ __all__ = [
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
     "project_positions",
+    "recovery_bar_in_send_session",
     "single_ledger_verifier",
 ]

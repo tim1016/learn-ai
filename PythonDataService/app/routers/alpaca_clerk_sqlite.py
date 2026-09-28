@@ -15,7 +15,8 @@ FastAPI event loop").
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from enum import StrEnum
 from typing import TypeVar
 
@@ -86,6 +87,8 @@ from app.schemas.alpaca_clerk_sqlite import (
     safe_flatten_pricing_response,
 )
 from app.schemas.paper_live_experiments import ClerkDecisionEvidencePage
+from app.services.broker_v2_panel.panel_data_source import bot_custody_authority
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
@@ -149,6 +152,33 @@ def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
             detail={"reason": "sqlite_account_not_active"},
         )
     return runtime.clerk
+
+
+@asynccontextmanager
+async def _bot_recovery_facade(
+    account_id: str,
+    strategy_instance_id: str,
+) -> AsyncIterator[SqliteAlpacaClerkFacade]:
+    """The authority one bot's recovery is judged and executed in.
+
+    The route's account is authorized against the account's own authority
+    first; the request then acts where that bot is custodied -- a Dry Run in
+    its own ``sim:`` simulator, whose ports never reach Alpaca -- through the
+    same selection its panel is read from (hurdle H33).
+    """
+    account = _active_sqlite_facade(account_id)
+    try:
+        async with bot_custody_authority("alpaca", strategy_instance_id) as facade:
+            yield account if facade is None else facade
+    except PanelUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "bot_custody_authority_unavailable",
+                "message": str(exc),
+                "next_step": exc.detail,
+            },
+        ) from exc
 
 
 def _conflict_response(exc: DurableConflictError) -> HTTPException:
@@ -493,7 +523,7 @@ async def get_bot_timeline(
 
 
 async def _check_recovery_action(
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     *,
     strategy_instance_id: str | None,
     body: RecoveryActionCheckRequest,
@@ -508,7 +538,6 @@ async def _check_recovery_action(
     (#2007): market inside the regular session, the live IBKR quote and a
     suggested limit in PRE/POST, or why nothing can be sent.
     """
-    facade = _active_sqlite_facade(account_id)
     try:
         context = await asyncio.to_thread(
             _read_projection,
@@ -571,7 +600,7 @@ async def check_account_recovery_action(
     body: RecoveryActionCheckRequest,
 ) -> RecoveryActionCheckResponse:
     return await _check_recovery_action(
-        account_id,
+        _active_sqlite_facade(account_id),
         strategy_instance_id=None,
         body=body,
     )
@@ -586,11 +615,12 @@ async def check_bot_recovery_action(
     strategy_instance_id: str,
     body: RecoveryActionCheckRequest,
 ) -> RecoveryActionCheckResponse:
-    return await _check_recovery_action(
-        account_id,
-        strategy_instance_id=strategy_instance_id,
-        body=body,
-    )
+    async with _bot_recovery_facade(account_id, strategy_instance_id) as facade:
+        return await _check_recovery_action(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            body=body,
+        )
 
 
 @router.post(
@@ -691,13 +721,11 @@ async def confirm_bot_historical_execution_recovery(
 
 
 async def _execute_presented_recovery_action(
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     *,
     strategy_instance_id: str | None,
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
-    facade = _active_sqlite_facade(account_id)
-
     async def current_context():
         context = await asyncio.to_thread(
             _read_projection,
@@ -775,7 +803,7 @@ async def execute_account_recovery_action(
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
     return await _execute_presented_recovery_action(
-        account_id,
+        _active_sqlite_facade(account_id),
         strategy_instance_id=None,
         body=body,
     )
@@ -790,11 +818,12 @@ async def execute_bot_recovery_action(
     strategy_instance_id: str,
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
-    return await _execute_presented_recovery_action(
-        account_id,
-        strategy_instance_id=strategy_instance_id,
-        body=body,
-    )
+    async with _bot_recovery_facade(account_id, strategy_instance_id) as facade:
+        return await _execute_presented_recovery_action(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            body=body,
+        )
 
 
 @router.post(

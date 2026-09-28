@@ -64,6 +64,8 @@ from app.services.bot_binding_repository import (
 from app.services.bot_runner import (
     get_bot_task_registry,
 )
+from app.services.bot_runner_errors import InvalidStrategyInstanceIdError
+from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
@@ -165,8 +167,32 @@ async def _panel_authority_for_binding(
         if not isinstance(facade, SqliteAlpacaClerkFacade) or runtime.authority_kind != "synthetic":
             raise PanelUnavailableError(
                 "The Dry Run custody authority is unavailable.",
-                detail="The sealed synthetic Clerk did not provide a SQLite projection authority.",
+                detail="This Dry Run's own simulated Clerk could not be opened.",
             )
+        yield facade
+
+
+@asynccontextmanager
+async def bot_custody_authority(
+    broker: str,
+    sid: str,
+) -> AsyncIterator[SqliteAlpacaClerkFacade | None]:
+    """The Clerk authority that custodies one bot, for a caller that knows only its id.
+
+    The binding selects it through ``_panel_authority_for_binding``, the one
+    selection panel reads and actions use: a Dry Run's own ``sim:`` Clerk,
+    else the account's. A custody subject the runner never bound (a manual
+    order's, a pre-binding identity) belongs to the account's authority.
+    """
+    registry = get_bot_task_registry()
+    try:
+        binding = None if registry is None else registry.binding_for_control(broker, sid)
+    except (RunnerUnknownBotError, InvalidStrategyInstanceIdError):
+        binding = None
+    if binding is None:
+        yield active_sqlite_facade(broker)
+        return
+    async with _panel_authority_for_binding(registry, binding) as facade:
         yield facade
 
 
@@ -301,13 +327,13 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
         )
     except SqliteCatalogProjectionUnavailable as exc:
         raise PanelUnavailableError(
-            "The activated SQLite bot roster could not be projected.",
+            "This account's bot roster could not be read.",
             detail=str(exc),
         ) from exc
     if sqlite_catalog is None:
         raise PanelUnavailableError(
-            "The activated SQLite bot roster is unavailable.",
-            detail="Restore or reactivate the account-scoped SQLite authority.",
+            "This account's bot roster is unavailable.",
+            detail="Restore the account's Clerk, then refresh.",
         )
     registry = get_bot_task_registry()
     if registry is None:
@@ -348,7 +374,7 @@ async def _get_panel_with_entries_from_authority(
     """Build one panel from its binding-selected SQLite authority."""
     if facade is None:
         raise PanelUnavailableError(
-            "The binding's SQLite Clerk is unavailable.",
+            "This bot's Clerk is unavailable.",
             detail="Restore the selected authority before projecting this bot's execution policy.",
         )
     authority_account_id = facade.account_id
@@ -364,30 +390,32 @@ async def _get_panel_with_entries_from_authority(
         raise UnknownBotError(str(exc)) from exc
     except SqlitePanelEconomicUnavailable as exc:
         raise PanelUnavailableError(
-            "The activated SQLite panel evidence is unavailable.",
+            "This bot's custody and money could not be read together.",
             detail=str(exc),
         ) from exc
     if evidence is None:
         raise PanelUnavailableError(
-            "The activated SQLite panel authority is unavailable.",
-            detail="Restore or reactivate the account-scoped SQLite authority.",
+            "This bot's Clerk is unavailable.",
+            detail="Restore the account's Clerk, then refresh.",
         )
     status = _status_in_binding_mode(evidence.status, binding)
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
     entries: list[OrderJournalEntry] = []
-    clerk = await clerk_status(symbol=binding.symbol)
+    # The card names the authority the evidence came from: a Dry Run's own
+    # simulated account, never the real account it is listed under (H33).
+    clerk = await clerk_status(symbol=binding.symbol, facade=facade)
     try:
         decision_read = read_sqlite_decision_receipts(broker, sid, facade=facade)
     except SqlitePanelDecisionUnavailable as exc:
         raise PanelUnavailableError(
-            "The activated SQLite decision evidence is unavailable.",
+            "This bot's decision record is unavailable.",
             detail=str(exc),
         ) from exc
     if decision_read is None:
         raise PanelUnavailableError(
-            "The activated SQLite decision evidence is unavailable.",
-            detail="The SQLite authority became unavailable during panel projection.",
+            "This bot's decision record is unavailable.",
+            detail="Its Clerk became unavailable while the page was read.",
         )
     decisions = decision_read
     decision = decisions[-1] if decisions else None
@@ -908,52 +936,62 @@ async def _run_action_under_live_authority(
     *,
     operator_identity: str,
 ) -> PanelActionResult:
-    panel = await get_panel(broker, account_id, sid)
-    action = next(
-        (candidate for candidate in panel.actions if candidate.action_id == request.action_id),
-        None,
-    )
-    if action is None:
-        raise UnknownBotError(
-            f"Action '{request.action_id}' is not available for bot '{sid}'.",
-            detail="Refresh the panel before retrying the command.",
-        )
-    availability_error: ActionNotAvailableError | None = None
-    if not action.enabled:
-        blocker = action.blockers[0] if action.blockers else None
-        availability_error = ActionNotAvailableError(
-            f"The '{action.label}' action is blocked by the current panel state.",
-            detail=(
-                blocker.detail
-                if blocker is not None
-                else "Refresh the panel and inspect the operation's readiness check."
-            ),
-        )
+    """Act in the one authority the bot's panel is read from.
+
+    Reads always opened a Dry Run's own ``sim:`` Clerk while actions ran
+    against the account's, which has never held that bot: Reconcile now
+    answered "no custody record" and Flatten never unlocked (hurdle H33). The
+    panel and the action now share one selection, held open across both, so
+    a Dry Run recovers inside its simulator and never reaches Alpaca.
+    """
+    await validate_account(broker, account_id)
     registry = get_bot_task_registry()
-    try:
-        sqlite_result = await execute_sqlite_panel_action(
-            broker,
-            account_id,
-            sid,
-            request=request,
-            panel=panel,
-            action=action,
-            availability_error=availability_error,
-            # Same durable receipt ledger the shared executor uses, so a
-            # repost of an applied SQLite recovery action replays as a no-op
-            # instead of re-executing (fleet run 2026-08-25 / F15).
-            store=(
-                durable_idempotency_store_for(registry.artifacts_root, sid)
-                if registry is not None
-                else None
-            ),
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
         )
-    except SqlitePanelBotNotFound as exc:
-        raise UnknownBotError(str(exc)) from exc
+    async with bot_custody_authority(broker, sid) as facade:
+        panel = await get_panel(broker, account_id, sid)
+        action = next(
+            (candidate for candidate in panel.actions if candidate.action_id == request.action_id),
+            None,
+        )
+        if action is None:
+            raise UnknownBotError(
+                f"Action '{request.action_id}' is not available for bot '{sid}'.",
+                detail="Refresh the panel before retrying the command.",
+            )
+        availability_error: ActionNotAvailableError | None = None
+        if not action.enabled:
+            blocker = action.blockers[0] if action.blockers else None
+            availability_error = ActionNotAvailableError(
+                f"The '{action.label}' action is blocked by the current panel state.",
+                detail=(
+                    blocker.detail
+                    if blocker is not None
+                    else "Refresh the panel and inspect the operation's readiness check."
+                ),
+            )
+        try:
+            sqlite_result = await execute_sqlite_panel_action(
+                broker,
+                account_id,
+                sid,
+                request=request,
+                panel=panel,
+                action=action,
+                availability_error=availability_error,
+                facade=facade,
+                # Same durable receipt ledger the shared executor uses, so a
+                # repost of an applied SQLite recovery action replays as a no-op
+                # instead of re-executing (fleet run 2026-08-25 / F15).
+                store=durable_idempotency_store_for(registry.artifacts_root, sid),
+            )
+        except SqlitePanelBotNotFound as exc:
+            raise UnknownBotError(str(exc)) from exc
     if sqlite_result is not None:
         return sqlite_result
-    if registry is None:
-        raise PanelUnavailableError("The bot runner is not available.")
     return await execute_action(
         request,
         sid=sid,
