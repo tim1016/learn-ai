@@ -194,6 +194,15 @@ class AlpacaPaperDeployEligibility(BaseModel):
     next_action: str
 
 
+class QualifiedDeployConfiguration(BaseModel):
+    """An exact corpus-covered preset, authored from the program's registry contract."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    symbol: str
+    parameters: dict[str, JsonValue]
+    explanation: str
+
+
 class AlpacaPaperDeployStrategy(BaseModel):
     """Trader-facing option for one accepted, evidence-only, or blocked strategy.
 
@@ -226,6 +235,7 @@ class AlpacaPaperDeployStrategy(BaseModel):
     strategy_key: str
     label: str
     explanation: str
+    qualified_configuration: QualifiedDeployConfiguration | None = None
     validation_case_symbol: str
     # When true, these are the exact non-symbol values accepted by the
     # Golden Validation review. They seed the deploy ticket and are enforced

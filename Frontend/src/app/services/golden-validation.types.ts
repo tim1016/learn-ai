@@ -52,6 +52,12 @@ export interface GoldenValidation {
   validation_case: GoldenValidationCase;
   evidence_state: string;
   evidence_revision: string;
+  evidence_applicability?: {
+    status: 'current' | 'affected' | 'unknown';
+    affected_issues: string[];
+    explanation: string;
+    requires_manual_override: boolean;
+  };
   parity_evidence: Record<string, unknown>;
   latest_review: GoldenReview | null;
   review_is_current: boolean | null;
@@ -72,4 +78,5 @@ export interface ReviewGoldenValidationRequest {
   reason: string;
   quantconnect_backtest_id?: string;
   authorized_program_version?: string;
+  acknowledge_provenance_risk?: boolean;
 }

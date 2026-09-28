@@ -1491,6 +1491,16 @@
           "params_schema": {
             "$ref": "#/components/schemas/StrategyParamsSchema"
           },
+          "qualified_configuration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualifiedDeployConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "selectable": {
             "title": "Selectable",
             "type": "boolean"
@@ -15400,6 +15410,16 @@
               }
             ]
           },
+          "evidence_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunEvidenceProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "fill_mode": {
             "title": "Fill Mode",
             "type": "string"
@@ -16301,6 +16321,43 @@
           "detail"
         ],
         "title": "ErrorDetailResponse",
+        "type": "object"
+      },
+      "EvidenceApplicability": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_issues": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Issues",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "requires_manual_override": {
+            "title": "Requires Manual Override",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "current",
+              "affected",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "explanation",
+          "requires_manual_override"
+        ],
+        "title": "EvidenceApplicability",
         "type": "object"
       },
       "EvidenceEntry": {
@@ -19144,6 +19201,9 @@
             "title": "Designated By",
             "type": "string"
           },
+          "evidence_applicability": {
+            "$ref": "#/components/schemas/EvidenceApplicability"
+          },
           "evidence_revision": {
             "title": "Evidence Revision",
             "type": "string"
@@ -19237,6 +19297,7 @@
           "validation_case",
           "evidence_state",
           "evidence_revision",
+          "evidence_applicability",
           "parity_evidence",
           "latest_review",
           "review_is_current",
@@ -31368,6 +31429,34 @@
         "title": "ProposedLimitEvaluationResponse",
         "type": "object"
       },
+      "QualifiedDeployConfiguration": {
+        "additionalProperties": false,
+        "description": "An exact corpus-covered preset, authored from the program's registry contract.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "parameters",
+          "explanation"
+        ],
+        "title": "QualifiedDeployConfiguration",
+        "type": "object"
+      },
       "QuantLibGreeksResponse": {
         "description": "Single option pricing result.",
         "properties": {
@@ -34109,6 +34198,11 @@
       },
       "ReviewGoldenRunRequest": {
         "properties": {
+          "acknowledge_provenance_risk": {
+            "default": false,
+            "title": "Acknowledge Provenance Risk",
+            "type": "boolean"
+          },
           "authorized_program_version": {
             "anyOf": [
               {
@@ -34773,6 +34867,46 @@
           "end_date"
         ],
         "title": "RunBatchOptionsRequest",
+        "type": "object"
+      },
+      "RunEvidenceProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "daily_return_convention": {
+            "title": "Daily Return Convention",
+            "type": "string"
+          },
+          "data_availability_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Availability Hash"
+          },
+          "data_contract": {
+            "title": "Data Contract",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "statistics_basis": {
+            "title": "Statistics Basis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_contract",
+          "statistics_basis",
+          "daily_return_convention"
+        ],
+        "title": "RunEvidenceProvenance",
         "type": "object"
       },
       "RunFeatureResearchRequest": {

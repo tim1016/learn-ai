@@ -1,11 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal, viewChild, untracked } from '@angular/core';
 import { InputTextModule } from 'primeng/inputtext';
 import { TooltipModule } from 'primeng/tooltip';
 
 import type {
   DeployStrategyParamProperty,
+  QualifiedDeployConfiguration,
   DeployStrategyParamsSchema,
 } from '../v2-panel/lib/broker-v2-panel.service';
+
+import { InstrumentCardComponent } from '../../../shared/ticker-range-picker/parts/instrument-card.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 
 export interface DeployParameterEntry {
   field: string;
@@ -37,11 +42,51 @@ function parseStrictNumber(raw: string, type: string | null | undefined): number
 @Component({
   selector: 'app-deploy-parameters-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [InputTextModule, TooltipModule],
+  imports: [InputTextModule, TooltipModule, InstrumentCardComponent, AssetIdentityComponent],
   templateUrl: './deploy-parameters-section.component.html',
   styleUrl: './deploy-parameters-section.component.scss',
 })
 export class DeployParametersSectionComponent {
+  readonly qualifiedConfiguration = input<QualifiedDeployConfiguration | null>(null);
+  readonly qualifiedConfigurationSelected = output<QualifiedDeployConfiguration>();
+  readonly dryRunRequested = output<void>();
+  protected readonly qualifiedPicker = viewChild<InstrumentCardComponent>('qualifiedPicker');
+  protected readonly qualifiedPickerValue: TickerRange = { symbol: '', from: '', to: '', resolution: 'daily' };
+  protected readonly coverageDetailsOpen = signal(false);
+  private pendingQualified: QualifiedDeployConfiguration | null = null;
+  protected readonly qualifiedRow = computed(() => {
+    const symbol = this.qualifiedConfiguration()?.symbol;
+    return this.qualifiedPicker()?.tickerPool().find(row => row.symbol === symbol) ?? null;
+  });
+  protected readonly qualifiedParameters = computed(() => Object.entries(this.qualifiedConfiguration()?.parameters ?? {}));
+
+  protected useQualifiedConfiguration(): void {
+    const configuration = this.qualifiedConfiguration();
+    const row = this.qualifiedRow();
+    if (!configuration || !row) return;
+    this.pendingQualified = configuration;
+    this.coverageDetailsOpen.set(true);
+    // The shared card owns joined membership and every lake/backfill check.
+    this.qualifiedPicker()?.pickTicker(row);
+  }
+
+  protected qualifiedSymbolSelected(symbol: string): void {
+    const selected = this.pendingQualified;
+    this.pendingQualified = null;
+    this.coverageDetailsOpen.set(false);
+    if (selected && selected === this.qualifiedConfiguration() && symbol === selected.symbol) {
+      this.invalidFieldsRaw.set(new Set());
+      this.qualifiedConfigurationSelected.emit(selected);
+    }
+  }
+
+  protected requestDryRun(): void {
+    this.pendingQualified = null;
+    this.qualifiedPicker()?.gate.abandon();
+    this.coverageDetailsOpen.set(false);
+    this.dryRunRequested.emit();
+  }
+
   readonly paramsSchema = input.required<DeployStrategyParamsSchema>();
   readonly values = input.required<Record<string, unknown>>();
 
@@ -64,6 +109,13 @@ export class DeployParametersSectionComponent {
   });
 
   constructor() {
+    effect(() => {
+      this.qualifiedConfiguration();
+      this.values();
+      this.pendingQualified = null;
+      const picker = this.qualifiedPicker();
+      untracked(() => picker?.gate.abandon());
+    });
     effect(() => this.invalidFieldsChange.emit(this.currentInvalidFields()));
   }
 

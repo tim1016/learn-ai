@@ -22,12 +22,9 @@ from app.services.canary_admission import canary_gate_applies, canary_pairing_ad
 from app.services.deploy_window import start_window_next_step
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
-# Rides an admitted Deploy decision at an uncovered parameter point
-# (ADR 0054); the deploy page renders that decision as the latest backend
-# Start check, so the stamp is said where an operator reads it.
 CORPUS_UNCOVERED_ADMITTED_NOTE = (
-    "Corpus coverage is UNCOVERED: the paper environment admits this exploratory run, "
-    "which is not citable as qualification evidence."
+    "Corpus coverage is UNCOVERED: Dry Run admits this exploratory configuration without broker orders. "
+    "It is not citable as qualification evidence."
 )
 
 def _not_armed(bot: RunAdmissionFacts) -> bool:
@@ -183,16 +180,15 @@ def evaluate_run_admission(
             next_step=bot.program_build.next_step
             or "Re-run the program qualification job and deploy a new sealed instance.",
         )
-    # ADR 0054: corpus coverage is a stamp on a paper account and a blocker
-    # anywhere else. `account_mode` is the Clerk's positive answer, learned
-    # from the broker at activation; nothing here infers it.
-    if bot.program_build.corpus_coverage == "UNCOVERED" and clerk.account_mode != "paper":
+    # Corpus qualification is independent of human evidence acceptance and
+    # account access. Only the explicit no-order Dry Run path is exempt.
+    if bot.program_build.corpus_coverage == "UNCOVERED" and bot.mode != "dry_run":
         return decide(
             allowed=False,
             reason_code="PROGRAM_CORPUS_UNCOVERED",
             explanation=(
-                "This instance resolved parameters the golden qualification corpus does not "
-                "cover, and only a proven paper account may run an uncovered parameter point."
+                "This exact symbol and resolved parameter configuration is outside the qualification corpus. "
+                "Paper, Shadow, and Live require a covered configuration."
             ),
             next_step=CORPUS_UNCOVERED_NEXT_STEP,
         )
@@ -371,7 +367,9 @@ def evaluate_run_admission(
 def _admitted_explanation(bot: RunAdmissionFacts) -> str:
     """The admitted sentence with the corpus-coverage and not-armed notices that apply."""
     admitted = "The process slot is absent, market data is ready, and the Clerk proves flat custody."
-    if bot.program_build.corpus_coverage == "UNCOVERED":
+    if bot.validation.state == "VERIFIED" and (bot.validation.event_id or "").startswith("golden-validation:"):
+        admitted = f"{admitted} {bot.validation.explanation}"
+    if bot.mode == "dry_run" and bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
     if _not_armed(bot):
         admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"

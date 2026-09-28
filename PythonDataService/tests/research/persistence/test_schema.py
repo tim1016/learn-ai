@@ -27,6 +27,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     7: "69a0fae284dcaa08",
     8: "bb246cd8379cf33e",
     9: "af0c45ee7f3d5e29",
+    10: "9051f189ab014f1e",
 }
 
 

@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.utils.session_anchors import et_midnight_ms
 
@@ -105,6 +106,7 @@ class BacktestRunRecord:
     insight_summary_json: str | None
     metric_documentation_json: str
     trades: tuple[TradeRecord, ...]
+    evidence_provenance_json: str | None = None
 
 
 def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
@@ -143,6 +145,7 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
     headline = _headline_metrics(payload, source=source, lean_statistics=lean_statistics)
     return BacktestRunRecord(
         source=source,
+        evidence_provenance_json=_evidence_provenance(payload.get("evidence_provenance_json")),
         requested_engine=requested_engine,
         lean_run_id=lean_run_id,
         parity_group_id=payload.get("parity_group_id") or None,
@@ -191,6 +194,17 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         metric_documentation_json=_metric_documentation(payload.get("metric_documentation_json"), source),
         trades=tuple(_trade(index, trade) for index, trade in enumerate(trades)),
     )
+
+
+def _evidence_provenance(raw: object) -> str | None:
+    # Imports/backfills lacking producer metadata remain unknown forever.
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        return RunEvidenceProvenance.model_validate(value).model_dump_json()
+    except (TypeError, ValueError) as exc:
+        raise RunPayloadError("evidence_provenance_json must contain valid producer conventions") from exc
 
 
 def synthesize_legacy_data_policy(symbol: str) -> str:

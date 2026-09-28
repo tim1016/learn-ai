@@ -134,6 +134,9 @@ def build_engine_run_payload(
 
     return {
         "source": "engine",
+        "evidence_provenance_json": (
+            response.evidence_provenance.model_dump_json() if response.evidence_provenance is not None else None
+        ),
         "lean_run_id": None,
         "requested_engine": requested_engine,
         "parity_group_id": parity_group_id,

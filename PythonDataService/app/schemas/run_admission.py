@@ -183,8 +183,7 @@ CORPUS_UNCOVERED_EXPLANATION = (
     "is exploratory and not citable as qualification evidence."
 )
 CORPUS_UNCOVERED_NEXT_STEP = (
-    "Deploy at the registered validated settings, or run golden qualification for these "
-    "parameters, before citing this run as evidence."
+    "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
 )
 ARMING_NEXT_STEP = (
     "Arm this instance with scripts.manage_alpaca_arming plan, then apply; until then the "
@@ -243,7 +242,7 @@ class ProgramBuildAdmissionFact(BaseModel):
     evidence_refs: tuple[str, ...] = ()
     explanation: str
     next_step: str | None = None
-    # How this verdict was obtained. Admission (Start/Resume) always proves the
+    # How this verdict was obtained. Admission (Deploy) always proves the
     # running bytes live, which is the default. A panel read replays the durable
     # per-run record instead, and says so rather than leaving a stale
     # ``verified_at_ms`` as the only clue that no re-proof happened.
@@ -257,9 +256,9 @@ class ProgramBuildAdmissionFact(BaseModel):
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
     # ADR 0054. Whether the golden corpus behind ``golden_trace_root`` covers
     # the resolved parameter point and symbol. ``UNCOVERED`` alongside
-    # ``state="PROVEN"`` is the paper-testing posture: the bytes are proven
-    # against their receipt, a proven paper account admits the run carrying
-    # this stamp, and anywhere else refuses it (``PROGRAM_CORPUS_UNCOVERED``).
+    # ``state="PROVEN"`` means the bytes are proven against their receipt.
+    # Only Dry Run admits an uncovered tuple; broker modes refuse it
+    # (``PROGRAM_CORPUS_UNCOVERED``).
     # Whether to admit is the pure policy's decision, never this fact's.
     corpus_coverage: Literal["COVERED", "UNCOVERED", "NOT_CHECKED"] = "NOT_CHECKED"
 

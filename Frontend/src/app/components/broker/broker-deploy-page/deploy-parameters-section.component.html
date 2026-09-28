@@ -1,5 +1,23 @@
 <section class="parameters-card" aria-labelledby="deploy-parameters-title">
   <h2 id="deploy-parameters-title">Strategy parameters</h2>
+  @if (qualifiedConfiguration(); as qualified) {
+    <aside class="qualified-configuration" aria-label="Qualified configuration">
+      <h3>Qualified configuration · <app-asset-identity [symbol]="qualified.symbol" size="xs" /></h3>
+      <p>{{ qualified.explanation }}</p>
+      <dl>
+        @for (parameter of qualifiedParameters(); track parameter[0]) {
+          <div><dt>{{ paramsSchema().properties?.[parameter[0]]?.title ?? parameter[0] }}</dt><dd>{{ parameter[1] }}</dd></div>
+        }
+      </dl>
+      <button type="button" [disabled]="!qualifiedRow()" (click)="useQualifiedConfiguration()">Use qualified configuration</button>
+      <button type="button" (click)="requestDryRun()">Try in Dry Run</button>
+      <details [open]="coverageDetailsOpen()">
+        <summary>Qualified instrument coverage</summary>
+        <app-instrument-card #qualifiedPicker appearance="flat" label="Qualified instrument coverage"
+          [value]="qualifiedPickerValue" (valueChange)="qualifiedSymbolSelected($event.symbol)" />
+      </details>
+    </aside>
+  }
 
   @if (entries().length === 0) {
     <p class="m-0 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">This strategy has no configurable parameters.</p>

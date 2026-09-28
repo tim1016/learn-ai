@@ -52,6 +52,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_backtest import (
@@ -1041,6 +1042,16 @@ def _aggregate_backtest_response(
     )
 
     response = EngineBacktestResponse(
+        evidence_provenance=RunEvidenceProvenance(
+            data_contract=(
+                "lake_complete_sessions/v1" if lake_manifest else
+                "fixture_identity/v1" if request.data_policy and request.data_policy.provider_kind == "fixture" else
+                "unrecorded"
+            ),
+            statistics_basis="marked_equity_curve/v1",
+            daily_return_convention="initial_capital_first_session/v1",
+            data_availability_hash=lake_manifest,
+        ),
         success=True,
         strategy_name=request.strategy_name,
         fill_mode=request.fill_mode,

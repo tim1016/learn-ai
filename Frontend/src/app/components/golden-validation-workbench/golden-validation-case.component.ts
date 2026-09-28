@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
+import { RouterLink } from "@angular/router";
+
 import type { GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
 import { ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
@@ -8,7 +10,7 @@ import { GoldenValidationScopeComponent } from "./golden-validation-scope.compon
 
 @Component({
   selector: "app-golden-validation-case",
-  imports: [AssetIdentityComponent, GoldenValidationScopeComponent, ReceiptLabelPipe, TimestampDisplayPipe],
+  imports: [RouterLink, AssetIdentityComponent, GoldenValidationScopeComponent, ReceiptLabelPipe, TimestampDisplayPipe],
   templateUrl: "./golden-validation-case.component.html",
   styleUrl: "./golden-validation-case.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,

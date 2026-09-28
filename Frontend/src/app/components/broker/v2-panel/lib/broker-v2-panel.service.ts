@@ -84,6 +84,7 @@ export const DEPLOYMENT_WORLD_LABELS: Readonly<Record<BudgetDeployReceipt['world
 };
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
+export type QualifiedDeployConfiguration = components['schemas']['QualifiedDeployConfiguration'];
 export type DeployStrategyParamsSchema = components['schemas']['StrategyParamsSchema'];
 export type DeployStrategyParamProperty = components['schemas']['ParamPropertySchema'];
 export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadinessCheck'];

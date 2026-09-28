@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { fakePickerWorld, flushGate } from '../../../shared/symbol-picker/testing/fake-picker-world';
+
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import type { DeployStrategyParamsSchema } from '../v2-panel/lib/broker-v2-panel.service';
 
@@ -88,5 +90,58 @@ describe('DeployParametersSectionComponent', () => {
 
     fireEvent.change(input, { target: { value: '25' } });
     expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set());
+  });
+});
+
+describe('qualified configuration action', () => {
+  const qualified = {
+    symbol: 'AAPL', parameters: { short_window: 10, gap: 0.2 },
+    explanation: 'This exact tuple is covered. Independent deployment checks still apply.',
+  };
+
+  it('leaves edits alone until the operator explicitly chooses the offered exact tuple', async () => {
+    const world = fakePickerWorld();
+    const selected = vi.fn();
+    const dryRun = vi.fn();
+    const parameters = vi.fn();
+    await render(DeployParametersSectionComponent, {
+      inputs: { paramsSchema: SCHEMA, values: { short_window: 25 }, qualifiedConfiguration: qualified },
+      providers: world.providers,
+      on: { qualifiedConfigurationSelected: selected, parameterChange: parameters, dryRunRequested: dryRun },
+    });
+    expect(selected).not.toHaveBeenCalled();
+    expect(parameters).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', { name: 'Short window' }) as HTMLInputElement).value).toBe('25');
+    fireEvent.click(screen.getByRole('button', { name: 'Try in Dry Run' }));
+    expect(dryRun).toHaveBeenCalledOnce();
+    expect(selected).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    expect(selected).toHaveBeenCalledWith(qualified);
+  });
+
+  it('applies the exact preset only after the shared instrument card confirms lake coverage', async () => {
+    const world = fakePickerWorld([], [{ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', asset_class: 'us_equity', status: 'active' }]);
+    const selected = vi.fn();
+    const { fixture } = await render(DeployParametersSectionComponent, {
+      inputs: { paramsSchema: SCHEMA, values: {}, qualifiedConfiguration: qualified },
+      providers: world.providers,
+      on: { qualifiedConfigurationSelected: selected },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    expect(world.coverage.ensureCalls).toEqual([{ symbol: 'AAPL', mode: 'polygon_split_adjusted' }]);
+    expect(selected).not.toHaveBeenCalled();
+    await flushGate(fixture);
+    expect(selected).toHaveBeenCalledWith(qualified);
+  });
+
+  it('cannot invent membership for a preset symbol missing from the joined universe', async () => {
+    const selected = vi.fn();
+    await render(DeployParametersSectionComponent, {
+      inputs: { paramsSchema: SCHEMA, values: {}, qualifiedConfiguration: { ...qualified, symbol: 'NOT-LISTED' } },
+      providers: fakePickerWorld().providers,
+      on: { qualifiedConfigurationSelected: selected },
+    });
+    expect((screen.getByRole('button', { name: 'Use qualified configuration' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(selected).not.toHaveBeenCalled();
   });
 });

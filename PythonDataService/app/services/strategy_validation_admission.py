@@ -1,4 +1,4 @@
-"""Fresh validation-proof receipts for the Start and Resume admission boundary."""
+"""Fresh validation-proof receipts for the Deploy admission boundary."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def current_strategy_validation_fact(
 ) -> StrategyValidationAdmissionFact:
     """Re-read and re-hash the proof that this run proposes to rely on.
 
-    This adapter deliberately executes at Start/Resume, not only when the
+    This adapter deliberately executes at Deploy, not only when the
     deploy panel was rendered.  A stale panel is therefore unable to turn a
     later-edited settings file, audit copy, validator, or validation event into
     a new duty run.
@@ -161,11 +161,11 @@ async def current_deployment_strategy_validation_fact(
     golden_loader: GoldenDossierLoader | None = None,
     golden_by_id_loader: GoldenDossierByIdLoader | None = None,
 ) -> StrategyValidationAdmissionFact:
-    """Resolve the exact Golden gate for Start/Resume, with v1 compatibility.
+    """Resolve the exact Golden gate for Deploy, with v1 compatibility.
 
     The first Golden case designated for a strategy moves that strategy onto
     configuration-scoped admission.  Until then, its existing v1 validation
-    event remains authoritative.  A Resume whose immutable program seal names
+    event remains authoritative.  An immutable program seal naming
     a Golden review is pinned to that exact record and can never fall back to
     a strategy-wide event.
     """
@@ -349,8 +349,8 @@ def _golden_verified(
             f"golden-validation:classification:{receipt.classification}",
         ),
         explanation=(
-            f"Golden Validation {golden_id} ({receipt.classification}) matches the exact "
-            "program version, symbol, and resolved parameters for this admission."
+            f"Golden Validation {golden_id}, human review: {receipt.classification.replace('_', ' ')}. "
+            + receipt.explanation
         ),
     )
 

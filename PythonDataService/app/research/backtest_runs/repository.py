@@ -173,6 +173,7 @@ class RunDetail(RunRow):
     trades: tuple[TradeRow, ...]
     trades_truncated: bool
     parity_verdicts: tuple[ParityVerdictRow, ...]
+    evidence_provenance_json: str | None = None
 
 
 # ── Writes ───────────────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                     max_drawdown, sharpe_ratio, sortino_ratio, profit_factor, commission_per_order, brokerage_policy,
                     data_policy_json, lean_statistics_json, lean_analysis_json, run_verdict_json,
                     verdict_version, verdict_grade, verdict_signal, equity_curve_json, validation_analytics_json,
-                    insight_summary_json, metric_documentation_json
+                    insight_summary_json, metric_documentation_json, evidence_provenance_json
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb,
                     $10, $11, $12, $13, $14, $15,
@@ -204,7 +205,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                     $24, $25, $26, $27, $28, $29,
                     $30::jsonb, $31::jsonb, $32::jsonb, $33::jsonb,
                     $34, $35, $36, $37::jsonb, $38::jsonb,
-                    $39::jsonb, $40::jsonb
+                    $39::jsonb, $40::jsonb, $41::jsonb
                 )
                 RETURNING id
                 """,
@@ -248,6 +249,7 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                 record.validation_analytics_json,
                 record.insight_summary_json,
                 record.metric_documentation_json,
+                record.evidence_provenance_json,
             )
             await _insert_trades(conn, int(run_id), record.trades)
     except asyncpg.UniqueViolationError:
@@ -357,7 +359,8 @@ _RUN_DETAIL_COLUMNS = f"""
     r.run_verdict_json::text AS run_verdict_json, r.verdict_version,
     r.equity_curve_json::text AS equity_curve_json, r.validation_analytics_json::text AS validation_analytics_json,
     r.insight_summary_json::text AS insight_summary_json,
-    r.metric_documentation_json::text AS metric_documentation_json
+    r.metric_documentation_json::text AS metric_documentation_json,
+    r.evidence_provenance_json::text AS evidence_provenance_json
 """
 _TRADE_COLUMNS = (
     "id, trade_number, entry_ms, exit_ms, entry_price, exit_price, quantity, pnl, signal_reason, is_synthetic_exit"

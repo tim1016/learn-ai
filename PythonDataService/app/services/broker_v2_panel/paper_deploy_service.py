@@ -23,6 +23,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperExecutionMode,
     AlpacaPaperSizingOption,
     BotStatusView,
+    QualifiedDeployConfiguration,
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
@@ -401,6 +402,26 @@ def _admissible_modes(
     return ()
 
 
+def _qualified_configuration(strategy_key: str, requested_symbol: str | None) -> QualifiedDeployConfiguration | None:
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    contract = registration.signal_program_contract if registration is not None else None
+    if contract is None or not contract.validated_symbols:
+        return None
+    symbol = requested_symbol if requested_symbol in contract.validated_symbols else contract.validated_symbols[0]
+    parameters = registration.param_schema.model_validate(
+        {**contract.validated_settings, "symbol": symbol}
+    ).model_dump(mode="json", exclude={"symbol"})
+    return QualifiedDeployConfiguration(
+        symbol=symbol,
+        parameters=parameters,
+        explanation=(
+            "This exact symbol and parameter configuration is covered by the registered qualification corpus. "
+            "Using it changes the form only; current evidence, account access, budget, and safety checks still apply. "
+            "Other configurations can be explored in Dry Run."
+        ),
+    )
+
+
 def _strategy_views(
     entries: list[StrategyValidationEntry],
     *,
@@ -421,6 +442,7 @@ def _strategy_views(
     return tuple(
         AlpacaPaperDeployStrategy(
             strategy_key=entry.strategy_key,
+            qualified_configuration=_qualified_configuration(entry.strategy_key, requested_symbol),
             label=entry.label,
             explanation=entry.explanation,
             validation_case_symbol=entry.validation_case_symbol,

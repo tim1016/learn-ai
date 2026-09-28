@@ -8652,6 +8652,7 @@ export interface components {
              */
             paper_access_state: "not_required" | "blocked" | "available" | "enabled";
             params_schema?: components["schemas"]["StrategyParamsSchema"];
+            qualified_configuration?: components["schemas"]["QualifiedDeployConfiguration"] | null;
             /** Selectable */
             selectable: boolean;
             /** Strategy Key */
@@ -14601,6 +14602,7 @@ export interface components {
             /** Error */
             error?: string | null;
             evaluation_window?: components["schemas"]["EngineEvaluationWindowResponse"] | null;
+            evidence_provenance?: components["schemas"]["RunEvidenceProvenance"] | null;
             /** Fill Mode */
             fill_mode: string;
             /** Final Equity */
@@ -14925,6 +14927,23 @@ export interface components {
              * @description Why the request was refused, in the words the route chose.
              */
             detail: string;
+        };
+        /** EvidenceApplicability */
+        EvidenceApplicability: {
+            /**
+             * Affected Issues
+             * @default []
+             */
+            affected_issues?: string[];
+            /** Explanation */
+            explanation: string;
+            /** Requires Manual Override */
+            requires_manual_override: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "current" | "affected" | "unknown";
         };
         /**
          * EvidenceEntry
@@ -16066,6 +16085,7 @@ export interface components {
             designated_at_ms: number;
             /** Designated By */
             designated_by: string;
+            evidence_applicability: components["schemas"]["EvidenceApplicability"];
             /** Evidence Revision */
             evidence_revision: string;
             /** Evidence State */
@@ -21602,6 +21622,20 @@ export interface components {
             worst_case_cost: number;
         };
         /**
+         * QualifiedDeployConfiguration
+         * @description An exact corpus-covered preset, authored from the program's registry contract.
+         */
+        QualifiedDeployConfiguration: {
+            /** Explanation */
+            explanation: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * QuantLibGreeksResponse
          * @description Single option pricing result.
          */
@@ -22659,6 +22693,11 @@ export interface components {
         };
         /** ReviewGoldenRunRequest */
         ReviewGoldenRunRequest: {
+            /**
+             * Acknowledge Provenance Risk
+             * @default false
+             */
+            acknowledge_provenance_risk?: boolean;
             /** Authorized Program Version */
             authorized_program_version?: string | null;
             /** Command Id */
@@ -22953,6 +22992,23 @@ export interface components {
              * @description List of tickers to test
              */
             tickers: string[];
+        };
+        /** RunEvidenceProvenance */
+        RunEvidenceProvenance: {
+            /** Daily Return Convention */
+            daily_return_convention: string;
+            /** Data Availability Hash */
+            data_availability_hash?: string | null;
+            /** Data Contract */
+            data_contract: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Statistics Basis */
+            statistics_basis: string;
         };
         /**
          * RunFeatureResearchRequest

@@ -9,6 +9,7 @@ export interface GoldenReviewDraft {
   reason: string;
   quantConnectBacktestId: string;
   authorizedProgramVersion: string;
+  acknowledgeProvenanceRisk?: boolean;
 }
 
 @Component({
@@ -51,6 +52,10 @@ export class GoldenValidationReviewComponent {
     if (event.target instanceof HTMLInputElement) {
       this.updateDraft({ authorizedProgramVersion: event.target.value });
     }
+  }
+
+  protected setProvenanceRisk(event: Event): void {
+    if (event.target instanceof HTMLInputElement) this.updateDraft({ acknowledgeProvenanceRisk: event.target.checked });
   }
 
   protected submit(): void {

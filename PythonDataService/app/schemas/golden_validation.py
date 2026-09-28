@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.research.backtest_runs.evidence_provenance import EvidenceApplicability
 from app.research.golden_validation.service import GoldenValidationDossier
 
 
@@ -34,6 +35,7 @@ class ReviewGoldenRunRequest(BaseModel):
     command_id: str = Field(min_length=1, max_length=200)
     expected_evidence_revision: str = Field(min_length=64, max_length=64)
     decision: Literal["accept", "reject"]
+    acknowledge_provenance_risk: bool = False
     reason: str = Field(min_length=3, max_length=4000)
     quantconnect_backtest_id: str | None = Field(default=None, max_length=200)
     authorized_program_version: str | None = Field(default=None, max_length=200)
@@ -117,6 +119,7 @@ class GoldenValidationResponse(BaseModel):
     validation_case: dict[str, Any]
     evidence_state: str
     evidence_revision: str
+    evidence_applicability: EvidenceApplicability
     parity_evidence: dict[str, Any]
     latest_review: GoldenReviewResponse | None
     review_is_current: bool | None
@@ -153,6 +156,7 @@ class GoldenValidationResponse(BaseModel):
             validation_case=dossier.validation_case,
             evidence_state=dossier.evidence.state,
             evidence_revision=dossier.evidence.revision,
+            evidence_applicability=dossier.evidence_applicability,
             parity_evidence=dossier.evidence.payload,
             latest_review=reviews[0] if reviews else None,
             review_is_current=dossier.review_is_current,

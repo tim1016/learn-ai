@@ -117,3 +117,22 @@ def test_seal_parameters_match_validated_settings_false_under_symbol_profile_tie
     assert seal is not None
     assert seal.configured_signal.parameters["gap"].origin == "deployment_symbol"
     assert seal.configured_signal.parameters_match_validated_settings is False
+
+
+def test_qualified_presets_resolve_to_the_exact_registry_corpus_without_changing_it() -> None:
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    from app.services.broker_v2_panel.paper_deploy_service import _qualified_configuration
+    from app.services.signal_program_admission import _parameters_match
+
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        before = dict(contract.validated_settings)
+        preset = _qualified_configuration(key, "NOT-COVERED")
+        assert preset is not None
+        assert _parameters_match(contract, {**preset.parameters, "symbol": preset.symbol})
+        assert contract.validated_settings == before
+        assert "symbol" not in preset.parameters
+        for symbol in contract.validated_symbols:
+            assert _qualified_configuration(key, symbol).symbol == symbol

@@ -126,6 +126,12 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
     """A complete engine-source payload: every column the row has is populated."""
     payload: dict[str, Any] = {
         "source": "engine",
+        "evidence_provenance_json": json.dumps({
+            "schema_version": 1,
+            "data_contract": "fixture_identity/v1",
+            "statistics_basis": "marked_equity_curve/v1",
+            "daily_return_convention": "initial_capital_first_session/v1",
+        }),
         "lean_run_id": None,
         "requested_engine": "python",
         "parity_group_id": None,

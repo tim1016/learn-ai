@@ -32,7 +32,6 @@ from app.schemas.run_admission import (
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import (
-    CORPUS_UNCOVERED_ADMITTED_NOTE,
     evaluate_run_admission,
 )
 
@@ -777,25 +776,23 @@ def test_canary_admission_refuses_when_clerk_custody_is_unprovable_even_if_allow
 # --- Corpus coverage: a stamp on a proven paper account, a blocker elsewhere --
 
 
-def _uncovered_bot(*, mode: str = "dry_run") -> StartRunFacts:
+def _uncovered_bot(*, mode: str = "log_only") -> StartRunFacts:
     """A PROVEN build whose resolved parameters lie outside the golden corpus."""
     return _bot(mode=mode).model_copy(
         update={"program_build": _canary_program_build(corpus_coverage="UNCOVERED")}
     )
 
 
-def test_uncovered_corpus_is_admitted_on_a_proven_paper_account_and_stamped() -> None:
-    """Paper is for testing: an uncovered parameter point starts, and says so.
-
-    The code-identity half of the proof is untouched (state stays PROVEN);
-    only the corpus-coverage half is relaxed, and the admitted decision
-    carries the stamp so the run is never mistaken for qualification evidence.
-    """
-    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="paper"), evaluated_at_ms=_NOW)
-
+@pytest.mark.parametrize("account_mode", ["paper", "live"])
+def test_uncovered_corpus_is_exempt_only_in_explicit_dry_run(account_mode: str) -> None:
+    decision = evaluate_run_admission(_uncovered_bot(mode="dry_run"), _clerk(account_mode=account_mode), evaluated_at_ms=_NOW)
     assert decision.allowed is True
-    assert decision.reason_code == "START_ADMITTED"
-    assert CORPUS_UNCOVERED_ADMITTED_NOTE in decision.explanation
+
+
+def test_uncovered_corpus_is_refused_on_paper_despite_accepted_evidence() -> None:
+    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="paper"), evaluated_at_ms=_NOW)
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+    assert "Use qualified configuration" in decision.next_step
 
 
 def test_uncovered_corpus_is_refused_on_a_live_account() -> None:
@@ -841,7 +838,6 @@ def test_covered_corpus_never_consults_the_account_environment() -> None:
     decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
 
     assert decision.allowed is True
-    assert CORPUS_UNCOVERED_ADMITTED_NOTE not in decision.explanation
 
 
 def test_uncovered_corpus_on_paper_trade_still_requires_the_canary_pairing(
@@ -861,8 +857,8 @@ def test_uncovered_corpus_on_paper_trade_still_requires_the_canary_pairing(
         _uncovered_bot(mode="trade"), _clerk(account_mode="paper"), evaluated_at_ms=_NOW
     )
 
-    assert admitted.allowed is True
-    assert CORPUS_UNCOVERED_ADMITTED_NOTE in admitted.explanation
+    assert admitted.allowed is False
+    assert admitted.reason_code == "PROGRAM_CORPUS_UNCOVERED"
 
 
 def _arming(state: str, *, reason_code: str | None = None, observed_at_ms: int = _NOW - 500) -> ArmingAdmissionFact:
@@ -895,7 +891,7 @@ def test_the_build_proof_gate_still_comes_first() -> None:
 
 def test_the_corpus_gate_still_comes_first() -> None:
     """R6: an uncovered corpus refuses before the arming ledger is even consulted."""
-    bot = _uncovered_bot(mode="dry_run").model_copy(
+    bot = _uncovered_bot().model_copy(
         update={"arming": _arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID)}
     )
     decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)

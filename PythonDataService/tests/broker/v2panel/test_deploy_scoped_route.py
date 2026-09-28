@@ -257,6 +257,7 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "override_explanation",
         "blocked_explanation",
         "params_schema",
+        "qualified_configuration",
     }
     assert strategy["validation_case_symbol"] == "SPY"
     assert strategy["validation_case_parameters"] == {}

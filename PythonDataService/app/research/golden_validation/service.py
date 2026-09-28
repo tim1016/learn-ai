@@ -18,6 +18,7 @@ from typing import Any, Literal
 import asyncpg
 
 from app.research.backtest_runs import repository as backtest_repo
+from app.research.backtest_runs.evidence_provenance import EvidenceApplicability, assess_evidence_provenance
 from app.research.golden_validation import repository as repo
 from app.utils.timestamps import now_ms_utc
 
@@ -74,13 +75,24 @@ class GoldenValidationDossier:
     reviews: tuple[repo.GoldenReviewRow, ...]
 
     @property
+    def evidence_applicability(self) -> EvidenceApplicability:
+        return assess_evidence_provenance(self.validation_case.get("evidence_provenance"))
+
+    @property
     def latest_review(self) -> repo.GoldenReviewRow | None:
         return self.reviews[0] if self.reviews else None
 
     @property
     def review_is_current(self) -> bool | None:
         review = self.latest_review
-        return None if review is None else review.expected_evidence_revision == self.evidence.revision
+        if review is None:
+            return None
+        if review.expected_evidence_revision != self.evidence.revision:
+            return False
+        if self.evidence_applicability.status == "affected":
+            reviewed = json.loads(review.evidence_json)
+            return review.classification == "manual_override" and reviewed.get("acknowledge_provenance_risk") is True
+        return True
 
     @property
     def state(self) -> str:
@@ -139,7 +151,10 @@ def _case_snapshot(run: backtest_repo.RunDetail) -> dict[str, Any]:
         allow_none=True,
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "evidence_provenance": _parse_object(
+            run.evidence_provenance_json, field="evidence provenance", allow_none=True,
+        ),
         "source_run_id": run.id,
         "strategy": {
             "name": run.strategy_name,
@@ -364,6 +379,11 @@ def _evidence_for(golden_run: repo.GoldenRunRow, verdict: Mapping[str, Any] | No
                 "payload": verdict_payload,
             },
         }
+    applicability = assess_evidence_provenance(validation_case.get("evidence_provenance"))
+    # Positively affected evidence changes review currentness. Unknown historical
+    # provenance is visible but does not revoke a previously accepted review.
+    if applicability.status == "affected":
+        payload["evidence_applicability"] = applicability.model_dump(mode="json")
     revision = _sha256({"case_sha256": golden_run.case_sha256, "evidence": payload})
     return EvidenceView(state=state, revision=revision, parity_verdict_id=verdict_id, payload=payload)
 
@@ -542,6 +562,7 @@ async def review(
     quantconnect_backtest_id: str | None,
     authorized_program_version: str | None,
     actor: str,
+    acknowledge_provenance_risk: bool = False,
 ) -> GoldenValidationDossier:
     """Append judgment against exactly the evidence revision the human saw."""
     command = {
@@ -553,6 +574,8 @@ async def review(
         "quantconnect_backtest_id": quantconnect_backtest_id,
         "authorized_program_version": authorized_program_version,
     }
+    if acknowledge_provenance_risk:
+        command["acknowledge_provenance_risk"] = True
     command_sha256 = _command_hash(command)
     async with conn.transaction():
         prior = await repo.get_review_by_command(conn, command_id)
@@ -587,13 +610,26 @@ async def review(
                 "The source run already records its program version; an authorization override is not applicable."
             )
 
+        applicability = dossier.evidence_applicability
+        if decision == "accept" and applicability.requires_manual_override and not acknowledge_provenance_risk:
+            raise GoldenRunIneligibleError(
+                "The recorded conventions are affected or unknown. Rerun and compare current evidence, "
+                "or explicitly acknowledge Manual override before accepting this limitation."
+            )
+
         classification: str | None = None
         if decision == "accept":
             classification = {
                 "agreement": "engine_agreement",
                 "deviations": "reviewed_deviations",
             }.get(dossier.evidence.state, "manual_override")
-        evidence_json = _canonical_json(dossier.evidence.payload)
+            if applicability.requires_manual_override:
+                classification = "manual_override"
+        reviewed_evidence = dict(dossier.evidence.payload)
+        if acknowledge_provenance_risk:
+            reviewed_evidence["evidence_applicability"] = applicability.model_dump(mode="json")
+            reviewed_evidence["acknowledge_provenance_risk"] = True
+        evidence_json = _canonical_json(reviewed_evidence)
         inserted = await repo.insert_review(
             conn,
             golden_run_id=golden_run_id,
@@ -605,7 +641,7 @@ async def review(
             evidence_state=dossier.evidence.state,
             parity_verdict_id=dossier.evidence.parity_verdict_id,
             evidence_json=evidence_json,
-            evidence_sha256=_sha256(dossier.evidence.payload),
+            evidence_sha256=_sha256(reviewed_evidence),
             reason=reason,
             quantconnect_backtest_id=quantconnect_backtest_id,
             authorized_program_version=authorized_program_version,
@@ -623,7 +659,7 @@ async def review(
 def assess(dossier: GoldenValidationDossier, proposed_configuration: dict[str, Any]) -> ApplicabilityReceipt:
     """Assess one accepted record against a proposed exact configuration.
 
-    This pure boundary is reusable by Start/Resume without moving any matching
+    This pure boundary is reusable by Deploy without moving any matching
     logic into a UI. Broker, custody, arming, corpus, and every other
     operational gate remain independent of this receipt.
     """
@@ -653,12 +689,18 @@ def assess(dossier: GoldenValidationDossier, proposed_configuration: dict[str, A
     elif review.decision != "accept":
         explanation = "The latest human review rejected this Golden Validation case."
     elif dossier.review_is_current is not True:
-        explanation = "Computed evidence changed after the latest human review; review the new evidence revision."
+        explanation = (
+            dossier.evidence_applicability.explanation
+            if dossier.evidence_applicability.status == "affected" else
+            "Computed evidence changed after the latest human review; review the new evidence revision."
+        )
     else:
         explanation = (
             "This accepted Golden Validation matches the proposed configuration exactly. "
             "All independent Paper or Live safety gates still apply."
         )
+    if not mismatches and dossier.review_is_current is True and dossier.evidence_applicability.status != "current":
+        explanation += " " + dossier.evidence_applicability.explanation
     applicable = not mismatches and review is not None and review.decision == "accept" and dossier.review_is_current is True
     return ApplicabilityReceipt(
         golden_validation_id=dossier.golden_run.id,
@@ -705,13 +747,19 @@ def assess_deployment_scope(
     elif review.decision != "accept":
         explanation = "The latest human review rejected this Golden Validation case."
     elif dossier.review_is_current is not True:
-        explanation = "Computed evidence changed after the latest human review; review the new evidence revision."
+        explanation = (
+            dossier.evidence_applicability.explanation
+            if dossier.evidence_applicability.status == "affected" else
+            "Computed evidence changed after the latest human review; review the new evidence revision."
+        )
     else:
         explanation = (
             "This accepted Golden Validation matches the exact program, symbol, and resolved parameters. "
             "Its historical data window and execution assumptions remain frozen evidence provenance, and all "
             "independent Paper or Live safety gates still apply."
         )
+    if not mismatches and dossier.review_is_current is True and dossier.evidence_applicability.status != "current":
+        explanation += " " + dossier.evidence_applicability.explanation
     applicable = not mismatches and review is not None and review.decision == "accept" and dossier.review_is_current is True
     return ApplicabilityReceipt(
         golden_validation_id=dossier.golden_run.id,

@@ -59,6 +59,7 @@ export class GoldenValidationWorkbenchComponent {
   protected readonly reviewReason = signal("");
   protected readonly quantConnectBacktestId = signal("");
   protected readonly authorizedProgramVersion = signal("");
+  protected readonly acknowledgeProvenanceRisk = signal(false);
   protected readonly busy = signal(false);
   protected readonly message = signal<string | null>(null);
   protected readonly error = signal<string | null>(null);
@@ -88,9 +89,19 @@ export class GoldenValidationWorkbenchComponent {
     reason: this.reviewReason(),
     quantConnectBacktestId: this.quantConnectBacktestId(),
     authorizedProgramVersion: this.authorizedProgramVersion(),
+    acknowledgeProvenanceRisk: this.acknowledgeProvenanceRisk(),
   }));
 
   constructor() {
+    let reviewedEvidenceKey: string | null = null;
+    effect(() => {
+      const selected = this.selected();
+      const key = selected ? `${selected.id}:${selected.evidence_revision}` : null;
+      if (key !== reviewedEvidenceKey) {
+        reviewedEvidenceKey = key;
+        this.acknowledgeProvenanceRisk.set(false);
+      }
+    });
     effect(() => {
       const sourceRunId = this.sourceRunId();
       if (sourceRunId !== this.lastSourceRunId) {
@@ -157,6 +168,7 @@ export class GoldenValidationWorkbenchComponent {
     this.reviewReason.set(draft.reason);
     this.quantConnectBacktestId.set(draft.quantConnectBacktestId);
     this.authorizedProgramVersion.set(draft.authorizedProgramVersion);
+    this.acknowledgeProvenanceRisk.set(draft.acknowledgeProvenanceRisk ?? false);
     this.reviewCommandId.set(this.commandId("review"));
   }
 
@@ -177,6 +189,10 @@ export class GoldenValidationWorkbenchComponent {
       this.error.set("Enter the exact Signal Program version this historical run is authorized to represent.");
       return;
     }
+    if (this.reviewDecision() === "accept" && selected.evidence_applicability?.requires_manual_override && !this.acknowledgeProvenanceRisk()) {
+      this.error.set("Acknowledge Manual override for the recorded affected or unknown conventions, or rerun and review new evidence.");
+      return;
+    }
     this.busy.set(true);
     this.clearNotice();
     try {
@@ -185,6 +201,7 @@ export class GoldenValidationWorkbenchComponent {
         expected_evidence_revision: selected.evidence_revision,
         decision: this.reviewDecision(),
         reason,
+        ...(this.reviewDecision() === "accept" && this.acknowledgeProvenanceRisk() ? { acknowledge_provenance_risk: true } : {}),
         ...(this.quantConnectBacktestId().trim()
           ? { quantconnect_backtest_id: this.quantConnectBacktestId().trim() }
           : {}),
@@ -234,6 +251,7 @@ export class GoldenValidationWorkbenchComponent {
     this.reviewReason.set("");
     this.quantConnectBacktestId.set("");
     this.authorizedProgramVersion.set("");
+    this.acknowledgeProvenanceRisk.set(false);
     this.reviewCommandId.set(this.commandId("review"));
   }
 
