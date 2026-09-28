@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.v2panel.vocabulary import ActionId
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_v2_panel import PanelActionReceipt, PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
 
@@ -581,8 +582,18 @@ def reset_idempotency_store_for_testing() -> None:
     _DURABLE_STORES.clear()
 
 
-def durable_idempotency_store_for(path: Path) -> DurableIdempotencyStore:
-    """Return the restart-safe receipt ledger for one bot instance."""
+def durable_idempotency_store_for(artifacts_root: Path, strategy_instance_id: str) -> DurableIdempotencyStore:
+    """Return the restart-safe receipt ledger for one bot instance.
+
+    Panel commands are lifecycle custody, so the ledger sits beside the bot's
+    binding and lifecycle artifacts. The store locates its own file through the
+    confined per-instance directory: the request's id is sanitized where the
+    receipt path is built, whichever registry supplied the artifacts root.
+    """
+    path = (
+        strategy_instance_artifact_dir(artifacts_root, "live_state", strategy_instance_id)
+        / "panel_action_receipts.json"
+    )
     return _DURABLE_STORES.setdefault(path, DurableIdempotencyStore(path))
 
 

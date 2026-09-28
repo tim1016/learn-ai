@@ -118,12 +118,12 @@ class _FakeBrokerPort:
 class _FakeRegistry:
     def __init__(
         self,
-        receipts_root: Path | None = None,
+        artifacts_root: Path | None = None,
         *,
         running: bool = True,
         sids: Sequence[str] = (SID,),
     ) -> None:
-        self._receipts_root = receipts_root or Path("receipts")
+        self.artifacts_root = artifacts_root or Path("receipts")
         self._running = running
         self._sids = tuple(sids)
         # Attributed per bot, not counted as a scalar: a fleet-wide total is
@@ -147,9 +147,6 @@ class _FakeRegistry:
         ) as (snapshot, _policy, _terms):
             self.custody_projections.append((sid, snapshot.reconciliation_state))
         raise BotRunnerError("resume admission policy is not modelled in this harness")
-
-    def panel_action_receipt_path(self, sid: str) -> Path:
-        return self._receipts_root / f"{sid}-panel-action-receipts.json"
 
     def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == "alpaca"
@@ -1001,9 +998,9 @@ async def test_action_refuses_malformed_sid_before_touching_receipt_path(
     seen_paths: list[Path] = []
     real_store = panel_data_source.durable_idempotency_store_for
 
-    def spy(path: Path) -> object:
-        seen_paths.append(path)
-        return real_store(path)
+    def spy(artifacts_root: Path, sid: str) -> object:
+        seen_paths.append(artifacts_root / sid)
+        return real_store(artifacts_root, sid)
 
     monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
     request = {

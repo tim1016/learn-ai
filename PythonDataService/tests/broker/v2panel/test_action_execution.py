@@ -32,6 +32,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     IdempotencyStore,
     StaleRevisionError,
     UnknownActionError,
+    durable_idempotency_store_for,
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
@@ -390,9 +391,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: SimpleNamespace(
-            panel_action_receipt_path=lambda _sid: tmp_path / "receipts.json"
-        ),
+        lambda: SimpleNamespace(artifacts_root=tmp_path),
     )
 
     with pytest.raises(ActionNotAvailableError) as exc:
@@ -582,6 +581,34 @@ async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp
             await store.reserve_or_get(_SID, "stop", "next-command")
 
     assert path.read_text(encoding="utf-8") == original
+
+
+async def test_durable_store_keeps_receipts_beside_the_instance_artifacts(tmp_path: Path) -> None:
+    """The ledger stays at ``live_state/<sid>/panel_action_receipts.json``, the
+    location every existing bot's receipts were written to, so an upgrade still
+    replays them instead of re-firing a completed command."""
+    store = durable_idempotency_store_for(tmp_path, _SID)
+
+    assert await store.reserve_or_get(_SID, "stop", "first") is None
+
+    assert (tmp_path / "live_state" / _SID / "panel_action_receipts.json").is_file()
+
+
+@pytest.mark.parametrize("hostile_sid", ["../escape", "evil id", "a/b", ""])
+def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
+    tmp_path: Path, hostile_sid: str,
+) -> None:
+    """The store builds its own path from the request's id through the confined
+    per-instance directory, so no caller -- production registry or test double
+    -- can hand it a file outside the artifacts root (CodeQL py/path-injection,
+    #2554)."""
+    artifacts_root = tmp_path / "artifacts"
+
+    with pytest.raises(ValueError):
+        durable_idempotency_store_for(artifacts_root, hostile_sid)
+
+    assert not artifacts_root.exists()
+    assert not (tmp_path / "escape").exists()
 
 
 async def test_unwired_action_is_typed_not_available() -> None:

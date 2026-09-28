@@ -1388,15 +1388,6 @@ class BotTaskRegistry:
             observed_at_ms=self._now_ms(),
         )
 
-    def panel_action_receipt_path(self, strategy_instance_id: str) -> Path:
-        """Return this instance's durable panel-command receipt location.
-
-        Panel commands are lifecycle custody, so their idempotency evidence is
-        co-located with the binding and lifecycle artifacts rather than held in
-        a process-local web handler.
-        """
-        return self._confined_instance_dir(strategy_instance_id) / "panel_action_receipts.json"
-
     def binding_for_control(self, broker: str, strategy_instance_id: str) -> BrokerBotBinding:
         """Return immutable deployed configuration for a Clerk control action."""
         binding = self._read_binding(strategy_instance_id)

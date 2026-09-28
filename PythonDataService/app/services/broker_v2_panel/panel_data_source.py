@@ -943,7 +943,7 @@ async def _run_action_under_live_authority(
             # repost of an applied SQLite recovery action replays as a no-op
             # instead of re-executing (fleet run 2026-08-25 / F15).
             store=(
-                durable_idempotency_store_for(registry.panel_action_receipt_path(sid))
+                durable_idempotency_store_for(registry.artifacts_root, sid)
                 if registry is not None
                 else None
             ),
@@ -961,6 +961,6 @@ async def _run_action_under_live_authority(
         current_concurrency_token=action.concurrency_token,
         performers=_action_performers(broker, sid, idempotency_key=request.idempotency_key),
         operator_identity=operator_identity,
-        store=durable_idempotency_store_for(registry.panel_action_receipt_path(sid)),
+        store=durable_idempotency_store_for(registry.artifacts_root, sid),
         availability_error=availability_error,
     )
