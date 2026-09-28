@@ -391,9 +391,15 @@ async def with_finished_results(
     Read only when a row is Finished, in a worker thread: the lifetime fee
     projection is blocking work and never runs on the event loop
     (``ClerkSqliteRepository.bot_results`` reuses it at an unchanged custody
-    revision). When the fee evidence cannot vouch for a result the rows keep
-    it unknown -- said in the log, never shown as $0 -- and the roster still
-    renders.
+    revision). That memo is the repository's and holds ONE entry, keyed by
+    ``(control_revision, Finished sids)``: a read whose Finished set differs
+    from the previous read's recomputes rather than reuses.
+
+    When the fee evidence cannot vouch for a result (``BudgetUnavailable``)
+    the rows keep it unknown -- said in the log, never shown as $0 -- and the
+    roster still renders. Any other error from the results read is unexpected
+    and propagates: it refuses the whole catalog read, by design, rather than
+    render every row beside Finished results that failed for an unnamed reason.
     """
     finished = [row.strategy_instance_id for row in rows if row.group == "finished"]
     if not finished:
