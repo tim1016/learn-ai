@@ -260,7 +260,7 @@ describe('AlpacaDeskComponent', () => {
     // workspace's header — the Overview tab renders none of them itself.
     expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Alpaca clerk lanes' })).toBeNull();
-    expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
+    expect(await screen.findByLabelText("The Clerk's records and Alpaca agree")).toBeTruthy();
     expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
     expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
 

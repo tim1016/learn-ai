@@ -17,7 +17,9 @@
       <p class="order-route-notice" role="alert">{{ notice }}</p>
     }
 
-    <app-alpaca-custody-resolution [target]="target" />
+    <app-alpaca-custody-resolution [target]="target">
+      <p>Review the exact evidence-bound recovery actions in the Operator lens.</p>
+    </app-alpaca-custody-resolution>
 
     @if (lens() === 'trader') {
       <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />

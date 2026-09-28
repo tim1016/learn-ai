@@ -317,7 +317,7 @@ def attribute_session_fees(
             f"Conflicting fee evidence for {charge_id}. Reconcile broker activities." for charge_id in collapsed.conflicts
         )
         if not activities_complete:
-            unresolved.append("The broker activity read does not cover this fee day. Refresh account evidence.")
+            unresolved.append("The broker activity read does not cover this fee day.")
     reported = {fill.fill_id: fill for fill in fills if fill.reported_fee is not None and not simulated}
     settled = {(key, component) for key in reported for component in COMPONENTS}
     replaced_reported: set[str] = set()

@@ -242,7 +242,7 @@ describe('AlpacaTraderLensComponent', () => {
 
     expect(await screen.findAllByTitle('SPY')).not.toHaveLength(0);
     expect(screen.getByRole('heading', { name: 'Current positions' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Orders and cash moves' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     // #2183: no eyebrow-plus-heading pair remains — the retired labels sat
     // above these headings. ("Today" is exercised in
@@ -251,9 +251,9 @@ describe('AlpacaTraderLensComponent', () => {
     expect(screen.queryByText('Account outcomes')).toBeNull();
     expect(screen.queryByText('Portfolio')).toBeNull();
     expect(screen.getByRole('table', { name: 'Current positions' })).toBeTruthy();
-    expect(screen.getByRole('table', { name: "Today's account activity" })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Orders and cash moves' })).toBeTruthy();
     expect(screen.getByRole('searchbox', { name: 'Search current positions' })).toBeTruthy();
-    expect(screen.getByRole('searchbox', { name: "Search today's activity" })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'Search orders and cash moves' })).toBeTruthy();
     expect(screen.getAllByTitle('NVDA')).not.toHaveLength(0);
     expect(broker.listActivities).toHaveBeenCalledWith(
       expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA1' }),
@@ -310,7 +310,7 @@ describe('AlpacaTraderLensComponent', () => {
     broker.listActivities.mockResolvedValue([]);
     await renderLens(broker);
 
-    expect(await screen.findByText('No account activity has been recorded today.')).toBeTruthy();
+    expect(await screen.findByText('No orders or cash moves were recorded in this period.')).toBeTruthy();
   });
 
   it('renders backend-authored reconciliation divergences', async () => {
@@ -344,8 +344,8 @@ describe('AlpacaTraderLensComponent', () => {
     await renderLens(broker);
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain("Today's account activity is unavailable");
-    expect(screen.queryByText('No account activity has been recorded today.')).toBeNull();
+    expect(alert.textContent).toContain('Orders and cash moves are unavailable');
+    expect(screen.queryByText('No orders or cash moves were recorded in this period.')).toBeNull();
   });
 
   it('keeps the broker curve visible when the independent proof is unavailable', async () => {

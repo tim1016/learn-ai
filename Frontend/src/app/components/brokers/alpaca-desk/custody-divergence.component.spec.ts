@@ -41,8 +41,8 @@ describe('CustodyDivergenceComponent', () => {
     });
 
     expect(screen.getByText('SPY')).toBeTruthy();
-    expect(screen.getByRole('columnheader', { name: 'Clerk attributes' })).toBeTruthy();
-    expect(screen.getByRole('columnheader', { name: 'Broker holds' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Recorded by the Clerk' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Held at Alpaca' })).toBeTruthy();
   });
 
   it('renders possible causes in a details/summary block', async () => {
