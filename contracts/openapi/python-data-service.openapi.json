@@ -365,6 +365,173 @@
         "title": "AccountPnlReconciliationResponse",
         "type": "object"
       },
+      "AccountRiskApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_risk_revision": {
+            "minimum": 0.0,
+            "title": "Expected Risk Revision",
+            "type": "integer"
+          },
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          },
+          "loss_fraction": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Fraction",
+            "type": "number"
+          },
+          "loss_usd": {
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "expected_risk_revision",
+          "expected_selection_generation",
+          "loss_fraction",
+          "loss_usd"
+        ],
+        "title": "AccountRiskApplyRequest",
+        "type": "object"
+      },
+      "AccountRiskClearRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_risk_revision": {
+            "minimum": 0.0,
+            "title": "Expected Risk Revision",
+            "type": "integer"
+          },
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_risk_revision",
+          "expected_selection_generation"
+        ],
+        "title": "AccountRiskClearRequest",
+        "type": "object"
+      },
+      "AccountRiskStateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "applied_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At Ms"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "entry_state": {
+            "enum": [
+              "ready",
+              "held",
+              "unknown"
+            ],
+            "title": "Entry State",
+            "type": "string"
+          },
+          "hold_loss_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Loss Limit Usd"
+          },
+          "hold_policy_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Policy Revision"
+          },
+          "hold_session_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Session Start Ms"
+          },
+          "loss_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Fraction"
+          },
+          "loss_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Usd"
+          },
+          "risk_revision": {
+            "title": "Risk Revision",
+            "type": "integer"
+          },
+          "selection_generation": {
+            "title": "Selection Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "risk_revision",
+          "selection_generation",
+          "loss_fraction",
+          "loss_usd",
+          "applied_at_ms",
+          "entry_state",
+          "detail"
+        ],
+        "title": "AccountRiskStateResponse",
+        "type": "object"
+      },
       "AccountVerificationResponse": {
         "additionalProperties": false,
         "properties": {
@@ -42544,6 +42711,7 @@
           "ACCOUNT_HOLD_RAISED",
           "ACCOUNT_HOLD_REFRESHED",
           "ACCOUNT_HOLD_RESOLVED",
+          "ACCOUNT_RISK_LIMITS_APPLIED",
           "ATTRIBUTED_RESIDUE_DISCHARGED",
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
@@ -51436,6 +51604,173 @@
           }
         },
         "summary": "Verify Account",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/risk-limits": {
+      "get": {
+        "operationId": "read_risk_limits_api_brokers_alpaca_configuration_risk_limits_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Risk Limits",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/risk-limits/apply": {
+      "post": {
+        "operationId": "apply_risk_limits_api_brokers_alpaca_configuration_risk_limits_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRiskApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Risk Limits",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/risk-limits/clear-hold": {
+      "post": {
+        "operationId": "clear_risk_hold_api_brokers_alpaca_configuration_risk_limits_clear_hold_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRiskClearRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Risk Hold",
         "tags": [
           "broker-configuration"
         ]
@@ -61835,6 +62170,238 @@
           }
         },
         "summary": "Fleet Configuration Verify Account",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/risk-limits (configuration_manage).",
+        "operationId": "fleet_configuration_risk_limits_read_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Limits Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/apply": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/risk-limits/apply (configuration_manage).",
+        "operationId": "fleet_configuration_risk_limits_apply_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Limits Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/clear-hold": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/risk-limits/clear-hold (configuration_manage).",
+        "operationId": "fleet_configuration_risk_hold_clear_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_clear_hold_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Hold Clear",
         "tags": [
           "broker-clerks"
         ]

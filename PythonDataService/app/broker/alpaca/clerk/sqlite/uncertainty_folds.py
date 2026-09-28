@@ -128,9 +128,9 @@ def account_hold_envelope(
         )
         operator_impact = "New submits are paused account-wide; exits are unaffected."
         next_step = (
-            "When the account has recovered, clear the hold with the guarded operator action "
-            "(POST /api/brokers/alpaca/live-envelope/loss-hold/clear). It does not clear at "
-            "session rollover."
+            "In Configuration, use Clear loss hold after recovery. In a new session, "
+            "the same action first proves previous obligations resolved and both loss "
+            "limits safe. Session rollover never clears a hold automatically."
         )
     else:
         raise KeyError(f"{reason_code!r} is not a registered account-hold cause")

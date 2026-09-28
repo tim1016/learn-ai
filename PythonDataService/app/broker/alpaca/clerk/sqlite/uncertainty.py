@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.live_arming import ARMING_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
+    LossHoldClearBasis,
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
 )
@@ -224,7 +225,8 @@ def raise_account_hold(
 
 
 def resolve_account_hold(
-    repo: ClerkSqliteRepository, *, reason_code: str, summary_code: str
+    repo: ClerkSqliteRepository, *, reason_code: str, summary_code: str,
+    loss_hold_clear_basis: LossHoldClearBasis | None = None,
 ) -> bool:
     """Close one account-hold episode once its cause is proven gone.
 
@@ -240,6 +242,7 @@ def resolve_account_hold(
         resolution_kind="CAUSE_CLEARED",
         summary_code=summary_code,
         evidence_refs=(),
+        loss_hold_clear_basis=loss_hold_clear_basis,
     )
 
 
@@ -255,12 +258,14 @@ def _resolve_account_uncertainty(
     resolution_kind: str,
     summary_code: str,
     evidence_refs: tuple[str, ...],
+    loss_hold_clear_basis: LossHoldClearBasis | None = None,
 ) -> bool:
     def build_transition(uncertainty_id: str) -> TransitionInput:
         facts = UncertaintyResolvedFacts(
             uncertainty_id=uncertainty_id,
             resolution_kind=resolution_kind,
             evidence_refs=list(evidence_refs),
+            loss_hold_clear_basis=loss_hold_clear_basis,
         )
         return TransitionInput(
             transition_kind="UNCERTAINTY_RESOLVED",

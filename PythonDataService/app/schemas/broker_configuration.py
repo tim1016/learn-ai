@@ -40,9 +40,10 @@ definition in ``app/broker_configuration/errors.py``:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.records import (
@@ -603,3 +604,37 @@ __all__ = [
     "SelectionPutRequest",
     "SelectionResponse",
 ]
+
+
+class AccountRiskApplyRequest(_ClosedRequest):
+    expected_risk_revision: int = Field(ge=0, strict=True)
+    expected_selection_generation: int = Field(ge=0, strict=True)
+    loss_fraction: float = Field(gt=0, lt=1, strict=True, allow_inf_nan=False)
+    loss_usd: float = Field(gt=0, strict=True, allow_inf_nan=False)
+
+    @field_validator("loss_usd")
+    @classmethod
+    def whole_cent_cap(cls, value: float) -> float:
+        amount = Decimal(str(value))
+        if amount.as_tuple().exponent < -2:
+            raise ValueError("The loss cap must be in whole cents")
+        return value
+
+
+class AccountRiskStateResponse(_Response):
+    account_id: str
+    risk_revision: int
+    selection_generation: int
+    loss_fraction: float | None
+    loss_usd: float | None
+    applied_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    entry_state: Literal["ready", "held", "unknown"]
+    detail: str
+    hold_loss_limit_usd: float | None = None
+    hold_session_start_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    hold_policy_revision: int | None = None
+
+
+class AccountRiskClearRequest(_ClosedRequest):
+    expected_risk_revision: int = Field(ge=0, strict=True)
+    expected_selection_generation: int = Field(ge=0, strict=True)

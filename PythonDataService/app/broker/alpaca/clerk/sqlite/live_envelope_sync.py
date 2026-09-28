@@ -1,31 +1,15 @@
-"""Independent fixed-cadence lifecycle for the live envelope and the arming refresh (ADR 0059 D4, D11).
+"""One cadence observes account cash and judges effective account risk.
 
-Modelled on ``StreamHealthHoldSync``: one background tap produces the
-account observation and the loss hold; ``accept_enter`` consumes them and
-never contacts the broker. Decoupled from the reconciliation pass, whose
-backoff reaches 300 s on failure — exactly when a loss hold matters most.
+Explicit Apply policies live in Clerk custody. Until a Live account has one,
+its historical arming envelope remains the compatibility policy. Paper has no
+invented default. Observation publication, risk Apply, ENTER and guarded clear
+share the repository writer fence. Unknown or breached evidence withdraws
+entry permission; a standing hold only clears with fresh proof satisfying both
+its original loss period/threshold and the current policy.
 
-Two subjects share the cadence, and only the cadence. The envelope's own —
-observe the account, publish or withdraw the observation, raise the loss
-hold — is this module's. The arming half (slice 7: read the ledger once,
-seal the envelope from it, refresh the per-instance gate) belongs to
-``ArmingRefresh`` in ``sqlite/arming_refresh.py``; the sync holds one
-reference to it, calls it once per observation -- ahead of the broker read,
-so the loss limit judged is the sealed one -- and assigns ``envelope.sealed``
-from what it returns.
-
-The sync raises the loss hold and never releases it: only the guarded
-operator action does (plan R6, R12).
-
-Four facts leave the account *unjudgeable* rather than merely unlucky: a
-broker snapshot with no ``last_equity`` has no loss limit to judge against
-(plan R3), an external order observed today makes the day's P&L unknowable
-(plan R5), a non-finite cash, equity or unrealized figure makes every
-loss comparison meaningless, and arming inputs this observation could not
-read leave no sealed envelope to judge against at all. None may be read as
-"nothing breached", so an unjudgeable tick withdraws the gate's observation
-and every ENTER refuses ``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one
-arrives.
+The arming refresh remains a separate compatibility collaborator until the
+budget authority cutover retires it. It never replaces an explicitly applied
+account risk policy or an immutable bot ExitTerms seal.
 """
 
 from __future__ import annotations
@@ -54,6 +38,8 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskR
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
 from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+from app.broker.alpaca.clerk.sqlite.facts import LossHoldClearBasis
+from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation, _custody_flat, observe_account_quiet
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, resolve_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -107,7 +93,7 @@ class EnvelopeReading:
 
     @property
     def breached(self) -> bool | None:
-        if self.day_pnl is None or not self.day_pnl.known or self.loss_limit_usd is None:
+        if self.day_pnl is None or not self.day_pnl.known or self.loss_limit_usd is None or not math.isfinite(self.day_pnl.total_usd):
             return None
         return loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
 
@@ -242,31 +228,13 @@ class LiveEnvelopeSync:
         self._last_reading: EnvelopeReading | None = None
 
     async def observe(self) -> EnvelopeReading:
-        """One ledger read and one broker read → the day-P&L reading, and the gate's observation.
+        """Read broker facts, then judge and publish under the custody fence.
 
-        The ledger read comes first and is what seals the envelope, so the loss
-        limit below is the newest arming record's rather than whatever the
-        process booted with (ADR 0059 D3). It is inside ``observe`` and not only
-        in :meth:`tick` because the guarded operator clear re-observes through
-        this same method: judging a standing hold against a limit an operator
-        raised in the environment and never re-armed is exactly the drift the
-        seal exists to prevent.
-
-        The observation is published only when the reading can be *judged*
-        AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3),
-        an external order observed today (plan R5), or a non-finite figure in
-        cash, equity or unrealized P&L leaves the account unjudgeable, and an
-        unjudgeable account must refuse every ENTER at once rather than let one
-        be bounded against a cash figure nothing can vouch for — so such a tick
-        withdraws whatever the last one published
-        instead of republishing it. A *breached* reading withdraws for the
-        same reason: nothing may take new exposure while the account is over
-        its loss limit, so a fresh observation buys nothing, and publishing
-        one before ``raise_account_hold`` has succeeded would leave the gate
-        admitting on the cash bound alone if that raise failed.
-
-        Raises ``BrokerError``: a failed read is not a verdict at all, so it
-        never touches the gate and the last observation ages out on its own.
+        The request-start timestamp conservatively bounds which fills the
+        broker cash includes. A policy Apply during the network read is seen
+        by the judgement after it returns; the earlier policy cannot publish
+        an obsolete permission. Broker errors leave ordinary cadence data to
+        age out; Configuration Apply discards failed evidence explicitly.
         """
         self.refresh_arming()
         # Stamped before the reads are issued, never when they return. The
@@ -383,12 +351,20 @@ class LiveEnvelopeSync:
             evidence_refs=[f"day-pnl:{cause.day_start_ms}"], cause_facts=cause.to_mapping(),
         )
 
-    def clear_observed_loss_hold(self, reading: EnvelopeReading) -> tuple[str, str]:
+    async def observe_loss_clearance(self) -> tuple[EnvelopeReading, AccountQuietObservation | None]:
+        reading = await self.observe()
+        snapshot = self.risk_snapshot()
+        needs_reset = snapshot.hold is not None and reading.day_pnl is not None and reading.day_pnl.day_start_ms > snapshot.hold.day_start_ms
+        quiet = await observe_account_quiet(self._repo, self._read) if needs_reset else None
+        return reading, quiet
+
+    def clear_observed_loss_hold(self, reading: EnvelopeReading, *, quiet: AccountQuietObservation | None = None) -> tuple[str, str]:
         """Prove current policy and the retained breach together, then resolve.
 
-        A rollover alone supplies no proof: the retained window starts at the
-        original session and keeps its original equity-derived dollar limit.
-        A subsequent recovery must make that cumulative window safe too.
+        Same-session proof retains the original loss threshold. In a later
+        session the explicit clear may reset a completed, fully resolved loss
+        period only with fresh double-read account-quiet proof. The new session
+        must satisfy the original dollar threshold and current limits too.
         """
         with self._repo._write_lock:
             current = self._repo.account_risk_policy()
@@ -416,13 +392,34 @@ class LiveEnvelopeSync:
             )
             if not retained.known or not math.isfinite(retained.total_usd):
                 return "unknown", "The original loss period cannot be judged. The hold stands."
-            if loss_breached(day_pnl_usd=retained.total_usd, loss_limit_usd=cause.loss_limit_usd):
+            session_reset = current_reading.day_pnl.day_start_ms > cause.day_start_ms
+            judged_pnl = retained.total_usd
+            if session_reset:
+                if quiet is None or not 0 <= self._repo.clock() - quiet.observed_at_ms <= self.envelope.observation_max_age_ms:
+                    return "unknown", "Fresh proof that the previous session's obligations are resolved is required. The hold stands."
+                if not (quiet.broker_work_ended and quiet.account_flat and quiet.intents_resolved) or self._repo.reconcilable_effect_operations() or not _custody_flat(self._repo):
+                    return "held", "The previous loss period still has open or unresolved obligations. Resolve them before clearing."
+                judged_pnl = current_reading.day_pnl.total_usd
+            if loss_breached(day_pnl_usd=judged_pnl, loss_limit_usd=cause.loss_limit_usd):
                 return "held", "The loss still breaches the limit recorded when this hold began. The hold stands."
+            basis = LossHoldClearBasis(
+                original_session_start_ms=cause.day_start_ms,
+                original_policy_revision=cause.policy_revision,
+                original_baseline_usd=cause.last_equity_usd,
+                original_loss_limit_usd=cause.loss_limit_usd,
+                current_session_start_ms=current_reading.day_pnl.day_start_ms,
+                current_policy_revision=revision,
+                current_loss_limit_usd=current_reading.loss_limit_usd,
+                current_day_pnl_usd=current_reading.day_pnl.total_usd,
+                observed_at_ms=current_reading.observation.observed_at_ms,
+                session_reset=session_reset,
+            )
             released = resolve_account_hold(
                 self._repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-                summary_code="LIVE_ENVELOPE_LOSS_HOLD_CLEARED",
+                summary_code="LIVE_ENVELOPE_LOSS_HOLD_CLEARED", loss_hold_clear_basis=basis,
             )
-            return ("cleared", "Both the current policy and the retained loss period are safe. Loss hold cleared.") if released else ("no_hold", "The hold was already released.")
+            detail = "Loss hold cleared for the new session after proving prior obligations resolved and both loss limits safe." if session_reset else "Both the current policy and the original loss limit are safe. Loss hold cleared."
+            return ("cleared", detail) if released else ("no_hold", "The hold was already released.")
 
     def _seal_unreadable(self) -> bool:
         """Whether this observation could not read the account's arming inputs.

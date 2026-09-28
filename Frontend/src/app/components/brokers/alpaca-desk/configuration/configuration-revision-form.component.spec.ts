@@ -106,7 +106,7 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(rendered.fixture.componentInstance.draft().xh_entry_bps).toBe(12.5);
   });
 
-  it('reveals the live envelope and exit defaults, and explains where to arm', async () => {
+  it('reveals legacy startup defaults and directs active risk edits to Apply risk limits', async () => {
     const rendered = await render(HostComponent);
     await userEvent.selectOptions(screen.getByLabelText('Endpoint'), 'live');
     await rendered.fixture.whenStable();
@@ -116,7 +116,7 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(screen.getByRole('spinbutton', { name: 'Daily loss fraction' })).toBeTruthy();
     expect(screen.getByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeTruthy();
     expect(screen.getByText(/It does not arm live trading/)).toBeTruthy();
-    expect(screen.getByText(/This page cannot arm anything/)).toBeTruthy();
+    expect(screen.getByText(/Use Apply risk limits above/)).toBeTruthy();
   });
 
   it('starts every live value blank rather than proposing a limit', async () => {

@@ -402,8 +402,12 @@ The effective loss policy is now the last explicit account risk Apply in Clerk
 custody; the original profile/arming payloads remain historical. The loss formula
 is unchanged. A held period is evaluated with the same canonical FIFO projection,
 from the hold's recorded session start through the fresh observation, using its
-original dollar limit. This prevents a new session or raised baseline from
-forgiving a standing loss. No second P&L engine is introduced.
+original dollar limit. Same-session clearance requires recovery. A later-session
+explicit clearance additionally proves all prior obligations resolved using the
+existing double-read account-quiet authority, then judges new-session P&L against
+both original and current thresholds. Original evidence is retained and the
+resolution records its reset basis. No automatic rollover clearance and no second
+P&L engine are introduced.
 
 The independent retained-window fixture is the existing deterministic round trip
 of 10 shares bought at 100 USD and sold at 110 USD in the prior session. Retaining

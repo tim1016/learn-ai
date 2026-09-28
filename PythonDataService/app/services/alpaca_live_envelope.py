@@ -1,20 +1,8 @@
-"""Operator actions on the live envelope (ADR 0059 D4).
+"""Guarded account loss-hold clearance for both Paper and Live.
 
-``clear_loss_hold`` is the ADR 0011 §6 shape: it re-reads the fact the
-hold was raised on and refuses while the breach still stands. The hold
-never clears on a timer or at session rollover; this is the only release.
-
-The limit it re-reads against is the envelope **sealed at arming** wherever
-an arming record exists (ADR 0059 D3): ``sync.observe()`` re-reads the
-arming ledger before it re-reads the account, so raising
-``ALPACA_LIVE_LOSS_USD`` in the environment and restarting cannot release a
-standing hold. Only a re-arm moves that number. An account no ceremony has
-ever armed has nothing sealed, and falls back to the configured values.
-
-Re-reading is not free of side effects: ``sync.observe()`` is the same call
-the background tap makes, so after ruling R-A′ it re-publishes the gate's
-observation only when the reading is judgeable AND not breached, and
-withdraws it otherwise -- unknown or breached alike.
+Re-observe current evidence, then prove the current policy and the hold's
+retained period/threshold under the custody writer fence. A rollover, larger
+baseline, looser Apply or legacy re-arm cannot clear a standing hold.
 """
 
 from __future__ import annotations
@@ -100,7 +88,7 @@ def _from_reading(
     return LossHoldClearOutcome(
         outcome=outcome,
         reason_code=reason_code,
-        day_pnl_usd=None if day_pnl is None or not day_pnl.known else day_pnl.total_usd,
+        day_pnl_usd=None if reading.breached is None else day_pnl.total_usd,
         loss_limit_usd=reading.loss_limit_usd,
         observed_at_ms=reading.observation.observed_at_ms,
         detail=detail,
@@ -127,7 +115,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             detail="The account is not in loss hold.",
         )
     try:
-        reading = await sync.observe()
+        reading, quiet = await sync.observe_loss_clearance()
     except BrokerError as exc:
         return _unobserved(
             now_ms,
@@ -138,7 +126,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
     day_pnl, loss_limit_usd = reading.day_pnl, reading.loss_limit_usd
     # Exactly ``reading.breached is None``, spelled out so both figures are
     # known to exist below: the day is unjudgeable precisely when one is absent.
-    if day_pnl is None or not day_pnl.known or loss_limit_usd is None:
+    if reading.breached is None:
         return _from_reading(
             reading,
             outcome="refused",
@@ -156,7 +144,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
                 f"{loss_limit_usd:.2f} USD loss limit {limit_source}. The hold stands."
             ),
         )
-    outcome, detail = sync.clear_observed_loss_hold(reading)
+    outcome, detail = sync.clear_observed_loss_hold(reading, quiet=quiet)
     return _from_reading(
         reading,
         outcome="refused" if outcome in {"unknown", "held"} else outcome,

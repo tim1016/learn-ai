@@ -207,6 +207,21 @@
       "path_template": "/configuration/profiles/{profile_id}/revisions",
       "requires_account": false
     },
+    "configuration_risk_hold_clear": {
+      "method": "POST",
+      "path_template": "/configuration/risk-limits/clear-hold",
+      "requires_account": false
+    },
+    "configuration_risk_limits_apply": {
+      "method": "POST",
+      "path_template": "/configuration/risk-limits/apply",
+      "requires_account": false
+    },
+    "configuration_risk_limits_read": {
+      "method": "GET",
+      "path_template": "/configuration/risk-limits",
+      "requires_account": false
+    },
     "configuration_selection_apply": {
       "method": "POST",
       "path_template": "/configuration/selection/apply",

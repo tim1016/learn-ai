@@ -40,6 +40,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 
+from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker_configuration.account_risk import (
+    apply_account_risk_limits,
+    clear_account_risk_hold,
+    read_account_risk_state,
+)
 from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
@@ -48,6 +54,9 @@ from app.broker_configuration.service import MAX_EVENT_PAGE, BrokerConfiguration
 from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
+    AccountRiskApplyRequest,
+    AccountRiskClearRequest,
+    AccountRiskStateResponse,
     AccountVerificationResponse,
     AlpacaDeskStateResponse,
     ApplyRequest,
@@ -453,3 +462,18 @@ __all__ = [
     "refuse_server_resolved_fields",
     "router",
 ]
+
+
+@router.get("/risk-limits", response_model=AccountRiskStateResponse, dependencies=READ_DEPENDENCIES)
+async def read_risk_limits(service: ServiceDep) -> AccountRiskStateResponse:
+    return await asyncio.to_thread(read_account_risk_state, service, get_active_clerk_runtime())
+
+
+@router.post("/risk-limits/apply", response_model=AccountRiskStateResponse, dependencies=WRITE_DEPENDENCIES)
+async def apply_risk_limits(service: ServiceDep, body: AccountRiskApplyRequest) -> AccountRiskStateResponse:
+    return await apply_account_risk_limits(service, get_active_clerk_runtime(), body)
+
+
+@router.post("/risk-limits/clear-hold", response_model=AccountRiskStateResponse, dependencies=WRITE_DEPENDENCIES)
+async def clear_risk_hold(service: ServiceDep, body: AccountRiskClearRequest) -> AccountRiskStateResponse:
+    return await clear_account_risk_hold(service, get_active_clerk_runtime(), body)

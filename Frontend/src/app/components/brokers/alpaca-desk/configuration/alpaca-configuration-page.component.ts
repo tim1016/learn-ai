@@ -26,6 +26,7 @@ import {
   toConfigurationRefusal,
 } from './broker-configuration-refusal';
 import { BrokerConfigurationService, type RevisionContent } from './broker-configuration.service';
+import { ConfigurationRiskLimitsComponent } from './configuration-risk-limits.component';
 import { ConfigurationHandoffScriptComponent } from './configuration-handoff-script.component';
 import { ConfigurationLifecycleTrackerComponent } from './configuration-lifecycle-tracker.component';
 import { ConfigurationProfileCreateComponent } from './configuration-profile-create.component';
@@ -102,6 +103,7 @@ function sameClerkRevisionRef(
   selector: 'app-alpaca-configuration-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    ConfigurationRiskLimitsComponent,
     ConfigurationProfileCreateComponent,
     ConfigurationProfileDetailComponent,
     ConfigurationProfileListComponent,

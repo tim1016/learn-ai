@@ -192,12 +192,18 @@ nothing. Paper and Live use this same policy and observation implementation.
 
 A standing hold retains the original policy revision, session start, equity
 baseline and derived dollar threshold. Clear requires fresh evidence safe under
-both the current session policy and the original hold's retained period. After
-rollover, that retained period spans the original session start through the new
-observation; rollover or a larger equity baseline cannot erase the original loss.
-An external/unresolved execution in that window makes clearance unknown. The
-explicit Clear loss hold action remains available in Configuration. Loosening a
-limit, applying it, restarting, and legacy re-arming never clear the hold.
+both the current session policy and the original hold's retained dollar limit.
+Within the original session, the loss must recover below both limits. After that
+session ends, the same explicit Clear action may begin a fresh session only after
+complete fresh evidence proves original positions and orders resolved. It reuses
+the account-quiet double read of broker orders/positions and current custody;
+unknown evidence or remaining obligations refuse. Current-session P&L must be safe
+under both the original baseline-derived dollar threshold and current policy.
+The original cause/session/baseline/revision stays unchanged in history; the
+resolution records both thresholds, the new session and fresh observation basis.
+This prevents a permanent dead end after a fully realized loss while keeping
+rollover, looser Apply, restart and legacy re-arm from clearing automatically.
+The explicit Clear loss hold action remains available in Configuration.
 
 Immutable per-instance ExitTerms remain the sole exit pricing authority; risk
 changes do not replace working orders or mutate those seals. This amendment

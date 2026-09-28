@@ -609,6 +609,20 @@ class UncertaintyRaisedFacts:
 
 
 @dataclass(frozen=True)
+class LossHoldClearBasis:
+    original_session_start_ms: int
+    original_policy_revision: int | None
+    original_baseline_usd: float
+    original_loss_limit_usd: float
+    current_session_start_ms: int
+    current_policy_revision: int | None
+    current_loss_limit_usd: float
+    current_day_pnl_usd: float
+    observed_at_ms: int
+    session_reset: bool
+
+
+@dataclass(frozen=True)
 class UncertaintyResolvedFacts:
     """``UNCERTAINTY_RESOLVED`` (#1380): which uncertainty resolved, and why —
     ``uncertainty_id`` is not an outer transition column (unlike
@@ -618,13 +632,20 @@ class UncertaintyResolvedFacts:
     uncertainty_id: str
     resolution_kind: str
     evidence_refs: list[str]
+    loss_hold_clear_basis: LossHoldClearBasis | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        if self.loss_hold_clear_basis is None:
+            payload.pop("loss_hold_clear_basis")
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> UncertaintyResolvedFacts:
-        return cls(**json.loads(facts_json))
+        payload = json.loads(facts_json)
+        if payload.get("loss_hold_clear_basis") is not None:
+            payload["loss_hold_clear_basis"] = LossHoldClearBasis(**payload["loss_hold_clear_basis"])
+        return cls(**payload)
 
 
 @dataclass(frozen=True)
