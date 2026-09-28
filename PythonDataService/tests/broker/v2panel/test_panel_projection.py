@@ -2558,6 +2558,45 @@ def test_sqlite_adapter_stopped_bot_without_a_cure_has_no_primary_action() -> No
     assert adapted.primary_action is None
 
 
+def test_sqlite_adapter_stopped_bot_still_holding_shares_has_no_primary_action() -> None:
+    """Review B4 (H29/H30): a crashed bot holding a ``CUSTODY_SUBJECT``
+    uncertainty got "Reconcile now" as its header action, beside the
+    stranded-position warning's Flatten. Its page offers that one action;
+    the header offers none."""
+    uncertainty = ProjectedUncertainty(
+        uncertainty_id="uncertainty:stranded",
+        scope="CUSTODY_SUBJECT",
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID,
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="The bot stopped while holding shares",
+        explanation="1 SPY is still held.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Reconcile, then flatten.",
+        observed_at_ms=_NOW - 1_000,
+        evidence_age_ms=1_000,
+        evidence_refs=(),
+    )
+    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    holding = replace(
+        _rail_projection(orders=()),
+        positions=_held(1.0),
+        uncertainties=(uncertainty,),
+        recovery_actions=(_recovery_capability("reconcile_now", primary=True),),
+    )
+
+    adapted = adapt_sqlite_panel(base, holding)
+    flat = adapt_sqlite_panel(base, replace(holding, positions=()))
+
+    assert adapted.exposure == {"SPY": 1.0}
+    assert adapted.primary_action is None
+    # Positive control: the same stopped bot, flat, keeps Reconcile as its cure.
+    assert flat.primary_action == "reconcile_now"
+
+
 def test_primary_action_rejects_a_dangling_reference() -> None:
     base = _panel(_status(running=True), _clerk_status(), [])
     payload = base.model_dump()

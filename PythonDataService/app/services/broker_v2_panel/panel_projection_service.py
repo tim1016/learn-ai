@@ -694,23 +694,28 @@ def select_primary_action(
     actions: list[PanelAction],
     health: BotHealthCard,
     *,
-    recovery_primary_action_id: str | None = None,
+    holds_position: bool = False,
+    recovery_primary_action_id: ActionId | None = None,
 ) -> ActionId | None:
     """Author the one backend-selected command for this bot's page (#1665).
 
-    One precedence rule (ADR 0027): a recovery capability the custody policy
-    marks as this bot's cure outranks the routine lifecycle command, because
-    the routine command may not even reflect the bot's true state. The caller
-    passes only a *diagnostic* recovery primary -- one that is this bot's cure,
-    not an always-available refresh. Otherwise a running bot's primary command
-    is its stop, and a stopped bot has none: its page offers Deploy again,
-    which is navigation, not a panel command. A candidate that is not
-    presented fails closed to ``None`` rather than being guessed from
-    ``health``.
+    A stopped bot that still holds shares has none: its page's stranded-position
+    warning owns the one action there, Flatten, and no other command may sit
+    beside it in the header (PRD #2560; review B4). Otherwise one precedence
+    rule (ADR 0027): a recovery capability the custody policy marks as this
+    bot's cure outranks the routine lifecycle command, because the routine
+    command may not even reflect the bot's true state. The caller passes only
+    a *diagnostic* recovery primary -- one that is this bot's cure, not an
+    always-available refresh. Otherwise a running bot's primary command is its
+    stop, and a stopped bot has none: its page offers Deploy again, which is
+    navigation, not a panel command. A candidate that is not presented fails
+    closed to ``None`` rather than being guessed from ``health``.
     """
+    if not health.running and holds_position:
+        return None
     action_ids = {action.action_id for action in actions}
     if recovery_primary_action_id is not None and recovery_primary_action_id in action_ids:
-        return recovery_primary_action_id  # type: ignore[return-value]
+        return recovery_primary_action_id
     if not health.running:
         return None
     return next((action_id for action_id in _RUNNING_STOP_ACTION_IDS if action_id in action_ids), None)

@@ -129,7 +129,12 @@ def adapt_sqlite_panel(
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
-    recovery_cure = _recovery_cure(projection)
+    recovery_cure = _recovery_cure(projection, bot_owns_problem=_has_bot_scoped_custody_problem(projection))
+    exposure = {
+        position.symbol: position.attributed_qty
+        for position in projection.positions
+        if position_quantity_is_nonzero(position.attributed_qty)
+    }
     return panel.model_copy(
         update={
             "health": _with_terminal_exposure_notices(panel, projection),
@@ -150,17 +155,14 @@ def adapt_sqlite_panel(
             "primary_action": select_primary_action(
                 actions,
                 panel.health,
+                holds_position=bool(exposure),
                 recovery_primary_action_id=None if recovery_cure is None else recovery_cure.action_id,
             ),
             "exit_terms": None if repository is None else repository.exit_terms(projection.strategy_instance_id),
             "readiness_checks": checks,
             "readiness_ready_count": ready_count,
             "readiness_blocked_count": len(checks) - ready_count,
-            "exposure": {
-                position.symbol: position.attributed_qty
-                for position in projection.positions
-                if position_quantity_is_nonzero(position.attributed_qty)
-            },
+            "exposure": exposure,
             "working_orders": _working_orders(
                 panel,
                 projection,
@@ -261,13 +263,14 @@ def _catalog_row_action(
     so renaming one cannot leave a stale literal here silently re-surfacing the
     button.
     """
-    if not row_needs_attention and not _has_bot_scoped_custody_problem(projection):
+    bot_owns_problem = _has_bot_scoped_custody_problem(projection)
+    if not row_needs_attention and not bot_owns_problem:
         return None
-    cure = _recovery_cure(projection)
+    cure = _recovery_cure(projection, bot_owns_problem=bot_owns_problem)
     return None if cure is None else _panel_action(cure, projection.control_revision)
 
 
-def _recovery_cure(projection: ClerkProjection) -> RecoveryCapability | None:
+def _recovery_cure(projection: ClerkProjection, *, bot_owns_problem: bool) -> RecoveryCapability | None:
     """This bot's recovery cure -- the policy's primary capability -- or ``None``.
 
     The one answer to "what is this bot's cure?", shared by the roster row and
@@ -280,7 +283,7 @@ def _recovery_cure(projection: ClerkProjection) -> RecoveryCapability | None:
     primary = next((item for item in projection.recovery_actions if item.primary), None)
     if primary is None:
         return None
-    if primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS and not _has_bot_scoped_custody_problem(projection):
+    if primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS and not bot_owns_problem:
         return None
     return primary
 
