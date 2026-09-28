@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LiveEnvelopeValues,
     loss_breached,
     loss_limit_usd,
+    observation_is_fresh,
 )
 from app.broker.alpaca.clerk.money import MoneyInputError, normalize_money
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
@@ -413,6 +414,23 @@ class LiveEnvelopeSync:
                 hold=None if hold is None else LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"]),
             )
 
+    def display_observation(self, now_ms: int) -> AccountObservation | None:
+        """The last reading of the account, for showing its money only.
+
+        Kept whether or not it admits new exposure: a loss hold or an
+        unjudgeable day P&L withdraws the envelope's observation, but the
+        account's cash and equity were still read. Forgotten, like the
+        envelope's, when the read itself failed (``discard_observation``), and
+        held to the same freshness bound. Never an admission input.
+        """
+        with self._repo._write_lock:
+            reading = self._last_reading
+            if reading is None or not observation_is_fresh(
+                reading.observation, now_ms=now_ms, max_age_ms=self.envelope.observation_max_age_ms,
+            ):
+                return None
+            return reading.observation
+
     def discard_observation(self) -> None:
         with self._repo._write_lock:
             self.envelope.withdraw()
@@ -431,7 +449,9 @@ class LiveEnvelopeSync:
             last = self._last_reading
             self.envelope.withdraw()
             append_risk_policy(self._repo, policy=policy, expected_revision=expected_revision)
-            if last is None or not 0 <= self._repo.clock() - last.observation.observed_at_ms <= self.envelope.observation_max_age_ms:
+            if last is None or not observation_is_fresh(
+                last.observation, now_ms=self._repo.clock(), max_age_ms=self.envelope.observation_max_age_ms,
+            ):
                 return self.risk_snapshot()
             reading = self._evaluate_observation(last.observation, now_ms=self._repo.clock())
             self._raise_loss_hold(reading)

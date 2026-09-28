@@ -31,7 +31,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import LANE_COUNT_KEYS
 
-_ADAPTER_VERSION = "alpaca-fleet.9"
+_ADAPTER_VERSION = "alpaca-fleet.10"
 
 
 def _op(

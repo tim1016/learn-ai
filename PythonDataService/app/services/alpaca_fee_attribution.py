@@ -51,6 +51,9 @@ class FeeFill:
     native_order_id: str | None = None
     reported_fee: Decimal | None = None
     observed_at_ms: int = 0
+    # When the broker executed it (int64 ms UTC); external fills carry it so
+    # the account-money read can lot them in execution order.
+    occurred_at_ms: int | None = None
 
 
 @dataclass(frozen=True)

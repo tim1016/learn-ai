@@ -102,7 +102,7 @@
       },
       "AccountMoneyView": {
         "additionalProperties": false,
-        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd``, their widths to 10000\nbasis points, and ``free_to_deploy_usd`` is the Deploy preview's\nunreserved cash. Otherwise every figure is absent and ``detail`` names\nthe reason and its fix -- an unknown is never shown as $0.",
+        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd`` plus\n``account_shortfall_usd`` (what the bots' and orders' claims exceed the\naccount by; \"0.00\" unless overdrawn), their widths to 10000 basis points,\nand ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.\nOtherwise the bar's figures are absent and ``detail`` names the reason --\nan unknown is never shown as $0 -- while the broker's own ``equity_usd``\nand ``today_pnl_usd`` stay whenever they are known.",
         "properties": {
           "account_charges_usd": {
             "anyOf": [
@@ -118,6 +118,17 @@
           "account_id": {
             "title": "Account Id",
             "type": "string"
+          },
+          "account_shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Shortfall Usd"
           },
           "cash_usd": {
             "anyOf": [
@@ -192,6 +203,17 @@
             ],
             "title": "Observed At Ms"
           },
+          "open_pnl_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Detail"
+          },
           "open_pnl_usd": {
             "anyOf": [
               {
@@ -222,6 +244,17 @@
             "title": "Segments",
             "type": "array"
           },
+          "settling_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settling Usd"
+          },
           "state": {
             "enum": [
               "ready",
@@ -230,6 +263,18 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "stopped_holding_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped Holding Count"
           },
           "today_pnl_usd": {
             "anyOf": [
@@ -26552,7 +26597,7 @@
       },
       "MoneyParts": {
         "additionalProperties": false,
-        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.",
+        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.\n\nThey sum to 10000, or to 0 when the slice holds nothing (a flat bot\nthat overran its budget draws no part; its shortfall is reported).",
         "properties": {
           "free_bps": {
             "maximum": 10000.0,
@@ -26598,7 +26643,7 @@
       },
       "MoneySegment": {
         "additionalProperties": false,
-        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``\nand ``still_claimed_usd`` to a stopped bot that still holds money.",
+        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``\nand ``still_claimed_usd`` to a stopped bot that still holds money.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
         "properties": {
           "amount_usd": {
             "title": "Amount Usd",
@@ -26610,6 +26655,7 @@
               "stopped",
               "outside",
               "charges",
+              "settling",
               "new",
               "free"
             ],
@@ -26619,6 +26665,18 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "palette_index": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Palette Index"
           },
           "parts": {
             "anyOf": [

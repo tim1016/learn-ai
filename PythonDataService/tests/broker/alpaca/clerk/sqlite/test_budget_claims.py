@@ -136,6 +136,98 @@ def test_stopped_bot_still_holding_keeps_its_shares_on_the_bar_and_releases_its_
         repo.close()
 
 
+def _manual_fill(repo: ClerkSqliteRepository, *, side: str, price: float, fee: float, ticket: str, leg_id: str, order_id: str) -> None:
+    """One filled manual order of 6 SPY, recorded at the repository clock."""
+    accepted = accept_manual_order(repo, account_id=repo.account_id, operator_id=OPERATOR_ID, ticket_id=ticket,
+        leg_id=leg_id, leg=BrokerOrderLeg(symbol="SPY", side=side, quantity=6))
+    leg = accepted.leg
+    assert leg.order_ref and leg.effect_operation_id
+    now = repo.clock()
+    repo.append_transition(TransitionInput(
+        command_id=accepted.command.command_id, effect_operation_id=leg.effect_operation_id,
+        order_ref=leg.order_ref, transition_kind="EXECUTION_SLICE_FILLED",
+        custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+        operation_state="in_progress", source_event_at_ms=now, clerk_observed_at_ms=now,
+        summary_code="EXECUTION_SLICE_FILLED", facts_json=ExecutionSliceFilledFacts(
+            execution_id=f"{order_id}-exact", symbol="SPY", side=side.upper(), slice_qty=6,
+            slice_price=price, fee=fee, fee_fidelity="reported", evidence_source="websocket",
+            source_event_at_ms=now,
+        ).to_facts_json(),
+    ))
+    fold_order_acknowledgement(repo, effect_operation_id=leg.effect_operation_id, order=filled_order(leg.order_ref).model_copy(update={
+        "order_id": order_id, "side": side, "quantity": 6, "filled_quantity": 6, "filled_avg_price": price,
+        "updated_at_ms": now, "observed_at_ms": now,
+    }))
+
+
+def test_a_sale_the_cash_has_not_seen_settles_on_the_bar_and_the_total_holds(tmp_path: Path) -> None:
+    """Review A2: canonical FIFO drops a sold lot at once while Alpaca's cash
+    catches up ~20 s later. The sale's net proceeds are counted by the same
+    ``seen_before_ms`` boundary as an unseen purchase, so the account's total
+    never dips and free to deploy stays the budget's conservative figure,
+    with the proceeds drawn as settling -- never as a shortfall."""
+    from app.broker.alpaca.clerk.account_money import money_bar
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _manual_fill(repo, side="buy", price=100, fee=.03, ticket=TICKET_ID, leg_id=LEG_ID, order_id="bought")
+        held = repo.account_money(cash="399.97", seen_before_ms=NOON + 5)
+        repo.clock.advance(10)
+        _manual_fill(repo, side="sell", price=110, fee=.02, ticket="3f0c7a2e-1b7d-4f7e-9d0a-6a1c3e5b7d90",
+                     leg_id="5a2b8c4d-6e7f-4a1b-8c2d-3e4f5a6b7c8d", order_id="sold")
+
+        unseen = repo.account_money(cash="399.97", seen_before_ms=NOON + 5)
+        seen = repo.account_money(cash="1059.95", seen_before_ms=NOON + 20)
+
+        assert held.total == Decimal("999.97") and held.outside == Decimal(600)
+        # $660 of proceeds less the reported $0.02 fee, exactly as an unseen
+        # purchase is its cost plus its reported fee.
+        assert unseen.total == seen.total == Decimal("1059.95") and unseen.outside == 0
+        unseen_bar, seen_bar = money_bar(unseen), money_bar(seen)
+        assert [(segment.kind, segment.cents) for segment in unseen_bar.segments] == [("settling", 65_998), ("free", 39_997)]
+        assert unseen_bar.shortfall_cents == 0 and unseen_bar.cents_of("free") == unseen.budget.unreserved_cents
+        assert [(segment.kind, segment.cents) for segment in seen_bar.segments] == [("free", 105_995)]
+    finally:
+        repo.close()
+
+
+def test_shares_bought_outside_every_bot_are_on_the_bar_at_fifo_cost(tmp_path: Path) -> None:
+    """Review A3: external (non-Clerk) shares are held outside any bot, valued
+    by canonical FIFO over the complete external population, before and after
+    the cash observation sees the purchase -- total = cash + every position."""
+    from app.broker.alpaca.clerk.account_money import money_bar
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        observe_external_order(repo, order=_external_order(state="filled", filled=6, observed_at=NOON))
+        record_fee_evidence(repo, [_external_fill()], checked_at_ms=NOON, history_complete=True)
+        for money in (repo.account_money(cash=1000, seen_before_ms=NOON), repo.account_money(cash=400, seen_before_ms=NOON + 1)):
+            assert money.outside == Decimal(600) and money.cash == Decimal(400) and money.total == Decimal(1000)
+            assert money.unvalued == ()
+            bar = money_bar(money)
+            assert [(segment.kind, segment.cents) for segment in bar.segments] == [("outside", 60_000), ("charges", 1), ("free", 39_999)]
+    finally:
+        repo.close()
+
+
+def test_outside_shares_that_cannot_be_valued_are_named_never_dropped(tmp_path: Path) -> None:
+    """Review A3: an external sale with no purchase in the population is a
+    short the long-only bar cannot place; it is named beside the bar."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        sold = _external_order(state="filled", filled=6, observed_at=NOON).model_copy(update={"side": "sell"})
+        observe_external_order(repo, order=sold)
+        record_fee_evidence(repo, [_external_fill().model_copy(update={"side": "sell"})], checked_at_ms=NOON, history_complete=True)
+        money = repo.account_money(cash=1600, seen_before_ms=NOON + 1)
+        assert money.outside == 0
+        assert money.unvalued == ("6 SPY sold short by outside orders",)
+    finally:
+        repo.close()
+
+
 @pytest.mark.parametrize("status,reported,recorded", [("filled", 10, 0), ("canceled", 3, 0), ("canceled", 3, 2.9999999999)])
 def test_missing_legacy_terminal_execution_is_unknown_until_reconciled(
     day_pnl_repo, status: str, reported: float, recorded: float,

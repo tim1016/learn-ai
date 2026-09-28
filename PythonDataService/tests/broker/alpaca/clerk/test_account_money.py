@@ -17,9 +17,9 @@ from app.broker.alpaca.clerk.account_money import (
     AccountMoney,
     Holding,
     MoneyBar,
-    MoneyBarUnavailable,
     MoneyConservationError,
     account_money,
+    bot_parts,
     money_bar,
     share_bps,
 )
@@ -34,16 +34,25 @@ def _bot(sid: str, *, cents: int, position: str = "0", pending: str = "0", fees:
     )
 
 
+def _money(budget: AccountBudget, *, unseen_fills: D = D(0), unseen_sales: D = D(0),
+           holdings: tuple[Holding, ...] | list[Holding] = (), order: tuple[str, ...] | None = None) -> AccountMoney:
+    """``order`` is the account's registration order; by default every bot in view, by name."""
+    bots = sorted({item.strategy_instance_id for item in budget.deployments}
+                  | {item.strategy_instance_id for item in holdings if item.strategy_instance_id is not None})
+    return account_money(budget, unseen_fills=unseen_fills, unseen_sales=unseen_sales, holdings=holdings,
+                         registration_order=tuple(bots) if order is None else order)
+
+
 def _drawn(money: AccountMoney, **kwargs: int) -> MoneyBar:
     bar = money_bar(money, **kwargs)
-    assert sum(segment.cents for segment in bar.segments) == bar.total_cents
+    assert sum(segment.cents for segment in bar.segments) == bar.total_cents + bar.shortfall_cents
     assert sum(segment.bps for segment in bar.segments) == FULL_BAR_BPS
     assert all(segment.bps >= 1 for segment in bar.segments if segment.cents > 0)
     for segment in bar.segments:
         if segment.parts is not None:
             parts = segment.parts
             assert parts.in_shares_cents + parts.pending_cents + parts.free_cents == segment.cents
-            assert parts.in_shares_bps + parts.pending_bps + parts.free_bps == FULL_BAR_BPS
+            assert parts.in_shares_bps + parts.pending_bps + parts.free_bps == (FULL_BAR_BPS if segment.cents else 0)
     return bar
 
 
@@ -56,7 +65,7 @@ def test_one_running_bot_is_its_whole_balance_beside_free_to_deploy() -> None:
     # Alpaca has not taken yet. Cash already shows the purchase.
     bot = _bot("spy-ema", cents=100_000, position="764.71", fees="0.01")
     budget = account_budget(cash="99235.29", deployments=[bot], order_claims=D(0), fee_claims=D("0.01"))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
+    money = _money(budget)
 
     assert money.total == D("100000.00")
     bar = _drawn(money)
@@ -72,7 +81,7 @@ def test_several_bots_with_pending_entries_keep_their_orders_inside_their_slices
     a = _bot("a", cents=100_000, pending="500.01")
     b = _bot("b", cents=200_000, position="600", pending="300.01")
     budget = account_budget(cash=50_000, deployments=[b, a], order_claims=D("800.02"), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
+    money = _money(budget)
 
     bar = _drawn(money)
     assert _by_kind(bar) == [("bot", "a", 100_000), ("bot", "b", 200_000), ("free", None, 4_760_000)]
@@ -84,7 +93,7 @@ def test_several_bots_with_pending_entries_keep_their_orders_inside_their_slices
 def test_stopped_bot_still_holding_keeps_its_shares_and_releases_its_free_budget() -> None:
     stopped = _bot("old", cents=100_000, position="764.71", fees="0.01", active=False)
     budget = account_budget(cash="99235.29", deployments=[stopped], order_claims=D(0), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
+    money = _money(budget)
 
     bar = _drawn(money)
     assert _by_kind(bar) == [("stopped", "old", 76_471), ("free", None, 9_923_529)]
@@ -97,7 +106,7 @@ def test_pre_budget_stopped_bot_and_its_working_order_stay_held() -> None:
     # A bot deployed before budgets holds $500 of shares and a working $100.01
     # entry; neither is anyone's budget, so both stay claimed, not free.
     budget = account_budget(cash=9_500, deployments=[], order_claims=D("100.01"), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=[Holding("bot:legacy", "legacy", D(500), D("100.01"))])
+    money = _money(budget, holdings=[Holding("bot:legacy", "legacy", D(500), D("100.01"))])
 
     bar = _drawn(money)
     assert _by_kind(bar) == [("stopped", "legacy", 60_001), ("free", None, 939_999)]
@@ -108,13 +117,13 @@ def test_pre_budget_stopped_bot_and_its_working_order_stay_held() -> None:
 def test_a_flat_stopped_bot_with_nothing_claimed_is_finished_and_not_drawn() -> None:
     finished = _bot("done", cents=100_000, realized="12.50", active=False)
     budget = account_budget(cash="1012.50", deployments=[finished], order_claims=D(0), fee_claims=D(0))
-    bar = _drawn(account_money(budget, unseen_fills=D(0), holdings=()))
+    bar = _drawn(_money(budget))
     assert _by_kind(bar) == [("free", None, 101_250)]
 
 
 def test_manual_shares_are_money_held_outside_any_bot() -> None:
     budget = account_budget(cash=8_500, deployments=[], order_claims=D(0), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=[Holding("manual-operator:owner", None, D(1_500), D(0))])
+    money = _money(budget, holdings=[Holding("manual-operator:owner", None, D(1_500), D(0))])
 
     bar = _drawn(money)
     assert _by_kind(bar) == [("outside", None, 150_000), ("free", None, 850_000)]
@@ -123,7 +132,7 @@ def test_manual_shares_are_money_held_outside_any_bot() -> None:
 
 def test_account_charges_cash_does_not_show_yet_are_their_own_slice() -> None:
     budget = account_budget(cash=1_000, deployments=[], order_claims=D(0), fee_claims=D("0.07"))
-    bar = _drawn(account_money(budget, unseen_fills=D(0), holdings=()))
+    bar = _drawn(_money(budget))
     assert _by_kind(bar) == [("charges", None, 7), ("free", None, 99_993)]
     assert bar.total_cents == 100_000
 
@@ -132,7 +141,7 @@ def test_overrun_shows_its_shortfall_and_never_a_negative_slice() -> None:
     # A $1,000 bot filled at $1,005 plus a $0.01 fee: $5.01 beyond its balance.
     bot = _bot("slipped", cents=100_000, position="1005", fees="0.01")
     budget = account_budget(cash=8_995, deployments=[bot], order_claims=D(0), fee_claims=D("0.01"))
-    bar = _drawn(account_money(budget, unseen_fills=D(0), holdings=()))
+    bar = _drawn(_money(budget))
 
     assert _by_kind(bar) == [("bot", "slipped", 100_500), ("charges", None, 1), ("free", None, 899_499)]
     assert bar.segments[0].shortfall_cents == 501
@@ -144,7 +153,7 @@ def test_a_fill_the_cash_has_not_seen_is_counted_once_as_shares() -> None:
     # The bot's $500 buy is recorded; Alpaca's cash still shows $10,000.
     bot = _bot("fresh", cents=100_000, position="500")
     budget = account_budget(cash=10_000, deployments=[bot], order_claims=D(500), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(500), holdings=())
+    money = _money(budget, unseen_fills=D(500))
 
     assert money.cash == D(9_500) and money.total == D(10_000)
     bar = _drawn(money)
@@ -155,7 +164,7 @@ def test_subcent_costs_round_per_part_and_the_drawn_cents_still_add_up() -> None
     # 0.125 shares at $10.01 cost $1.25125.
     bot = _bot("frac", cents=100_000, position="1.25125")
     budget = account_budget(cash="998.74875", deployments=[bot], order_claims=D(0), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
+    money = _money(budget)
     assert money.total == D(1_000)
     bar = _drawn(money)
     assert _by_kind(bar) == [("bot", "frac", 99_999), ("free", None, 0)]
@@ -166,34 +175,96 @@ def test_subcent_costs_round_per_part_and_the_drawn_cents_still_add_up() -> None
 def test_money_after_carves_the_new_slice_out_of_free_and_keeps_the_total() -> None:
     bot = _bot("a", cents=100_000)
     budget = account_budget(cash=10_000, deployments=[bot], order_claims=D(0), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
+    money = _money(budget)
 
     before = _drawn(money)
     after = _drawn(money, new_cents=80_000)
     assert _by_kind(after) == [("bot", "a", 100_000), ("new", None, 80_000), ("free", None, 820_000)]
     assert after.total_cents == before.total_cents == 1_000_000
-    with pytest.raises(MoneyBarUnavailable, match="more than is free"):
+    with pytest.raises(ValueError, match="within free to deploy"):
         money_bar(money, new_cents=900_001)
 
 
-def test_overdrawn_account_names_the_shortfall_instead_of_drawing_a_false_bar() -> None:
+def test_overdrawn_account_draws_every_claim_and_reports_the_shortfall_as_data() -> None:
+    # A $1,000 bot on an account with $900: the claims exceed the money by
+    # $100. The bar still draws (review A6); free is $0 and the overrun is a
+    # figure, never a hidden bar and never a negative slice.
     bot = _bot("a", cents=100_000)
     budget = account_budget(cash=900, deployments=[bot], order_claims=D(0), fee_claims=D(0))
-    money = account_money(budget, unseen_fills=D(0), holdings=())
-    with pytest.raises(MoneyBarUnavailable, match=r"\$100\.00 short"):
-        money_bar(money)
+    bar = _drawn(_money(budget))
+    assert _by_kind(bar) == [("bot", "a", 100_000), ("free", None, 0)]
+    assert bar.shortfall_cents == 10_000 and bar.total_cents == 90_000
+    assert [segment.bps for segment in bar.segments] == [FULL_BAR_BPS, 0]
 
 
-def test_parts_that_do_not_add_up_refuse_instead_of_drawing() -> None:
+def test_an_exit_cash_has_not_seen_is_settling_never_a_drop_or_a_shortfall() -> None:
+    # Review A2. A $1,000 bot bought 1 SPY at $764.71 (cash saw it) and has
+    # just sold it at $770 with a $0.02 fee; Alpaca's cash still shows the
+    # position's cost gone and no proceeds. FIFO already dropped the lot.
+    before = _money(account_budget(
+        cash="99235.29", deployments=[_bot("spy", cents=100_000, position="764.71")], order_claims=D(0), fee_claims=D(0),
+    ))
+    sold = _bot("spy", cents=100_000, realized="5.29", fees="0.02")
+    after_budget = account_budget(cash="99235.29", deployments=[sold], order_claims=D(0), fee_claims=D("0.02"))
+    after = _money(after_budget, unseen_sales=D(770))
+
+    # The total moves only by the realized gain, never by the proceeds in flight.
+    assert before.total == D("100000.00") and after.total == D("100005.29")
+    bar = _drawn(after)
+    assert _by_kind(bar) == [("bot", "spy", 100_527), ("charges", None, 2), ("settling", None, 77_000), ("free", None, 9_823_000)]
+    # Free to deploy stays the Deploy preview's conservative figure until cash lands.
+    assert bar.cents_of("free") == after_budget.unreserved_cents and bar.shortfall_cents == 0
+
+
+def test_a_fully_deployed_accounts_exit_in_flight_is_not_a_shortfall() -> None:
+    # Review A2's false advice: a $1,000 bot is the whole $1,000 account; it
+    # bought at $990 and sold at $1,000, and cash has not seen the sale. The
+    # budget's own available is -$1,000, but the proceeds in flight cover it.
+    bot = _bot("all-in", cents=100_000, realized="10")
+    budget = account_budget(cash=10, deployments=[bot], order_claims=D(0), fee_claims=D(0))
+    assert budget.available == D(-1_000)
+    bar = _drawn(_money(budget, unseen_sales=D(1_000)))
+    assert _by_kind(bar) == [("bot", "all-in", 101_000), ("free", None, 0)]
+    assert bar.shortfall_cents == 0 and bar.total_cents == 101_000
+
+
+def test_a_flat_bot_that_overran_its_budget_draws_no_free_part() -> None:
+    # A $1,000 bot lost $5.01 and is flat: nothing in its slice, its overrun shown.
+    bot = _bot("lost", cents=100_000, realized="-1005.01")
+    parts = bot_parts(bot)
+    assert (parts.in_shares_cents, parts.pending_cents, parts.free_cents) == (0, 0, 0)
+    assert (parts.in_shares_bps, parts.pending_bps, parts.free_bps) == (0, 0, 0)
+    budget = account_budget(cash="994.99", deployments=[bot], order_claims=D(0), fee_claims=D(0))
+    bar = _drawn(_money(budget))
+    assert bar.segments[0].shortfall_cents == 501 and bar.segments[0].cents == 0
+
+
+def test_every_bot_keeps_one_colour_slot_by_registration_order() -> None:
+    # Palette slots follow the account's registration order, not the bar's
+    # (name) order, so a bot's hue is the same on every surface and survives
+    # other bots stopping or finishing.
+    a, b = _bot("a", cents=100_000), _bot("b", cents=100_000)
+    stopped = _bot("c", cents=100_000, position="10", active=False)
+    budget = account_budget(cash=10_000, deployments=[a, b, stopped], order_claims=D(0), fee_claims=D(0))
+    bar = _drawn(_money(budget, order=("finished", "b", "c", "a")))
+    assert [(segment.strategy_instance_id, segment.palette_index) for segment in bar.segments] == [
+        ("a", 3), ("b", 1), ("c", 2), (None, None),
+    ]
+    with pytest.raises(MoneyConservationError, match="not registered"):
+        money_bar(_money(budget, order=("a", "b")))
+
+
+def test_parts_that_do_not_add_up_refuse_to_draw() -> None:
     # An order claim with no pending entry or unseen fill behind it.
     budget = account_budget(cash=1_000, deployments=[], order_claims=D(1), fee_claims=D(0))
+    money = _money(budget)
     with pytest.raises(MoneyConservationError):
-        account_money(budget, unseen_fills=D(0), holdings=())
+        money_bar(money)
 
 
 def test_empty_account_draws_all_free_and_still_sums_to_the_full_width() -> None:
     budget = AccountBudget(cash=D(0), active_free_claims=D(0), order_claims=D(0), fee_claims=D(0), available=D(0), deployments=())
-    bar = _drawn(account_money(budget, unseen_fills=D(0), holdings=()))
+    bar = _drawn(_money(budget))
     assert [(segment.kind, segment.bps) for segment in bar.segments] == [("free", FULL_BAR_BPS)]
 
 
@@ -202,5 +273,6 @@ def test_basis_points_follow_the_fee_rule_and_lift_a_tiny_slice_to_one() -> None
     widths = share_bps({"tiny": 1, "huge": 10_000_000}, empty="huge")
     assert widths == {"huge": 9_999, "tiny": 1}
     assert share_bps({"x": 0, "free": 0}, empty="free") == {"x": 0, "free": FULL_BAR_BPS}
+    assert share_bps({"x": 0, "y": 0}, empty=None) == {"x": 0, "y": 0}
     with pytest.raises(ValueError):
         share_bps({"x": -1}, empty="x")

@@ -7999,16 +7999,21 @@ export interface components {
          * @description Where one account's money is: the single read every money bar draws.
          *
          *     Python authors every dollar string and every width. When ``ready``, the
-         *     segments sum exactly (in cents) to ``total_usd``, their widths to 10000
-         *     basis points, and ``free_to_deploy_usd`` is the Deploy preview's
-         *     unreserved cash. Otherwise every figure is absent and ``detail`` names
-         *     the reason and its fix -- an unknown is never shown as $0.
+         *     segments sum exactly (in cents) to ``total_usd`` plus
+         *     ``account_shortfall_usd`` (what the bots' and orders' claims exceed the
+         *     account by; "0.00" unless overdrawn), their widths to 10000 basis points,
+         *     and ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.
+         *     Otherwise the bar's figures are absent and ``detail`` names the reason --
+         *     an unknown is never shown as $0 -- while the broker's own ``equity_usd``
+         *     and ``today_pnl_usd`` stay whenever they are known.
          */
         AccountMoneyView: {
             /** Account Charges Usd */
             account_charges_usd?: string | null;
             /** Account Id */
             account_id: string;
+            /** Account Shortfall Usd */
+            account_shortfall_usd?: string | null;
             /** Cash Usd */
             cash_usd?: string | null;
             /** Detail */
@@ -8023,6 +8028,8 @@ export interface components {
             in_bots_usd?: string | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
+            /** Open Pnl Detail */
+            open_pnl_detail?: string | null;
             /** Open Pnl Usd */
             open_pnl_usd?: string | null;
             /** Outside Bots Usd */
@@ -8032,11 +8039,15 @@ export interface components {
              * @default []
              */
             segments?: components["schemas"]["MoneySegment"][];
+            /** Settling Usd */
+            settling_usd?: string | null;
             /**
              * State
              * @enum {string}
              */
             state: "ready" | "unavailable" | "legacy";
+            /** Stopped Holding Count */
+            stopped_holding_count?: number | null;
             /** Today Pnl Usd */
             today_pnl_usd?: string | null;
             /** Total Usd */
@@ -19426,6 +19437,9 @@ export interface components {
         /**
          * MoneyParts
          * @description A bot's slice, shaded. Widths are basis points of the slice itself.
+         *
+         *     They sum to 10000, or to 0 when the slice holds nothing (a flat bot
+         *     that overran its budget draws no part; its shortfall is reported).
          */
         MoneyParts: {
             /** Free Bps */
@@ -19448,6 +19462,10 @@ export interface components {
          *     ``label`` is the legend's words for the slice; ``share_bps`` its width.
          *     ``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``
          *     and ``still_claimed_usd`` to a stopped bot that still holds money.
+         *     ``palette_index`` is a bot's stable colour slot (its registration order
+         *     on the account), the same on every surface that draws that bot.
+         *     ``settling`` is sale proceeds on their way into cash: not yet free to
+         *     deploy, never a shortfall.
          */
         MoneySegment: {
             /** Amount Usd */
@@ -19456,9 +19474,11 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "bot" | "stopped" | "outside" | "charges" | "new" | "free";
+            kind: "bot" | "stopped" | "outside" | "charges" | "settling" | "new" | "free";
             /** Label */
             label: string;
+            /** Palette Index */
+            palette_index?: number | null;
             parts?: components["schemas"]["MoneyParts"] | null;
             /** Released Usd */
             released_usd?: string | null;

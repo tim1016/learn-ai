@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, observation_is_fresh
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
@@ -58,6 +58,31 @@ def _publish_book(*asks: tuple[str, float]) -> None:
     ), now_ms=NOON)
 
 
+class _Sync:
+    """The sync's read contract as the money views use it.
+
+    ``reading`` is the last account reading; the envelope publishes (admits)
+    it only when the account is judged safe. Withdrawing admission never
+    forgets the reading, exactly as ``LiveEnvelopeSync`` keeps
+    ``_last_reading`` (see test_live_envelope_sync) -- a fake that tied the
+    two together would hide review A6.
+    """
+
+    def __init__(self, gate: LiveEnvelopeGate, reading: AccountObservation | None, snapshot: SimpleNamespace | None = None) -> None:
+        self.envelope = gate
+        self.reading = reading
+        self.snapshot = snapshot
+
+    def risk_snapshot(self) -> SimpleNamespace | None:
+        return self.snapshot
+
+    def display_observation(self, now_ms: int) -> AccountObservation | None:
+        reading = self.reading
+        if reading is None or not observation_is_fresh(reading, now_ms=now_ms, max_age_ms=self.envelope.observation_max_age_ms):
+            return None
+        return reading
+
+
 def _request(symbol: str = "SPY", **updates) -> AlpacaPaperDeployRequest:
     return AlpacaPaperDeployRequest(
         strategy_instance_id="review-a", strategy_key="deployment_validation", symbol=symbol,
@@ -80,7 +105,7 @@ def authority(tmp_path, monkeypatch):
     snapshot = SimpleNamespace(observation=observation, policy=policy, hold=None)
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     gate.publish(observation)
-    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=SimpleNamespace(envelope=gate, risk_snapshot=lambda: snapshot))
+    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=_Sync(gate, observation, snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
     monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: None)
     monkeypatch.setattr(budget_deploy, "get_broker_configuration_service", lambda: SimpleNamespace(owner=lambda: SimpleNamespace(owner_id="server-owner")))
@@ -302,6 +327,8 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         primary_repo.close()
 
 
+
+
 # ── Account money: the one read every money bar draws (PRD #2560) ───────────
 
 
@@ -309,25 +336,39 @@ def _segments(view) -> list[tuple[str, str, str, int]]:
     return [(segment.kind, segment.label, segment.amount_usd, segment.share_bps) for segment in view.segments]
 
 
-def test_account_money_is_the_running_bot_beside_free_to_deploy(authority: tuple) -> None:
+def _hold_one_share(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate) -> None:
+    """Bot ``view`` buys 1 SPY at $100; the reading's cash has not seen it yet."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                            lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                            reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="held", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+
+
+async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority: tuple) -> None:
     repo, _, _ = _committed_view(authority)
 
-    view = budget_deploy.account_money_view(repo.account_id)
+    view = await budget_deploy.account_money_view(repo.account_id)
 
     assert view.state == "ready" and view.world == "real_paper" and view.account_id == repo.account_id
     assert _segments(view) == [("bot", "view", "200.00", 2_000), ("free", "free to deploy", "800.00", 8_000)]
     assert (view.total_usd, view.cash_usd, view.in_bots_usd, view.free_to_deploy_usd) == ("1000.00", "1000.00", "200.00", "800.00")
     assert (view.held_by_stopped_usd, view.outside_bots_usd, view.account_charges_usd) == ("0.00", "0.00", "0.00")
-    assert (view.equity_usd, view.today_pnl_usd, view.open_pnl_usd) == ("1000.00", "0.00", "0.00")
+    assert (view.settling_usd, view.account_shortfall_usd, view.stopped_holding_count) == ("0.00", "0.00", 0)
+    assert (view.equity_usd, view.today_pnl_usd, view.open_pnl_usd, view.open_pnl_detail) == ("1000.00", "0.00", "0.00", None)
     parts = view.segments[0].parts
     assert parts is not None and (parts.in_shares_usd, parts.pending_usd, parts.free_usd, parts.free_bps) == ("0.00", "0.00", "200.00", 10_000)
     assert view.segments[0].shortfall_usd == "0.00" and view.observed_at_ms == NOON
+    assert (view.segments[0].palette_index, view.segments[1].palette_index) == (0, None)
     assert view.detail == "Cash plus shares at the price paid."
 
 
-def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
+async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
     repo, _, _ = _committed_view(authority)
-    view = budget_deploy.account_money_view(repo.account_id)
+    view = await budget_deploy.account_money_view(repo.account_id)
 
     preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
     assert view.free_to_deploy_usd == preview.unreserved_usd == "800.00"
@@ -342,121 +383,194 @@ def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_c
     assert after.total_usd == view.total_usd
 
 
-def test_money_after_is_absent_when_the_preview_refuses_and_for_dry_run(authority: tuple) -> None:
+async def test_the_deploy_preview_reads_the_account_once_under_its_fence(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A5: free to deploy = unreserved by construction, from one projection."""
     repo, _, _ = _committed_view(authority)
-    too_much = _request(budget=DeploymentBudgetInput(amount_usd="900", risk_revision=1))
-    refused = budget_deploy.preview_budget(repo.account_id, too_much, resolved_parameters={})
-    assert refused.state == "unavailable" and "Only $800.00 is unreserved" in refused.detail
-    assert refused.money_after is None
+    calls: list[str] = []
+    for name in ("account_budget", "account_money"):
+        real = getattr(repo, name)
+        monkeypatch.setattr(repo, name, lambda *a, _real=real, _name=name, **k: (calls.append(_name), _real(*a, **k))[1])
+
+    preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
+
+    assert preview.state == "ready" and preview.money_after is not None
+    assert calls == ["account_money"]
+
+
+async def test_a_refused_amount_still_returns_the_bar_the_money_step_draws(authority: tuple) -> None:
+    repo, _, _ = _committed_view(authority)
+    today = await budget_deploy.account_money_view(repo.account_id)
+    for amount, why in (("900", "Only $800.00 is unreserved"), ("50", "at least $100.02")):
+        refused = budget_deploy.preview_budget(
+            repo.account_id, _request(budget=DeploymentBudgetInput(amount_usd=amount, risk_revision=1)), resolved_parameters={},
+        )
+        assert refused.state == "unavailable" and why in refused.detail
+        assert refused.review_token is None and refused.unreserved_usd == "800.00"
+        assert refused.money_after == today  # the bar, with no new slice
     dry = _request(execution_mode="dry_run", budget=DeploymentBudgetInput(amount_usd="2000", risk_revision=0))
     assert budget_deploy.preview_budget(repo.account_id, dry, resolved_parameters={}).money_after is None
 
 
-@pytest.mark.parametrize("observation", ["withdrawn", "stale"])
-def test_a_missing_or_stale_cash_observation_is_unavailable_never_zero(authority: tuple, observation: str) -> None:
-    repo, runtime, _ = _committed_view(authority)
-    gate = runtime.envelope_sync.envelope
-    if observation == "withdrawn":
-        gate.withdraw()
-    else:
-        repo.clock.advance(60_000)
+async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(authority: tuple) -> None:
+    """Review A6: the sync withdraws its admission observation whenever the
+    account is not judged safe (a loss hold, an unjudgeable day). The money
+    was still read, so the bar and Alpaca's figures stay."""
+    repo, runtime, gate = _committed_view(authority)
+    gate.withdraw()
 
-    view = budget_deploy.account_money_view(repo.account_id)
+    view = await budget_deploy.account_money_view(repo.account_id)
 
-    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
-    canonical = current_risk_readiness(repo, envelope=gate, now_ms=repo.clock())
-    assert view.state == "unavailable" and view.detail == canonical.detail
+    assert view.state == "ready" and view.free_to_deploy_usd == "800.00"
+    assert (view.equity_usd, view.today_pnl_usd) == ("1000.00", "0.00")
+    assert not budget_deploy._budget_view(runtime, "view").entry_eligible
+
+
+async def test_a_stale_reading_is_unavailable_never_zero(authority: tuple) -> None:
+    repo, _, _ = _committed_view(authority)
+    repo.clock.advance(60_000)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "unavailable" and view.detail == budget_deploy._NO_FRESH_READING
+    assert "Settings" in view.detail and "Configuration" not in view.detail
     assert view.segments == () and view.total_usd is None and view.free_to_deploy_usd is None
+    assert view.equity_usd is None and view.today_pnl_usd is None
 
 
-def _unlimited_runtime(tmp_path, monkeypatch: pytest.MonkeyPatch, *, cutover: bool = True) -> ClerkSqliteRepository:
-    """A Paper account whose owner never applied risk limits (hurdle H7)."""
+async def test_a_bar_that_cannot_be_drawn_keeps_alpacas_equity_and_today(authority: tuple) -> None:
+    """Review A6: an unknown claim blanks the bar, never the broker figures."""
+    from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_manual_orders import LEG_ID, OPERATOR_ID, TICKET_ID
+
+    repo, _, _ = _committed_view(authority)
+    accept_manual_order(repo, account_id=repo.account_id, operator_id=OPERATOR_ID, ticket_id=TICKET_ID,
+                        leg_id=LEG_ID, leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1))
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "unavailable" and "manual order is still working" in view.detail
+    assert "before assigning or spending a budget" not in view.detail
+    assert (view.equity_usd, view.today_pnl_usd, view.observed_at_ms) == ("1000.00", "0.00", NOON)
+    assert view.segments == () and view.total_usd is None
+
+
+async def test_an_overdrawn_account_draws_its_bar_and_reports_the_shortfall(authority: tuple) -> None:
+    """Review A6: overdrawn is a known state -- drawn, with the overrun as data."""
+    repo, runtime, _ = _committed_view(authority)
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, cash_available_usd=150)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "ready" and view.account_shortfall_usd == "50.00"
+    assert _segments(view) == [("bot", "view", "200.00", 10_000), ("free", "free to deploy", "0.00", 0)]
+    assert (view.total_usd, view.free_to_deploy_usd) == ("150.00", "0.00")
+
+
+async def test_open_pnl_is_canonical_fifo_or_withheld_with_its_reason(authority: tuple) -> None:
+    """Review A4: never Alpaca's equity less the bar's cost total."""
+    repo, runtime, gate = _committed_view(authority)
+    _hold_one_share(repo, gate)
+    # Alpaca marks the share $5 up: the retired formula would have said $5.00.
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, equity_usd=1005)
+
+    real = await budget_deploy.account_money_view(repo.account_id)
+    assert real.state == "ready" and real.total_usd == "1000.00" and real.equity_usd == "1005.00"
+    assert real.open_pnl_usd is None and real.open_pnl_detail == budget_deploy._OPEN_PNL_UNPRICED
+
+    # A simulated reading values its own lots with its own marks (fifo.open_pnl).
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, simulation_session_start_ms=NOON - 1, unrealized_pl_usd=4.2)
+    simulated = await budget_deploy.account_money_view(repo.account_id)
+    assert (simulated.open_pnl_usd, simulated.open_pnl_detail) == ("4.20", None)
+
+
+async def test_an_account_without_risk_limits_still_shows_its_money_while_deploy_names_the_limits(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hurdle H7 x review A6: with no limits the sync cannot judge the account,
+    so it admits nothing -- but it read the cash. The money read shows it; the
+    Deploy preview names the missing limits (``risk_admission``'s wording)."""
     repo = ClerkSqliteRepository.initialize(account_id="NO-LIMITS", artifacts_root=tmp_path, clock=_TestClock(NOON))
-    if cutover:
-        commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
-    # With no limits the sync cannot judge the account, so it publishes no observation.
-    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
-    snapshot = SimpleNamespace(observation=None, policy=None, hold=None)
-    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo,
-                              envelope_sync=SimpleNamespace(envelope=gate, risk_snapshot=lambda: snapshot))
+    reading = AccountObservation(observed_at_ms=NOON, broker_cash_usd=1000, cash_available_usd=1000,
+                                 last_equity_usd=1000, position_count=0, equity_usd=1000)
+    sync = _Sync(LiveEnvelopeGate(values=None, custody_is_simulated=False), reading, SimpleNamespace(observation=None, policy=None, hold=None))
+    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=sync)
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
-    return repo
-
-
-def test_an_account_without_risk_limits_is_unavailable_for_the_canonical_readiness_reason(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hurdle H7: the money read names the same cause the Deploy preview does.
-
-    The wording belongs to the one readiness check (``risk_admission``);
-    this read never authors a second copy of it, and never shows $0.
-    """
-    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
-
-    repo = _unlimited_runtime(tmp_path, monkeypatch)
     market_liveness.reset_market_liveness_store_for_testing()
     _publish_book(("SPY", 100))
     try:
-        view = budget_deploy.account_money_view(repo.account_id)
+        view = await budget_deploy.account_money_view(repo.account_id)
         preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
-        canonical = current_risk_readiness(repo, envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False), now_ms=NOON)
     finally:
         market_liveness.reset_market_liveness_store_for_testing()
         repo.close()
-    assert not canonical.allowed
-    assert view.state == "unavailable" and view.detail == canonical.detail == preview.detail
-    assert view.total_usd is None and view.segments == ()
+    assert view.state == "ready" and _segments(view) == [("free", "free to deploy", "1000.00", 10_000)]
+    assert preview.state == "unavailable" and preview.money_after is None
 
 
-def test_an_account_not_switched_to_budgets_reads_legacy_with_its_settings_action(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = _unlimited_runtime(tmp_path, monkeypatch, cutover=False)
+async def test_an_account_not_switched_to_budgets_reads_legacy_with_its_settings_action(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="LEGACY", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo,
+                              envelope_sync=_Sync(LiveEnvelopeGate(values=None, custody_is_simulated=False), None))
+    monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
     try:
-        view = budget_deploy.account_money_view(repo.account_id)
+        view = await budget_deploy.account_money_view(repo.account_id)
     finally:
         repo.close()
     assert view.state == "legacy" and "Switch it in Settings" in view.detail and view.segments == ()
 
 
-def test_a_dry_run_budget_never_appears_on_the_accounts_money(authority: tuple, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_dry_run_budget_never_appears_on_the_accounts_money(authority: tuple, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review: a real Dry Run authority, installed and holding its budget, with
+    the real runtime lookup and bot registry in place -- nothing is patched
+    away that the money read could consult."""
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+    from app.services.bot_runner import BotTaskRegistry
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
     repo, _, _ = _committed_view(authority)
-    before = budget_deploy.account_money_view(repo.account_id)
-    dry_repo = ClerkSqliteRepository.initialize(account_id="sim:dry-bot", artifacts_root=tmp_path / "dry", clock=_TestClock(NOON))
+    before = await budget_deploy.account_money_view(repo.account_id)
+    sid = "dry-bot"
+    binding = BrokerBotBinding(
+        strategy_instance_id=sid, strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY", mode="dry_run",
+        quantity=1, action_plan=alpaca_v1_action_plan("SPY"), run_id="run-1", created_at_ms=0,
+        sealed_account_id=f"sim:{sid}", exit_terms=TERMS, budget_consent=DeployBudgetConsent(
+            committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic"),
+    )
+    registry = BotTaskRegistry(tmp_path / "dry", feed_resolver=lambda: None, now_ms=repo.clock, boot_recovery_required=False)
     try:
-        from app.broker.alpaca.clerk.et_day import et_day_window_ms
+        dry_authority = registry._authority_for(binding)
+        await dry_authority.ensure_recoverable()
+        dry = get_clerk_runtime(f"sim:{sid}")
+        dry.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+        await dry.clerk.register_strategy_run(binding)
+        # Positive control: the Dry Run's own authority holds a real budget.
+        assert dry.sqlite_repository.deployment_budget(sid)["committed_cents"] == 50_000
+        monkeypatch.setattr(budget_deploy, "get_clerk_runtime", get_clerk_runtime)
+        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: registry)
 
-        commit_budget_authority_cutover(dry_repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
-        terms = _request().exit_terms.seal()
-        dry_repo.register_strategy_instance(strategy_instance_id="dry-bot", symbol="SPY", config_hash="seal", exit_terms=terms)
-        session = et_day_window_ms(NOON)[0]
-        dry_gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
-        dry_gate.publish(AccountObservation(observed_at_ms=NOON, broker_cash_usd=2000, cash_available_usd=2000,
-            last_equity_usd=2000, position_count=0, equity_usd=2000, simulation_session_start_ms=session,
-            risk_equity_window_start_ms=session, risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=session))
-        # The Dry Run's private authority holds its own simulated budget.
-        submit_budgeted_deploy(dry_repo, strategy_instance_id="dry-bot", lifecycle_run_id="dry-run", world="synthetic",
-            committed_cents=200_000, configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
-            risk_revision=0, actor="owner", envelope=dry_gate, minimum_position_cost=Decimal("100.02"))
-        assert dry_repo.deployment_budget("dry-bot") is not None
-        monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: SimpleNamespace(sqlite_repository=dry_repo))
-
-        after = budget_deploy.account_money_view(repo.account_id)
+        after = await budget_deploy.account_money_view(repo.account_id)
     finally:
-        dry_repo.close()
+        await close_synthetic_clerk_runtimes()
     assert after == before
-    assert all(segment.strategy_instance_id != "dry-bot" for segment in after.segments)
+    assert all(segment.strategy_instance_id != sid for segment in after.segments)
 
 
-def test_shadow_draws_its_bar_from_its_own_shadow_pool(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_shadow_draws_its_bar_from_its_own_shadow_pool(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE-1", artifacts_root=tmp_path, clock=_TestClock(NOON))
     try:
         commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
-        gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
-        gate.publish(AccountObservation(observed_at_ms=NOON, broker_cash_usd=5000, cash_available_usd=2500,
-            last_equity_usd=2500, position_count=0, equity_usd=2500))
+        reading = AccountObservation(observed_at_ms=NOON, broker_cash_usd=5000, cash_available_usd=2500,
+                                     last_equity_usd=2500, position_count=0, equity_usd=2500)
         runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="shadow", sqlite_repository=repo,
-                                  envelope_sync=SimpleNamespace(envelope=gate))
+                                  envelope_sync=_Sync(LiveEnvelopeGate(values=None, custody_is_simulated=True), reading))
         monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
 
-        view = budget_deploy.account_money_view("LIVE-1")
+        view = await budget_deploy.account_money_view("LIVE-1")
     finally:
         repo.close()
     # The simulated pool's own cash, never the real account's $5,000.
@@ -464,10 +578,19 @@ def test_shadow_draws_its_bar_from_its_own_shadow_pool(tmp_path, monkeypatch: py
     assert _segments(view) == [("free", "free to deploy", "2500.00", 10_000)]
 
 
-def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(authority: tuple) -> None:
+async def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, runtime, _ = _committed_view(authority)
-    segment = budget_deploy.account_money_view(repo.account_id).segments[0]
-    assert budget_deploy._budget_view(runtime, "view").parts == segment.parts
+    segment = (await budget_deploy.account_money_view(repo.account_id)).segments[0]
+    calls: list[int] = []
+    real = budget_deploy.current_risk_readiness
+    monkeypatch.setattr(budget_deploy, "current_risk_readiness", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+    runtime.envelope_sync.envelope.withdraw()
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and view.parts == segment.parts
+    # Review A5: one readiness judgement per read, even without admission.
+    assert len(calls) == 1
 
 
 async def test_account_money_endpoint_serves_the_view_and_refuses_an_unserved_account(authority: tuple) -> None:
@@ -486,9 +609,10 @@ async def test_account_money_endpoint_serves_the_view_and_refuses_an_unserved_ac
     assert served.status_code == 200
     assert served.json()["free_to_deploy_usd"] == "800.00" and served.json()["segments"][0]["kind"] == "bot"
     assert other.status_code == 503 and "custody authority is unavailable" in other.json()["detail"]["why"]
+    assert "Settings" in other.json()["detail"]["why"]
 
 
-def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_previews(
+async def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_previews(
     authority: tuple, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.broker.alpaca.clerk.account_money import MoneyConservationError
@@ -500,9 +624,10 @@ def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_previews
 
     monkeypatch.setattr(budget_deploy, "money_bar", unconserved)
 
-    view = budget_deploy.account_money_view(repo.account_id)
+    view = await budget_deploy.account_money_view(repo.account_id)
     preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
 
     assert view.state == "unavailable" and "does not add up" in view.detail and view.segments == ()
+    assert view.equity_usd == "1000.00"
     assert any(getattr(record, "action", None) == "account_money_unconserved" for record in caplog.records)
     assert preview.state == "ready" and preview.money_after is not None and preview.money_after.state == "unavailable"
