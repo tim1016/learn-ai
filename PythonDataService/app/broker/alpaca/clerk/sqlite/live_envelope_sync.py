@@ -229,6 +229,7 @@ class LiveEnvelopeSync:
         self._reader = SqliteEconomicProjectionReader.from_repository(repo)
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
+        self._account_mode_disagreed = False
         # The previous tick's non-finite risk fields, deduplicated the same way.
         self._last_non_finite: tuple[str, ...] = ()
         self._task: asyncio.Task[None] | None = None
@@ -518,6 +519,11 @@ class LiveEnvelopeSync:
             },
         )
 
+    @property
+    def account_mode_disagreed(self) -> bool:
+        """Latest proven mode disagreement; a failed read cannot clear it."""
+        return self._account_mode_disagreed
+
     async def tick(self) -> EnvelopeSyncAction:
         """Observe once, and act on the verdict.
 
@@ -536,6 +542,7 @@ class LiveEnvelopeSync:
             # arming refresh ``observe`` ran before the read may publish
             # freely and the recovery below is not one tick late: this tick's
             # read is what raises it and this tick's read is what releases it.
+            self._account_mode_disagreed = True
             self.envelope.withdraw()
             if self._arming_gate is not None:
                 self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))
@@ -544,6 +551,7 @@ class LiveEnvelopeSync:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.
             return self._acted("read_failed", {"why": str(exc)})
+        self._account_mode_disagreed = False
         if self._arming_gate is not None:
             self._arming_gate.release()
         with self._repo._write_lock:

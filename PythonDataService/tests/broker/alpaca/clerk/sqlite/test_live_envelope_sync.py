@@ -161,6 +161,35 @@ def _sync_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.name == SYNC_LOGGER]
 
 
+async def test_budget_authority_mode_disagreement_remains_visible_through_failed_read(tmp_path, make_sync) -> None:
+    from app.broker.contract.errors import BrokerAccountModeDisagreement
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _new_budget_repo
+
+    class Read(_Read):
+        disagree = True
+
+        async def get_account(self) -> BrokerAccountSnapshot:
+            if self.disagree:
+                raise BrokerAccountModeDisagreement("Account changed", broker="alpaca")
+            return await super().get_account()
+
+    repo = _new_budget_repo(tmp_path)
+    broker = Read()
+    sync = make_sync(repo, broker)
+    try:
+        assert await sync.tick() == "mode_disagreed"
+        assert sync.account_mode_disagreed and sync.risk_snapshot().observation is None
+        broker.disagree, broker.fail = False, True
+        assert await sync.tick() == "read_failed"
+        assert sync.account_mode_disagreed
+        broker.fail = False
+        assert await sync.tick() == "observed"
+        assert not sync.account_mode_disagreed
+    finally:
+        await sync.stop()
+        repo.close()
+
+
 async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
