@@ -1005,6 +1005,27 @@ describe('AlpacaDeployWorkflowComponent — accessibility', () => {
     expect(results.violations).toEqual([]);
   });
 
+  it('passes AXE with a lost Deploy offering its status read, and a strategy not yet allowed', async () => {
+    const notYetAllowed: DeployBotView['strategies'][number] = {
+      ...VALIDATION_STRATEGY, paper_access_state: 'available', selectable: false, admissible_modes: ['dry_run'],
+      blocked_explanation: 'Broker trading is not enabled for this strategy on this account yet. Allow it in What.',
+    };
+    const service = mockService({ ...DEPLOY_VIEW, strategies: [notYetAllowed, EMA_STRATEGY] }, new HttpErrorResponse({ status: 0 }));
+    const { fixture } = await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
+    await fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('button', { name: 'Check deployment status' });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'deployment_validation' } });
+    await fixture.whenStable();
+    await screen.findByRole('button', { name: 'Allow on Paper' });
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations).toEqual([]);
+  });
+
   it('passes AXE on Live with the typed phrase showing', async () => {
     const { fixture } = await renderWorkflow(mockService(LIVE_DEPLOY_VIEW));
     fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Live/ }));
