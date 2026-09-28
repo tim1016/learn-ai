@@ -62,7 +62,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
-from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError
+from app.broker.contract.errors import (
+    BrokerAccountModeDisagreement,
+    BrokerError,
+    BrokerEvidenceUnavailable,
+)
 from app.broker.contract.models import BrokerActivity
 from app.broker.contract.ports import BrokerReadPort
 
@@ -299,17 +303,25 @@ class LiveEnvelopeSync:
         # (#2441).
         observed_at_ms = self._repo.clock()
         day_start_ms = day_pnl_window_start_ms(observed_at_ms)
-        cash_flows_before = await self._read.list_activities(
-            after_ms=day_start_ms,
-            limit=100,
-            activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
-        )
-        account = await self._read.get_account()
-        cash_flows_after = await self._read.list_activities(
-            after_ms=day_start_ms,
-            limit=100,
-            activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
-        )
+        try:
+            cash_flows_before = await self._read.list_activities(
+                after_ms=day_start_ms,
+                limit=100,
+                activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
+            )
+            account = await self._read.get_account()
+            cash_flows_after = await self._read.list_activities(
+                after_ms=day_start_ms,
+                limit=100,
+                activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
+            )
+        except BrokerEvidenceUnavailable:
+            # Unlike a transport outage, a current response that contradicts
+            # the transfer contract is a verdict: the cash/P&L evidence is
+            # unknown now. Guarded clears call ``observe`` directly, so the
+            # withdrawal belongs here rather than only in ``tick``.
+            self.envelope.withdraw()
+            raise
         # ``last_equity`` advances at the ET day boundary. If the account read
         # landed on the next boundary, these transfer queries used the wrong
         # horizon for that snapshot; classify the whole cash-flow proof as
@@ -462,6 +474,12 @@ class LiveEnvelopeSync:
             if self._arming_gate is not None:
                 self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
+        except BrokerEvidenceUnavailable as exc:
+            # ``observe`` already withdrew so direct callers (notably guarded
+            # clear) are safe too. Classify this as current unknown evidence,
+            # not a transient read failure whose old observation may age out.
+            self.envelope.withdraw()
+            return self._acted("unknown", {"why": str(exc), "cash_flows_known": False})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.

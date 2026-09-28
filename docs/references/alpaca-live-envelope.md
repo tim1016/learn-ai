@@ -188,15 +188,19 @@ notional cap, no symbol allowlist, no session restriction.
   `TRANS` window immediately before and
   after its account snapshot and accepts it only when both economic row sets
   match. It subtracts signed `CSD` deposits and `CSW` withdrawals, whose
-  `net_amount` sign is part of Alpaca's activity contract
+  `net_amount` sign is part of Alpaca's activity contract: a deposit must be
+  strictly positive and a withdrawal strictly negative; zero or a
+  contradictory sign makes the result unknown
   ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
   The dedicated `TRANS` pagination validates newest-first continuity and reads
   one proof page beyond the first page that crosses the date boundary; a
   missing, repeated, cyclic, or out-of-order cursor raises instead of returning
   a partial set. Non-object rows, rows that cannot be mapped, rows lacking a
   nonblank broker id, and rows not definitively `executed` make the read
-  unavailable. Duplicate activity ids carrying different economic evidence do
-  the same; economically identical duplicates are collapsed. Missing
+  unavailable. This rejected-evidence condition withdraws the prior envelope
+  observation immediately; only a transient transport failure uses the normal
+  freshness age-out. Duplicate activity ids carrying different economic evidence
+  do the same; economically identical duplicates are collapsed. Missing
   timestamps, missing or non-finite amounts, and a date-only transfer on the
   boundary session make `DayPnl.known` false rather than turning an
   unclassified cash movement into profit or loss. A sync tick whose account

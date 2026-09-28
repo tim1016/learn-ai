@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -69,6 +69,7 @@ class _Read:
         cash_flows: list[BrokerActivity] | None = None,
         cash_flow_reads: list[list[BrokerActivity]] | None = None,
         account_observed_at_ms: int = NOON,
+        activity_error: BrokerEvidenceUnavailable | None = None,
         fail: bool = False,
         fail_positions: bool = False,
         fail_unexpectedly: bool = False,
@@ -80,6 +81,7 @@ class _Read:
         self.cash_flows = [] if cash_flows is None else cash_flows
         self.cash_flow_reads = cash_flow_reads
         self.account_observed_at_ms = account_observed_at_ms
+        self.activity_error = activity_error
         self.activity_calls: list[tuple[int | None, int, str | None]] = []
         self.fail = fail
         self.fail_positions = fail_positions
@@ -143,6 +145,8 @@ class _Read:
         activity_type: str | None = None,
     ) -> list[BrokerActivity]:
         self.activity_calls.append((after_ms, limit, activity_type))
+        if self.activity_error is not None:
+            raise self.activity_error
         if self.cash_flow_reads is not None:
             read_index = min(len(self.activity_calls) - 1, len(self.cash_flow_reads) - 1)
             return self.cash_flow_reads[read_index]
@@ -397,6 +401,40 @@ async def test_incomplete_cash_transfer_evidence_withdraws_the_observation(
     assert await sync.tick() == "unknown"
     assert sync.envelope.latest_observation() is None
     assert _hold(day_pnl_repo) is None
+
+
+async def test_rejected_cash_transfer_evidence_withdraws_the_previous_observation(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    read = _Read()
+    sync = make_sync(day_pnl_repo, read)
+    assert await sync.tick() == "observed"
+    assert sync.envelope.latest_observation() is not None
+
+    read.activity_error = BrokerEvidenceUnavailable(
+        "Alpaca transfer activity evidence was malformed."
+    )
+
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
+
+
+async def test_rejected_cash_transfer_evidence_withdraws_on_direct_observe(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    read = _Read()
+    sync = make_sync(day_pnl_repo, read)
+    assert await sync.tick() == "observed"
+
+    read.activity_error = BrokerEvidenceUnavailable(
+        "Alpaca transfer activity evidence was malformed."
+    )
+
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await sync.observe()
+    assert sync.envelope.latest_observation() is None
 
 
 async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(

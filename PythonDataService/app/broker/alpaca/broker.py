@@ -25,7 +25,7 @@ from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -91,13 +91,13 @@ def _validate_transfer_payload(payload: object) -> None:
         raise TypeError("Alpaca transfer activity row must be an object")
     activity_id = payload.get("id")
     if not isinstance(activity_id, str) or not activity_id.strip():
-        raise BrokerUnavailable(
+        raise BrokerEvidenceUnavailable(
             "Alpaca transfer activity evidence had no valid activity id.",
             broker=BROKER_ID,
             detail="A transfer row cannot be identified without a nonempty broker id.",
         )
     if payload.get("status") != "executed":
-        raise BrokerUnavailable(
+        raise BrokerEvidenceUnavailable(
             "An Alpaca transfer activity was not executed.",
             broker=BROKER_ID,
             detail=(
@@ -126,7 +126,7 @@ def _transfer_page_oldest_ms(
         previous_page_oldest_ms is not None
         and dated[0] > previous_page_oldest_ms
     ):
-        raise BrokerUnavailable(
+        raise BrokerEvidenceUnavailable(
             "Alpaca transfer activity history was not newest-first.",
             broker=BROKER_ID,
             detail="Transfer pagination cannot prove the prior-close boundary.",
@@ -286,7 +286,7 @@ class AlpacaBroker:
                         _validate_transfer_payload(payload)
                     mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
                 except (AttributeError, KeyError, TypeError, ValueError) as exc:
-                    raise BrokerUnavailable(
+                    raise BrokerEvidenceUnavailable(
                         "Alpaca transfer activity evidence was malformed.",
                         broker=BROKER_ID,
                         detail="A transfer row could not be mapped to the broker contract.",
@@ -299,7 +299,7 @@ class AlpacaBroker:
                     previous = seen_activities.get(activity.activity_id)
                     if previous is not None:
                         if not _same_activity_evidence(previous, activity):
-                            raise BrokerUnavailable(
+                            raise BrokerEvidenceUnavailable(
                                 "Alpaca transfer activity history contains a conflicting duplicate.",
                                 broker=BROKER_ID,
                                 detail=(
@@ -332,7 +332,7 @@ class AlpacaBroker:
                     or not next_page_token
                     or next_page_token in issued_page_tokens
                 ):
-                    raise BrokerUnavailable(
+                    raise BrokerEvidenceUnavailable(
                         "Alpaca transfer activity history was incomplete.",
                         broker=BROKER_ID,
                         detail="Pagination ended before the prior-close boundary.",

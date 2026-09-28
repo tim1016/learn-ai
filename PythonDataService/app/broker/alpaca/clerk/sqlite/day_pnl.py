@@ -15,8 +15,10 @@ The broker's equity makes this account-wide without composing incompatible
 lot horizons: an overnight position contributes only its change since the
 prior regular-session close, while an external order is already reflected in
 the same account value. ``TRANS`` is Alpaca's aggregate activity filter for
-the two owner cash-flow types; anything unexpected or without a finite signed
-amount makes the fact unknown rather than silently treating cash flow as P&L.
+the two owner cash-flow types; deposits must be strictly positive and
+withdrawals strictly negative. Anything unexpected or without a finite,
+direction-consistent signed amount makes the fact unknown rather than silently
+treating cash flow as P&L.
 """
 
 from __future__ import annotations
@@ -75,6 +77,10 @@ def day_pnl_at(
         if activity.activity_type in CASH_TRANSFER_ACTIVITY_TYPES
         and activity.net_amount is not None
         and math.isfinite(activity.net_amount)
+        and (
+            (activity.activity_type == "CSD" and activity.net_amount > 0.0)
+            or (activity.activity_type == "CSW" and activity.net_amount < 0.0)
+        )
         and activity.occurred_at_ms is not None
         and day_start_ms < activity.occurred_at_ms <= now_ms
     ]

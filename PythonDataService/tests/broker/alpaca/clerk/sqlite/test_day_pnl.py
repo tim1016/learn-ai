@@ -140,6 +140,10 @@ def test_after_hours_keeps_the_previous_trading_day_close_as_its_baseline() -> N
     [
         pytest.param(_cash_flow("CSD", None), id="missing-amount"),
         pytest.param(_cash_flow("CSD", float("nan")), id="non-finite-amount"),
+        pytest.param(_cash_flow("CSD", -10.0), id="deposit-with-negative-amount"),
+        pytest.param(_cash_flow("CSD", 0.0), id="deposit-with-zero-amount"),
+        pytest.param(_cash_flow("CSW", 10.0), id="withdrawal-with-positive-amount"),
+        pytest.param(_cash_flow("CSW", 0.0), id="withdrawal-with-zero-amount"),
         pytest.param(_cash_flow("DIV", 10.0), id="unexpected-transfer-type"),
         pytest.param(_cash_flow("CSD", 10.0, occurred_at_ms=None), id="missing-occurred-at"),
         pytest.param(_cash_flow("CSD", 10.0, occurred_at_ms=1), id="before-prior-close"),
