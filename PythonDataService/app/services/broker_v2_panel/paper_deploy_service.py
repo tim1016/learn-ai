@@ -237,9 +237,8 @@ def _deploy_view_copy(account: BrokerAccountSnapshot, custody_world: CustodyWorl
             ),
             eligible_headline="This Alpaca live account is eligible for a Clerk-governed live deployment.",
             eligible_explanation=(
-                "The operator may choose Clerk-governed live execution — real-money submission for an "
-                "armed instance only; every ENTER of an unarmed instance is refused — or a "
-                "zero-broker-write Dry Run before launch."
+                "Choose real-money execution with a reviewed budget, typed deployment consent and "
+                "effective account risk limits, or explore the configuration in a private Dry Run."
             ),
         )
     return _DeployViewCopy(
@@ -296,12 +295,11 @@ _RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
     "live": _ReceiptCopy(
         duty="Alpaca live",
         explanation=(
-            "The deployment binding is durable and sealed on the real-money account; every ENTER "
-            "is refused until an operator arms this instance (ADR 0059 D11)."
+            "The deployment binding is durable and sealed on the real-money account; "
+            "new entries remain subject to its budget and the effective account risk limits."
         ),
         next_action=(
-            "Arm the instance with scripts.manage_alpaca_arming plan, then apply; then open the bot "
-            "panel and verify the first Clerk receipt."
+            "Open the bot panel to review its budget, launch status and first Clerk receipt."
         ),
     ),
 }
@@ -318,9 +316,8 @@ _OVERRIDE_RECEIPT_NEXT_ACTION = (
 def _override_receipt_copy(copy: _ReceiptCopy) -> _ReceiptCopy:
     """The override's sentences beside the mode's own — an override records a risk; it never hides what the mode does.
 
-    A live launch under an override must still say that every ENTER is refused
-    until the instance is armed (ADR 0059 D11); a shadow one must still say it
-    submits nothing (D2).
+    A live launch under an override must still name its budget and risk bounds;
+    a shadow one must still say it submits nothing.
     """
     return _ReceiptCopy(
         duty=copy.duty,
@@ -334,9 +331,8 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
 
     Dry Run is offered in every world. The one broker-contacting card is the
     world's own — ``paper``, ``shadow``, or ``live`` on the real-live
-    authority (ADR 0059 D2/D11). The paper and shadow worlds also show the
-    ``live`` card as `planned`, because graduation is the step that follows
-    them; on the live world that card *is* the broker card.
+    authority. Account Configuration owns activation and graduation; Deploy
+    offers only the selected world and its private Dry Run.
     """
     dry_run = AlpacaPaperExecutionMode(
         mode="dry_run",
@@ -368,27 +364,12 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
             label="Live",
             availability="available",
             explanation=(
-                "Orders submit real-money trades through the live Clerk for an armed instance only; "
-                "every ENTER of an unarmed instance is refused until an operator arms it (ADR 0059 D11)."
+                "Orders submit real-money trades through the live Clerk after typed deployment consent. "
+                "Every new entry must fit its budget and the effective account risk limits."
             ),
         ),
     }
-    if broker_mode == "live":
-        return (dry_run, broker_cards["live"])
-    planned_live = AlpacaPaperExecutionMode(
-        mode="live",
-        label="Live",
-        availability="planned",
-        explanation=(
-            "Live is unavailable on a paper account. Select a live account to deploy real-money bots."
-            if broker_mode == "paper" else
-            "Real-money submission follows the live cutover and the arming ceremony; a shadow "
-            "rehearsal is optional (ADR 0059, amended 2026-09-09)."
-            if broker_mode == "shadow"
-            else "Live Alpaca execution is planned but is not connected to an admission or execution path."
-        ),
-    )
-    return (dry_run, broker_cards[broker_mode], planned_live)
+    return (dry_run, broker_cards[broker_mode])
 
 
 def _admissible_modes(
@@ -913,8 +894,7 @@ def build_alpaca_paper_deploy_receipt(
     row, so a shadow deployment on a live account never inherits paper
     prose (ADR 0059 D2). When an evidence override is present, its sentences
     are prepended/appended to the mode's own rather than replacing them, so
-    an override never hides what the mode itself does (e.g. that every ENTER
-    is refused until a live instance is armed). ``receipt_id``'s prefix is an
+    an override never hides what the mode itself does or its money bounds. ``receipt_id``'s prefix is an
     opaque audit token and is deliberately not world-scoped.
     """
     copy = _RECEIPT_COPY[request.execution_mode]

@@ -446,7 +446,7 @@ async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(
     view = response.json()
     assert view["account_mode"] == "live"
     offered = {mode["mode"]: mode["availability"] for mode in view["execution_modes"]}
-    assert offered == {"dry_run": "available", "shadow": "available", "live": "planned"}
+    assert offered == {"dry_run": "available", "shadow": "available"}
 
 
 async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
