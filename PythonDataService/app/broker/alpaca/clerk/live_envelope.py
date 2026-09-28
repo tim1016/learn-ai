@@ -87,6 +87,9 @@ ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("xh_entry_bps", "live_xh_entry_bps"),
     ("xh_exit_bps", "live_xh_exit_bps"),
 )
+CURRENT_ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = tuple(
+    pair for pair in ENVELOPE_SETTINGS_FIELDS if pair[0] not in {"shadow_sessions", "arming_max_sessions"}
+)
 
 # The domain of each envelope value, as one table.
 #
@@ -125,22 +128,24 @@ class LiveEnvelopeIncomplete(ValueError):
 class LiveEnvelopeValues:
     loss_fraction: float
     loss_usd: float
-    shadow_sessions: int
-    arming_max_sessions: int
     xh_entry_bps: float
     xh_exit_bps: float
+    # Historical records retain their original six-field seal. Current
+    # Configuration has no session-count or expiring-grant authority.
+    shadow_sessions: int | None = None
+    arming_max_sessions: int | None = None
 
     @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> LiveEnvelopeValues:
-        missing = [name for _, name in ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
+        missing = [name for _, name in CURRENT_ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
         if missing:
             raise LiveEnvelopeIncomplete(
                 "the live envelope needs every ALPACA_LIVE_* value; missing: " + ", ".join(missing)
             )
-        return cls(**{field: getattr(settings, name) for field, name in ENVELOPE_SETTINGS_FIELDS})
+        return cls(**{field: getattr(settings, name) for field, name in CURRENT_ENVELOPE_SETTINGS_FIELDS})
 
     def to_mapping(self) -> dict[str, float | int]:
-        return asdict(self)
+        return {name: value for name, value in asdict(self).items() if value is not None}
 
     @property
     def sha(self) -> str:
@@ -155,6 +160,8 @@ def envelope_domain_violation(values: LiveEnvelopeValues) -> str | None:
     arming path has to say *which record* carries the bad value.
     """
     for name, admits, domain in _ENVELOPE_DOMAINS:
+        if name in {"shadow_sessions", "arming_max_sessions"} and getattr(values, name) is None:
+            continue
         if not admits(getattr(values, name)):
             return f"{name} is not {domain}"
     return None
