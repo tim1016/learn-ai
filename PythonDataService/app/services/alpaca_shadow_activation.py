@@ -105,8 +105,8 @@ async def _activate_shadow_from_configuration(account_id: str) -> ShadowActivati
                     # A fresh empty account can adopt budgets as part of this act.
                     history = any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() for table in ("runs", "orders", "fills", "deployment_budgets"))
                     if not history:
-                        SimulatedAccountProjection(repo=repo, artifacts_root=root).observe(reference_cash=initial_reference,
-                            observed_at_ms=repo.clock(), now_ms=repo.clock())
+                        SimulatedAccountProjection(repo=repo, artifacts_root=root).establish_session_baseline(
+                            reference_cash=initial_reference, now_ms=repo.clock())
                         commit_budget_authority_cutover(repo, actor=service.owner().owner_id,
                             reviewed_token=authority_review_token(repo), stop_receipt=record.activation_sha256)
             finally:

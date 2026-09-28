@@ -60,6 +60,25 @@ def shadow(tmp_path: Path) -> Iterator[ShadowContext]:
         repo.close()
 
 
+def test_establish_session_baseline_persists_once_and_is_idempotent(tmp_path: Path) -> None:
+    """#2550: shadow activation calls this narrow entry point instead of
+    discarding observe()'s AccountObservation return value for its baseline
+    side effect. A second call for the same session must not append a
+    second SIMULATION_SESSION_BASELINE transition."""
+    clock = _TestClock(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+    try:
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+        first = projection.establish_session_baseline(reference_cash=1000, now_ms=clock())
+        assert first.initial_capital_usd == Decimal(1000)
+        assert sum(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions()) == 1
+        second = projection.establish_session_baseline(reference_cash=1000, now_ms=clock())
+        assert second == first
+        assert sum(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions()) == 1
+    finally:
+        repo.close()
+
+
 def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int = 1000) -> LiveEnvelopeGate:
     if repo.budget_authority_version() < 2:
         commit_budget_authority_cutover(repo, actor="owner", reviewed_token="fresh-simulation", stop_receipt="no-old-runs")
