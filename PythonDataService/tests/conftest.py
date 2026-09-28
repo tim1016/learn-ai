@@ -23,6 +23,20 @@ os.environ["DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"] = "true"
 
 
 @pytest.fixture(autouse=True)
+def _isolate_data_plane_control_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the router harness independent of when Settings was constructed.
+
+    The source anchor may import app.config before this file's environment
+    setup. Apply the same documented test policy to that cached instance;
+    dedicated security fixtures override it afterwards to exercise refusal.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+
+
+@pytest.fixture(autouse=True)
 def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
     """The Alpaca Clerk's submission-boundary liveness recheck (#1671,
     ``runtime.py::_execute_effect``) fails closed by default — correct in

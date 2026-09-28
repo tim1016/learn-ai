@@ -127,7 +127,6 @@ def _register_instance(facade: object) -> None:
 @pytest.fixture()
 async def shadow_app_and_broker(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[FastAPI, ActiveClerkRuntime, _LiveBroker]]:
     """One composed shadow authority, installed as the process's active runtime.
 
@@ -135,12 +134,6 @@ async def shadow_app_and_broker(
     account's reported P&L after boot needs it. ``shadow_app`` below is this
     same fixture with the third element dropped.
     """
-    # Source-anchor bootstrap may construct Settings before tests/conftest's
-    # environment opt-out runs. Set the ASGI harness's auth policy on the
-    # actual settings instance, with per-test restoration, so this suite
-    # reaches Shadow custody checks regardless of collection/import order.
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
-    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
     await activate_shadow_clerk_authority(
         live_account_id=LIVE_ACCT, artifacts_root=tmp_path
     )
