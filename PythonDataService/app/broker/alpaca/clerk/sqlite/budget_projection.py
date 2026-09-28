@@ -33,11 +33,12 @@ class BudgetFees(Protocol):
 
     def total_for(self, subject_id: str) -> Decimal: ...
 
-    def unobserved_cash_claim(self, *, cash_seen_before_ms: int) -> Decimal: ...
+    def unobserved_cash_claim(self, *, cash_seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None, subject_id: str | None = None) -> Decimal: ...
 
 
 def project_account_budget(
     conn: sqlite3.Connection, *, cash: object, seen_before_ms: int, fees: BudgetFees,
+    modelled_fees_seen_before_ms: int | None = None,
 ) -> AccountBudget:
     """The caller holds one custody read/write fence for this entire read.
 
@@ -89,9 +90,11 @@ def project_account_budget(
                 active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
                 realized_gross=fifo.realized_pnl, fees=fees.total_for(subject_id),
                 position_cost=position_cost, pending_orders=pending_orders,
+                outstanding_cash=sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO)
+                + fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms, subject_id=subject_id),
             ))
         return account_budget(
             cash=cash, deployments=budgets,
             order_claims=sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
-            fee_claims=fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms),
+            fee_claims=fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms),
         )

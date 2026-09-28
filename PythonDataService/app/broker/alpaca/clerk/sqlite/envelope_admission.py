@@ -13,6 +13,8 @@ clock, like every other stamp on this path.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_CASH_EXCEEDED,
@@ -50,7 +52,7 @@ def require_envelope_admission(
     *,
     envelope: LiveEnvelopeGate,
     leg: BrokerOrderLeg,
-    reference_price: float | None,
+    reference_price: float | Decimal | None,
     now_ms: int,
     strategy_instance_id: str | None = None,
 ) -> EnvelopeReservation:

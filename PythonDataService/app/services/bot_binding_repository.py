@@ -34,6 +34,7 @@ from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
@@ -122,6 +123,7 @@ class BrokerBotBinding(BaseModel):
     # Transient authoring metadata is persisted only inside the append-only v2
     # seal. Excluding it here preserves the historical v1 configuration hash.
     strategy_param_origins: dict[str, ParameterOrigin] | None = Field(default=None, exclude=True)
+    budget_consent: DeployBudgetConsent | None = Field(default=None, exclude=True)
     sealed_program: SealedBotProgram | None = Field(default=None, exclude=True)
     program_build: ProgramBuildAdmissionFact | None = Field(default=None, exclude=True)
     # A Start obtains this exact account from its custody snapshot before it

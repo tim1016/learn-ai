@@ -56,6 +56,7 @@ class DeploymentBudgetPreview(BaseModel):
     unreserved_usd: str | None = None
     estimated_price_usd: str | None = None
     risk_revision: int = Field(default=0, ge=0)
+    risk_limits_summary: str = "Account risk evidence is unavailable."
     shortcuts: tuple[DeploymentBudgetShortcut, ...] = ()
     review_token: str | None = None
     confirmation_text: str | None = None
@@ -74,6 +75,7 @@ class DeploymentBudgetView(BaseModel):
     fees_usd: str | None = None
     position_cost_usd: str | None = None
     pending_orders_usd: str | None = None
+    outstanding_cash_usd: str | None = None
     free_usd: str | None = None
     released_usd: str | None = None
     shortfall_usd: str | None = None

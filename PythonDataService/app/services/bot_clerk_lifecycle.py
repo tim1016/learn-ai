@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.active_protocol import (
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import ActiveSqliteAlpacaLifecycleAuthority
@@ -71,6 +72,16 @@ async def register_alpaca_duty_run(
         )
     except ClerkAdmissionSnapshotStaleError as exc:
         raise ClerkAdmissionTokenStaleError(str(exc)) from exc
+
+
+async def commit_deploy_launch(binding: BrokerBotBinding) -> None:
+    """Record launch before releasing intake; compensation uses normal Stop."""
+    if binding.budget_consent is None:
+        return
+    clerk = _clerk_for_binding(binding)
+    if not isinstance(clerk, SqliteAlpacaClerkFacade):
+        raise ActiveClerkUnavailableError("The budget-backed deployment authority is unavailable.")
+    await clerk.record_deployment_launch(binding)
 
 
 async def commit_stop_before_task_cancel(
@@ -138,6 +149,7 @@ __all__ = [
     "ActiveClerkUnavailableError",
     "ClerkAdmissionTokenStaleError",
     "ClerkRunAuthorityChangedError",
+    "commit_deploy_launch",
     "commit_stop_before_task_cancel",
     "register_alpaca_duty_run",
     "stop_interrupted_alpaca_duty_run",

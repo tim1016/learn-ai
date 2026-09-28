@@ -19,6 +19,7 @@ from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
@@ -115,6 +116,7 @@ class StartRequest:
     # narrower field here was already silently out of sync with its own
     # producer, not a deliberate invariant.
     strategy_param_origins: dict[str, ParameterOrigin] | None = None
+    budget_consent: DeployBudgetConsent | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +187,7 @@ def make_start_request(
     exit_terms: ExitTerms | None,
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
+    budget_consent: DeployBudgetConsent | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -201,6 +204,7 @@ def make_start_request(
         strategy_params=strategy_params,
         exit_terms=exit_terms,
         strategy_param_origins=strategy_param_origins,
+        budget_consent=budget_consent,
     )
 
 
@@ -424,6 +428,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         strategy_params=request.strategy_params,
         exit_terms=request.exit_terms,
         strategy_param_origins=request.strategy_param_origins,
+        budget_consent=request.budget_consent,
         sealed_account_id=(
             synthetic_account_id_for_strategy(request.strategy_instance_id)
             if request.mode == "dry_run"

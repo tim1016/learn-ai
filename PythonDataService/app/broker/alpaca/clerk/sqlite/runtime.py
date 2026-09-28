@@ -18,11 +18,13 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
+    authority_kind_for_account,
     require_real_account_id,
     require_shadow_account_id,
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
+from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.exit_terms import (
     ExitTerms,
@@ -65,10 +67,13 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     price_recovery_reduction,
     recovery_reduction_shape,
 )
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
     guard_broker_ports,
 )
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -675,6 +680,26 @@ class SqliteAlpacaClerkFacade:
             if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
                 raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
             self._exit_terms[binding.strategy_instance_id] = terms
+            if binding.budget_consent is not None:
+                consent = binding.budget_consent
+                world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
+                if consent.world != world or self._live_envelope is None:
+                    raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
+                quote = self._quote_source(binding.symbol, self._repo.clock())
+                if quote is None:
+                    raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
+                required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
+                submission = submit_budgeted_deploy(
+                    self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
+                    world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
+                    exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+                    risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
+                    envelope=self._live_envelope, minimum_position_cost=required,
+                )
+                if not submission.created:
+                    raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
+                self._hold_run(binding, run_owner)
+                return
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
@@ -693,6 +718,10 @@ class SqliteAlpacaClerkFacade:
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
             self._hold_run(binding, run_owner)
+
+    async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        async with self._intake:
+            self._repo.record_deploy_launched(strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id)
 
     def _hold_run(self, binding: BrokerBotBinding, run_owner: RunOwner | None) -> None:
         if run_owner is not None:
@@ -1116,16 +1145,12 @@ class SqliteAlpacaClerkFacade:
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
                         arming=self._live_arming,
-                        # The bar's close is a ``Decimal``; the envelope's money
-                        # is float end to end (``BrokerAccountSnapshot.cash``,
-                        # the REAL columns the reservation is stored in, and
-                        # ``cash_bound_admits``' own epsilon). Converting here
-                        # keeps the boundary at one line instead of leaking a
-                        # Decimal into arithmetic that would silently promote.
+                        # Preserve the recorded decision price through the
+                        # canonical Decimal normalization boundary.
                         reference_price=(
                             None
                             if retained_source_bar is None
-                            else float(retained_source_bar.close)
+                            else retained_source_bar.close
                         ),
                     )
                 except AdmissionBlockedError as exc:

@@ -74,6 +74,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import (
     RunAdmissionDecision,
@@ -99,6 +100,7 @@ from app.services.bot_boot_recovery import (
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
     ClerkAdmissionTokenStaleError,
+    commit_deploy_launch,
     commit_stop_before_task_cancel,
     register_alpaca_duty_run,
     stop_interrupted_alpaca_duty_run,
@@ -604,6 +606,7 @@ class BotTaskRegistry:
         # `symbol_profile`. A narrower type here was already silently out of
         # sync with the value actually flowing through it.
         strategy_param_origins: dict[str, ParameterOrigin] | None = None,
+        budget_consent: DeployBudgetConsent | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         for refuse_if_gated in self._lane_start_gates:
@@ -626,6 +629,7 @@ class BotTaskRegistry:
             strategy_params=strategy_params,
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
+            budget_consent=budget_consent,
         )
         # Graduation re-observes the complete stopped roster and appends the
         # boot-selection fence. No deploy may cross that exact interval.
@@ -659,6 +663,7 @@ class BotTaskRegistry:
         # See the widening note on the matching parameter in
         # `deploy_with_admission` above.
         strategy_param_origins: dict[str, ParameterOrigin] | None = None,
+        budget_consent: DeployBudgetConsent | None = None,
     ) -> RunAdmissionDecision:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
@@ -679,6 +684,7 @@ class BotTaskRegistry:
             strategy_params=strategy_params,
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
+            budget_consent=budget_consent,
         )
         async with self._operation_lock(strategy_instance_id):
             try:
@@ -783,6 +789,7 @@ class BotTaskRegistry:
             # Let supervision enter its exception boundary before a Start releases
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
+            await commit_deploy_launch(binding)
         except BaseException as exc:
             if task is None:
                 # No supervise task ever held the run, so nothing else will

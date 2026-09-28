@@ -20,6 +20,9 @@ from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
 )
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
+from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
@@ -30,7 +33,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
 )
-from app.schemas.deployment_budget import DeploymentBudgetPreview
+from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeploymentBudgetPreview
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
@@ -202,8 +205,15 @@ async def deploy_alpaca_paper_bot(
     broker: str,
     account_id: str,
     request: AlpacaPaperDeployRequest,
-) -> AlpacaPaperDeployReceipt:
-    """Execute the production paper deployment command through the runner seam."""
+) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
+    """Execute or recover one durable deployment through the runner seam."""
+    if request.budget is not None:
+        try:
+            existing = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+            if existing is not None:
+                return existing
+        except BudgetUnavailable as exc:
+            raise budget_deploy.budget_error(exc) from exc
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
@@ -213,6 +223,7 @@ async def deploy_alpaca_paper_bot(
             detail="The service is still starting or has shut down.",
         )
     try:
+        consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         started = await registry.deploy_with_admission(
             broker=broker,
             strategy_instance_id=request.strategy_instance_id,
@@ -226,8 +237,19 @@ async def deploy_alpaca_paper_bot(
             strategy_params=resolved_params.effective,
             exit_terms=request.exit_terms.seal(),
             strategy_param_origins=resolved_params.origins,
+            **({"budget_consent": consent} if consent is not None else {}),
         )
-    except BotRunnerError as exc:
+    except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
+        if request.budget is not None:
+            try:
+                existing = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+                if existing is not None:
+                    return existing
+            except BudgetUnavailable as conflict:
+                raise budget_deploy.budget_error(conflict) from conflict
+        if not isinstance(exc, BotRunnerError):
+            detail = exc.decision.why if isinstance(exc, AdmissionBlockedError) else str(exc)
+            raise budget_deploy.budget_error(BudgetUnavailable(detail)) from exc
         raise PanelRunnerError(
             str(exc),
             detail=exc.detail,
@@ -237,6 +259,11 @@ async def deploy_alpaca_paper_bot(
             admission_decision=exc.admission_decision,
             reason_code=exc.reason_code,
         ) from exc
+    if request.budget is not None:
+        receipt = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+        if receipt is None:
+            raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
+        return receipt
     return build_alpaca_paper_deploy_receipt(
         broker=broker,
         view=view,
@@ -262,6 +289,7 @@ async def preview_alpaca_paper_start_admission(
             detail="The service is still starting or has shut down.",
         )
     try:
+        consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
         return await registry.preview_start_admission(
             broker=broker,
             strategy_instance_id=request.strategy_instance_id,
@@ -275,7 +303,10 @@ async def preview_alpaca_paper_start_admission(
             strategy_params=resolved_params.effective,
             exit_terms=request.exit_terms.seal(),
             strategy_param_origins=resolved_params.origins,
+            **({"budget_consent": consent} if consent is not None else {}),
         )
+    except BudgetUnavailable as exc:
+        raise budget_deploy.budget_error(exc) from exc
     except BotRunnerError as exc:
         raise PanelRunnerError(
             str(exc),

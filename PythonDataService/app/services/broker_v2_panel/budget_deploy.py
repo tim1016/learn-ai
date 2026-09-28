@@ -99,6 +99,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             available = None
             observed_at = quote.observed_at_ms
             risk_revision = 0
+            risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         else:
             sync = runtime.envelope_sync
             if sync is None:
@@ -113,6 +114,9 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             available = projection.unreserved_cents
             observed_at = observation.observed_at_ms
             risk_revision = snapshot.policy.revision
+            with money_context():
+                percent = normalize_money(snapshot.policy.loss_fraction) * 100
+                risk_summary = f"Daily loss limit: the smaller of {percent:f}% of session-start equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
         with money_context():
             shortcuts = [DeploymentBudgetShortcut(
                 key="position_headroom", label="1.2 × one position",
@@ -147,6 +151,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             world=world, custody_account_id=custody_id, observed_at_ms=observed_at,
             minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
             estimated_price_usd=display_dollars(normalize_money(quote.ask)), risk_revision=risk_revision,
+            risk_limits_summary=risk_summary,
             shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
@@ -224,6 +229,7 @@ def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
                 realized_gross_usd=display_dollars(own.realized_gross), fees_usd=display_dollars(own.fees),
                 position_cost_usd=display_dollars(own.position_cost), pending_orders_usd=display_dollars(own.pending_orders),
+                outstanding_cash_usd=display_dollars(own.outstanding_cash),
                 free_usd=dollars(own.spendable_cents), released_usd=dollars(max(0, cents_spendable(own.free))) if not own.active else "0.00",
                 shortfall_usd=dollars(cents_required(max(Decimal(0), -own.free))),
                 entry_eligible=own.active and own.free > 0 and projected.available >= 0,

@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
 from app.broker.alpaca.clerk.sqlite.uncertainty import require_admission
 from app.schemas.account_authority import AuthorityKind, account_authority_agrees
 
@@ -73,7 +74,8 @@ def submit_budgeted_deploy(
         if repo.latest_run(strategy_instance_id) is not None:
             raise BudgetUnavailable("Trading again requires a fresh deployment identity.")
         require_admission(repo, strategy_instance_id=strategy_instance_id)
-        observation = envelope.fresh_observation(repo.clock())
+        observation = (envelope.fresh_observation(repo.clock()) if world == "synthetic" else
+                       require_current_risk_admission(repo, envelope=envelope, now_ms=repo.clock()))
         if observation is None:
             raise BudgetUnavailable("Wait for a fresh cash observation, then review Deploy again.")
         policy = repo.account_risk_policy()

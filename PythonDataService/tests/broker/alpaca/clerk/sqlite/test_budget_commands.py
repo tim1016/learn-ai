@@ -140,3 +140,48 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
         assert rebuilt.deployment_budget("a")["released_at_ms"] == NOON
     finally:
         rebuilt.close()
+
+
+def test_a_budgeted_run_cannot_bypass_money_by_omitting_envelope(budget_repo) -> None:
+    _deploy(budget_repo)
+    with pytest.raises(AdmissionBlockedError):
+        accept_enter(
+            budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a",
+            decision_id="without-money-authority", lifecycle_run_id="run-a",
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        )
+    assert budget_repo.account_budget(cash=1000, seen_before_ms=NOON).available == 0
+
+
+async def test_runtime_registers_budget_before_launch_and_never_relaunches_retry(budget_repo) -> None:
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_carryover import configuration_hash
+    from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _Broker
+
+    binding = _binding().model_copy(update={"strategy_instance_id": "runtime-budget", "sealed_account_id": budget_repo.account_id})
+    original_hash = configuration_hash(binding)
+    binding = binding.model_copy(update={"budget_consent": DeployBudgetConsent(
+        committed_cents=50_000, risk_revision=1, actor="server-owner", request_fingerprint="reviewed", world="real_paper",
+    )})
+    assert configuration_hash(binding) == original_hash
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(
+        repo=budget_repo, read=broker, trade=broker, account_mode="paper", live_envelope=_gate(),
+        quote_source=lambda symbol, now: SimpleNamespace(ask=100),
+    )
+    await facade.register_strategy_run(binding)
+    committed = budget_repo.deployment_budget(binding.strategy_instance_id)
+    assert committed["committed_cents"] == 50_000 and committed["launched_at_ms"] is None
+    assert not broker.submissions
+    with pytest.raises(BudgetUnavailable):
+        await facade.register_strategy_run(binding)
+    await facade.record_deployment_launch(binding)
+    assert budget_repo.deployment_budget(binding.strategy_instance_id)["launched_at_ms"] == NOON
+    await facade.stop_strategy_run(strategy_instance_id=binding.strategy_instance_id, run_id=binding.run_id, reason="owner_stop")
+    with pytest.raises(BudgetUnavailable):
+        await facade.register_strategy_run(binding)
+    assert budget_repo.active_run(binding.strategy_instance_id) is None
+    assert not broker.submissions
