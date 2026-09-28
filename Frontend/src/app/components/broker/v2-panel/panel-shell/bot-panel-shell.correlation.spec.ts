@@ -190,12 +190,6 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
               account_id: ACCOUNT_ID,
               authority_kind: 'real_paper',
               hold: { active: false, reason: null, reason_code: null, since_ms: null },
-              operator_posture: {
-                account_desk: null,
-                condition: null,
-                status_detail: null,
-                status_headline: 'Clerk and broker are in sync.',
-              },
               outstanding_intents: 0,
               observed_at_ms: 1_753_800_004_000,
             }),

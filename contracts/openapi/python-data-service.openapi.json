@@ -329,55 +329,6 @@
         "title": "AccountMoneyView",
         "type": "object"
       },
-      "AccountOperatorPosture": {
-        "additionalProperties": false,
-        "description": "One canonical account-level operator decision, authored from one\nevidence cut (issue #1664).\n\n``condition`` is ``None`` exactly when the account is healthy; in that\ncase the ``account_desk`` projection is also ``None`` and\n``status_headline`` / ``status_detail`` carry the backend-authored healthy\ncopy. Whenever ``condition`` is set, ``account_desk`` is required \u2014 a\nnon-null condition can never validate without it, so the desk never\nsilently reads ``None`` for a live blocking condition. The projection\nshares ``condition`` (identity and severity) and carries the desk's\ndisposition, copy, and moves per ADR 0027; its own ``host`` field is\nvalidated to be ``account_desk``. The former ``fleet_roster`` projection\nwas retired with its host (#2192). Consumers must never re-derive a\nverdict from raw evidence.",
-        "properties": {
-          "account_desk": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperatorBlocker"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "condition": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperatorCondition"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "status_detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status Detail"
-          },
-          "status_headline": {
-            "title": "Status Headline",
-            "type": "string"
-          }
-        },
-        "required": [
-          "condition",
-          "account_desk",
-          "status_headline",
-          "status_detail"
-        ],
-        "title": "AccountOperatorPosture",
-        "type": "object"
-      },
       "AccountPinRequest": {
         "additionalProperties": false,
         "properties": {
@@ -9802,9 +9753,6 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
-          "operator_posture": {
-            "$ref": "#/components/schemas/AccountOperatorPosture"
-          },
           "outstanding_intents": {
             "title": "Outstanding Intents",
             "type": "integer"
@@ -9815,8 +9763,7 @@
           "account_id",
           "hold",
           "outstanding_intents",
-          "observed_at_ms",
-          "operator_posture"
+          "observed_at_ms"
         ],
         "title": "ClerkStatus",
         "type": "object"
@@ -27957,8 +27904,7 @@
             "enum": [
               "bot_cockpit",
               "deploy_preflight",
-              "account_monitor",
-              "account_desk"
+              "account_monitor"
             ],
             "title": "Host",
             "type": "string"
@@ -56463,7 +56409,7 @@
     },
     "/api/brokers/{broker}/clerk/status": {
       "get": {
-        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state,\nplus (#1664) the one canonical account operator posture, authored from\nthis same custody projection and a same-request account observation.\n\nThe account read degrades gracefully: a broker-side failure does not 503\nthis endpoint (custody state is independently available) \u2014 it instead\nsurfaces as an explicit ``alpaca_account_evidence_unavailable`` operator\ncondition so the account/paper-mode checks fail closed rather than\nsilently passing.",
+        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state.\nIt never reads the broker: every fact is the custody projection's.",
         "operationId": "get_clerk_status_api_brokers__broker__clerk_status_get",
         "parameters": [
           {

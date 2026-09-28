@@ -264,108 +264,79 @@ def sqlite_desk_clean(tmp_path: Path) -> Iterator[FastAPI]:
         clear_broker_account_snapshot_cache_for_testing()
 
 
+class _AccountReadForbidden:
+    broker_id = "alpaca"
+
+    async def get_account(self) -> NoReturn:
+        raise AssertionError("the Clerk status must never read the broker")
+
+
 @pytest.mark.asyncio
-async def test_clerk_status_reports_healthy_posture_when_account_and_custody_are_clean(
+async def test_clerk_status_never_reads_the_broker_and_carries_no_desk_posture(
     sqlite_desk_clean: FastAPI,
 ) -> None:
-    get_broker_registry().register(_FakeAccountReadPort(_FakeAccount()))  # type: ignore[arg-type]
+    """PRD #2560: the Overview desk that rendered the account posture (and its
+    "Open Clerk recovery" shortcut) is gone, so the status no longer authors
+    one -- nor makes the same-request account read that only fed it."""
+    get_broker_registry().register(_AccountReadForbidden())  # type: ignore[arg-type]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
     ) as client:
         status = await client.get("/api/brokers/alpaca/clerk/status")
 
-    assert status.status_code == 200
-    posture = status.json()["operator_posture"]
-    assert posture["condition"] is None
-    assert posture["account_desk"] is None
-    # #2192: the retired fleet_roster host no longer reaches the wire.
-    assert "fleet_roster" not in posture
+    assert status.status_code == 200, status.json()
+    body = status.json()
+    assert body["account_id"] == "PA-SQLITE-DESK-CLEAN"
+    assert "operator_posture" not in body
 
 
-@pytest.mark.asyncio
-async def test_clerk_status_reports_wrong_execution_mode_from_the_same_read(
-    sqlite_desk_clean: FastAPI,
+def _projection(tmp_path: Path, account_id: str) -> Any:
+    from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+
+    repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        return reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+
+def _account_snapshot(**overrides: Any) -> Any:
+    from app.broker.contract.models import BrokerAccountSnapshot
+
+    return BrokerAccountSnapshot(**{
+        "broker": "alpaca", "account_id": "PA-ELIGIBLE", "account_mode": "paper", "account_status": "ACTIVE",
+        "currency": "USD", "cash": 100.0, "equity": 100.0, "buying_power": 100.0, "portfolio_value": 100.0,
+        "long_market_value": 0.0, "short_market_value": 0.0, "pattern_day_trader": False,
+        "trading_blocked": False, "account_blocked": False, "created_at_ms": None, "observed_at_ms": 1,
+        **overrides,
+    })
+
+
+def test_account_eligibility_reports_identity_mismatch_instead_of_the_wrong_accounts_facts(
+    tmp_path: Path,
 ) -> None:
-    account = _FakeAccount()
-    account.account_mode = "live"
-    get_broker_registry().register(_FakeAccountReadPort(account))  # type: ignore[arg-type]
+    """The observation names a different account than the one this Clerk
+    authority is bound to (e.g. credentials were repointed): the wrong
+    account's mode, status and block flags are never attributed to this
+    projection's account (2026-08-20 review)."""
+    from app.services.sqlite_clerk_compat import account_eligibility
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
-    ) as client:
-        status = await client.get("/api/brokers/alpaca/clerk/status")
+    projection = _projection(tmp_path, "PA-ELIGIBLE")
+    condition = account_eligibility(projection, _account_snapshot(account_id="PA-WRONG-ACCOUNT", account_mode="live"))
 
-    assert status.status_code == 200
-    posture = status.json()["operator_posture"]
-    assert posture["condition"]["id"] == "alpaca_account_wrong_execution_mode"
-    # Terminal, not wait: a non-paper account is a static config problem that
-    # fresh evidence can never resolve (2026-08-20 review).
-    assert posture["account_desk"]["disposition"] == "terminal"
-    assert posture["account_desk"]["condition"]["id"] == posture["condition"]["id"]
+    assert condition is not None
+    assert condition.condition_id == "alpaca_account_identity_mismatch"
+    assert condition.severity == "blocking"
 
 
-@pytest.mark.asyncio
-async def test_clerk_status_degrades_to_evidence_unavailable_when_account_read_fails(
-    sqlite_desk_clean: FastAPI,
-) -> None:
-    """No broker is registered — the account read fails, but the endpoint still 200s."""
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
-    ) as client:
-        status = await client.get("/api/brokers/alpaca/clerk/status")
+def test_account_eligibility_judges_the_bound_accounts_own_mode(tmp_path: Path) -> None:
+    from app.services.sqlite_clerk_compat import account_eligibility
 
-    assert status.status_code == 200
-    posture = status.json()["operator_posture"]
-    assert posture["condition"]["id"] == "alpaca_account_evidence_unavailable"
-    assert posture["condition"]["severity"] == "warning"
+    projection = _projection(tmp_path, "PA-ELIGIBLE")
 
-
-@pytest.mark.asyncio
-async def test_clerk_status_reports_identity_mismatch_instead_of_the_wrong_accounts_facts(
-    sqlite_desk_clean: FastAPI,
-) -> None:
-    """The registered broker port observes a different account than the one
-    the active SQLite Clerk authority is bound to (e.g. credentials were
-    repointed) — the wrong account's paper mode/status/block flags must
-    never be attributed to this projection's account (2026-08-20 review)."""
-    mismatched_account = _FakeAccount()
-    mismatched_account.account_id = "PA-WRONG-ACCOUNT"
-    get_broker_registry().register(_FakeAccountReadPort(mismatched_account))  # type: ignore[arg-type]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
-    ) as client:
-        status = await client.get("/api/brokers/alpaca/clerk/status")
-
-    assert status.status_code == 200
-    assert status.json()["account_id"] == "PA-SQLITE-DESK-CLEAN"
-    posture = status.json()["operator_posture"]
-    assert posture["condition"]["id"] == "alpaca_account_identity_mismatch"
-    assert posture["condition"]["severity"] == "blocking"
-    assert posture["account_desk"]["disposition"] == "terminal"
-
-
-@pytest.mark.asyncio
-async def test_clerk_status_degrades_to_evidence_unavailable_when_account_read_times_out(
-    sqlite_desk_clean: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bound account read that times out must still 200 with the same
-    evidence-unavailable posture as an outright read failure — the endpoint
-    can never block UI polling for the account read's full budget."""
-
-    async def timed_out_snapshot(_broker: str) -> Any:
-        raise TimeoutError("simulated account read timeout")
-
-    monkeypatch.setattr(brokers_router, "resolve_broker_account_snapshot", timed_out_snapshot)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
-    ) as client:
-        status = await client.get("/api/brokers/alpaca/clerk/status")
-
-    assert status.status_code == 200
-    posture = status.json()["operator_posture"]
-    assert posture["condition"]["id"] == "alpaca_account_evidence_unavailable"
-    assert posture["condition"]["severity"] == "warning"
+    assert account_eligibility(projection, _account_snapshot()) is None
+    wrong_mode = account_eligibility(projection, _account_snapshot(account_mode="live"))
+    assert wrong_mode is not None and wrong_mode.condition_id == "alpaca_account_wrong_execution_mode"

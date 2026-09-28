@@ -1,5 +1,4 @@
 import type {
-  AccountOperatorPosture,
   BlockerSeverity,
   Disposition,
   OperatorBlocker,
@@ -61,15 +60,5 @@ export function operatorBlockerFixture(
     primary_move: hasOwnOption(options, 'primaryMove') ? options.primaryMove ?? null : DEFAULT_MOVE,
     secondary_moves: options.secondaryMoves ?? [],
     applies_to: options.appliesTo ?? 'both',
-  };
-}
-
-/** A healthy `AccountOperatorPosture` (null condition, no host blockers) for fixtures unrelated to #1664. */
-export function healthyAccountOperatorPostureFixture(): AccountOperatorPosture {
-  return {
-    condition: null,
-    account_desk: null,
-    status_headline: 'Account Clerk custody is healthy',
-    status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
   };
 }

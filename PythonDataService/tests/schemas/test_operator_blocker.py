@@ -191,9 +191,9 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
         secondary_moves=[],
         applies_to="both",
     )
-    account_desk = OperatorBlocker(
+    monitor = OperatorBlocker(
         condition=condition,
-        host="account_desk",
+        host="account_monitor",
         anchor=_surface_anchor(),
         audience="operator",
         disposition="fix_here",
@@ -211,11 +211,11 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
         applies_to="both",
     )
 
-    assert cockpit.condition.id == account_desk.condition.id
+    assert cockpit.condition.id == monitor.condition.id
     assert cockpit.disposition == "fix_elsewhere"
-    assert account_desk.disposition == "fix_here"
+    assert monitor.disposition == "fix_here"
     assert cockpit.host == "bot_cockpit"
-    assert account_desk.host == "account_desk"
+    assert monitor.host == "account_monitor"
 
 
 @pytest.mark.parametrize(
@@ -251,7 +251,7 @@ def test_operator_blocker_requires_projection_routing_fields(required_field: str
     blocker = OperatorBlocker.for_host(
         condition_id="broker_disconnected",
         scope="broker",
-        host="account_desk",
+        host="account_monitor",
         anchor=_surface_anchor(),
         audience="operator",
         disposition="fix_elsewhere",
@@ -280,7 +280,7 @@ def test_operator_blocker_wire_contract_pins_anchor_and_audience_fields() -> Non
     blocker = OperatorBlocker.for_host(
         condition_id="fleet_contaminated",
         scope="fleet",
-        host="account_desk",
+        host="account_monitor",
         anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
         audience="operator",
         disposition="fix_elsewhere",
@@ -297,7 +297,7 @@ def test_operator_blocker_wire_contract_pins_anchor_and_audience_fields() -> Non
             "scope": "fleet",
             "evidence": {},
         },
-        "host": "account_desk",
+        "host": "account_monitor",
         "anchor": {"kind": "reconciliation", "subject_key": None},
         "audience": "operator",
         "disposition": "fix_elsewhere",
@@ -312,3 +312,22 @@ def test_operator_blocker_wire_contract_pins_anchor_and_audience_fields() -> Non
         "secondary_moves": [],
         "applies_to": "both",
     }
+
+
+def test_the_retired_account_desk_host_is_rejected() -> None:
+    """PRD #2560 retired the Overview desk that rendered ``account_desk``
+    projections (with their "Open Clerk recovery" shortcut); the host cannot
+    come back through the schema."""
+    with pytest.raises(ValidationError, match="host"):
+        OperatorBlocker.for_host(
+            condition_id="alpaca_clerk_recovery:reconcile",
+            scope="account",
+            host="account_desk",  # type: ignore[arg-type]
+            anchor=_surface_anchor(),
+            audience="operator",
+            disposition="fix_elsewhere",
+            headline="Clerk recovery is available",
+            detail=None,
+            primary_move=_nav_move(),
+            applies_to="both",
+        )

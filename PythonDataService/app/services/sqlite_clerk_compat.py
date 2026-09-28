@@ -19,9 +19,9 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
-from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
-    AccountOperatorPostureContext,
-    build_account_operator_posture,
+from app.broker.alpaca.clerk.sqlite.account_eligibility import (
+    AccountEligibilityCondition,
+    account_eligibility_condition,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -41,10 +41,6 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.account_authority import CustodyWorld
 from app.schemas.clerk_custody import CustodyDiagnosis
-from app.services.broker_v2_panel.channel_health import (
-    ChannelHealthEvaluation,
-    evaluate_channel_health,
-)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -237,63 +233,33 @@ def failed_sqlite_projection(
     )
 
 
-def account_operator_posture_context(
-    projection: ClerkProjection,
-    *,
-    channel_healths: Sequence[ChannelHealth] | None,
-    account: BrokerAccountSnapshot | None,
-    custody_world: CustodyWorld | None = None,
-) -> AccountOperatorPostureContext:
-    """The one evidence cut the account's operator posture is judged on (#1664).
+def account_eligibility(
+    projection: ClerkProjection, account: BrokerAccountSnapshot,
+) -> AccountEligibilityCondition | None:
+    """Whether Alpaca lets this custody's account trade in its world (#1664).
 
-    Shared by the Clerk status and the lane's attention read, so both judge
-    one account's eligibility identically. ``account`` naming a different
+    Judged on one account observation. An observation naming a different
     account than ``projection`` is an explicit identity mismatch, never a
-    blend of two accounts' facts (see ``sqlite_clerk_status``).
+    blend of two accounts' facts. "Different account" is asked of the
+    *custody* id the world implies, not of the broker's own answer: a shadow
+    authority observing ``9LIVE0001`` legitimately custodies
+    ``shadow:9LIVE0001`` (ADR 0059 D2).
     """
-    unresolved = sum(
-        _operation_requires_reconciliation(operation)
-        for operation in projection.operations
-    )
-    channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
-    # Read once and reused for both the identity expectation and the posture
-    # context, so the two can never disagree about which world this is. A
-    # caller that also states the world passes the one it read.
-    if custody_world is None:
-        custody_world = _labelled_custody_world()
-    identity_mismatch = (
-        account is not None
-        and custody_account_id_for(custody_world, account.account_id) != projection.account_id
-    )
+    custody_world = _labelled_custody_world()
+    identity_mismatch = custody_account_id_for(custody_world, account.account_id) != projection.account_id
     if identity_mismatch:
         logger.warning(
-            "Clerk status account read named a different account than the "
-            "active projection; reporting identity-mismatch posture",
+            "An account read named a different account than the active projection; "
+            "reporting an identity mismatch",
             extra={
+                "action": "account_identity_mismatch",
                 "projection_account_id": projection.account_id,
-                "observed_account_id": account.account_id if account is not None else None,
+                "observed_account_id": account.account_id,
                 "custody_world": custody_world,
             },
         )
-    account_usable = account is not None and not identity_mismatch
-    return AccountOperatorPostureContext(
-        authority_health=projection.authority_health,
-        uncertainty_count=len(projection.uncertainties),
-        guidance=projection.guidance,
-        recovery_actions=projection.recovery_actions,
-        # None together exactly when the account snapshot is
-        # unavailable or names the wrong account — never defaulted to a
-        # fake eligible shape. See AccountOperatorPostureContext's
-        # docstring (#1664 review).
-        account_mode=account.account_mode if account_usable else None,
-        account_status=account.account_status if account_usable else None,
-        trading_blocked=account.trading_blocked if account_usable else None,
-        account_blocked=account.account_blocked if account_usable else None,
-        account_identity_mismatch=identity_mismatch,
-        custody_world=custody_world,
-        outstanding_intents=unresolved,
-        channels_ready=channel_evaluation.ready,
-        channels_detail=_channel_evaluation_detail(channel_evaluation),
+    return account_eligibility_condition(
+        account, custody_world=custody_world, identity_mismatch=identity_mismatch,
     )
 
 
@@ -301,27 +267,9 @@ def sqlite_clerk_status(
     projection: ClerkProjection,
     *,
     channel_healths: Sequence[ChannelHealth] | None = None,
-    account: BrokerAccountSnapshot | None = None,
 ) -> ClerkStatus:
-    """Compose the Clerk status, including the #1664 canonical operator posture.
-
-    ``account`` is the same-request Alpaca account observation. It is
-    optional only because a live broker read can fail independently of the
-    Clerk's own custody folds; when it is unavailable the posture reports an
-    explicit ``alpaca_account_evidence_unavailable`` condition instead of
-    silently skipping the paper-mode/active-status checks (#1664 scope).
-
-    If ``account`` names a different account than ``projection`` — e.g. the
-    registered Alpaca port's credentials were repointed while this SQLite
-    Clerk authority is still bound to the original account — its facts are
-    never attributed to this projection's account (2026-08-20 review): the
-    posture reports an explicit ``alpaca_account_identity_mismatch``
-    condition instead of silently blending two accounts' evidence.
-    "Different account" is asked of the *custody* id the world implies, not
-    of the broker's own answer: a shadow authority observing ``9LIVE0001``
-    legitimately custodies ``shadow:9LIVE0001`` (ADR 0059 D2), and comparing
-    the two raw ids reads every correct shadow boot as a misconfiguration.
-    """
+    """Compose the Clerk status: the hold, the latest reconciliation verdict,
+    the commands still resolving, and the submission-gate channels."""
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
         _operation_requires_reconciliation(operation)
@@ -334,10 +282,6 @@ def sqlite_clerk_status(
         verdict = "unexplained_order"
     else:
         verdict = "clean"
-    custody_world = _labelled_custody_world()
-    posture = build_account_operator_posture(account_operator_posture_context(
-        projection, channel_healths=channel_healths, account=account, custody_world=custody_world,
-    ))
     return ClerkStatus(
         broker="alpaca",
         account_id=projection.account_id,
@@ -358,22 +302,8 @@ def sqlite_clerk_status(
             list(channel_healths) if channel_healths is not None else None
         ),
         # Derived from the id and the primary's world, never asserted (slice 4 / slice 7, R12).
-        authority_kind=authority_kind_in_world(projection.account_id, custody_world),
-        operator_posture=posture,
+        authority_kind=authority_kind_in_world(projection.account_id, _labelled_custody_world()),
     )
-
-
-def _channel_evaluation_detail(evaluation: ChannelHealthEvaluation) -> str | None:
-    if evaluation.ready:
-        return None
-    parts: list[str] = []
-    if evaluation.missing:
-        parts.append(f"missing: {', '.join(evaluation.missing)}")
-    if evaluation.stale:
-        parts.append(f"stale: {', '.join(evaluation.stale)}")
-    if evaluation.unhealthy:
-        parts.append(f"unhealthy: {', '.join(evaluation.unhealthy)}")
-    return "Clerk submission channels are not ready (" + "; ".join(parts) + ")."
 
 
 def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:

@@ -56,7 +56,6 @@ from app.schemas.broker_v2_panel import (
     RecentFillView,
 )
 from app.schemas.live_runs import BotDutyOutcomeView
-from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
     CORPUS_UNCOVERED_NEXT_STEP,
@@ -326,12 +325,6 @@ def _clerk_status(
             ChannelHealth(stream="market_data", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
             ChannelHealth(stream="execution", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
         ],
-        operator_posture=AccountOperatorPosture(
-            condition=None,
-            account_desk=None,
-            status_headline="Account Clerk custody is healthy",
-            status_detail=None,
-        ),
     )
 
 

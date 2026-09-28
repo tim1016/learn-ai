@@ -10,18 +10,11 @@ must never appear in this verdict.
 from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import AccountFreezeState, ChannelHealth, ClerkStatus, HoldState
-from app.schemas.operator_blocker import AccountOperatorPosture
 from app.services.broker_v2_panel.paper_deploy_service import _dry_run_eligibility, _strategy_views
 from app.services.strategy_validation_manifest import load_strategy_validation_entries, strategy_registry_seeds
 from tests.broker.v2panel.fixtures import ACCT
 
 _NOW = 1_700_000_000_000
-_HEALTHY_POSTURE = AccountOperatorPosture(
-    condition=None,
-    account_desk=None,
-    status_headline="Account Clerk custody is healthy",
-    status_detail=None,
-)
 
 
 def _strategies() -> tuple:
@@ -64,7 +57,6 @@ def _clerk_status(
         channel_healths=[
             ChannelHealth(stream="market_data", healthy=market_data_healthy, connected=market_data_healthy, observed_at_ms=_NOW),
         ],
-        operator_posture=_HEALTHY_POSTURE,
     )
 
 

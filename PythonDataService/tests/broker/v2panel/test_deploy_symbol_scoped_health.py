@@ -29,7 +29,7 @@ from app.broker.alpaca.clerk.models import (
 from app.services.broker_v2_panel import panel_deploy
 from app.services.broker_v2_panel.channel_health import evaluate_channels_at_account_scope
 from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE
+from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.fixtures import ACCT
 
 _WARMING = "AAPL"
@@ -74,7 +74,6 @@ def _install_warming_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
                     observed_at_ms=observed_at_ms,
                 ),
             ],
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)

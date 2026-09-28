@@ -447,9 +447,10 @@ async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
 ) -> None:
     """(b) Also I3's proof: the broker answers 9LIVE0001, custody is shadow:9LIVE0001.
 
-    Comparing those two raw ids made the terminal identity-mismatch posture
+    Comparing those two raw ids made the terminal identity-mismatch condition
     fire on every correct shadow boot, which in turn made the custody-world
-    relaxation below it unreachable.
+    relaxation below it unreachable. The account's eligibility is Home's
+    account line now, judged on the cached account read.
     """
     app, _runtime = shadow_app
 
@@ -457,16 +458,17 @@ async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get("/api/brokers/alpaca/clerk/status")
+        account = await client.get("/api/brokers/alpaca/account")
+        attention = await client.get("/api/brokers/alpaca/attention")
 
     assert response.status_code == 200, response.json()
     body = response.json()
     assert body["account_id"] == SHADOW_ACCT
     # The wire cannot say ``real_paper`` beside a ``shadow:`` custody id.
     assert body["authority_kind"] == "shadow"
-    condition = body["operator_posture"]["condition"]
-    condition_id = None if condition is None else condition["id"]
-    assert condition_id != "alpaca_account_identity_mismatch"
-    assert condition_id != "alpaca_account_wrong_execution_mode"
+    assert account.status_code == 200 and account.json()["account_id"] == LIVE_ACCT
+    assert attention.status_code == 200, attention.json()
+    assert [item for item in attention.json()["items"] if item["kind"] == "account"] == []
 
 
 async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fills(

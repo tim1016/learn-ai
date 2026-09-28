@@ -30,7 +30,6 @@ import {
 import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
-import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-list-page.component';
 import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
@@ -150,7 +149,6 @@ function fakeClerkStatus(): ClerkStatus {
     latest_reconciliation: { verdict: 'clean', recorded_at_ms: 1_700_000_000_000 },
     outstanding_intents: 0,
     observed_at_ms: 1_700_000_000_000,
-    operator_posture: healthyAccountOperatorPostureFixture(),
   };
 }
 

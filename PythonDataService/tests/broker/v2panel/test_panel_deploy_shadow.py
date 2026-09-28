@@ -25,7 +25,6 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.exit_terms import ExitTermsInput
-from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.broker_v2_panel import panel_deploy
@@ -48,12 +47,6 @@ from tests.broker.v2panel.fixtures import ACCT, SID
 LIVE_ACCT = "9LIVE0001"
 _STRATEGY_KEY = "ema_crossover_signal"
 _BINDING_AT_MS = 1_700_000_000_000
-_HEALTHY_POSTURE = AccountOperatorPosture(
-    condition=None,
-    account_desk=None,
-    status_headline="Account Clerk custody is healthy",
-    status_detail=None,
-)
 
 
 def _entries() -> list[StrategyValidationEntry]:
@@ -83,7 +76,6 @@ def _clerk_status(account_id: str) -> ClerkStatus:
             ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=observed_at_ms),
             ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=observed_at_ms),
         ],
-        operator_posture=_HEALTHY_POSTURE,
     )
 
 

@@ -43,7 +43,6 @@ from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
-from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 
 ACCOUNT_ID = "PA-TEST"
@@ -1072,25 +1071,24 @@ async def test_second_unfoldable_order_joins_the_episode_without_dropping_the_fi
         repo.close()
 
 
-async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
+async def test_released_unfoldable_order_returns_the_account_to_normal(
     tmp_path: Path,
 ) -> None:
-    """The panel/verdict/posture derivations all read active uncertainties;
+    """The panel/verdict/attention derivations all read active uncertainties;
     once the operator reviews the order they must stop reporting it."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
 
-    def posture_condition() -> str | None:
+    def account_conditions() -> tuple[str, ...]:
         reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             projection = reader.account_snapshot()
         finally:
             reader.close()
         assert projection is not None
-        posture = sqlite_clerk_status(projection).operator_posture
-        return None if posture is None else posture.condition.id
+        return tuple(sorted(uncertainty.reason_code for uncertainty in projection.uncertainties))
 
     try:
-        baseline = posture_condition()
+        baseline = account_conditions()
         await _sqlite_sink(repo).record_lifecycle_event(
             client_order_id="alpaca-console:mleg-1",
             event=BrokerOrderEvent(event_type="new", occurred_at_ms=1, price=None, quantity=None),
@@ -1101,12 +1099,12 @@ async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
             recovery_source=None,
             recovery_window_limit=None,
         )
-        fenced = posture_condition()
-        assert fenced != baseline and fenced is not None and fenced.startswith("alpaca_clerk")
+        fenced = account_conditions()
+        assert fenced != baseline and "UNFOLDABLE_BROKER_ORDER" in fenced
 
         acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
 
-        assert posture_condition() == baseline
+        assert account_conditions() == baseline
     finally:
         repo.close()
 
