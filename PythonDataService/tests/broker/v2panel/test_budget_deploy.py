@@ -80,7 +80,7 @@ def test_dry_run_never_copies_parent_cash_or_risk(authority) -> None:
     assert [item.key for item in preview.shortcuts] == ["position_headroom"]
 
 
-def test_recovery_returns_committed_outcome_even_after_evidence_expires(authority) -> None:
+async def test_recovery_returns_committed_outcome_even_after_evidence_expires(authority) -> None:
     repo, _, snapshot = authority
     request = _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1))
     terms = request.exit_terms.seal()
@@ -89,11 +89,11 @@ def test_recovery_returns_committed_outcome_even_after_evidence_expires(authorit
     gate.publish(snapshot.observation)
     submit_budgeted_deploy(repo, strategy_instance_id=request.strategy_instance_id, lifecycle_run_id="run", world="real_paper", committed_cents=50_000, configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")), risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal(100), request_fingerprint=budget_deploy.request_fingerprint(request, custody_account_id=repo.account_id, world="real_paper"))
     snapshot.observation = None
-    receipt = budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, request)
+    receipt = await budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, request)
     assert receipt.status == "pending" and receipt.committed_usd == "500.00"
     altered = request.model_copy(update={"symbol": "QQQ"})
     with pytest.raises(BudgetUnavailable):
-        budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, altered)
+        await budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, altered)
 
 
 def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:

@@ -77,13 +77,15 @@ def require_envelope_admission(
         )
     # Built before the bound is asked, so the notional the refusal names and
     # the notional the reservation will claim are the same one property.
-    reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=price)
+    # Preserve the historical sibling-row shape before budget cutover. The
+    # budget branch below additionally seals the exact price for replay.
+    reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=float(price))
     try:
         reserved = repo.reserved_cash_decimal(seen_before_ms=observation.fills_seen_before_ms)
         required = notional(leg.quantity, price)
         affordable = cash_admits(cash=observation.cash_available_usd, claims=reserved, required=required)
         if strategy_instance_id is not None and repo.deployment_budget(strategy_instance_id) is not None:
-            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms)
+            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
             own = next(budget for budget in projection.deployments if budget.strategy_instance_id == strategy_instance_id)
             required, fee_cents = entry_requirement(quantity=leg.quantity, price=price, at_ms=now_ms)
             with money_context():

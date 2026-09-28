@@ -6,6 +6,8 @@ installed authorities. Browser amounts are consent, never cash observations.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from decimal import Decimal, Inexact, localcontext
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id, synthetic_account_id_for_strategy
@@ -34,6 +36,7 @@ from app.schemas.deployment_budget import (
     DeploymentBudgetShortcut,
     DeploymentBudgetView,
 )
+from app.services.bot_runner import UnknownBotError, get_bot_task_registry
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.market_liveness import get_market_liveness_store
 
@@ -112,7 +115,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                 raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
             if snapshot.hold is not None:
                 raise BudgetUnavailable("A standing account loss hold blocks Deploy. Review and clear it in Configuration when the evidence permits.")
-            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms)
+            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
             available = projection.unreserved_cents
             observed_at = observation.observed_at_ms
             risk_revision = snapshot.policy.revision
@@ -174,16 +177,36 @@ def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resol
     )
 
 
-def _deployment_runtime(account_id: str, sid: str) -> ActiveClerkRuntime:
+@asynccontextmanager
+async def _deployment_runtime(account_id: str, sid: str) -> AsyncIterator[ActiveClerkRuntime]:
     primary = _primary(account_id)
     synthetic = get_clerk_runtime(synthetic_account_id_for_strategy(sid))
     if synthetic is not None and synthetic.sqlite_repository is not None and synthetic.sqlite_repository.deployment_budget(sid) is not None:
-        return synthetic
-    return primary
+        yield synthetic
+        return
+    registry = get_bot_task_registry()
+    if registry is not None:
+        try:
+            binding = registry.binding_for_control("alpaca", sid)
+        except UnknownBotError:
+            binding = None
+        if binding is not None and binding.mode == "dry_run":
+            # Reuse the same durable-authority reader as the bot panel. A
+            # stopped Dry Run releases its process runtime, not its receipt.
+            async with registry.synthetic_runtime_for_projection(binding) as runtime:
+                if runtime.sqlite_repository is None:
+                    raise BudgetUnavailable("Dry Run custody recovery is unavailable. Restore it before recovering this command.")
+                yield runtime
+            return
+    yield primary
 
 
-def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest | None = None) -> BudgetDeployCommandReceipt | None:
-    runtime = _deployment_runtime(account_id, sid)
+async def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest | None = None) -> BudgetDeployCommandReceipt | None:
+    async with _deployment_runtime(account_id, sid) as runtime:
+        return _command_receipt(runtime, account_id, sid, request)
+
+
+def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, sid: str, request: AlpacaPaperDeployRequest | None) -> BudgetDeployCommandReceipt | None:
     repo = runtime.sqlite_repository
     assert repo is not None
     with repo._write_lock:
@@ -210,8 +233,12 @@ def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest
     )
 
 
-def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
-    runtime = _deployment_runtime(account_id, sid)
+async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
+    async with _deployment_runtime(account_id, sid) as runtime:
+        return _budget_view(runtime, sid)
+
+
+def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
     repo = runtime.sqlite_repository
     assert repo is not None
     world = runtime.account_authority_kind
@@ -223,7 +250,7 @@ def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
         observation = None if sync is None else sync.risk_snapshot().observation
         if observation is None:
             raise BudgetUnavailable("Wait for fresh account cash and risk evidence. The original commitment is retained.")
-        projected = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms)
+        projected = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
         own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
         with money_context():
             return DeploymentBudgetView(

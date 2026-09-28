@@ -186,6 +186,36 @@ async def test_an_activated_live_account_boots_the_real_live_authority_with_both
     assert primary_custody_world() == "real_live"
 
 
+async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+    from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+    repo = ClerkSqliteRepository.initialize(account_id=LIVE_ACCT, artifacts_root=tmp_path, clock=lambda: NOW_MS)
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="reviewed", stop_receipt="empty")
+    append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOW_MS), expected_revision=0)
+    record_fee_evidence(repo, [], checked_at_ms=NOW_MS, history_complete=True)
+    meta = repo.control_meta_snapshot()
+    repo.close()
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    ledger.path.write_text("unreadable retired permission\n")
+    broker = _RecordingLiveBroker(now_ms=NOW_MS)
+    activation = live_activation(authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token)
+    runtime = await select_active_clerk_runtime(read=broker, trade=broker, artifacts_root=tmp_path,
+        activation_store=_ActivationStore(activation), repository_opener=pinned_repository(NOW_MS),
+        live_envelope_values=TEST_ENVELOPE_VALUES, instance_seals=lambda _: pytest.fail("retired grants must not be read"))
+    try:
+        assert runtime.authority_kind == "sqlite", runtime.startup_failure
+        assert runtime.clerk.live_arming is None
+        assert await runtime.envelope_sync.tick() == "observed"
+        assert runtime.envelope_sync.risk_snapshot().observation is not None
+        assert not broker.submissions
+    finally:
+        await runtime.close()
+
+
 async def test_an_open_control_plane_installs_no_live_authority(
     tmp_path: Path, live_state_root: Path
 ) -> None:

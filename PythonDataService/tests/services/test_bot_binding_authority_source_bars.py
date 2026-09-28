@@ -173,3 +173,50 @@ async def test_synthetic_runtime_uses_the_runners_clock_for_broker_custody_and_s
             assert (await broker.get_clock_evidence()).observed_at_ms == clock()
     finally:
         await close_synthetic_clerk_runtimes()
+
+
+async def test_private_budget_seed_refreshes_preview_then_survives_runtime_release(tmp_path: Path, monkeypatch) -> None:
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_authority import SyntheticBindingAuthority
+    from app.services.broker_v2_panel import budget_deploy
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    sid = "private-budget"
+    consent = DeployBudgetConsent(committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic")
+    binding = _trade_binding(sid).model_copy(update={"mode": "dry_run", "sealed_account_id": f"sim:{sid}", "exit_terms": TERMS, "budget_consent": consent})
+    authority = SyntheticBindingAuthority(binding=binding, artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        runtime_in_use=lambda _: False, brokers={}, clock=_TestClock(NOON))
+    try:
+        await authority.ensure_recoverable()
+        async with authority.runtime_for_projection() as runtime:
+            assert runtime.sqlite_repository.budget_authority_version() == 2
+            assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(500)
+            authority.binding = binding.model_copy(update={"budget_consent": consent.model_copy(update={"committed_cents": 70_000})})
+            await authority.ensure_recoverable()
+            assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(700)
+            runtime.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+            await runtime.clerk.register_strategy_run(authority.binding)
+            await runtime.clerk.record_deployment_launch(authority.binding)
+            await runtime.clerk.stop_strategy_run(strategy_instance_id=sid, run_id=binding.run_id, reason="owner_stop")
+        await authority.release_if_unused()
+        # Restart has no transient consent: custody's one stored commitment
+        # is the initial cash source and the command remains a read.
+        authority.binding = binding.model_copy(update={"budget_consent": None})
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: object())
+        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: SimpleNamespace(
+            binding_for_control=lambda broker, identity: authority.binding,
+            synthetic_runtime_for_projection=lambda _: authority.runtime_for_projection(),
+        ))
+        receipt = await budget_deploy.command_receipt("PARENT", sid)
+        assert receipt.status == "deployed" and receipt.committed_usd == "700.00"
+        async with authority.runtime_for_projection() as recovered:
+            assert recovered.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(700)
+            assert recovered.sqlite_repository.active_run(sid) is None
+            assert len([item for item in recovered.sqlite_repository.custody_transitions() if item["transition_kind"] == "DEPLOY_COMMITTED"]) == 1
+    finally:
+        await close_synthetic_clerk_runtimes()

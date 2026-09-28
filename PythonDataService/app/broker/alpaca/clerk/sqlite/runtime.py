@@ -273,7 +273,7 @@ class SqliteAlpacaClerkFacade:
             # ADR 0059 D11 (slice 7): a real-money facade is never a permissive
             # default. Both gates are composed by the live selector; a live
             # facade with either missing is a composition bug, refused here.
-            if account_mode == "live" and (live_envelope is None or live_arming is None):
+            if account_mode == "live" and (live_envelope is None or (repo.budget_authority_version() < 2 and live_arming is None)):
                 raise AccountAuthorityIdentityError(
                     "a live sqlite authority requires a risk envelope and an arming gate"
                 )

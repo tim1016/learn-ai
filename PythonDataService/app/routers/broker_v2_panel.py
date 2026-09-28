@@ -396,7 +396,7 @@ async def read_deployment_budget_scoped(broker: str, account_id: str, sid: str) 
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
     try:
-        return budget_deploy.budget_view(account_id, sid)
+        return await budget_deploy.budget_view(account_id, sid)
     except BudgetUnavailable as error:
         _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
 
@@ -406,7 +406,7 @@ async def read_deployment_command_scoped(broker: str, account_id: str, sid: str)
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
     try:
-        receipt = budget_deploy.command_receipt(account_id, sid)
+        receipt = await budget_deploy.command_receipt(account_id, sid)
         if receipt is None:
             raise HTTPException(status_code=404, detail="No budget-backed Deploy command exists for this deployment.")
         return receipt

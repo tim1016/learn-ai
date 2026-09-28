@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -28,6 +29,7 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
+from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
@@ -237,6 +239,7 @@ class SyntheticBindingAuthority(BindingAuthority):
     async def _runtime(self) -> ActiveClerkRuntime:
         existing = get_clerk_runtime(self.account_id)
         if existing is not None:
+            await self._prepare_budget_runtime(existing)
             return existing
         broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars(), clock=self.clock)
         await activate_synthetic_clerk_authority(
@@ -252,11 +255,27 @@ class SyntheticBindingAuthority(BindingAuthority):
             repository_opener=lambda account_id, root: ClerkSqliteRepository.open(
                 account_id=account_id, artifacts_root=root, clock=self.clock,
             ),
+            simulation_initial_cash=(None if self.binding.budget_consent is None else Decimal(self.binding.budget_consent.committed_cents) / 100),
         )
         if runtime.clerk is not None:
             register_clerk_runtime(runtime)
             self.brokers[self.account_id] = broker
+            await self._prepare_budget_runtime(runtime)
         return runtime
+
+    async def _prepare_budget_runtime(self, runtime: ActiveClerkRuntime) -> None:
+        consent = self.binding.budget_consent
+        repo = runtime.sqlite_repository
+        if consent is None or repo is None:
+            return
+        if repo.budget_authority_version() < 2:
+            with repo._write_lock:
+                if repo._conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
+                    raise StartAdmissionUnavailable("This earlier Dry Run cannot be restarted.", detail="Review a fresh deployment identity and simulated starting cash.")
+                commit_budget_authority_cutover(repo, actor=consent.actor,
+                    reviewed_token=authority_review_token(repo), stop_receipt="fresh-private-authority-with-no-runs")
+        if runtime.envelope_sync is not None:
+            await runtime.envelope_sync.refresh_private_starting_cash(Decimal(consent.committed_cents) / 100)
 
 
 @dataclass

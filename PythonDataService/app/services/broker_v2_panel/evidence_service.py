@@ -155,6 +155,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Account switched to budgets",
         "Earlier runners were stopped. Fresh deployment consent now owns new spending; prior custody obligations remain.",
     ),
+    "SIMULATION_SESSION_BASELINE": (
+        "Simulation risk baseline retained",
+        "The simulation recorded the reference equity for its own session loss calculation.",
+    ),
     "DEPLOY_COMMITTED": (
         "Deployment budget committed",
         "The reviewed dollar budget and one deployment intent were recorded together. Launch is pending.",

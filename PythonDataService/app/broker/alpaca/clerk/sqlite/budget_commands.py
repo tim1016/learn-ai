@@ -76,8 +76,7 @@ def submit_budgeted_deploy(
         if repo.latest_run(strategy_instance_id) is not None:
             raise BudgetUnavailable("Trading again requires a fresh deployment identity.")
         require_admission(repo, strategy_instance_id=strategy_instance_id)
-        observation = (envelope.fresh_observation(repo.clock()) if world == "synthetic" else
-                       require_current_risk_admission(repo, envelope=envelope, now_ms=repo.clock()))
+        observation = require_current_risk_admission(repo, envelope=envelope, now_ms=repo.clock())
         if observation is None:
             raise BudgetUnavailable("Wait for a fresh cash observation, then review Deploy again.")
         policy = repo.account_risk_policy()
@@ -89,6 +88,7 @@ def submit_budgeted_deploy(
         try:
             projection = repo.account_budget(
                 cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,
+                modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms,
             )
             with money_context():
                 amount = Decimal(committed_cents) / 100

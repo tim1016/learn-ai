@@ -21,6 +21,7 @@ import math
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
@@ -35,7 +36,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
-from app.broker.alpaca.clerk.money import MoneyInputError
+from app.broker.alpaca.clerk.money import MoneyInputError, normalize_money
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
 from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at, risk_fill_sequence
@@ -466,7 +467,17 @@ class LiveEnvelopeSync:
         (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``): it
         falls back and never refuses, because an EXIT leaves the account.
         """
-        return self._arming is not None and self._arming.inputs_unreadable
+        return self._repo.budget_authority_version() < 2 and self._arming is not None and self._arming.inputs_unreadable
+
+    async def refresh_private_starting_cash(self, amount: Decimal) -> None:
+        """Refresh transient reviewed cash; durable consent always owns the seed."""
+        if not self._repo.account_id.startswith("sim:") or self._simulation is None:
+            raise ValueError("Only a private Dry Run accepts starting cash")
+        with self._repo._write_lock:
+            self.envelope.withdraw()
+            if not self._repo._conn.execute("SELECT 1 FROM deployment_budgets LIMIT 1").fetchone():
+                self._simulation.initial_cash = normalize_money(amount)
+        await self.tick()
 
     def refresh_arming(self) -> None:
         """Run the arming half of this observation, and seal the envelope from what it read.

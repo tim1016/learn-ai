@@ -209,7 +209,7 @@ async def deploy_alpaca_paper_bot(
     """Execute or recover one durable deployment through the runner seam."""
     if request.budget is not None:
         try:
-            existing = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+            existing = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
             if existing is not None:
                 return existing
         except BudgetUnavailable as exc:
@@ -242,7 +242,7 @@ async def deploy_alpaca_paper_bot(
     except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
         if request.budget is not None:
             try:
-                existing = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+                existing = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
                 if existing is not None:
                     return existing
             except BudgetUnavailable as conflict:
@@ -260,7 +260,7 @@ async def deploy_alpaca_paper_bot(
             reason_code=exc.reason_code,
         ) from exc
     if request.budget is not None:
-        receipt = budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
+        receipt = await budget_deploy.command_receipt(account_id, request.strategy_instance_id, request)
         if receipt is None:
             raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
         return receipt

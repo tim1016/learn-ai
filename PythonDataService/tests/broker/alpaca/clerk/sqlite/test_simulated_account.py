@@ -12,6 +12,7 @@ from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
@@ -45,6 +46,8 @@ def shadow(tmp_path: Path) -> Iterator[ShadowContext]:
 
 
 def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int = 1000) -> LiveEnvelopeGate:
+    if repo.budget_authority_version() < 2:
+        commit_budget_authority_cutover(repo, actor="owner", reviewed_token="fresh-simulation", stop_receipt="no-old-runs")
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS)
     policy = repo.account_risk_policy()
     observation = projection.observe(reference_cash=reference, observed_at_ms=repo.clock(), now_ms=repo.clock())

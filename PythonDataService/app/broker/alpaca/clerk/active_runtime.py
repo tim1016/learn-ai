@@ -316,6 +316,11 @@ async def compose_repository_runtime(
             retry_interval_s=execution_lease_retry_interval_s,
         )
         verify_activation(repository.control_meta_snapshot())
+        if repository.budget_authority_version() >= 2:
+            # Historical arming remains readable for exit-term migration;
+            # it supplies no executable permission after the cutover.
+            arming_gate = None
+            instance_seals = None
         intake = ReentrantAsyncLock()
         guarded_read, guarded_trade = guard_broker_ports(
             read=ports.read,
@@ -406,7 +411,7 @@ async def compose_repository_runtime(
                     else guard_broker_read_port(envelope_read, intake=intake)
                 ),
                 envelope=live_envelope,
-                arming_ledger=arming_ledger,
+                arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
                 arming_gate=arming_gate,
                 instance_seals=instance_seals,
                 simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
