@@ -28,7 +28,7 @@ const LOCATION: AccountWorkspaceLocation = {
 
 /** A lane with no confirmed account: the same workspace, addressed without an
  * account segment (FR-092). */
-const LANE_ONLY: AccountWorkspaceLocation = { ...LOCATION, accountId: null, tab: 'configuration' };
+const LANE_ONLY: AccountWorkspaceLocation = { ...LOCATION, accountId: null, tab: 'settings' };
 
 const ACCOUNT = { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' };
 
@@ -37,12 +37,13 @@ describe('accountWorkspaceLocation', () => {
     [WORKSPACE, 'home'],
     [`${WORKSPACE}?view=wall`, 'home'],
     [`${WORKSPACE}/deploy`, 'deploy'],
+    [`${WORKSPACE}/activity`, 'activity'],
   ] as const)('resolves the account-scoped %s to the %s tab', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab });
   });
 
   it.each([
-    [`${LANE}/configuration`, 'configuration'],
+    [`${LANE}/settings`, 'settings'],
     [`${LANE}/home`, 'home'],
   ] as const)('resolves the lane-scoped %s to the %s tab with no account', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
@@ -100,15 +101,16 @@ describe('accountWorkspaceTabRoute', () => {
   it.each([
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9']],
     ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy']],
-    // Configuration is lane-scoped wherever it is opened from (FR-092).
-    ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration']],
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],
+    // Settings is lane-scoped wherever it is opened from (FR-092).
+    ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
   ])('builds the %s tab route for a bound account', (tab, expected) => {
     expect(accountWorkspaceTabRoute(LOCATION, tab)).toEqual(expected);
   });
 
   it.each([
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'home']],
-    ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration']],
+    ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
   ])('addresses the %s tab of a lane with no account in place', (tab, expected) => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, tab)).toEqual(expected);
   });
@@ -119,14 +121,19 @@ describe('accountWorkspaceTabRoute', () => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, 'deploy')).toBeNull();
   });
 
+  it("has no Activity to offer a lane with no account", () => {
+    // Activity is the account's own history; a lane without one has none.
+    expect(accountWorkspaceTabRoute(LANE_ONLY, 'activity')).toBeNull();
+  });
+
   it('round-trips every routed tab back through the resolver', () => {
-    for (const tab of ['home', 'deploy', 'configuration'] as const) {
+    for (const tab of ['home', 'activity', 'deploy', 'settings'] as const) {
       const url = accountWorkspaceTabRoute(LOCATION, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual(
-        tab === 'configuration' ? { ...LANE_ONLY, tab } : { ...LOCATION, tab },
+        tab === 'settings' ? { ...LANE_ONLY, tab } : { ...LOCATION, tab },
       );
     }
-    for (const tab of ['home', 'configuration'] as const) {
+    for (const tab of ['home', 'settings'] as const) {
       const url = accountWorkspaceTabRoute(LANE_ONLY, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
     }
@@ -157,7 +164,7 @@ describe('the links Home hands out', () => {
   it.each([
     ['bot' as const, 'sid-1', ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'sid-1']],
     ['activity' as const, null, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],
-    // Settings stays lane-scoped, like the Configuration it replaces.
+    // Settings stays lane-scoped wherever it is opened from.
     ['settings' as const, null, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
   ])('links an attention line whose fix lives at %s', (destination, sid, commands) => {
     expect(accountWorkspaceFixRoute(ACCOUNT, destination, sid)?.commands).toEqual(commands);
@@ -173,8 +180,9 @@ describe('accountWorkspaceSwitchRoute', () => {
 
   it.each([
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'activity']],
     ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'deploy']],
-    ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']],
+    ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
   ])('lands on the same %s tab of the chosen account', (tab, expected) => {
     expect(accountWorkspaceSwitchRoute({ ...LOCATION, tab }, target, null).commands).toEqual(expected);
   });
@@ -190,7 +198,8 @@ describe('accountWorkspaceSwitchRoute', () => {
   });
 
   it.each([
-    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']],
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'home']],
   ])('lands the %s tab on an unconfirmed account in place', (tab, expected) => {
     const unbound = { clerkId: 'clrk_live', accountId: null };
@@ -216,9 +225,9 @@ describe('accountWorkspaceEntryRoute', () => {
     ]);
   });
 
-  it('opens a lane with no confirmed account on Configuration, where binding it happens', () => {
+  it('opens a lane with no confirmed account on Settings, where binding it happens', () => {
     expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId: null })).toEqual([
-      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration',
+      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings',
     ]);
   });
 });
@@ -226,7 +235,7 @@ describe('accountWorkspaceEntryRoute', () => {
 describe('accountWorkspaceBadgeRoute', () => {
   const target = { broker: 'alpaca', clerkId: 'clrk_live', accountId: 'PA_LIVE' };
 
-  it.each([['home' as const], ['deploy' as const], ['configuration' as const]])(
+  it.each([['home' as const], ['activity' as const], ['deploy' as const], ['settings' as const]])(
     'keeps the %s tab when the badge is clicked from inside a workspace',
     (tab) => {
       const from: AccountWorkspaceLocation = { ...LOCATION, tab };
@@ -252,10 +261,10 @@ describe('accountWorkspaceBadgeRoute', () => {
     });
   });
 
-  it('lands on Configuration from outside a workspace when the account is unconfirmed', () => {
+  it('lands on Settings from outside a workspace when the account is unconfirmed', () => {
     expect(
       accountWorkspaceBadgeRoute(null, { ...target, accountId: null }, null).commands,
-    ).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']);
+    ).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']);
   });
 
   it("opens another broker's account at its own front door, never under the broker being left", () => {
@@ -273,7 +282,8 @@ describe('accountWorkspaceBadgeRoute', () => {
 describe('accountWorkspaceTitle', () => {
   it.each([
     ['home' as const, 'Home · Paper'],
-    ['configuration' as const, 'Configuration · Paper'],
+    ['settings' as const, 'Settings · Paper'],
+    ['activity' as const, 'Activity · Paper'],
     ['deploy' as const, 'Deploy strategy · Paper'],
   ])('titles the %s tab with the account name beside it', (tab, expected) => {
     expect(accountWorkspaceTitle(tab, 'Paper', null)).toBe(expected);
@@ -286,6 +296,6 @@ describe('accountWorkspaceTitle', () => {
   });
 
   it('names only what is open when the account has no resolved name', () => {
-    expect(accountWorkspaceTitle('configuration', null, null)).toBe('Configuration');
+    expect(accountWorkspaceTitle('settings', null, null)).toBe('Settings');
   });
 });

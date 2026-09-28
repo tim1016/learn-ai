@@ -1,7 +1,8 @@
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { BehaviorSubject } from 'rxjs';
@@ -18,7 +19,7 @@ import type {
   BrokerProfileDetail,
   BrokerProfileRevision,
 } from '../../../../api/alpaca.types';
-import { AlpacaConfigurationPageComponent } from './alpaca-configuration-page.component';
+import { AlpacaSettingsPageComponent } from './alpaca-settings-page.component';
 import { BrokerConfigurationService } from './broker-configuration.service';
 import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 import type { ResourceTarget } from '../../../../fleet/resource-target';
@@ -143,6 +144,12 @@ class FakeConfigurationService {
 
   readBudgetAuthority = vi.fn(async () => ({ state: 'budget', account_id: this.current.effective_account_id,
     authorization_version: 2, active_run_count: 0, review_token: 'test-authority', detail: 'Budgets are enabled.' }));
+  readRiskLimits = vi.fn(async () => ({
+    account_id: this.current.effective_account_id, risk_revision: 1, selection_generation: this.current.selection_generation,
+    loss_fraction: 0.02, loss_usd: 100, applied_at_ms: 1_757_000_000_000, entry_state: 'ready',
+    detail: 'These limits apply to new entries immediately. Existing bot exit terms stay fixed.',
+    hold_loss_limit_usd: null, hold_session_start_ms: null, hold_policy_revision: null,
+  }));
   listCredentialSlots = vi.fn(async (_clerkId: string) => SLOTS);
   listNicknames = vi.fn(async (_clerkId: string) => this.nicknames);
   listProfiles = vi.fn(async (
@@ -241,9 +248,11 @@ async function renderPage(
   query: Record<string, string> = {},
 ) {
   const queryParamMap = new BehaviorSubject(convertToParamMap(query));
-  const view = await render(AlpacaConfigurationPageComponent, {
+  const view = await render(AlpacaSettingsPageComponent, {
     componentInputs: { clerkId: 'clrk_spec' },
     providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
       provideFleetDirectory(),
       provideRouter([]),
       {
@@ -277,7 +286,7 @@ async function saveProfile(name: string): Promise<void> {
   await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
 }
 
-describe('AlpacaConfigurationPageComponent', () => {
+describe('AlpacaSettingsPageComponent', () => {
   it('opens and highlights the exact revision selected from the desk without mutating it', async () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile());
@@ -323,7 +332,7 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     await renderPage(service);
 
-    expect(await screen.findByRole('heading', { name: 'Broker configuration' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
   });
 
@@ -903,5 +912,189 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(service.pinAccount).toHaveBeenCalledWith(
       expect.objectContaining({ clerkId: 'clrk_spec' }), 'profile-1', 1, 'PA3ZK9QWERTY',
     );
+  });
+});
+
+describe('Settings sections (PRD #2560)', () => {
+  const HANDOFF_URL = '/assets/scripts/alpaca-paper-to-live-handoff.sh';
+
+  /** A lane whose worker bound `profile-1@2` to an account. */
+  function bound(service: FakeConfigurationService, mode: 'paper' | 'live', extra: Partial<BrokerProfileRevision> = {}): void {
+    service.profiles.push(profile({
+      profile_id: 'profile-1',
+      display_name: mode === 'live' ? 'Live — real money' : 'Paper — strategy testing',
+    }));
+    service.revisions.push(revision({ profile_id: 'profile-1', revision: 2, endpoint_mode: mode, ...extra }));
+    service.current = selection({
+      effective_profile_id: 'profile-1',
+      effective_revision: 2,
+      effective_account_id: mode === 'live' ? '9LIVE0001' : 'PA000PAPER',
+      selection_generation: 4,
+    });
+  }
+
+  function connectionFold(): HTMLDetailsElement {
+    const fold = document.querySelector('details.settings__connection');
+    if (!(fold instanceof HTMLDetailsElement)) throw new Error('Broker connection is not a fold.');
+    return fold;
+  }
+
+  it('names the account once, and folds Broker connection away by default', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'paper');
+    await renderPage(service);
+
+    expect(await screen.findByRole('heading', { name: 'Daily loss limit' })).toBeTruthy();
+    expect(document.querySelector('.settings__account')?.textContent?.trim()).toBe('Account PA000PAPER');
+    expect(connectionFold().open).toBe(false);
+    // The heading sits outside the summary, which keeps its native marker: a
+    // heading inside a summary loses its role.
+    const heading = screen.getByRole('heading', { name: 'Broker connection' });
+    expect(heading.closest('summary')).toBeNull();
+    expect(connectionFold().querySelector('summary [role="heading"], summary h1, summary h2, summary h3, summary h4')).toBeNull();
+    // The two meanings of "going Live" are told apart in the fold itself.
+    expect(screen.getByText(/It is not the account stage/)).toBeTruthy();
+  });
+
+  it('opens Broker connection when the desk sent the owner to review a revision', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(connectionFold().open).toBe(true);
+  });
+
+  it('shows the account stage on the Live lane', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'live');
+    await renderPage(service);
+
+    expect(await screen.findByRole('heading', { name: 'Account stage' })).toBeTruthy();
+    // The handoff script switches a Paper installation to Live; a Live lane has none.
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+  });
+
+  it('never shows the account stage on the Paper lane', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'paper');
+    const rendered = await renderPage(service);
+    await screen.findByRole('heading', { name: 'Daily loss limit' });
+    await vi.waitFor(() => expect(service.readRevision).toHaveBeenCalledWith('clrk_spec', 'profile-1', 2));
+    await rendered.fixture.whenStable();
+
+    expect(screen.queryByRole('heading', { name: 'Account stage' })).toBeNull();
+  });
+
+  it('says a failed mode read on the Live lane out loud, at page level, and offers no Paper-only script', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'live');
+    service.readRevision.mockRejectedValue(new Error('Revision read unavailable'));
+    await renderPage(service);
+
+    const alert = await screen.findByText(/Some configuration details could not be read/);
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(alert.closest('details')).toBeNull();
+    expect(await screen.findByText(/Couldn.t read whether this account is Paper or Live/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Account stage' })).toBeNull();
+
+    service.readRevision.mockImplementation(async () => service.revisions[0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Read the mode again' }));
+
+    expect(await screen.findByRole('heading', { name: 'Account stage' })).toBeTruthy();
+    expect(screen.queryByText(/Couldn.t read whether this account is Paper or Live/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+  });
+
+  it('says a failed selection read at page level, outside the folded Broker connection', async () => {
+    const service = new FakeConfigurationService();
+    service.readSelection.mockRejectedValue(new Error('Selection unavailable'));
+    await renderPage(service);
+
+    const alert = await screen.findByText(/could not read which account this lane is connected to/);
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(alert.closest('details')).toBeNull();
+    expect(connectionFold().open).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Show script' })).toBeNull();
+  });
+
+  it('keeps the handoff script behind Show script until asked for', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'paper');
+    await renderPage(service);
+    const http = TestBed.inject(HttpTestingController);
+
+    const toggle = await screen.findByRole('button', { name: 'Show script' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.querySelector('.handoff__source')).toBeNull();
+    expect(http.match(HANDOFF_URL)).toHaveLength(0);
+
+    await userEvent.click(toggle);
+    http.expectOne(HANDOFF_URL).flush('#!/usr/bin/env bash\nset -euo pipefail\n');
+
+    await vi.waitFor(() => expect(document.querySelector('.handoff__source')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Hide script' }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows the defaults for new bots from the profile in use, and opens that profile to change them', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'paper', { default_exit_terms: { exit_allowance_bps: 25, band_multiple: 2, spread_cap_bps: 50 } });
+    await renderPage(service);
+
+    const defaults = within(
+      (await screen.findByRole('heading', { name: 'Defaults for new bots' })).closest('section') as HTMLElement,
+    );
+    expect(await defaults.findByText('25 bps')).toBeTruthy();
+    expect(defaults.getByText('2×')).toBeTruthy();
+    expect(defaults.getByText('50 bps')).toBeTruthy();
+    expect(defaults.getByText(/profile in use, Paper — strategy testing\./)).toBeTruthy();
+
+    await userEvent.click(defaults.getByRole('button', { name: 'Change defaults in Broker connection' }));
+
+    expect(connectionFold().open).toBe(true);
+    expect(await screen.findByRole('heading', { name: 'Open profile' })).toBeTruthy();
+    expect(service.readProfile).toHaveBeenCalledWith('clrk_spec', 'profile-1');
+    await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('.settings__connection-body')));
+  });
+
+  it('says so when the profile in use saved no defaults', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'paper');
+    await renderPage(service);
+
+    expect(await screen.findByText('No defaults are set, so Deploy asks for exit terms each time.')).toBeTruthy();
+  });
+
+  it('stays reachable without a connected account, pointing at Broker connection (FR-092)', async () => {
+    const service = new FakeConfigurationService();
+    await renderPage(service);
+
+    const connect = await screen.findByRole('button', { name: 'Connect one under Broker connection' });
+    expect(screen.queryByRole('heading', { name: 'Daily loss limit' })).toBeNull();
+    expect(screen.getByText(/No broker connection is in use yet/)).toBeTruthy();
+
+    await userEvent.click(connect);
+
+    expect(connectionFold().open).toBe(true);
+    await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('.settings__connection-body')));
+  });
+
+  it('has no detectable accessibility violations with every section and the fold open', async () => {
+    const service = new FakeConfigurationService();
+    bound(service, 'live', { default_exit_terms: { exit_allowance_bps: 25, band_multiple: 2, spread_cap_bps: 50 } });
+    await renderPage(service);
+    await screen.findByRole('heading', { name: 'Account stage' });
+    await screen.findByRole('button', { name: 'Apply daily loss limit' });
+    await userEvent.click(connectionFold().querySelector('summary') as HTMLElement);
+    expect(connectionFold().open).toBe(true);
+
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 });

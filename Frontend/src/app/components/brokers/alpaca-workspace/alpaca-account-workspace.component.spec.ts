@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import {
   Router,
@@ -26,6 +27,7 @@ import {
   UNPOLLED_LANE_STATE,
   type LaneVerdictState,
 } from '../../../services/alpaca-live-verdict.service';
+import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
@@ -57,11 +59,14 @@ class WorkspaceHostComponent {}
 @Component({ selector: 'app-home-stub', template: '<main aria-label="Home">Home tab</main>' })
 class HomeStubComponent {}
 
+@Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
+class ActivityStubComponent {}
+
 @Component({
-  selector: 'app-configuration-stub',
-  template: '<main aria-label="Configuration">Configuration tab</main>',
+  selector: 'app-settings-stub',
+  template: '<main aria-label="Settings">Settings tab</main>',
 })
-class ConfigurationStubComponent {}
+class SettingsStubComponent {}
 
 @Component({ selector: 'app-bot-stub', template: '<main aria-label="Bot">Bot page</main>' })
 class BotStubComponent {}
@@ -82,17 +87,18 @@ const WORKSPACE_ROUTES: Routes = [
     path: 'brokers/alpaca/clerks/:clerkId',
     component: AlpacaAccountWorkspaceComponent,
     children: [
-      { path: 'configuration', component: ConfigurationStubComponent },
+      { path: 'settings', component: SettingsStubComponent },
       { path: 'home', component: AlpacaSurfaceNotReadyTabComponent },
       {
         path: 'accounts/:accountId',
         children: [
           { path: 'bots/:sid', component: BotStubComponent },
+          { path: 'activity', component: ActivityStubComponent },
           { path: 'deploy', component: DeployStubComponent },
           { path: '', component: HomeStubComponent },
         ],
       },
-      { path: '', redirectTo: 'configuration', pathMatch: 'full' },
+      { path: '', redirectTo: 'settings', pathMatch: 'full' },
     ],
   },
   // The real account list, so a spec can follow one of its account cards into
@@ -101,7 +107,7 @@ const WORKSPACE_ROUTES: Routes = [
 ];
 
 /** A ready lane that Alpaca has not confirmed an account for: it keeps its
- * workspace, and only Configuration can open (ADR 0064, FR-096). */
+ * workspace, and only Settings can open (ADR 0064, FR-096). */
 function unboundDirectory() {
   return provideFleetDirectory({
     observed_at_ms: 1,
@@ -212,6 +218,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
   it.each([
     [WORKSPACE_URL, 'Home'],
     [`${WORKSPACE_URL}?view=wall`, 'Home'],
+    [`${WORKSPACE_URL}/activity`, 'Activity'],
     [`${WORKSPACE_URL}/deploy`, 'Deploy strategy'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
     await renderWorkspace({ url });
@@ -219,7 +226,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
     // Overview, Bots and Gallery are one Home tab (PRD #2560).
-    for (const label of ['Home', 'Configuration', 'Deploy strategy']) {
+    for (const label of ['Home', 'Activity', 'Settings', 'Deploy strategy']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     for (const retired of ['Overview', 'Bots', 'Gallery']) {
@@ -249,23 +256,23 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('points the Configuration tab at the lane’s own configuration page', async () => {
+  it('points the Settings tab at the lane’s own Settings page', async () => {
     await renderWorkspace();
 
-    expect(screen.getByRole('link', { name: 'Configuration' }).getAttribute('href')).toBe(
-      `${LANE_URL}/configuration`,
+    expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe(
+      `${LANE_URL}/settings`,
     );
   });
 
   describe('the lane-scoped tabs', () => {
-    it('renders Configuration inside the workspace, under this account’s header', async () => {
-      // Configuration stays lane-scoped (FR-092) but is no longer a page of
+    it('renders Settings inside the workspace, under this account’s header', async () => {
+      // Settings stays lane-scoped (FR-092) but is no longer a page of
       // its own: the account header and the tab strip frame it like any tab.
-      await renderWorkspace({ url: `${LANE_URL}/configuration` });
+      await renderWorkspace({ url: `${LANE_URL}/settings` });
 
       expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
-      expect(screen.getByText('Configuration tab')).toBeTruthy();
-      expect(screen.getByRole('link', { name: 'Configuration' }).getAttribute('aria-current')).toBe(
+      expect(screen.getByText('Settings tab')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('aria-current')).toBe(
         'page',
       );
       // A confirmed lane reads its account's own facts there, exactly as the
@@ -275,13 +282,13 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
     it('keeps the workspace for a lane Alpaca has confirmed no account for', async () => {
       await renderWorkspace({
-        url: `${LANE_URL}/configuration`,
+        url: `${LANE_URL}/settings`,
         directory: unboundDirectory(),
       });
 
       // The lane's own label stands in for the account name it has not got.
       expect(await screen.findByRole('heading', { name: 'Unbound' })).toBeTruthy();
-      expect(screen.getByText('Configuration tab')).toBeTruthy();
+      expect(screen.getByText('Settings tab')).toBeTruthy();
       // Equity and a sync verdict belong to an account. Saying "$—" and
       // "Not reconciled" here would report a failed read where there was none.
       expect(screen.getByText('No confirmed account')).toBeTruthy();
@@ -291,7 +298,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
     it('offers no Deploy to a lane with no account, and Home explains itself in place', async () => {
       await renderWorkspace({
-        url: `${LANE_URL}/configuration`,
+        url: `${LANE_URL}/settings`,
         directory: unboundDirectory(),
       });
 
@@ -299,14 +306,14 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(screen.queryByRole('link', { name: 'Deploy strategy' })).toBeNull();
       expect(screen.getByText('Deploy strategy').getAttribute('aria-disabled')).toBe('true');
       expect(screen.getByRole('link', { name: 'Home' }).getAttribute('href')).toBe(`${LANE_URL}/home`);
-      expect(screen.getByRole('link', { name: 'Configuration' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
     });
 
     it('has no detectable accessibility violations with no account to offer', async () => {
       // The bound render above never emits the inert Deploy tab, so this is
       // the only pass that grades it — and the unoffered tab is exactly the
       // markup an operator is most likely to meet with a screen reader.
-      await renderWorkspace({ url: `${LANE_URL}/configuration`, directory: unboundDirectory() });
+      await renderWorkspace({ url: `${LANE_URL}/settings`, directory: unboundDirectory() });
       await screen.findByRole('heading', { name: 'Unbound' });
 
       const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
@@ -314,17 +321,17 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(results.violations).toEqual([]);
     });
 
-    it('explains in place why Home cannot open, and links to Configuration', async () => {
+    it('explains in place why Home cannot open, and links to Settings', async () => {
       const { router } = await renderWorkspace({
         url: `${LANE_URL}/home`,
         directory: unboundDirectory(),
       });
 
       expect(await screen.findByText('Home unavailable')).toBeTruthy();
-      expect(screen.getByText(/no confirmed account yet/i)).toBeTruthy();
+      expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
       expect(
-        screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
-      ).toBe(`${LANE_URL}/configuration`);
+        screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href'),
+      ).toBe(`${LANE_URL}/settings`);
       expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
       // FR-096: it fails in place. No other lane, and no other account, is
       // substituted by the navigation itself.
@@ -364,10 +371,54 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(screen.queryByText(/\$0\.00/)).toBeNull();
   });
 
+  it('keeps Alpaca’s Equity and Today, dated, when the bar cannot be drawn', async () => {
+    await renderWorkspace({
+      money: () => Promise.resolve({
+        ...unavailableAccountMoney('A manual order is still working, so this account’s money cannot be drawn yet.'),
+        account_id: TEST_ACCOUNT_ID,
+        equity_usd: '100012.40',
+        today_pnl_usd: '-3.20',
+        observed_at_ms: 1_700_000_000_000,
+      }),
+    });
+
+    const figure = async (term: string) =>
+      (await screen.findByText(term, { selector: 'dt' })).nextElementSibling?.textContent?.trim();
+    expect(await figure('Equity')).toBe('$100,012.40');
+    expect(await figure('Today')).toBe('-$3.20');
+    const readAt = (await screen.findByText('Read at', { selector: 'dt' })).nextElementSibling;
+    expect(readAt?.querySelector('app-timestamp-display')?.textContent?.trim()).toBe(
+      formatTimestampDisplay(1_700_000_000_000, { mode: 'local' }),
+    );
+    expect(screen.getByText(/A manual order is still working/)).toBeTruthy();
+    expect(screen.queryByText('Free to deploy')).toBeNull();
+    expect(screen.queryByText('Cash', { selector: 'dt' })).toBeNull();
+  });
+
   it('says a failed money read failed rather than showing nothing', async () => {
     await renderWorkspace({ money: () => Promise.reject(new Error('money read failed')) });
 
-    expect(await screen.findByText('Account money could not be read.')).toBeTruthy();
+    expect(await screen.findByText(/Account money could not be read\./)).toBeTruthy();
+  });
+
+  it('names the next step a refused money read authored, instead of discarding it', async () => {
+    const refusal = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          message: 'This account’s money cannot be read right now.',
+          why: 'The account’s records are still being opened.',
+          next_action: 'Open the account’s Settings to see why, then retry.',
+        },
+      },
+    });
+    await renderWorkspace({ money: () => Promise.reject(refusal) });
+
+    const reason = await screen.findByText(/cannot be read right now/);
+    expect(reason.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'This account’s money cannot be read right now. The account’s records are still being opened. '
+        + 'Open the account’s Settings to see why, then retry.',
+    );
   });
 
   it.each([
@@ -473,7 +524,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       });
       await screen.findByRole('heading', { name: 'Paper' });
 
-      await router.navigateByUrl('/brokers/alpaca/clerks/clrk_live/configuration');
+      await router.navigateByUrl('/brokers/alpaca/clerks/clrk_live/settings');
       await view.fixture.whenStable();
 
       await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
@@ -485,7 +536,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       // in flight — so the header opens on "Lane unresolved" exactly as it
       // does while the real request is outstanding.
       const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [] });
-      const { view } = await renderWorkspace({ url: `${LANE_URL}/configuration`, directory });
+      const { view } = await renderWorkspace({ url: `${LANE_URL}/settings`, directory });
       await screen.findByText('Lane unresolved');
 
       // The directory now resolves this lane's confirmed account — a tick or
@@ -573,7 +624,8 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
     it.each([
       [WORKSPACE_URL, LIVE_URL, 'Home'],
-      [`${LANE_URL}/configuration`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/configuration`, 'Configuration'],
+      [`${LANE_URL}/settings`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/settings`, 'Settings'],
+      [`${WORKSPACE_URL}/activity`, `${LIVE_URL}/activity`, 'Activity'],
       [`${WORKSPACE_URL}/deploy`, `${LIVE_URL}/deploy`, 'Deploy'],
     ])('lands on the same tab of the chosen account, from %s', async (url, expected) => {
       await openSwitcher(url);

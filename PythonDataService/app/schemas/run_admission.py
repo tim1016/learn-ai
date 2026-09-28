@@ -185,12 +185,12 @@ CORPUS_UNCOVERED_NEXT_STEP = (
     "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
 )
 ARMING_NEXT_STEP = (
-    "Open Configuration and review the Budget authority upgrade. Then deploy a fresh run "
+    "Open Settings and switch this account to budgets. Then deploy a fresh run "
     "with its own budget and Live consent; historical grants cannot be renewed."
 )
 ARMING_REQUIRED_ADMITTED_NOTE = (
     "This legacy run has no current entry permission. Reducing recovery remains available; "
-    "review Budget authority upgrade in Configuration before a fresh Deploy."
+    "switch this account to budgets in Settings before a fresh Deploy."
 )
 
 

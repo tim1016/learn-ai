@@ -1,11 +1,11 @@
 /** The account workspace's URL vocabulary (ADR 0064 Decision 1, PRD #2560).
  *
  * One broker account is one place: an account header over its Home,
- * Configuration and Deploy tabs. Which account that is, which tab is open, and
- * which bot's page is open under Home is carried by the URL alone (nothing
- * remembers a last-used account, FR-091), so deciding all three is a pure
- * function of the URL and lives here rather than in a service every surface
- * would have to inject.
+ * Activity, Settings and Deploy tabs. Which account that is, which tab is
+ * open, and which bot's page is open under Home is carried by the URL alone
+ * (nothing remembers a last-used account, FR-091), so deciding all three is a
+ * pure function of the URL and lives here rather than in a service every
+ * surface would have to inject.
  *
  * Three consumers share it: the workspace shell (which tab to mark current,
  * where each tab and the account switcher lead), `app-menu`'s
@@ -22,7 +22,7 @@ import { LENS_QUERY_PARAM } from '../shared/lens/lens';
 
 /** The workspace's tabs, in the order they are presented. Home is the
  * account's money and its bots: Overview, Bots and Gallery merged (D1, D3). */
-export type AccountWorkspaceTab = 'home' | 'configuration' | 'deploy';
+export type AccountWorkspaceTab = 'home' | 'activity' | 'settings' | 'deploy';
 
 /** One tab's identity and its operator-facing name. */
 export interface AccountWorkspaceTabDescriptor {
@@ -34,14 +34,16 @@ export interface AccountWorkspaceTabDescriptor {
  * title composes from them, so a tab can never pick up a second name. */
 const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>> = {
   home: 'Home',
-  configuration: 'Configuration',
+  activity: 'Activity',
+  settings: 'Settings',
   deploy: 'Deploy strategy',
 };
 
-/** The presented tab order (ADR 0064 Decision 1). Deploy sits last, after
- * Configuration: binding a new strategy to the account, not a fact about it. */
+/** The presented tab order (ADR 0064 Decision 1). Activity — the account's
+ * history and records (PRD #2560) — sits before Settings. Deploy sits
+ * last: binding a new strategy to the account, not a fact about it. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['home', 'configuration', 'deploy'] as const
+  ['home', 'activity', 'settings', 'deploy'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
 /** Home's query parameter for how its bots are shown: `wall` as chart tiles,
@@ -61,7 +63,7 @@ export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
 export interface AccountWorkspaceLocation {
   readonly broker: string;
   readonly clerkId: string;
-  /** `null` on the lane-scoped URLs — Configuration and a not-ready Home —
+  /** `null` on the lane-scoped URLs — Settings and a not-ready Home —
    * which name no account at all (FR-092). The workspace shell resolves the
    * lane's confirmed account for those; the URL cannot. */
   readonly accountId: string | null;
@@ -95,19 +97,19 @@ export interface AccountWorkspaceLink {
 
 /**
  * The account-scoped workspace URLs: broker, clerk and account identity
- * (FR-092), optionally followed by Deploy's segment or one bot's own page
- * (`bots/:sid`). Home is the bare account URL.
+ * (FR-092), optionally followed by Activity's or Deploy's segment or one bot's
+ * own page (`bots/:sid`). Home is the bare account URL.
  */
 const ACCOUNT_WORKSPACE_URL =
-  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(deploy)|\/bots\/([^/]+))?$/;
+  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(activity|deploy)|\/bots\/([^/]+))?$/;
 
 /**
- * The lane-scoped workspace URLs: Configuration, which stays clerk-scoped
+ * The lane-scoped workspace URLs: Settings, which stays clerk-scoped
  * wherever it is opened from (FR-092), and the Home of a lane with no account
  * to serve it, which explains in place why it cannot open and never
  * redirects to another lane (FR-096).
  */
-const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(configuration|home)$/;
+const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(settings|home)$/;
 
 /**
  * The workspace `url` is inside, or `null` when it is not a workspace URL at
@@ -118,12 +120,12 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
 
   const account = ACCOUNT_WORKSPACE_URL.exec(path);
   if (account !== null) {
-    const [, broker, clerkId, accountId, deploy, sid] = account;
+    const [, broker, clerkId, accountId, segment, sid] = account;
     return {
       broker: decodeURIComponent(broker),
       clerkId: decodeURIComponent(clerkId),
       accountId: decodeURIComponent(accountId),
-      tab: deploy === undefined ? 'home' : 'deploy',
+      tab: segment === 'activity' || segment === 'deploy' ? segment : 'home',
       botSid: sid === undefined ? null : decodeURIComponent(sid),
     };
   }
@@ -135,7 +137,7 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
     broker: decodeURIComponent(broker),
     clerkId: decodeURIComponent(clerkId),
     accountId: null,
-    tab: surface === 'configuration' ? 'configuration' : 'home',
+    tab: surface === 'settings' ? 'settings' : 'home',
     botSid: null,
   };
 }
@@ -156,20 +158,21 @@ export function accountWorkspaceLens(url: string): string | null {
  * One tab's router commands for a workspace, or `null` when this workspace has
  * no address for that tab.
  *
- * Configuration is always lane-scoped — it is the one tab a lane can serve
+ * Settings is always lane-scoped — it is the one tab a lane can serve
  * before it has a confirmed account, which is what makes it the way out of an
  * unbound lane. Home always has an address: on a lane with no confirmed
- * account it is the page that explains why it cannot open (FR-096). Deploy is
- * the account's own action and needs a confirmed account to target, so it is
- * the one tab an accountless workspace cannot offer.
+ * account it is the page that explains why it cannot open (FR-096). Activity
+ * and Deploy are the account's own history and its own action — each needs a
+ * confirmed account to target — so they are the tabs an accountless workspace
+ * cannot offer.
  */
 export function accountWorkspaceTabRoute(
   address: AccountWorkspaceAddress,
   tab: AccountWorkspaceTab,
 ): readonly string[] | null {
-  if (tab === 'configuration') return configurationRoute(address);
+  if (tab === 'settings') return settingsRoute(address);
   if (tab === 'home') return accountWorkspaceHomeRoute(address);
-  return address.accountId === null ? null : [...workspaceRoute(address), 'deploy'];
+  return address.accountId === null ? null : [...workspaceRoute(address), tab];
 }
 
 /** Home's route: the account's own URL, or the lane's not-ready Home. */
@@ -190,9 +193,9 @@ export type AccountWorkspaceFixDestination = 'bot' | 'activity' | 'settings';
 
 /**
  * The link to an attention line's fix: the line's own bot page, Activity's
- * order records and recovery, or Settings — lane-scoped, like Configuration,
- * which it replaces. `null` only for a bot fix naming no bot, which the
- * backend never sends.
+ * order records and recovery, or Settings — lane-scoped wherever it is
+ * opened from. `null` only for a bot fix naming no bot, which the backend
+ * never sends.
  */
 export function accountWorkspaceFixRoute(
   account: BoundAccountWorkspaceAddress,
@@ -205,7 +208,7 @@ export function accountWorkspaceFixRoute(
     case 'activity':
       return { commands: [...workspaceRoute(account), 'activity'], queryParams: {} };
     case 'settings':
-      return { commands: [...laneRoute(account.broker, account.clerkId), 'settings'], queryParams: {} };
+      return { commands: settingsRoute(account), queryParams: {} };
   }
 }
 
@@ -219,7 +222,7 @@ export function accountWorkspaceDeployAgainRoute(
 
 /**
  * Where opening an account from *outside* any workspace lands: its Home, the
- * account's own page — or Configuration, the one tab a lane with no
+ * account's own page — or Settings, the one tab a lane with no
  * confirmed account can serve, which is where binding it happens anyway.
  *
  * The account list's cards and the shell's account badges both open an
@@ -230,7 +233,7 @@ export function accountWorkspaceDeployAgainRoute(
  * opened from (FR-092).
  */
 export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): readonly string[] {
-  return address.accountId === null ? configurationRoute(address) : workspaceRoute(address);
+  return address.accountId === null ? settingsRoute(address) : workspaceRoute(address);
 }
 
 /**
@@ -265,7 +268,7 @@ export function accountWorkspaceBadgeRoute(
  *
  * A bot's page is never carried across — the chosen account need not run that
  * bot — so a switch from one lands on Home. An account the chosen lane has not
- * confirmed has no Deploy either; Configuration is the tab it can serve for
+ * confirmed has no Deploy either; Settings is the tab it can serve for
  * that, and binding it is what the operator has to do there anyway.
  *
  * Nothing that was open *over* the workspace travels: the destination's query
@@ -284,7 +287,7 @@ export function accountWorkspaceSwitchRoute(
     clerkId: target.clerkId,
     accountId: target.accountId,
   };
-  const commands = accountWorkspaceTabRoute(destination, tab) ?? configurationRoute(destination);
+  const commands = accountWorkspaceTabRoute(destination, tab) ?? settingsRoute(destination);
   return { commands, queryParams: lensQuery(lens) };
 }
 
@@ -319,10 +322,10 @@ function workspaceRoute(address: AccountWorkspaceAddress): string[] {
   return address.accountId === null ? lane : [...lane, 'accounts', address.accountId];
 }
 
-/** Configuration's URL — lane-scoped wherever it is opened from (FR-092), so
+/** Settings' URL — lane-scoped wherever it is opened from (FR-092), so
  * it is the one tab an address can always offer. */
-function configurationRoute(address: AccountWorkspaceAddress): string[] {
-  return [...laneRoute(address.broker, address.clerkId), 'configuration'];
+function settingsRoute(address: AccountWorkspaceAddress): string[] {
+  return [...laneRoute(address.broker, address.clerkId), 'settings'];
 }
 
 /** The destination's query, built from the lens alone — never merged from the

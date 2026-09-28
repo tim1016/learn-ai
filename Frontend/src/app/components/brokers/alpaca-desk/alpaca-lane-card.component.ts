@@ -1,5 +1,5 @@
-import { CurrencyPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
+import { CurrencyPipe, DOCUMENT } from '@angular/common';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, resource } from '@angular/core';
 import { RouterLink, type QueryParamsHandling } from '@angular/router';
 
 import { accountWorkspaceEntryRoute, accountWorkspaceTabRoute } from '../../../fleet/account-workspace';
@@ -11,11 +11,17 @@ import {
   laneDisplayNameText,
   laneIsReady,
 } from '../../../fleet/fleet-directory.types';
-import { resourceTarget, type FleetCapability, type ResourceTarget } from '../../../fleet/resource-target';
+import {
+  resourceTarget,
+  sameResourceTarget,
+  type FleetCapability,
+  type ResourceTarget,
+} from '../../../fleet/resource-target';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
-import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { accountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
+import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaLaneModeChipComponent } from './alpaca-lane-mode-chip.component';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 
@@ -25,12 +31,11 @@ import { BrokerConfigurationService } from './configuration/broker-configuration
 const READINESS_UNAVAILABLE = 'Readiness unavailable';
 const READINESS_LOADING = 'Reading readiness…';
 
-/** The card's account money: read, not yet read, or why there is none. An
- * account whose money cannot be drawn says why in the backend's own words
- * (a missing loss limit, budgets not switched on) — never $0. */
-type CardMoney =
-  | { readonly kind: 'ready'; readonly view: AccountMoneyView }
-  | { readonly kind: 'reason'; readonly text: string };
+/** How often a card re-reads its account's money: the cadence the directory
+ * its counts come from is refreshed at (`AlpacaLiveVerdictService` forces one
+ * every 30 s), so a card's figures and counts move together. A reload keeps
+ * the figures on screen while it runs. */
+const CARD_MONEY_POLL_MS = 30_000;
 
 /** What this card can show for its lane, in the same three terms the
  * workspace's own not-ready surfaces use: it is serving an account, its lane
@@ -46,7 +51,7 @@ type LaneCardState =
  * One account's card in the Alpaca account list (ADR 0064 Decision 2).
  *
  * The whole card is a single click target into that account's workspace —
- * its Home, or Configuration for a lane with no confirmed account, which
+ * its Home, or Settings for a lane with no confirmed account, which
  * is the one tab such a lane can serve and where binding it happens anyway.
  * The destination is the navigation resolver's to decide
  * (`accountWorkspaceEntryRoute`), never composed here, so a card and a shell
@@ -57,13 +62,13 @@ type LaneCardState =
  * deploy, and a small money bar), how many bots run, hold or dry-run on it,
  * and how many things need the owner — or why it is not ready yet — and none
  * of the lane mechanics (endpoint mode, authority state, binding generation,
- * the raw account id). Those are the workspace's and Configuration's facts;
+ * the raw account id). Those are the workspace's and Settings' facts;
  * a list exists to choose from.
  *
  * Every dollar and width is the account-money read's (PRD #2560 D12); the
  * running, Dry Run and attention counts are one field each of the lane's
  * directory summary, and the stopped-still-holding count is the money read's
- * own stopped slices. The card adds nothing up. Each read is this card's own
+ * `stopped_holding_count`. The card adds nothing up. Each read is this card's own
  * `resource()` against this lane's frozen target: one account's failed read
  * is that card's alone and leaves every sibling card whole (FR-093).
  *
@@ -86,6 +91,7 @@ export class AlpacaLaneCardComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly panel = inject(BrokerV2PanelService);
   private readonly configuration = inject(BrokerConfigurationService);
+  private readonly document = inject(DOCUMENT);
 
   readonly lane = input.required<LaneDescriptor>();
 
@@ -137,7 +143,7 @@ export class AlpacaLaneCardComponent {
 
   /** The card's one destination: this lane's confirmed account, whatever the
    * lane can currently report about itself. The resolver substitutes
-   * Configuration only for a lane with no account at all — the same
+   * Settings only for a lane with no account at all — the same
    * substitution a carried deploy intent falls back to when this lane has no
    * account for Deploy to target either. */
   protected readonly openRoute = computed(() => {
@@ -176,40 +182,42 @@ export class AlpacaLaneCardComponent {
     });
   });
 
+  /** The money read's address, compared by value. A `resource()` re-reads
+   * whenever its params function re-runs, even to the same answer, and every
+   * directory refresh hands the card a new lane object — so without this the
+   * card re-read its money on each refresh. */
+  private readonly moneyTarget = computed(() => this.targetFor('bot_panel_read'), { equal: sameResourceTarget });
+
   protected readonly money = resource({
-    params: () => this.targetFor('bot_panel_read'),
+    params: () => this.moneyTarget(),
     loader: ({ params }) => this.panel.getAccountMoney(params),
   });
 
-  protected readonly cardMoney = computed<CardMoney>(() => {
-    if (!this.lane().capabilities.includes('bot_panel_read')) {
-      return { kind: 'reason', text: 'This lane does not report account money.' };
-    }
-    if (this.money.hasValue()) {
-      const view = this.money.value();
-      return view.state === 'ready' ? { kind: 'ready', view } : { kind: 'reason', text: view.detail };
-    }
-    return this.money.error() === undefined
-      ? { kind: 'reason', text: 'Reading account money…' }
-      : { kind: 'reason', text: 'Account money could not be read. Open the account to see why.' };
-  });
+  /** The card's account money in the one projection every money surface
+   * shares (`accountMoneyState`): the header of the account this card opens
+   * words the same state the same way. */
+  protected readonly cardMoney = computed(() =>
+    accountMoneyState({
+      capable: this.lane().capabilities.includes('bot_panel_read'),
+      view: this.money.hasValue() ? this.money.value() : undefined,
+      error: this.money.error(),
+    }),
+  );
 
   /** Running and Dry Run counts, each one field of the lane's directory
    * summary, and the stopped bots still holding money — the money read's own
-   * stopped slices. A count the lane did not report is said to be unknown,
-   * never shown as zero. */
+   * `stopped_holding_count`. A count the backend did not report is said to be
+   * unknown, never shown as zero (or left out, as a zero is). */
   protected readonly botCounts = computed<readonly string[]>(() => {
     const summary = this.lane().provider_summary;
     const running = summary?.running_count ?? null;
     const dryRun = summary?.dry_run_count ?? null;
     const money = this.cardMoney();
-    const holding = money.kind === 'ready'
-      ? (money.view.segments ?? []).filter((segment) => segment.kind === 'stopped').length
-      : 0;
+    const holding = money.kind === 'ready' ? money.view.stopped_holding_count ?? null : null;
     if (running === null || dryRun === null) return ['Bot counts unavailable'];
     return [
       `${running} running`,
-      ...(holding > 0 ? [`${holding} stopped, still holding`] : []),
+      ...(holding === null ? ['Stopped holdings unknown'] : holding > 0 ? [`${holding} stopped, still holding`] : []),
       `${dryRun} Dry Run`,
     ];
   });
@@ -223,9 +231,13 @@ export class AlpacaLaneCardComponent {
     return { needs: true, text: count === 1 ? '1 needs you' : `${count} need you` };
   });
 
+  /** The unbound lane whose readiness is read, as a string so a directory
+   * refresh of the same lane does not re-run the read. */
+  private readonly unboundClerkId = computed(() => (this.state().kind === 'unbound' ? this.lane().clerk_id : undefined));
+
   /** The backend-authored readiness sentence a *ready but unbound* account
    * shows in place of its money and bots. Operator prose the server owns,
-   * rendered verbatim — the same `headline` the Configuration tab states, so
+   * rendered verbatim — the same `headline` the Settings tab states, so
    * the list and the tab cannot describe one lane's readiness differently.
    *
    * A lane that is *down* is never asked: its clerk is by definition not
@@ -234,7 +246,7 @@ export class AlpacaLaneCardComponent {
    * `targetFor` exists to avoid for an undeclared capability (FR-097). The
    * `lifecycle` state is what such a lane says instead. */
   protected readonly readiness = resource({
-    params: () => (this.state().kind === 'unbound' ? this.lane().clerk_id : undefined),
+    params: () => this.unboundClerkId(),
     loader: ({ params }) => this.configuration.readDeskState(params),
   });
 
@@ -242,6 +254,22 @@ export class AlpacaLaneCardComponent {
     if (this.readiness.hasValue()) return this.readiness.value().headline;
     return this.readiness.error() === undefined ? READINESS_LOADING : READINESS_UNAVAILABLE;
   });
+
+  /** The ids that name the card's one link by its account and mode, and
+   * describe it by everything else it carries — so a screen reader hears
+   * "Paper, PAPER · practice money" as the link, not the whole card. */
+  protected readonly nameId = computed(() => `lane-card-${this.lane().clerk_id}-name`);
+  protected readonly detailId = computed(() => `lane-card-${this.lane().clerk_id}-detail`);
+
+  constructor() {
+    // Money moves while the list is open, and nothing pushes it. Paused while
+    // the tab is hidden, as every other poll on these pages is.
+    const timer = setInterval(() => {
+      if (this.document.visibilityState !== 'visible') return;
+      if (!this.money.isLoading()) this.money.reload();
+    }, CARD_MONEY_POLL_MS);
+    inject(DestroyRef).onDestroy(() => clearInterval(timer));
+  }
 
   /** The frozen target, or `undefined` when this lane has not declared the
    * capability the read needs — a capability it never claimed is not a read

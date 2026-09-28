@@ -102,7 +102,7 @@
       },
       "AccountMoneyView": {
         "additionalProperties": false,
-        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd``, their widths to 10000\nbasis points, and ``free_to_deploy_usd`` is the Deploy preview's\nunreserved cash. Otherwise every figure is absent and ``detail`` names\nthe reason and its fix -- an unknown is never shown as $0.",
+        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd`` plus\n``account_shortfall_usd`` (what the bots' and orders' claims exceed the\naccount by; absent unless overdrawn), their widths to 10000 basis points,\nand ``free_to_deploy_usd`` is the Deploy preview's unreserved cash.\nOtherwise the bar's figures are absent and ``detail`` names the reason --\nan unknown is never shown as $0 -- while the broker's own ``equity_usd``\nand ``today_pnl_usd`` stay whenever they are known.",
         "properties": {
           "account_charges_usd": {
             "anyOf": [
@@ -118,6 +118,17 @@
           "account_id": {
             "title": "Account Id",
             "type": "string"
+          },
+          "account_shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Shortfall Usd"
           },
           "cash_usd": {
             "anyOf": [
@@ -192,6 +203,17 @@
             ],
             "title": "Observed At Ms"
           },
+          "open_pnl_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Detail"
+          },
           "open_pnl_usd": {
             "anyOf": [
               {
@@ -222,6 +244,17 @@
             "title": "Segments",
             "type": "array"
           },
+          "settling_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settling Usd"
+          },
           "state": {
             "enum": [
               "ready",
@@ -230,6 +263,18 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "stopped_holding_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped Holding Count"
           },
           "today_pnl_usd": {
             "anyOf": [
@@ -661,6 +706,10 @@
             ],
             "title": "Hold Session Start Ms"
           },
+          "limit_missing": {
+            "title": "Limit Missing",
+            "type": "boolean"
+          },
           "loss_fraction": {
             "anyOf": [
               {
@@ -700,7 +749,8 @@
           "loss_usd",
           "applied_at_ms",
           "entry_state",
-          "detail"
+          "detail",
+          "limit_missing"
         ],
         "title": "AccountRiskStateResponse",
         "type": "object"
@@ -749,6 +799,46 @@
           }
         },
         "title": "ActionPlan",
+        "type": "object"
+      },
+      "ActivityPeriodRead": {
+        "additionalProperties": false,
+        "description": "One Activity period's orders and cash moves, newest first.\n\n``evidence`` is one bounded broker read of the window that opens at\n``period_start_ms``. When ``evidence.history_complete`` is false the\nperiod holds older rows this read did not reach; ``next_page_token``\nreads the next older stretch, and the page must say the list is partial.",
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/BrokerActivityEvidence"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "period": {
+            "enum": [
+              "today",
+              "30d",
+              "60d"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "period_start_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Period Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "period",
+          "period_start_ms",
+          "observed_at_ms",
+          "evidence"
+        ],
+        "title": "ActivityPeriodRead",
         "type": "object"
       },
       "AdjustmentNotCoveredDetail": {
@@ -5762,6 +5852,40 @@
         "title": "BrokerActivity",
         "type": "object"
       },
+      "BrokerActivityEvidence": {
+        "additionalProperties": false,
+        "description": "A bounded activity read with explicit provider pagination exhaustion.\n\n``history_complete`` is true only when a provider returned a short final\npage -- or, for a read bounded to a window, when the newest-first walk\nreached a row older than the window. A consumer must not infer it from the\nfiltered activity list's length. ``next_page_token`` continues an\nunfinished newest-first walk exactly where this read stopped; it is absent\nwhen complete or the provider gave none.",
+        "properties": {
+          "activities": {
+            "items": {
+              "$ref": "#/components/schemas/BrokerActivity"
+            },
+            "title": "Activities",
+            "type": "array"
+          },
+          "history_complete": {
+            "title": "History Complete",
+            "type": "boolean"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "activities",
+          "history_complete"
+        ],
+        "title": "BrokerActivityEvidence",
+        "type": "object"
+      },
       "BrokerAsset": {
         "additionalProperties": false,
         "description": "A tradable (or listed) instrument descriptor.",
@@ -6438,7 +6562,7 @@
       },
       "BrokerPosition": {
         "additionalProperties": false,
-        "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).",
+        "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).\n\n``prior_close_price`` is the broker's price for the instrument at the\nprevious regular-session close -- the same close the account's\nprevious-close equity describes -- or ``None`` when the broker gives none.",
         "properties": {
           "asset_class": {
             "anyOf": [
@@ -6492,6 +6616,17 @@
           "observed_at_ms": {
             "title": "Observed At Ms",
             "type": "integer"
+          },
+          "prior_close_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Close Price"
           },
           "quantity": {
             "title": "Quantity",
@@ -14321,6 +14456,7 @@
         "type": "object"
       },
       "DeploymentFeeAttribution": {
+        "description": "Custody fee ownership, over a deployment's lifetime or one Activity period.\n\n``period`` and ``period_start_ms`` echo the account read's Activity\nperiod (the ET midnight of its first fee day); both are ``None`` on a\nlifetime read.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -14377,6 +14513,36 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
+          "period": {
+            "anyOf": [
+              {
+                "enum": [
+                  "today",
+                  "30d",
+                  "60d"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "period_start_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start Ms"
+          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/DeploymentFeeRow"
@@ -14399,7 +14565,7 @@
         "type": "object"
       },
       "DeploymentFeeRow": {
-        "description": "Server-owned fee totals; decimal USD is preserved on the wire.",
+        "description": "Server-owned fee totals; decimal USD is preserved on the wire.\n\n``label`` names who owns the fees: the bot's own name, or an outside\norder's symbol. ``order_id`` is the broker order an outside row belongs\nto, so two outside rows are never indistinguishable.",
         "properties": {
           "estimated_usd": {
             "title": "Estimated Usd",
@@ -14416,6 +14582,17 @@
           "observed_usd": {
             "title": "Observed Usd",
             "type": "string"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
           },
           "strategy_instance_id": {
             "anyOf": [
@@ -26650,7 +26827,7 @@
       },
       "MoneyParts": {
         "additionalProperties": false,
-        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.",
+        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.\n\nThey sum to 10000, or to 0 when the slice holds nothing (a flat bot\nthat overran its budget draws no part; its shortfall is reported).",
         "properties": {
           "free_bps": {
             "maximum": 10000.0,
@@ -26696,7 +26873,7 @@
       },
       "MoneySegment": {
         "additionalProperties": false,
-        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``\nand ``still_claimed_usd`` to a stopped bot that still holds money.",
+        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent\nbeyond its balance -- absent, never \"0.00\", when nothing is short;\n``released_usd`` and ``still_claimed_usd`` to a stopped bot that still\nholds money.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
         "properties": {
           "amount_usd": {
             "title": "Amount Usd",
@@ -26708,6 +26885,7 @@
               "stopped",
               "outside",
               "charges",
+              "settling",
               "new",
               "free"
             ],
@@ -26717,6 +26895,18 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "palette_index": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Palette Index"
           },
           "parts": {
             "anyOf": [
@@ -43696,6 +43886,108 @@
         "title": "TimingCellResponse",
         "type": "object"
       },
+      "TodayStatement": {
+        "additionalProperties": false,
+        "description": "Today's money for the bots and this app's orders, since the last close.\n\n``since_ms`` is the prior regular-session close the figures run from --\nthe same close the account's previous-close equity describes. Realized\ngains and the change in open gains span ``(since_ms, observed_at_ms]``;\nfees are those billed on today's ET date. ``net_usd`` is exactly\n``realized_usd - fees_usd + open_change_usd`` in cents. Orders placed\noutside the bots are not included, so this is never the account's day\nP&L. An amount that cannot be known is ``None`` with ``detail`` saying\nwhy -- never zero -- and ``state`` is ``ready`` only when all four are\nknown.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "fees_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Usd"
+          },
+          "net_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Usd"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "open_change_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Change Usd"
+          },
+          "realized_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Usd"
+          },
+          "since_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Ms"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "since_ms",
+          "observed_at_ms",
+          "realized_usd",
+          "fees_usd",
+          "open_change_usd",
+          "net_usd"
+        ],
+        "title": "TodayStatement",
+        "type": "object"
+      },
       "ToleranceResponse": {
         "properties": {
           "atol": {
@@ -55279,6 +55571,97 @@
         ]
       }
     },
+    "/api/brokers/{broker}/activities/period": {
+      "get": {
+        "description": "One Activity period's orders and cash moves, newest first, in bounded reads.\n\nThe window opens at the period's own calendar anchor, the same one its\nfees use. A read that stops short says so and hands back the token that\nreads the next older stretch.",
+        "operationId": "get_activity_period_api_brokers__broker__activities_period_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "enum": [
+                "today",
+                "30d",
+                "60d"
+              ],
+              "title": "Period",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPeriodRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Activity Period",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
     "/api/brokers/{broker}/assets": {
       "get": {
         "operationId": "list_assets_api_brokers__broker__assets_get",
@@ -61721,6 +62104,72 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/activities/period": {
+      "get": {
+        "description": "Fleet-routed GET /activities/period (account_read).",
+        "operationId": "fleet_activity_period_read_api_brokers__broker__clerks__clerk_id__activities_period_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Activity Period Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/attention": {
       "get": {
         "description": "Fleet-routed GET /attention (custody_read).",
@@ -64648,6 +65097,72 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/today-statement": {
+      "get": {
+        "description": "Fleet-routed GET /today-statement (account_read).",
+        "operationId": "fleet_today_statement_read_api_brokers__broker__clerks__clerk_id__today_statement_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Today Statement Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clock": {
       "get": {
         "operationId": "get_clock_evidence_api_brokers__broker__clock_get",
@@ -64708,7 +65223,7 @@
     },
     "/api/brokers/{broker}/fees/attribution": {
       "get": {
-        "description": "Canonical lifetime fee evidence, including stopped deployment ownership.",
+        "description": "Canonical fee evidence, including stopped deployment ownership.\n\nLifetime by default; ``period`` reads one account Activity period's fees.",
         "operationId": "get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get",
         "parameters": [
           {
@@ -64736,6 +65251,27 @@
                 }
               ],
               "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "today",
+                    "30d",
+                    "60d"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period"
             }
           },
           {
@@ -65715,6 +66251,65 @@
           }
         },
         "summary": "List Positions",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/today-statement": {
+      "get": {
+        "description": "Today's realized gains, fees and change in open gains since the last close.",
+        "operationId": "get_today_statement_api_brokers__broker__today_statement_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodayStatement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Today Statement",
         "tags": [
           "brokers-v2"
         ]

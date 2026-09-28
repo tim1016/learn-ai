@@ -10,6 +10,9 @@ import { CustodyDivergenceComponent } from './custody-divergence.component';
  * Alpaca custody-resolution card. Slice 1 (read-only) renders the
  * backend-authored Clerk↔broker diagnosis. This card is deliberately read-only:
  * all custody mutations are exact actions owned by the SQLite projection.
+ *
+ * Where those actions live differs by host page, so an out-of-sync card
+ * projects its host's pointer to them (`<ng-content>`) rather than naming one.
  */
 @Component({
   selector: 'app-alpaca-custody-resolution',

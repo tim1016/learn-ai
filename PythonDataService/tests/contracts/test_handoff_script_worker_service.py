@@ -396,16 +396,16 @@ def test_the_fleet_path_derives_the_coordinators_published_port() -> None:
 
 def test_the_operator_page_url_is_clerk_scoped_on_fleet_postures() -> None:
     """On a fleet posture the page the ceremony opens must be the clerk's
-    own Configuration page. The compatibility /brokers/alpaca/configuration
-    URL renders BrokerLaneUnavailableComponent there — the operator could
+    own Settings page. The compatibility /brokers/alpaca/settings URL
+    renders BrokerLaneUnavailableComponent there — the operator could
     never stage or Apply from it. Pinned against the Angular routes the
-    URL must resolve through: the clerk route prefix plus its
-    configuration child (app.routes.ts)."""
+    URL must resolve through: the clerk route prefix plus its settings
+    child (app.routes.ts), which the Configuration tab became (#2566)."""
     script = _script()
-    assert "brokers/alpaca/clerks/$fleet_clerk_id/configuration" in script
-    assert "brokers/alpaca/clerks/\"$fleet_clerk_id\"/configuration" not in script
+    assert "brokers/alpaca/clerks/$fleet_clerk_id/settings" in script
+    assert "brokers/alpaca/clerks/\"$fleet_clerk_id\"/settings" not in script
     routes = (
         REPOSITORY_ROOT / "Frontend" / "src" / "app" / "app.routes.ts"
     ).read_text(encoding="utf-8")
     assert "brokers/alpaca/clerks/:clerkId" in routes
-    assert "path: 'configuration'" in routes
+    assert "path: 'settings'" in routes

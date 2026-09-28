@@ -204,6 +204,46 @@ async def test_activity_evidence_resumes_an_unfinished_walk_where_it_stopped(
     assert rest.history_complete and rest.next_page_token is None
     assert [row.activity_id for row in rest.activities] == ["oldest"]
     assert client.page_tokens == [None, "first-99", "second-99", "third-99"]
+
+
+async def test_windowed_activity_evidence_is_complete_once_it_reaches_the_window_start(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """A period read stops at its own start instead of walking older history (#2565)."""
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    in_window = [{**trade, "id": f"in-{i}"} for i in range(60)]
+    older = [{**non_trade, "id": f"older-{i}"} for i in range(40)]
+    client = _ActivitiesClient({None: in_window + older, "older-39": [{**trade, "id": "must-not-fetch"}]})
+
+    evidence = await AlpacaBroker(client=client).read_activity_evidence(
+        after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"),
+    )
+
+    assert evidence.history_complete and evidence.next_page_token is None
+    assert [row.activity_id for row in evidence.activities] == [f"in-{i}" for i in range(60)]
+    assert client.page_tokens == [None]
+
+
+async def test_windowed_activity_evidence_says_when_the_window_holds_more(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """Regression (#2565 review): a busy period was cut at 300 rows with no marker."""
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    pages = {None: [{**trade, "id": f"first-{i}"} for i in range(100)],
+        "first-99": [{**trade, "id": f"second-{i}"} for i in range(100)],
+        "second-99": [{**trade, "id": f"third-{i}"} for i in range(100)],
+        "third-99": [{**trade, "id": "oldest-in-window"}, {**non_trade, "id": "before-window"}]}
+    client = _ActivitiesClient(pages)
+    broker = AlpacaBroker(client=client)
+    window_start = rfc3339_to_ms("2026-07-24T00:00:00Z")
+
+    head = await broker.read_activity_evidence(after_ms=window_start)
+    assert not head.history_complete and head.next_page_token == "third-99"
+    assert len(head.activities) == 300
+
+    rest = await broker.read_activity_evidence(page_token=head.next_page_token, after_ms=window_start)
+    assert rest.history_complete
+    assert [row.activity_id for row in rest.activities] == ["oldest-in-window"]
 async def test_transfer_cursor_reads_every_page_until_the_window_is_complete(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:

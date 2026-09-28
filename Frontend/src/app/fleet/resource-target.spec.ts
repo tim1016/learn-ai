@@ -6,6 +6,7 @@ import {
   commandContextOf,
   laneKey,
   resourceTarget,
+  sameResourceTarget,
   withCommand,
   withEntity,
 } from './resource-target';
@@ -56,5 +57,24 @@ describe('resource targets', () => {
     expect(() => accountUrl(lane, '/bots')).toThrow(/account ID/i);
     expect(() => resourceTarget('alpaca', 'clerk-1', { accountId: '' })).toThrow(/account ID/i);
     expect(laneUrl(lane, '/account')).toBe('/api/brokers/alpaca/clerks/clerk-1/account');
+  });
+
+  it('treats an identical address re-derived as a new object as the same target', () => {
+    const frozen = { accountId: 'PA1', bindingGeneration: 3, routingEpoch: 4 };
+    const rendered = resourceTarget('alpaca', 'clerk-1', frozen);
+
+    expect(sameResourceTarget(rendered, resourceTarget('alpaca', 'clerk-1', frozen))).toBe(true);
+    expect(sameResourceTarget(null, undefined)).toBe(false);
+    expect(sameResourceTarget(null, null)).toBe(true);
+    for (const changed of [
+      resourceTarget('alpaca', 'clerk-2', frozen),
+      resourceTarget('alpaca', 'clerk-1', { ...frozen, accountId: 'PA2' }),
+      resourceTarget('alpaca', 'clerk-1', { ...frozen, bindingGeneration: 4 }),
+      resourceTarget('alpaca', 'clerk-1', { ...frozen, routingEpoch: 5 }),
+      withEntity(rendered, 'bot-1'),
+      withCommand(rendered, 'deploy', 'key-1'),
+    ]) {
+      expect(sameResourceTarget(rendered, changed)).toBe(false);
+    }
   });
 });

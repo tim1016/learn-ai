@@ -69,6 +69,14 @@
   opacity: 0.65;
 }
 
+/* Everything below the name: the link's description, laid out in the card's
+   own column rhythm. */
+.lane-card__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 .lane-card__money {
   display: flex;
   flex-wrap: wrap;
@@ -85,6 +93,12 @@
 
 .lane-card__figure--end {
   text-align: right;
+}
+
+/* An overdrawn account: its own full-width line, stated in words. */
+.lane-card__figure--shortfall {
+  flex-basis: 100%;
+  color: var(--text-secondary);
 }
 
 .lane-card__figure strong {

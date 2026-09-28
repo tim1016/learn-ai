@@ -14,6 +14,8 @@ import { firstValueFrom } from 'rxjs';
 import { PolledReadScheduler } from './polled-read-scheduler';
 
 import type {
+  ActivityPeriod,
+  ActivityPeriodRead,
   AlpacaLiveVerdict,
   BrokerAccountSnapshot,
   BrokerActivity,
@@ -36,6 +38,7 @@ import type {
   SqliteRecoveryActionCheck,
   SqliteRecoveryResult,
   SqliteTimelinePage,
+  TodayStatement,
 } from '../api/alpaca.types';
 import type { components } from '../api/broker.types';
 import type {
@@ -56,6 +59,32 @@ export interface SqliteTimelineQuery {
   readonly sequence?: number;
   readonly cursor?: string;
   readonly pageSize?: number;
+}
+
+/**
+ * The Clerk timeline a page's URL addresses (`?timelineBot=…&timelineOrderRef=…`),
+ * or `null` when it names none. A bot's recovery link opens an account's order
+ * records at exactly this query; every page that hosts those records reads it
+ * back through this one parser.
+ */
+export function sqliteTimelineQueryFromParams(
+  params: { get(name: string): string | null },
+): SqliteTimelineQuery | null {
+  const rawSequence = params.get('timelineSequence');
+  const sequence = rawSequence === null ? undefined : Number(rawSequence);
+  const query: SqliteTimelineQuery = {
+    strategyInstanceId: params.get('timelineBot') ?? undefined,
+    orderRef: params.get('timelineOrderRef') ?? undefined,
+    effectOperationId: params.get('timelineOperationRef') ?? undefined,
+    uncertaintyId: params.get('timelineUncertaintyId') ?? undefined,
+    executionId: params.get('timelineExecutionId') ?? undefined,
+    transitionKind: params.get('timelineTransitionKind') ?? undefined,
+    sequence:
+      typeof sequence === 'number' && Number.isInteger(sequence) && sequence > 0
+        ? sequence
+        : undefined,
+  };
+  return Object.values(query).some((value) => value !== undefined) ? query : null;
 }
 
 /**
@@ -172,10 +201,49 @@ export class BrokersService {
     );
   }
 
-  getFeeAttribution(target: ResourceTarget, strategyInstanceId: string | null = null): Promise<components['schemas']['DeploymentFeeAttribution']> {
+  /**
+   * One Activity period's orders and cash moves, newest first, as far as one
+   * bounded read reached. The data plane opens the window at the period's own
+   * calendar anchor; `pageToken` continues a read that stopped short.
+   */
+  getActivityPeriod(
+    target: ResourceTarget,
+    period: ActivityPeriod,
+    pageToken: string | null = null,
+  ): Promise<ActivityPeriodRead> {
+    let params = new HttpParams().set('period', period);
+    if (pageToken !== null) {
+      params = params.set('page_token', pageToken);
+    }
+    return firstValueFrom(
+      this.http.get<ActivityPeriodRead>(operationUrl('activity_period_read', target), { params }),
+    );
+  }
+
+  /** Today's statement since the last close; every amount is authored by the data plane. */
+  getTodayStatement(target: ResourceTarget): Promise<TodayStatement> {
+    return firstValueFrom(this.http.get<TodayStatement>(operationUrl('today_statement_read', target)));
+  }
+
+  /**
+   * Custody fee ownership: a deployment's lifetime, the account's lifetime,
+   * or — with `period` — the account's fees for one Activity period.
+   */
+  getFeeAttribution(
+    target: ResourceTarget,
+    strategyInstanceId: string | null = null,
+    period: ActivityPeriod | null = null,
+  ): Promise<components['schemas']['DeploymentFeeAttribution']> {
+    let params = new HttpParams();
+    if (strategyInstanceId !== null) {
+      params = params.set('strategy_instance_id', strategyInstanceId);
+    }
+    if (period !== null) {
+      params = params.set('period', period);
+    }
     return firstValueFrom(this.http.get<components['schemas']['DeploymentFeeAttribution']>(
       operationUrl('fee_attribution_read', target),
-      { params: strategyInstanceId === null ? {} : { strategy_instance_id: strategyInstanceId } },
+      { params },
     ));
   }
 

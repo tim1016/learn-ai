@@ -3,19 +3,27 @@
 The attention read (``GET /{broker}/attention``) and the counts this lane
 reports on every heartbeat come from here, so the Accounts page's attention
 count is always the number of items the lane's bell lists (PRD #2560), and
-its bot counts are the lane's own facts rather than a browser tally. Stopped
-bots still holding money are the account-money read's stopped slices, which
-the card already reads, so the beat never takes the custody write fence.
+its bot counts are the lane's own facts rather than a browser tally. The
+heartbeat reaches ``lane_counts`` through the probe the composition root
+installs (``FleetLaneBoot.lane_counts_probe``).
 
 Every attention item is one line on the account's Home: a backend-authored
 headline and exactly one fix, a link to where that fix lives. Only what the
 owner must act on is listed -- an old bot that is flat and fully released is
 Finished, not attention (hurdles H13, H34).
+
+Locks a beat takes: the bot counts read the runner's task table only -- no
+lock, no file. The attention count is the attention read: one SQLite read
+transaction on its own connection for the account projection, plus short
+holds of the repository's write lock for each roster query and for each
+registration that can still need attention. A retired registration with no
+live custody is skipped (it is the catalog's inert row, #1911), so the walk
+does not grow with retired history. No lock is held across the event loop
+or around a broker call; it all runs off the loop.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
@@ -221,7 +229,11 @@ class LaneCounts:
 
 
 async def lane_counts() -> LaneCounts:
-    """Count this lane's bots and attention items; each count fails alone."""
+    """Count this lane's bots and attention items; each count fails alone.
+
+    A count that cannot be taken -- no bot runner, no clerk runtime, or a
+    failed read -- is ``None``: unknown, never zero.
+    """
     bots = await _counted("bots", _bot_counts)
     running, dry_run = (None, None) if bots is None else bots
     return LaneCounts(
@@ -247,13 +259,14 @@ async def _bot_counts() -> tuple[int, int] | None:
     registry = get_bot_task_registry()
     if registry is None:
         return None
-    statuses = await asyncio.to_thread(registry.list_bots, "alpaca")
-    running = [status for status in statuses if status.running]
-    return (
-        sum(1 for status in running if status.mode == "trade"),
-        sum(1 for status in running if status.mode == "dry_run"),
-    )
+    running = registry.running_mode_counts("alpaca")
+    return running["trade"], running["dry_run"]
 
 
-async def _attention_count() -> int:
+async def _attention_count() -> int | None:
+    runtime = get_active_clerk_runtime()
+    if runtime is None or runtime.sqlite_repository is None:
+        # No clerk is serving an account: the bell has nothing to list, but
+        # that is "not counted", never "none need attention".
+        return None
     return len((await lane_attention_read()).items)

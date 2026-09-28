@@ -1,6 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
+  Injector,
+  afterNextRender,
   computed,
   input,
   inject,
@@ -40,6 +43,7 @@ import { ConfigurationRefusalComponent } from './configuration-refusal.component
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
 import { ConfigurationSwitchGuideComponent } from './configuration-switch-guide.component';
 import { LiveGraduationComponent } from './live-graduation.component';
+import { SettingsExitDefaultsComponent, type ExitDefaultsView } from './settings-exit-defaults.component';
 
 /** The `(profile, revision)` pair one side of the selection names, if it names one. */
 interface RevisionRef {
@@ -50,6 +54,20 @@ interface RevisionRef {
 interface ClerkRevisionRef extends RevisionRef {
   readonly clerkId: string;
 }
+
+/** The effective revision as this page read it — the one read both the lane's
+ * mode and the defaults for new bots come from. `none`: no profile is in use. */
+type EffectiveRead =
+  | { readonly kind: 'reading' | 'failed' | 'none' }
+  | { readonly kind: 'read'; readonly revision: BrokerProfileRevision };
+
+/**
+ * Whether this lane's account is Live. `unknown` is a failed read, said out
+ * loud; while `reading` or `unknown`, neither the Live-only account stage nor
+ * the Paper-only handoff script is offered, so a failed read never quietly
+ * shows the other lane's content.
+ */
+type LaneMode = 'live' | 'not_live' | 'unknown' | 'reading';
 
 function reviewRef(params: { get(name: string): string | null }): RevisionRef | null {
   const profileId = params.get('profileId');
@@ -81,9 +99,17 @@ function sameClerkRevisionRef(
 }
 
 /**
- * The saved-configuration surface for the Alpaca broker path (ADR 0060).
+ * The account's Settings tab (PRD #2560): the daily loss limit, the one-time
+ * switch to budgets, the account stage (Live lane only), the defaults for new
+ * bots, and — folded under Broker connection — the saved-configuration surface
+ * for the Alpaca broker path (ADR 0060). Lane-scoped and reachable without a
+ * confirmed account (FR-092); the sections that act on an account appear once
+ * the effective selection names one.
  *
- * It owns every read and every write on this page, so one place holds the
+ * The loss-limit, budget and stage sections read and write for themselves;
+ * the defaults for new bots are the effective revision this page already
+ * reads. This page owns every read and every write of the broker connection,
+ * so one place holds the
  * `selection_generation` and the `expected_revision` that fence a stale write.
  * Two rules follow from that and are the reason the mutations are not spread
  * across the child components:
@@ -101,7 +127,7 @@ function sameClerkRevisionRef(
  * custody activation receipt is durable; it never deploys a strategy.
  */
 @Component({
-  selector: 'app-alpaca-configuration-page',
+  selector: 'app-alpaca-settings-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ConfigurationRiskLimitsComponent,
@@ -115,14 +141,16 @@ function sameClerkRevisionRef(
     ConfigurationStatusPanelComponent,
     ConfigurationSwitchGuideComponent,
     LiveGraduationComponent,
+    SettingsExitDefaultsComponent,
   ],
-  templateUrl: './alpaca-configuration-page.component.html',
-  styleUrl: './alpaca-configuration-page.component.scss',
+  templateUrl: './alpaca-settings-page.component.html',
+  styleUrl: './alpaca-settings-page.component.scss',
 })
-export class AlpacaConfigurationPageComponent {
+export class AlpacaSettingsPageComponent {
   private readonly service = inject(BrokerConfigurationService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly route = inject(ActivatedRoute);
+  private readonly injector = inject(Injector);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
@@ -130,10 +158,21 @@ export class AlpacaConfigurationPageComponent {
   readonly clerkId = input.required<string>();
   private readonly requestedReview = computed(() => reviewRef(this.queryParams()));
   private readonly createForm = viewChild(ConfigurationProfileCreateComponent);
+  private readonly profileArea = viewChild<ElementRef<HTMLElement>>('profileArea');
   private readonly selectionContext = computed(() => ({
     clerkId: this.clerkId(),
     request: this.requestedReview(),
   }));
+
+  /** Broker connection is folded (PRD #2560) — except when the Alpaca desk
+   * sent the owner here to review one exact revision, which lives inside it. */
+  protected readonly connectionOpen = linkedSignal<
+    { readonly clerkId: string; readonly request: RevisionRef | null },
+    boolean
+  >({
+    source: this.selectionContext,
+    computation: ({ request }) => request !== null,
+  });
 
   protected readonly includeArchived = linkedSignal<string, boolean>({
     source: () => this.clerkId(),
@@ -286,6 +325,54 @@ export class AlpacaConfigurationPageComponent {
     this.selection.hasValue() ? this.selection.value() : null,
   );
 
+  /** The account the worker actually bound — the one the account sections act
+   * on, and the one place Settings names the account number (ADR 0064 D5). */
+  protected readonly effectiveAccountId = computed(
+    () => this.currentSelection()?.effective_account_id ?? null,
+  );
+
+  private readonly effectiveRead = computed((): EffectiveRead => {
+    const selection = this.currentSelection();
+    if (selection === null) return { kind: this.selection.error() ? 'failed' : 'reading' };
+    if (selection.effective_profile_id === null) return { kind: 'none' };
+    if (this.effectiveRevision.error()) return { kind: 'failed' };
+    if (!this.effectiveRevision.hasValue()) return { kind: 'reading' };
+    return { kind: 'read', revision: this.effectiveRevision.value() };
+  });
+
+  /** The account stage (Shadow → Review → Live) belongs to a Live account only;
+   * the Paper → Live handoff script to one that is not Live. */
+  protected readonly laneMode = computed((): LaneMode => {
+    const read = this.effectiveRead();
+    switch (read.kind) {
+      case 'read': return read.revision.endpoint_mode === 'live' ? 'live' : 'not_live';
+      case 'none': return 'not_live';
+      case 'failed': return 'unknown';
+      case 'reading': return 'reading';
+    }
+  });
+
+  /** The defaults Deploy starts a new bot's exit terms from: the effective
+   * revision's own `default_exit_terms`, the same values the Deploy read
+   * (`bots_deploy_read` → `default_exit_terms`) serves from the bound worker. */
+  protected readonly exitDefaults = computed<ExitDefaultsView>(() => {
+    const read = this.effectiveRead();
+    switch (read.kind) {
+      case 'failed': return { kind: 'unavailable' };
+      case 'reading': return { kind: 'loading' };
+      case 'none': return { kind: 'none' };
+    }
+    const revision = read.revision;
+    const profile = this.profiles.hasValue()
+      ? this.profiles.value().find((entry) => entry.profile_id === revision.profile_id)
+      : undefined;
+    return {
+      kind: 'ready',
+      terms: revision.default_exit_terms ?? null,
+      profileName: profile?.display_name ?? null,
+    };
+  });
+
   /**
    * The desk lifecycle and the adopted selection must both be read and agree
    * on the selection generation before any write runs: another writer may
@@ -369,6 +456,20 @@ export class AlpacaConfigurationPageComponent {
 
   protected openProfile(profileId: string): void {
     this.selectedProfileId.set(profileId === this.selectedProfileId() ? null : profileId);
+  }
+
+  /** Unfold Broker connection and move the keyboard into it. */
+  protected openConnection(): void {
+    this.connectionOpen.set(true);
+    afterNextRender({ write: () => this.profileArea()?.nativeElement.focus() }, { injector: this.injector });
+  }
+
+  /** The defaults are saved with the profile in use, so changing them opens
+   * that profile's editor: a new revision there, then Apply and a restart. */
+  protected editExitDefaults(): void {
+    const profileId = this.currentSelection()?.effective_profile_id ?? null;
+    if (profileId !== null) this.selectedProfileId.set(profileId);
+    this.openConnection();
   }
 
   protected reloadAll(): void {

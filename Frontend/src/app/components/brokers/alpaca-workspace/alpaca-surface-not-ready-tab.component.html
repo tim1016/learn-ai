@@ -26,8 +26,8 @@
           Home cannot open. No other account is shown in its place.
         }
         @case ('unbound') {
-          This lane has no confirmed account yet, so its Home has no account
-          to show. Confirm an account in this lane's configuration to open it.
+          This lane has no confirmed account binding yet, so its Home has no
+          account to show. Connect an account in this lane's Settings to open it.
         }
         @case ('capability') {
           This lane does not declare the
@@ -36,8 +36,8 @@
         }
       }
     </p>
-    @if (configurationRoute(); as configuration) {
-      <a class="surface-not-ready__primary" [routerLink]="configuration">Open lane configuration</a>
+    @if (settingsRoute(); as settings) {
+      <a class="surface-not-ready__primary" [routerLink]="settings">Open Settings</a>
     }
   }
 </main>

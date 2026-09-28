@@ -181,7 +181,7 @@ describe('AlpacaHomeComponent', () => {
     const entries = within(legend).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
     expect(entries).toEqual([
       'spy-ema-20260929-0931 $999.99 in shares $764.71 · in entry orders $0.00 · free $235.28',
-      'held by stopped bot spy-ema-20260925-1402 $670.43',
+      'held by stopped bot spy-ema-20260925-1402 $670.43 released $0.00 · still claimed $0.00',
       'account charges $0.01',
       'free to deploy $98,329.57',
     ]);

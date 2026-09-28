@@ -7,7 +7,7 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money
 from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
-from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
+from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
@@ -67,8 +67,7 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
         key = fill.native_order_id
         if key is None:
             raise BudgetUnavailable(
-                "An external fill has no order identity. "
-                "Reconcile account activities before assigning or spending a budget."
+                "An external fill has no order identity. Reconcile account activities."
             )
         quantities[key] = quantities.get(key, ZERO) + fill.quantity
         if fill.side is OrderSide.BUY and fill.observed_at_ms >= seen_before_ms:
@@ -77,12 +76,12 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
         if order.broker_state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES or order.filled_quantity is None:
             raise BudgetUnavailable(
                 "An external order still has a working or unknown cash obligation. "
-                "Resolve it at Alpaca, then choose Reconcile now before assigning or spending a budget."
+                "Resolve it at Alpaca, then choose Reconcile now."
             )
         if quantities.get(order.broker_order_id, ZERO) != normalize_money(order.filled_quantity):
             raise BudgetUnavailable(
                 "The external order's complete execution population is unavailable. "
-                "Reconcile account activities before assigning or spending a budget."
+                "Reconcile account activities."
             )
     return unseen
 
@@ -118,13 +117,22 @@ def project_account_money(
 ) -> AccountMoney:
     """Where the account's money is, from the same fenced read as its budget.
 
-    The subjects the budget does not cover -- stopped pre-budget bots and
-    manual (operator) positions -- are valued by the same canonical FIFO over
-    the same effective fills. Formula/reference/validation: clerk.account_money.
+    The subjects the budget does not cover -- stopped pre-budget bots, manual
+    (operator) positions and external (non-Clerk) fills -- are valued by the
+    same canonical FIFO: the Clerk's own effective fills, and the external
+    population ``_external_cash_claim`` already requires to be complete. Sale
+    proceeds the cash observation has not seen are counted by the same
+    ``seen_before_ms`` boundary as unseen purchases. A short position has no
+    place on a long-only bar and is named, never dropped.
+    Formula/reference/validation: clerk.account_money.
     """
     projected = _project(conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees,
                          modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
     budgeted = {item.strategy_instance_id for item in projected.budget.deployments}
+    order = tuple(row[0] for row in conn.execute(
+        "SELECT strategy_instance_id FROM strategy_instances ORDER BY created_at_ms, strategy_instance_id"
+    ))
+    unvalued: list[str] = []
     with money_context():
         pending: dict[str, Decimal] = {}
         for claim in projected.claims:
@@ -133,16 +141,69 @@ def project_account_money(
         subjects = {fill.sid for fill in projected.records} | {bot_subject_id(sid) for sid in pending}
         holdings = []
         for subject_id in sorted(subjects - {bot_subject_id(sid) for sid in budgeted}):
-            fifo = compute_fifo_pnl([fill for fill in projected.records if fill.sid == subject_id])
-            if any(lot.side != OrderSide.BUY for lot in fifo.open_lots):
-                raise BudgetUnavailable("A short position outside the running budgets has no place on the money bar. Flatten it first.")
             sid = subject_id.removeprefix(BOT_SUBJECT_PREFIX) if subject_id.startswith(BOT_SUBJECT_PREFIX) else None
+            fifo = compute_fifo_pnl([fill for fill in projected.records if fill.sid == subject_id])
+            unvalued += _shorts(fifo.open_lots, holder="manual trades" if sid is None else f"stopped bot {sid}")
             holdings.append(Holding(
                 subject_id=subject_id, strategy_instance_id=sid,
-                position_cost=sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO),
+                position_cost=_long_cost(fifo.open_lots),
                 pending_orders=pending.get(sid, ZERO) if sid is not None else ZERO,
             ))
-    return account_money(projected.budget, unseen_fills=projected.unseen_fills, holdings=holdings)
+        external, unpriced = _external_holdings(conn, fees)
+        holdings += external
+        unvalued += unpriced
+        # Net of a reported fee, exactly as an unseen purchase is its cost
+        # plus its reported fee; an unreported fee stays an account charge.
+        unseen_sales = sum((
+            normalize_money(fill.quantity) * normalize_money(fill.fill_price) - (ZERO if fill.fee is None else normalize_money(fill.fee))
+            for fill in projected.records
+            if fill.side is OrderSide.SELL and fill.recorded_at_ms is not None and fill.recorded_at_ms >= seen_before_ms
+        ), ZERO) + sum((
+            fill.quantity * fill.price for fill in fees.external_fills
+            if fill.side is OrderSide.SELL and fill.observed_at_ms >= seen_before_ms
+        ), ZERO)
+    return account_money(
+        projected.budget, unseen_fills=projected.unseen_fills, unseen_sales=unseen_sales,
+        holdings=holdings, registration_order=order, unvalued=unvalued,
+    )
+
+
+def _long_cost(lots: Iterable[OpenLot]) -> Decimal:
+    return sum((lot.exact_qty * lot.exact_cost for lot in lots if lot.side is OrderSide.BUY), ZERO)
+
+
+def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
+    return [f"{lot.exact_qty:f} {lot.symbol} sold short by {holder}" for lot in lots if lot.side is not OrderSide.BUY]
+
+
+def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
+    """Shares bought outside every bot, at FIFO cost, one holding per symbol.
+
+    The execution population is the one ``_external_cash_claim`` already
+    proved complete; each fill's symbol is its external order's. A fill whose
+    order or execution time is unknown cannot be lotted, so it is named.
+    """
+    symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
+    records: list[FillRecord] = []
+    unpriced: list[str] = []
+    for fill in fees.external_fills:
+        symbol = symbols.get(fill.native_order_id) if fill.native_order_id is not None else None
+        if symbol is None or fill.occurred_at_ms is None:
+            unpriced.append(f"{fill.quantity:f} shares from outside order {fill.native_order_id or fill.fill_id}")
+            continue
+        records.append(FillRecord(
+            account_id="", sid=f"external:{symbol}", intent_id=fill.fill_id, order_ref=fill.native_order_id or fill.fill_id,
+            event_key=fill.fill_id, symbol=symbol, side=fill.side, quantity=float(fill.quantity),
+            fill_price=float(fill.price), filled_at_ms=fill.occurred_at_ms, fee=None,
+            native_order_id=fill.native_order_id, recorded_at_ms=fill.observed_at_ms,
+        ))
+    fifo = compute_fifo_pnl(sorted(records, key=lambda record: (record.filled_at_ms, record.event_key)))
+    held: dict[str, Decimal] = {}
+    for lot in fifo.open_lots:
+        if lot.side is OrderSide.BUY:
+            held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_qty * lot.exact_cost
+    unpriced += _shorts(fifo.open_lots, holder="outside orders")
+    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], unpriced
 
 
 def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
@@ -245,7 +306,7 @@ def _project(
         "WHERE r.state='ACTIVE' AND b.run_id IS NULL LIMIT 1"
     ).fetchone()
     if legacy is not None:
-        raise BudgetUnavailable("Stop the earlier deployment before assigning budgets: " + legacy[0])
+        raise BudgetUnavailable("An earlier deployment without a budget is still running. Stop it first: " + legacy[0])
     # Manual custody remains independent. Until its order outcome is known,
     # refusing a new budget is safer than inventing its missing cash claim.
     manual = conn.execute(
@@ -253,7 +314,7 @@ def _project(
         "AND state NOT IN ('succeeded','failed','rejected','cancelled') LIMIT 1"
     ).fetchone()
     if manual:
-        raise BudgetUnavailable("Resolve the working manual order before assigning or spending a budget.")
+        raise BudgetUnavailable("A manual order is still working, so its cash is not yet known. Resolve it first.")
     unpriced_legacy = conn.execute(
         "SELECT 1 FROM orders o LEFT JOIN envelope_reservations r ON r.effect_operation_id=o.effect_operation_id "
         "WHERE o.role='ENTRY' AND r.effect_operation_id IS NULL AND "

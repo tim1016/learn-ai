@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 BOT_SUBJECT_PREFIX = "bot:"
 MANUAL_OPERATOR_SUBJECT_PREFIX = "manual-operator:"
+#: Fee attribution's owner for an order placed outside the Clerk: never a
+#: custody subject row, only the account-unattributed owner of its fees.
+OUTSIDE_ORDER_SUBJECT_PREFIX = "external:"
 
 
 def bot_subject_id(strategy_instance_id: str) -> str:
@@ -18,6 +21,13 @@ def bot_subject_id(strategy_instance_id: str) -> str:
     if not strategy_instance_id:
         raise ValueError("bot custody subject requires strategy_instance_id")
     return f"{BOT_SUBJECT_PREFIX}{strategy_instance_id}"
+
+
+def outside_order_subject_id(broker_order_id: str) -> str:
+    """Return the fee-attribution owner of one order placed outside the Clerk."""
+    if not broker_order_id:
+        raise ValueError("an outside order subject requires broker_order_id")
+    return f"{OUTSIDE_ORDER_SUBJECT_PREFIX}{broker_order_id}"
 
 
 def manual_operator_subject_id(operator_id: str) -> str:
