@@ -809,6 +809,29 @@ class BotTaskRegistry:
                     },
                     exc_info=True,
                 )
+            if cleanup_proven and task is not None and not task.done():
+                # The Clerk recorded STOP and released the budget, so the task
+                # this activation started must not keep supervising a stopped
+                # run. Compensation is the normal Stop past its durable commit;
+                # without that proof the task keeps holding its active run.
+                try:
+                    await self._stop_locked(
+                        binding.broker,
+                        binding.strategy_instance_id,
+                        updated_by=_UPDATED_BY,
+                        reason="activation_failed_after_registration",
+                        clerk_stop_already_committed=True,
+                    )
+                except Exception:
+                    logger.error(
+                        "A failed activation's task could not be stopped",
+                        extra={
+                            "action": "activation_failed_task_stop_failed",
+                            "strategy_instance_id": binding.strategy_instance_id,
+                            "run_id": binding.run_id,
+                        },
+                        exc_info=True,
+                    )
             # A resolved failure is reported as known only for a genuine
             # Exception with cleanup proven. asyncio.CancelledError and other
             # BaseException-only paths are not Exception instances, so they
