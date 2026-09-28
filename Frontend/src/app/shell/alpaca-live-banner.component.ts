@@ -32,13 +32,13 @@ import { CurrentUrlService } from './current-url.service';
 const ASSUME_REAL_MONEY = 'Assume real money until a read succeeds.';
 
 /** Which of the four treatments a badge renders in. */
-type BadgeTone = 'is-paper' | 'is-live-unarmed' | 'is-live-armed' | 'is-undetermined';
+type BadgeTone = 'is-paper' | 'is-live' | 'is-shadow' | 'is-undetermined';
 
 /**
  * Everything known about one lane's badge before its extra facts (shadow
- * authority, armed count, loss hold, refusal code) are folded into the
+ * authority, loss hold and refusal code) are folded into the
  * accessible name and tooltip by `finalizeBadge`. Kept separate from
- * `LaneBadge` so those four facts have exactly one place they turn into text
+ * `LaneBadge` so those facts have exactly one place they turn into text
  * — never a second, inline-only rendering that could say something the
  * accessible name doesn't.
  */
@@ -49,7 +49,6 @@ interface LaneBadgeFacts {
   readonly ariaLabel: string;
   readonly detail: string;
   readonly shadow: boolean;
-  readonly armedCount: number | null;
   readonly lossHold: boolean;
   readonly refusalCode: string | null;
 }
@@ -62,7 +61,7 @@ interface LaneBadgeFacts {
  */
 interface LaneBadge {
   readonly tone: BadgeTone;
-  /** The compact mode word shown in the pill: "Live", "Paper", or an
+  /** The compact mode word shown in the pill: "Live", "Paper", "Shadow", or an
    * undetermined-state sentence (which is already the loud, descriptive text
    * WCAG 1.4.1 requires — never a generic "Undetermined" label). */
   readonly mode: string;
@@ -83,7 +82,7 @@ interface LaneBadge {
  * though the pill itself now shows only the mode word.
  *
  * The server verdict remains the only truth source. Live mode keeps the
- * authority mode and armed count in the accessible name and tooltip even in
+ * authority mode and deployment readiness in the accessible name and tooltip even in
  * the dense global header — but not the account number, which names the
  * account without guarding anything here (ADR 0064; #2188).
  *
@@ -132,7 +131,7 @@ interface LaneBadge {
  * not a raw lane count, so it fires exactly on a genuine collision and never
  * earlier. Both name and disambiguator are operator prose, not backend
  * identifiers, so neither goes through `receiptLabel`. The shadow-authority
- * flag, armed count, loss hold, and refusal code that used to sit beside the
+ * flag, loss hold and refusal code that used to sit beside the
  * mode word live in the same two places now — never dropped, just no longer
  * always on screen. Siblings come from injecting `FleetDirectoryService`
  * directly (`lanesOf(lane.broker)`), not a prop the caller must remember to
@@ -160,8 +159,8 @@ interface LaneBadge {
       transition: box-shadow 0.12s ease, border-color 0.12s ease;
     }
     .alpaca-banner.is-paper { color: #b9edff; border-color: #45b9e1; }
-    .alpaca-banner.is-live-unarmed { color: #ffd0cf; border-color: #f06b68; font-weight: 650; }
-    .alpaca-banner.is-live-armed { color: #fff; border-color: #ff8b88; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
+    .alpaca-banner.is-live { color: #fff; border-color: #ff8b88; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
+    .alpaca-banner.is-shadow { color: #d9caff; border-color: #a78bfa; font-weight: 650; }
     .alpaca-banner.is-undetermined { color: #fff; border-color: #ffb020; background: rgba(122, 61, 0, 0.85); font-weight: 750; }
     .alpaca-banner.is-active {
       border-width: 2px;
@@ -302,15 +301,14 @@ export class AlpacaLiveBannerComponent {
   });
 }
 
-/** Folds `shadow` / `armedCount` / `lossHold` / `refusalCode` into the
+/** Folds `shadow` / `lossHold` / `refusalCode` into the
  * accessible name and the tooltip and drops them from the rendered type —
- * the one place those four facts turn into text, so trimming the pill's
+ * the one place those facts turn into text, so trimming the pill's
  * visible content down to the mode word can never mean losing them; they
  * move to the hover/screen-reader surface instead. */
 function finalizeBadge(raw: LaneBadgeFacts): LaneBadge {
   const parts: string[] = [];
   if (raw.shadow) parts.push('Shadow authority');
-  if (raw.armedCount !== null) parts.push(`${raw.armedCount} armed`);
   if (raw.lossHold) parts.push('loss hold');
   if (raw.refusalCode) parts.push(formatReceiptLabel(raw.refusalCode));
 
@@ -342,8 +340,8 @@ function modeWordFor(state: LaneVerdictState): string {
   if (state.verdict !== null) {
     switch (state.verdict.final_verdict) {
       case 'paper': return 'Paper';
-      case 'live-unarmed':
-      case 'live-armed': return 'Live';
+      case 'live': return 'Live';
+      case 'shadow': return 'Shadow';
       case 'unknown': return 'Mode unknown — assume real money';
     }
   }
@@ -376,9 +374,8 @@ function verdictBadge({
     ariaLabel: `${accessibleName}: ${v.headline}`,
     detail: v.detail,
     lossHold: v.loss_hold === 'held',
-    // Derived once, before the switch, on exactly the same server field
-    // `verdictModeChip` reads — so this badge and the lane's own mode chip
-    // can never disagree about the authority the operator is standing in.
+    // Retain known Shadow authority in the accessible detail even when a
+    // separate account-read failure makes the overall verdict unknown.
     shadow: v.clerk_authority === 'shadow',
   };
   switch (v.final_verdict) {
@@ -386,15 +383,13 @@ function verdictBadge({
       return {
         ...base,
         tone: 'is-paper',
-        armedCount: null,
         refusalCode: null,
       };
-    case 'live-unarmed':
-    case 'live-armed':
+    case 'live':
+    case 'shadow':
       return {
         ...base,
-        tone: v.final_verdict === 'live-armed' ? 'is-live-armed' : 'is-live-unarmed',
-        armedCount: v.armed_instance_count,
+        tone: v.final_verdict === 'shadow' ? 'is-shadow' : 'is-live',
         refusalCode: null,
       };
     case 'unknown':
@@ -456,7 +451,6 @@ function undetermined({
     // authority is known to report. The `unknown` verdict case overrides this
     // with the authority its own read did carry.
     shadow: false,
-    armedCount: null,
     lossHold: false,
     refusalCode,
   };

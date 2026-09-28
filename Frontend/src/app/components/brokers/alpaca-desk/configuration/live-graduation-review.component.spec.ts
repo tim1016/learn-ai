@@ -17,10 +17,9 @@ const PLAN: LiveGraduationPlan = {
   backup_reference: 'accounts/alpaca/live/verified-backups/backup-1',
   daily_loss_fraction: 0.1,
   daily_loss_usd: 200,
-  arming_max_sessions: 1,
   extended_hours_entry_bps: 0,
   extended_hours_exit_bps: 0,
-  consequence: 'Graduation changes custody but deploys and arms nothing.',
+  consequence: 'Graduation changes custody but deploys nothing.',
 };
 
 async function renderReview(overrides: Partial<{ expired: boolean; busy: boolean; applying: boolean; acknowledged: boolean }> = {}) {

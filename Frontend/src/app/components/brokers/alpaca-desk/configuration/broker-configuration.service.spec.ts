@@ -281,8 +281,6 @@ describe('BrokerConfigurationService', () => {
       live_envelope: {
         loss_fraction: 0.05,
         loss_usd: 5000,
-        shadow_sessions: 3,
-        arming_max_sessions: 20,
         xh_entry_bps: 11,
         xh_exit_bps: 17.5,
       },
@@ -293,8 +291,10 @@ describe('BrokerConfigurationService', () => {
     expect(request.request.body).toMatchObject({
       expected_revision: 3,
       endpoint_mode: 'live',
-      live_envelope: { shadow_sessions: 3 },
+      live_envelope: { loss_fraction: 0.05, loss_usd: 5000, xh_entry_bps: 11, xh_exit_bps: 17.5 },
     });
+    expect(request.request.body.live_envelope).not.toHaveProperty('shadow_sessions');
+    expect(request.request.body.live_envelope).not.toHaveProperty('arming_max_sessions');
     request.flush({});
   });
 

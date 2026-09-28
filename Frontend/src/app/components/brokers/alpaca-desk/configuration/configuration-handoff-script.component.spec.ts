@@ -43,7 +43,7 @@ describe('ConfigurationHandoffScriptComponent', () => {
       + 'worker_service="${FLEET_WORKER_SERVICE:?set it}"\n'
       + 'echo "handoff $worker_service"\n',
     );
-    expect(screen.getByText(/never arms or launches a Live bot/)).toBeTruthy();
+    expect(screen.getByText(/never launches a Live bot/)).toBeTruthy();
   });
 
   it('splices in the full compose context, in the same order the desk authored it', async () => {

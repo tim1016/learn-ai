@@ -159,7 +159,7 @@ export class BrokerConfigurationService {
     );
   }
 
-  /** Metadata only. A rename never invalidates an arming (ADR 0060 Decision 4). */
+  /** Metadata only. A rename changes no deployment consent or economic terms. */
   updateProfile(
     target: ResourceTarget,
     profileId: string,

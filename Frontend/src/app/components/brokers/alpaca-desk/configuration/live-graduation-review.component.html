@@ -18,7 +18,6 @@
     <div><dt>Open orders</dt><dd>{{ plan().open_order_count }} · clear</dd></div>
     <div><dt>Stopped bots</dt><dd>{{ plan().stopped_bot_ids.length }}</dd></div>
     <div><dt>Daily loss limits</dt><dd>{{ plan().daily_loss_fraction | percent }} or {{ plan().daily_loss_usd | currency }}</dd></div>
-    <div><dt>Arming lapse</dt><dd>{{ plan().arming_max_sessions }} session</dd></div>
     <div><dt>Extended-hours allowance</dt><dd>{{ plan().extended_hours_entry_bps }} / {{ plan().extended_hours_exit_bps }} bps</dd></div>
     <div><dt>Verified backup</dt><dd>Complete</dd></div>
   </dl>
@@ -38,7 +37,7 @@
       (change)="acknowledged.set(!acknowledged())" />
     <span>
       I understand this irreversibly graduates account {{ plan().account_id }} to
-      real-money custody, while every strategy remains stopped and unarmed.
+      real-money custody. Strategies remain stopped until a fresh Deploy with a reviewed budget.
     </span>
   </label>
   <div class="graduation__actions">

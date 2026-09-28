@@ -8,7 +8,7 @@ import type { RevisionDraft } from './configuration-revision-draft';
 
 /**
  * The editable content of one revision: which credential slot it names, which
- * endpoint it talks to, and its risk values — the six envelope values for a
+ * endpoint it talks to, and its risk values — the four envelope values for a
  * live endpoint, the two extended-hours offsets for a paper one (#2440).
  *
  * The slot picker shows every slot on the code-owned allowlist, including the

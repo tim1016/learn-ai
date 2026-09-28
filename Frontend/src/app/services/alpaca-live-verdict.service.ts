@@ -54,18 +54,8 @@ interface RosterResult {
  * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
  * everywhere it is named. */
 export interface LaneModeChip {
-  readonly tone: 'paper' | 'live' | 'undetermined';
+  readonly tone: 'paper' | 'live' | 'shadow' | 'undetermined';
   readonly mode: string;
-  /** How many sealed instances are armed for real-money submission, or
-   * `null` when the verdict is not a live one — there is no armed count to
-   * show for a paper or undetermined lane, which is not the same fact as
-   * "zero are armed". */
-  readonly armedCount: number | null;
-  /** True when the clerk holds the no-submit Shadow authority (ADR 0059 D2):
-   * the real live read ports bound to a port that synthesizes fills and
-   * submits nothing. Carried beside `mode` rather than replacing it, because
-   * a shadowing lane is still reading the live account. */
-  readonly shadow: boolean;
 }
 
 /** Project one lane's verdict state into its compact chip form.
@@ -75,23 +65,21 @@ export interface LaneModeChip {
  * text* (decision D2, #2110/#2139 — the same fail-closed stance as the
  * pills; grey or neutral "not configured" wording is banned). The verdict
  * stays the only truth source; the chip never guesses a mode from
- * account-id shape or env (ADR 0011 §7), and `shadow` is read from the
- * server's own `clerk_authority` rather than inferred from the account. */
+ * account-id shape or env (ADR 0011 §7). Shadow is the server's declared
+ * simulation world, distinct from real Live custody. */
 export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
   const verdict = state.verdict;
-  const shadow = verdict?.clerk_authority === 'shadow';
   switch (verdict?.final_verdict) {
     case 'paper':
-      return { tone: 'paper', mode: 'Paper money', armedCount: null, shadow };
-    case 'live-unarmed':
-    case 'live-armed':
-      return { tone: 'live', mode: 'Live', armedCount: verdict.armed_instance_count, shadow };
+      return { tone: 'paper', mode: 'Paper money' };
+    case 'live':
+      return { tone: 'live', mode: 'Live' };
+    case 'shadow':
+      return { tone: 'shadow', mode: 'Shadow' };
     default:
       return {
         tone: 'undetermined',
         mode: 'Mode unknown — assume real money',
-        armedCount: null,
-        shadow,
       };
   }
 }
@@ -116,8 +104,8 @@ export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
  *   alone is not enough: the shared scheduler dispatches one read at a time
  *   and spends `POLL_REQUEST_TIMEOUT_MS` from enqueue, so a live lane hanging
  *   15 s used to reject the paper lane's queued read with "the poll ceiling
- *   elapsed while it waited for a turn" — a genuinely live-armed lane losing
- *   its account id and armed count because a sibling was slow.
+ *   elapsed while it waited for a turn" — a live lane losing its account
+ *   evidence because a sibling was slow.
  *
  * A single poll timer drives every lane's read and the group is one entry in
  * the shared queue, so this is still one poller fanning out to N reads, not

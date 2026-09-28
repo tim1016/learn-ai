@@ -85,9 +85,9 @@ describe('ConfigurationRevisionFormComponent', () => {
     const note = within(offsets).getByText(/The entry offset sets/);
     expect(note.textContent).toMatch(/each bot keeps the exit terms chosen when it was deployed/);
     expect(note.textContent).toMatch(/a sell below the bid or a cover above the ask/);
-    expect(note.textContent).toMatch(/Start requires the bot's exit terms/);
-    expect(note.textContent).toMatch(/must be flattened before Resume/);
-    expect(screen.queryByText(/It does not arm live trading/)).toBeNull();
+    expect(note.textContent).toMatch(/Stopped\s+positions retain their existing recovery actions/);
+    expect(note.textContent).toMatch(/Every fresh Deploy reviews its own exit terms/);
+    expect(screen.queryByText(/Every Live deployment/)).toBeNull();
   });
 
   it('keeps typed offsets when the endpoint switches between paper and live', async () => {
@@ -112,10 +112,11 @@ describe('ConfigurationRevisionFormComponent', () => {
     await rendered.fixture.whenStable();
 
     expect(screen.getByRole('group', { name: 'Live risk envelope' })).toBeTruthy();
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(8);
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(6);
     expect(screen.getByRole('spinbutton', { name: 'Daily loss fraction' })).toBeTruthy();
-    expect(screen.getByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeTruthy();
-    expect(screen.getByText(/It does not arm live trading/)).toBeTruthy();
+    expect(screen.queryByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Shadow sessions required' })).toBeNull();
+    expect(screen.getByText(/Every Live deployment/)).toBeTruthy();
     expect(screen.getByText(/Use Apply risk limits above/)).toBeTruthy();
   });
 

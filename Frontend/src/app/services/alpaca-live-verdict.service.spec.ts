@@ -36,12 +36,10 @@ function makeVerdict(overrides: Partial<AlpacaLiveVerdict> = {}): AlpacaLiveVerd
     mode_agreement: 'agreed',
     clerk_authority: 'sqlite',
     clerk_refusal_reason_code: null,
-    armed_instance_count: 0,
-    envelope_state: 'not_applicable',
+    budget_authority_version: 2,
+    deployment_readiness: 'ready',
     // A paper verdict carries no envelope and no hold, and the server says so
     // with 'not_applicable' on both.
-    envelope_agreement: 'not_applicable',
-    shadow_state: 'not_applicable',
     loss_hold: 'not_applicable',
     final_verdict: 'paper',
     headline: 'Paper account PA9 — no real money at risk',
@@ -109,9 +107,8 @@ describe('AlpacaLiveVerdictService', () => {
   it('refresh() stores the server verdict verbatim under the lane clerk_id', async () => {
     const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
     const v = makeVerdict({
-      final_verdict: 'live-unarmed',
+      final_verdict: 'live',
       configured_mode: 'live',
-      envelope_agreement: 'unsealed',
       loss_hold: 'clear',
     });
     brokers.readLane.mockResolvedValue(v);
@@ -139,7 +136,7 @@ describe('AlpacaLiveVerdictService', () => {
       testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_label: 'Paper' }),
       testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' }),
     ]);
-    const liveVerdict = makeVerdict({ final_verdict: 'live-armed', configured_mode: 'live' });
+    const liveVerdict = makeVerdict({ final_verdict: 'live', configured_mode: 'live' });
     brokers.readLane.mockImplementation(async (clerkId: string) => {
       if (clerkId === 'clrk_paper') throw new Error('paper lane down');
       return liveVerdict;
@@ -174,9 +171,8 @@ describe('AlpacaLiveVerdictService', () => {
 
     const fast = makeVerdict({
       configured_mode: 'live',
-      final_verdict: 'live-armed',
+      final_verdict: 'live',
       observed_account_id: '9LIVE0001',
-      armed_instance_count: 2,
     });
     open[1].flush(fast);
 
@@ -383,7 +379,7 @@ describe('AlpacaLiveVerdictService', () => {
         testLane({ clerk_id: 'clrk_bad', broker: 'alpaca', display_label: 'Bad' }),
         testLane({ clerk_id: 'clrk_good', broker: 'alpaca', display_label: 'Good' }),
       ]);
-      const goodVerdict = makeVerdict({ final_verdict: 'live-armed', configured_mode: 'live' });
+      const goodVerdict = makeVerdict({ final_verdict: 'live', configured_mode: 'live' });
       brokers.readLane.mockImplementation(async (clerkId: string) => {
         if (clerkId === 'clrk_bad') throw new Error('bad lane down');
         return goodVerdict;

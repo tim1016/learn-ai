@@ -22,8 +22,6 @@ function liveDraft() {
     endpoint_mode: 'live' as const,
     loss_fraction: 0.05,
     loss_usd: 5000,
-    shadow_sessions: 3,
-    arming_max_sessions: 20,
     xh_entry_bps: 11,
     xh_exit_bps: 17.5,
   };
@@ -86,12 +84,6 @@ describe('configuration revision draft', () => {
     expect(problems.every((problem) => problem.includes('needs a number'))).toBe(true);
   });
 
-  it('refuses a fractional session count, which the service would only reject as a 422', () => {
-    const problems = draftProblems({ ...liveDraft(), shadow_sessions: 3.5 }, SLOTS);
-
-    expect(problems).toEqual(['Shadow sessions required must be a whole number.']);
-  });
-
   it('refuses a loss fraction outside the open unit interval', () => {
     expect(draftProblems({ ...liveDraft(), loss_fraction: 0 }, SLOTS)).toHaveLength(1);
     expect(draftProblems({ ...liveDraft(), loss_fraction: 1 }, SLOTS)).toHaveLength(1);
@@ -107,7 +99,9 @@ describe('configuration revision draft', () => {
     expect(() => toRevisionContent({ ...liveDraft(), loss_usd: null })).toThrowError(/loss_usd/);
   });
 
-  it('carries a stored revision forward without changing a value', () => {
+  it('keeps historical values intact but omits retired session controls from a new revision', () => {
+    const historicalEnvelope = { loss_fraction: 0.05, loss_usd: 5000, shadow_sessions: 3,
+      arming_max_sessions: 20, xh_entry_bps: 11, xh_exit_bps: 17.5 };
     const stored: BrokerProfileRevision = {
       profile_id: 'p1',
       revision: 4,
@@ -116,14 +110,7 @@ describe('configuration revision draft', () => {
       endpoint_mode: 'live',
       account_pin: '9LIVE0001',
       account_pinned_at_ms: 1_757_000_000_000,
-      live_envelope: {
-        loss_fraction: 0.05,
-        loss_usd: 5000,
-        shadow_sessions: 3,
-        arming_max_sessions: 20,
-        xh_entry_bps: 11,
-        xh_exit_bps: 17.5,
-      },
+      live_envelope: historicalEnvelope,
       paper_xh_allowances: null,
       content_sha256: 'a'.repeat(64),
       complete: true,
@@ -132,8 +119,10 @@ describe('configuration revision draft', () => {
     };
 
     expect(toRevisionContent(draftFromRevision(stored)).live_envelope).toEqual(
-      stored.live_envelope,
+      { loss_fraction: 0.05, loss_usd: 5000, xh_entry_bps: 11, xh_exit_bps: 17.5 },
     );
+    expect(historicalEnvelope.shadow_sessions).toBe(3);
+    expect(historicalEnvelope.arming_max_sessions).toBe(20);
   });
 
   it('carries a stored paper revision\'s offsets forward unchanged', () => {

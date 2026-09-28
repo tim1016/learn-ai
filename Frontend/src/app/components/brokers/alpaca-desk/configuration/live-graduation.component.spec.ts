@@ -34,10 +34,9 @@ const PLAN: LiveGraduationPlan = {
   backup_reference: 'accounts/alpaca/live/verified-backups/backup-1',
   daily_loss_fraction: 0.1,
   daily_loss_usd: 200,
-  arming_max_sessions: 1,
   extended_hours_entry_bps: 0,
   extended_hours_exit_bps: 0,
-  consequence: 'Graduation changes custody but deploys and arms nothing.',
+  consequence: 'Graduation changes custody but deploys nothing.',
 };
 
 async function renderGraduation(status: LiveGraduationStatus = STATUS) {
@@ -86,7 +85,7 @@ describe('LiveGraduationComponent', () => {
     expect((screen.getByRole('button', { name: 'Activate Shadow and restart' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('keeps graduation distinct from deploy and arming, then requires an explicit acknowledgement', async () => {
+  it('keeps graduation distinct from deployment consent, then requires an explicit acknowledgement', async () => {
     const { fixture, service } = await renderGraduation();
 
     expect(screen.getByText(/does not deploy a strategy/)).toBeTruthy();

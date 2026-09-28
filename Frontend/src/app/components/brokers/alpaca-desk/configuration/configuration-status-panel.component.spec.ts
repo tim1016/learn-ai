@@ -96,10 +96,10 @@ describe('ConfigurationStatusPanelComponent', () => {
       .toBe(true);
   });
 
-  it('never suggests Apply arms live trading', async () => {
+  it('keeps profile Apply separate from Deploy', async () => {
     await renderPanel(selection({ staged_profile_id: 'profile-paper', staged_revision: 1 }));
 
-    expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
+    expect(screen.getByText(/Applying a profile does not deploy a bot/)).toBeTruthy();
   });
 
   it('renders the effective account id exactly and its nickname beside it', async () => {

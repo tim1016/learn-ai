@@ -16,7 +16,7 @@ describe('ConfigurationSwitchGuideComponent', () => {
     expect(screen.queryByText('Every account switch')).toBeNull();
     expect(screen.getAllByRole('listitem')).toHaveLength(4);
     expect(screen.getByText(/Refreshing or reopening the browser does not apply/)).toBeTruthy();
-    expect(screen.getByText(/never retargets, arms, or launches an existing bot/)).toBeTruthy();
+    expect(screen.getByText(/never retargets or launches an existing bot/)).toBeTruthy();
   });
 
   it('shows the command the backend authored for this lane, not a built-in one', async () => {

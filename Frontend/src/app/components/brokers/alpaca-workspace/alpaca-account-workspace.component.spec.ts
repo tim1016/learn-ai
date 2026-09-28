@@ -373,7 +373,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
   it.each([
     ['paper', fakeVerdictState('paper'), 'Paper money'],
-    ['live-armed', fakeVerdictState('live-armed', { armed_instance_count: 2 }), 'Live'],
+    ['live', fakeVerdictState('live', {}), 'Live'],
     ['unread', UNPOLLED_LANE_STATE, 'Mode unknown — assume real money'],
   ])('renders the mode chip the %s server verdict declares', async (_label, verdict, mode) => {
     await renderWorkspace({ verdict });
@@ -381,16 +381,15 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(await screen.findByText(mode)).toBeTruthy();
   });
 
-  it('names the armed count and the Shadow authority on a live lane', async () => {
+  it('names the Shadow simulation world separately from Live', async () => {
     await renderWorkspace({
-      verdict: fakeVerdictState('live-armed', {
-        armed_instance_count: 2,
+      verdict: fakeVerdictState('shadow', {
         clerk_authority: 'shadow',
       }),
     });
 
-    expect(await screen.findByText('· 2 armed')).toBeTruthy();
-    expect(screen.getByText('· Shadow')).toBeTruthy();
+    expect(await screen.findByText('Shadow')).toBeTruthy();
+    expect(screen.queryByText(/armed/)).toBeNull();
   });
 
   it('points Deploy at the workspace’s own lane and account from every other tab', async () => {

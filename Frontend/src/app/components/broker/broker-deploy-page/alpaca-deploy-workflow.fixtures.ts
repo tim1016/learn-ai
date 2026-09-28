@@ -197,7 +197,7 @@ export const SHADOW_DEPLOY_VIEW: DeployBotView = {
       // Verbatim from `paper_deploy_service._execution_modes`, the shadow
       // world's planned-live card: shadow is a mode, not a requirement.
       explanation:
-        'Real-money submission follows the live cutover and the arming ceremony; a shadow '
+        'Real-money submission follows Live graduation and reviewed deployment consent; a shadow '
         + 'rehearsal is optional (ADR 0059, amended 2026-09-09).',
     },
   ],
