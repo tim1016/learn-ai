@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.fee_evidence import (
     FEE_EVIDENCE_MAX_AGE_MS,
     custody_fee_attribution,
@@ -211,6 +212,32 @@ def test_one_observed_order_fee_keeps_other_order_provision_through_custody(tmp_
         assert observed.unobserved_cash_claim(cash_seen_before_ms=now) == Decimal("2.25")
         # A newer cash read cannot release this still-unmatched obligation.
         assert repo.account_budget(cash=1000, seen_before_ms=now).fee_claims == Decimal("2.25")
+    finally:
+        repo.close()
+
+
+def test_unattributed_fee_stops_claiming_once_cash_observation_recognizes_it(tmp_path) -> None:
+    """An account-unattributed fee counts once against availability (PRD #2540).
+
+    The fee's order has no proven custody owner, so the charge stays at the
+    account level. A cash observation taken after the fee evidence was
+    observed already carries the debit; claiming it past that point counted
+    the same dollar twice and understated availability forever.
+    """
+    now = NOON
+    repo = ClerkSqliteRepository.initialize(account_id="PA-unattributed-fee", artifacts_root=tmp_path, clock=_clock_at(now))
+    try:
+        fee = _activity("fee-x", "FEE", YESTERDAY_NOON, -0.05).model_copy(update={"native_order_id": "order-x"})
+        assert record_fee_evidence(repo, [fee], checked_at_ms=now, history_complete=True)
+        observed = custody_fee_attribution(repo._conn, now_ms=now)
+        assert not observed.known and observed.unattributed == Decimal("0.05")
+        assert observed.unobserved_cash_claim(cash_seen_before_ms=now) == Decimal("0.05")
+        assert observed.unobserved_cash_claim(cash_seen_before_ms=now + 1) == 0
+        # Unresolved fee evidence refuses budget projection outright; once the
+        # evidence resolves, the claim the projection would read is the gated
+        # one above, not the old forever-claimed account total.
+        with pytest.raises(BudgetUnavailable):
+            repo.account_budget(cash=1000, seen_before_ms=now)
     finally:
         repo.close()
 

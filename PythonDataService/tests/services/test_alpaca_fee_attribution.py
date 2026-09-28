@@ -140,6 +140,39 @@ def test_unknown_population_and_zero_weights_remain_account_unattributed() -> No
     assert not result.known and result.unattributed == D("0.05")
 
 
+def test_unattributed_charge_claims_only_until_cash_observation() -> None:
+    """A posted but unattributable fee counts once against availability.
+
+    The claim lasts only until the first cash observation taken after the
+    fee evidence was observed. Before the per-charge gate the collapsed
+    ``unattributed`` total claimed forever, double-counting the debit once
+    the trusted cash reading already recognized it (PRD #2540).
+    """
+    result = _attribute([_fill("a")], [FeeCharge("c", D("0.05"), 100)], population_complete=False)
+    assert not result.known and result.unattributed == D("0.05")
+    assert [charge.charge_id for charge in result.unattributed_charges] == ["c"]
+    assert result.unobserved_cash_claim(cash_seen_before_ms=100) == D("0.05")
+    assert result.unobserved_cash_claim(cash_seen_before_ms=101) == 0
+
+
+def test_unattributed_refund_never_manufactures_availability() -> None:
+    """An unrecognized refund credit is not spendable until observed."""
+    result = _attribute([], [FeeCharge("refund", D("-0.05"), 200)], population_complete=False)
+    assert result.unobserved_cash_claim(cash_seen_before_ms=0) == 0
+    assert result.unobserved_cash_claim(cash_seen_before_ms=10_000) == 0
+
+
+def test_unattributed_charges_do_not_net_refunds_against_fees() -> None:
+    """Each account-unattributed fact claims on its own fail-closed side."""
+    result = _attribute(
+        [],
+        [FeeCharge("fee", D("0.05"), 100), FeeCharge("refund", D("-0.02"), 150)],
+        population_complete=False,
+    )
+    assert result.unattributed == D("0.03")
+    assert result.unobserved_cash_claim(cash_seen_before_ms=0) == D("0.05")
+
+
 def test_duplicate_delivery_is_one_charge_and_conflict_fails_closed() -> None:
     charge = FeeCharge("fee", D("0.05"), 100)
     result = _attribute([_fill("a")], [charge, FeeCharge("fee", D("0.05"), 200)])

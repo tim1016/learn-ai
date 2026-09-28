@@ -83,6 +83,21 @@ class FeeShare:
 
 
 @dataclass(frozen=True)
+class UnattributedCharge:
+    """One account-level obligation kept out of per-bot attribution.
+
+    Recognition follows the same observation-overlap rule as observed
+    shares: a cash observation taken after ``observed_at_ms`` already
+    includes the posted charge, so it must stop claiming availability
+    ("count it once relative to the cash observation", PRD #2540).
+    """
+
+    charge_id: str
+    amount: Decimal
+    observed_at_ms: int
+
+
+@dataclass(frozen=True)
 class FeeAttribution:
     shares: tuple[FeeShare, ...]
     unattributed: Decimal
@@ -92,6 +107,9 @@ class FeeAttribution:
     # Normalized account-unattributed execution evidence, shared with the
     # cash projection. Its notional is never charged to a bot's fee or P&L.
     external_fills: tuple[FeeFill, ...] = ()
+    # Per-charge detail behind ``unattributed`` so the cash claim can respect
+    # each charge's own observation time instead of double-counting forever.
+    unattributed_charges: tuple[UnattributedCharge, ...] = ()
 
     @property
     def known(self) -> bool:
@@ -110,9 +128,20 @@ class FeeAttribution:
 
         An observed activity is only safely inside broker cash after a later
         cash observation. Its trade-date timestamp does not prove recognition.
-        Caller MUST refuse admission when ``known`` is false.
+        The same rule gates each account-unattributed charge: it claims
+        availability only until the first cash observation taken after its
+        evidence was observed, and a negative (refund-like) charge never
+        manufactures availability. Caller MUST refuse admission when
+        ``known`` is false.
         """
-        return (max(ZERO, self.unattributed) if subject_id is None else ZERO) + sum(
+        return sum(
+            (
+                max(ZERO, charge.amount)
+                for charge in self.unattributed_charges
+                if subject_id is None and charge.observed_at_ms >= cash_seen_before_ms
+            ),
+            ZERO,
+        ) + sum(
             (
                 max(ZERO, share.amount)
                 for share in self.shares
@@ -227,6 +256,7 @@ def attribute_session_fees(
     shares: list[FeeShare] = []
     unresolved: list[str] = []
     unattributed = ZERO
+    unattributed_charges: list[UnattributedCharge] = []
     priced = [
         fees_for_fill(trade_date=trade_date, side=fill.side, quantity=fill.quantity, fill_price=fill.price)
         for fill in fills
@@ -312,6 +342,7 @@ def attribute_session_fees(
             )
             if amount is not None and amount.is_finite():
                 unattributed += amount
+                unattributed_charges.append(UnattributedCharge(charge.charge_id, amount, charge.observed_at_ms))
             continue
         if charge.refund_of is None:
             original[charge.charge_id] = portions
@@ -336,4 +367,7 @@ def attribute_session_fees(
                     portions[fill.subject_id] = portions.get(fill.subject_id, ZERO) + provisions[fill.fill_id, component]
             shares.extend(FeeShare(f"model:{trade_date}:{component}", subject, amount, state, settlement_at_ms)
                           for subject, amount in sorted(portions.items()) if amount)
-    return FeeAttribution(tuple(shares), unattributed, tuple(dict.fromkeys(unresolved)), observed, predicted)
+    return FeeAttribution(
+        tuple(shares), unattributed, tuple(dict.fromkeys(unresolved)), observed, predicted,
+        unattributed_charges=tuple(unattributed_charges),
+    )

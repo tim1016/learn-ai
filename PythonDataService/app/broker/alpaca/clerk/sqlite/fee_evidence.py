@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker.alpaca.clerk.money import money_context, normalize_money
+from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -27,7 +27,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
-from app.services.alpaca_fee_attribution import FeeAttribution, FeeCharge, FeeFill, attribute_session_fees
+from app.services.alpaca_fee_attribution import (
+    FeeAttribution,
+    FeeCharge,
+    FeeFill,
+    UnattributedCharge,
+    attribute_session_fees,
+)
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 if TYPE_CHECKING:
@@ -94,6 +100,18 @@ def record_fee_evidence(
     return True
 
 
+def _normalized_or_none(value: object) -> Decimal | None:
+    """The canonical normalizer as a fail-closed population check.
+
+    External activity rows with malformed money must mark the population
+    incomplete, not abort the whole projection with an input error.
+    """
+    try:
+        return normalize_money(value)
+    except MoneyInputError:
+        return None
+
+
 def _effective_fills(
     conn: sqlite3.Connection, *, simulated_fill_cutoff_ms: int | None = None
 ) -> tuple[dict[date, list[FeeFill]], set[str], bool]:
@@ -136,10 +154,10 @@ def _effective_fills(
                 fill_id=record.event_key,
                 subject_id=record.sid,
                 side=record.side,
-                quantity=Decimal(str(record.quantity)),
-                price=Decimal(str(record.fill_price)),
+                quantity=normalize_money(record.quantity),
+                price=normalize_money(record.fill_price),
                 native_order_id=record.native_order_id,
-                reported_fee=None if record.fee is None else Decimal(str(record.fee)),
+                reported_fee=None if record.fee is None else normalize_money(record.fee),
                 observed_at_ms=record.recorded_at_ms,
             )
         )
@@ -251,8 +269,8 @@ def custody_fee_attribution(
                 or row.quantity is None
                 or row.price is None
                 or row.side not in {"buy", "sell"}
-                or not Decimal(str(row.quantity)).is_finite()
-                or not Decimal(str(row.price)).is_finite()
+                or _normalized_or_none(row.quantity) is None
+                or _normalized_or_none(row.price) is None
                 or row.quantity <= 0
                 or row.price <= 0
             ):
@@ -260,12 +278,12 @@ def custody_fee_attribution(
                 continue
             witnessed_external.add(row.native_order_id)
             external = FeeFill(
-                row.activity_id,
-                f"external:{row.native_order_id}",
-                OrderSide(row.side),
-                Decimal(str(row.quantity)),
-                Decimal(str(row.price)),
-                row.native_order_id,
+                fill_id=row.activity_id,
+                subject_id=f"external:{row.native_order_id}",
+                side=OrderSide(row.side),
+                quantity=normalize_money(row.quantity),
+                price=normalize_money(row.price),
+                native_order_id=row.native_order_id,
                 observed_at_ms=row.observed_at_ms,
             )
             grouped[day].append(external)
@@ -274,11 +292,14 @@ def custody_fee_attribution(
     shares = []
     unresolved = []
     unattributed = Decimal(0)
+    unattributed_charges: list[UnattributedCharge] = []
     if undated:
         unresolved.append("A broker fee or fill has no economic date. Reconcile account activity evidence.")
         for row in undated.values():
             if row.activity_type == "FEE" and row.net_amount is not None:
-                unattributed -= normalize_money(row.net_amount)
+                amount = -normalize_money(row.net_amount)
+                unattributed += amount
+                unattributed_charges.append(UnattributedCharge(row.activity_id, amount, row.observed_at_ms))
     observed = Decimal(0)
     predicted = Decimal(0)
     predicted_known = observed_known = True
@@ -294,7 +315,7 @@ def custody_fee_attribution(
         fees = [
             FeeCharge(
                 row.activity_id,
-                None if row.net_amount is None else -Decimal(str(row.net_amount)),
+                None if row.net_amount is None else -normalize_money(row.net_amount),
                 row.observed_at_ms,
                 row.native_order_id,
             )
@@ -314,6 +335,7 @@ def custody_fee_attribution(
         shares.extend(result.shares)
         unresolved.extend(result.unresolved)
         unattributed += result.unattributed
+        unattributed_charges.extend(result.unattributed_charges)
         if result.observed_total is None:
             observed_known = False
         else:
@@ -331,4 +353,5 @@ def custody_fee_attribution(
         observed if observed_known else None,
         predicted if predicted_known else None,
         external_fills=tuple(external_fills),
+        unattributed_charges=tuple(unattributed_charges),
     )
