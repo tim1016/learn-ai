@@ -566,7 +566,7 @@ describe('BotTriageDetailComponent', () => {
   it('leads with one command and folds the rest into the overflow', async () => {
     await renderDetail(
       fakeBotPanelView({
-        primary_action_by_lens: { trader: 'stop', operator: null },
+        primary_action: 'stop',
         actions: [
           fakePanelAction('stop', { enabled: false }),
           fakePanelAction('reconcile_now', { label: 'Reconcile now' }),

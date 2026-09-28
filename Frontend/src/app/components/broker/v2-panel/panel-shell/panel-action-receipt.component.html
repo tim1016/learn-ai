@@ -1,5 +1,8 @@
 <aside
+  #outcome
   class="action-receipt"
+  tabindex="-1"
+  aria-label="Action outcome"
   [attr.data-outcome]="receipt().outcome"
   [attr.role]="receipt().outcome === 'success' ? 'status' : 'alert'"
 >

@@ -31,88 +31,105 @@
     [backRoute]="backRoute()"
     [backLabel]="backLabel()"
     [clerkId]="clerkId()"
-    [tickerQuote]="tickerQuote()"
+    [routeAccountId]="accountId()"
     [actionPending]="actionPending()"
-    [lens]="activeLens()"
     (actionRequested)="onActionRequested($event)"
     (retryRequested)="currentRun.reload()"
   />
 
-  @if (actionReceipt(); as receipt) {
-    <div class="panel-feedback">
-      <app-panel-action-receipt
-        [receipt]="receipt"
-        (dismissed)="dismissActionReceipt()"
+  <div class="bot-page">
+    @if (actionReceipt(); as receipt) {
+      <app-panel-action-receipt [receipt]="receipt" (dismissed)="dismissActionReceipt()" />
+    }
+
+    @if (stranded()) {
+      <app-stranded-position-warning
+        [panel]="panelData"
+        [steps]="flattenSteps()"
+        [pending]="actionPending()"
+        (flatten)="onFlattenConfirmed($event)"
+      />
+    }
+
+    @if (reductionPlan(); as plan) {
+      <div #flattenTicket class="flatten-ticket" tabindex="-1" aria-label="Prepared sale">
+        <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
+        @if (extendedFlattenTicket(); as ticket) {
+          <app-extended-flatten-ticket
+            [pricing]="ticket.pricing"
+            [quantity]="ticket.quantity"
+            [quoteReceivedAtMs]="ticket.receivedAtMs"
+            [pending]="actionPending()"
+            (send)="sendExtendedFlatten($event)"
+            (priceCheck)="priceExtendedFlatten($event)"
+            (overridePriceCheck)="priceExtendedFlatten($event, true)"
+            (refresh)="refreshFlattenQuote()"
+          />
+          @if (preparedFlatten()?.quoteError; as quoteError) {
+            <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
+          }
+        }
+      </div>
+    }
+
+    @if (flattenFills().length > 0) {
+      <app-flatten-fills [fills]="flattenFills()" />
+    }
+
+    <div class="bot-page__grid bot-page__grid--market">
+      <app-bot-day-chart
+        [symbol]="panelData.symbol"
+        [liveChart]="liveChart()"
+        [histChart]="histChart.hasValue() ? histChart.value() : null"
+        [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
+        [histChartLoading]="histChart.isLoading()"
+        [histChartFailed]="histChartFailed()"
+        [liveResolution]="liveResolution()"
+        [historyTimeframe]="selectedHistoryTimeframe()"
+        (historyTimeframeChange)="onHistoryTimeframeChange($event)"
+        (liveResolutionChange)="onLiveResolutionChange($event)"
+        (historyRetry)="histChart.reload()"
+      />
+      <app-deployment-budget
+        [target]="target()"
+        [strategyInstanceId]="panelData.strategy_instance_id"
+        [revision]="panelData.revision"
+        [running]="panelData.health.running"
+        [holdsShares]="holdsShares()"
+        [openPnl]="panelData.open_pnl"
       />
     </div>
-  }
 
-  @if (reductionPlan(); as plan) {
-    <div class="panel-feedback">
-      <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
-      @if (extendedFlattenTicket(); as ticket) {
-        <app-extended-flatten-ticket
-          [pricing]="ticket.pricing"
-          [quantity]="ticket.quantity"
-          [quoteReceivedAtMs]="ticket.receivedAtMs"
-          [pending]="actionPending()"
-          (send)="sendExtendedFlatten($event)"
-          (priceCheck)="priceExtendedFlatten($event)"
-          (overridePriceCheck)="priceExtendedFlatten($event, true)"
-          (refresh)="refreshFlattenQuote()"
+    <div class="bot-page__grid">
+      @if (panelData.mode === 'log_only') {
+        <section class="observation-note" role="status">
+          <strong>Observation only</strong>
+          <span>This bot records decisions but does not place broker orders.</span>
+        </section>
+      } @else {
+        <app-trades-today-list
+          [fills]="liveChart()?.fill_markers ?? []"
+          [fillCount]="panelData.fills_today"
+          [tradingDateMs]="liveChart()?.trading_date_open_ms ?? null"
         />
-        @if (preparedFlatten()?.quoteError; as quoteError) {
-          <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
-        }
       }
+      <app-recent-decisions-list [decisions]="panelData.recent_decisions" />
     </div>
-  }
 
-  @if (flattenFills().length > 0) {
-    <div class="panel-feedback">
-      <app-flatten-fills [fills]="flattenFills()" />
-    </div>
-  }
-
-  @switch (activeLens()) {
-    @case ('trader') {
-      <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
-        <app-trader-lens
-          [target]="target()"
-          [panel]="panelData"
-          [tickerQuote]="tickerQuote()"
-          [profile]="profileData"
-          [liveChart]="liveChart()"
-          [histChart]="histChart.hasValue() ? histChart.value() : null"
-          [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
-          [histChartLoading]="histChart.isLoading()"
-          [histChartFailed]="histChartFailed()"
-          [liveResolution]="liveResolution()"
-          [historyTimeframe]="selectedHistoryTimeframe()"
-          (historyTimeframeChange)="onHistoryTimeframeChange($event)"
-          (liveResolutionChange)="onLiveResolutionChange($event)"
-          (historyRetry)="histChart.reload()"
-        />
-      </div>
-    }
-    @case ('operator') {
-      <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
-        <app-operator-lens
-          [panel]="panelData"
-          [profile]="profileData"
-          [actionPending]="actionPending()"
-          [broker]="broker()"
-          [clerkId]="clerkId()"
-          [accountId]="accountId()"
-          [sid]="sid()"
-          [currentRunState]="currentRunState()"
-          (runRefreshRequested)="currentRun.reload()"
-          (transactionSelected)="onTransactionSelected($event)"
-          (actionRequested)="onActionRequested($event)"
-        />
-      </div>
-    }
-  }
+    <app-bot-details
+      [panel]="panelData"
+      [profile]="profileData"
+      [actionPending]="actionPending()"
+      [broker]="broker()"
+      [clerkId]="clerkId()"
+      [accountId]="accountId()"
+      [sid]="sid()"
+      [currentRunState]="currentRunState()"
+      (actionRequested)="onActionRequested($event)"
+      (transactionSelected)="onTransactionSelected($event)"
+      (runRefreshRequested)="currentRun.reload()"
+    />
+  </div>
 }
 
 @if (historicalRecoveryDraft(); as draft) {

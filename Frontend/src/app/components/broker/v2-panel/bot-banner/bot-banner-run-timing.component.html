@@ -18,29 +18,27 @@
       {{ runState().loading ? 'Loading…' : 'Unavailable' }}
     }
   </span>
-  @if (operator()) {
-    <span class="run-timing__item">
-      <span class="run-timing__label">Last bar</span>
-      <app-timestamp-display
-        [value]="health().last_bar_at_ms"
-        mode="local"
-        granularity="time"
-        fallback="None"
-      />
-    </span>
-    <span class="run-timing__item">
-      <span class="run-timing__label">Last decision</span>
-      <app-timestamp-display
-        [value]="health().last_decision_at_ms"
-        mode="local"
-        granularity="time"
-        fallback="None"
-      />
-      @if (health().last_decision_at_ms !== null && health().decision_stale) {
-        <span class="run-timing__stale">Stale</span>
-      }
-    </span>
-  }
+  <span class="run-timing__item">
+    <span class="run-timing__label">Last bar</span>
+    <app-timestamp-display
+      [value]="health().last_bar_at_ms"
+      mode="local"
+      granularity="time"
+      fallback="None"
+    />
+  </span>
+  <span class="run-timing__item">
+    <span class="run-timing__label">Last decision</span>
+    <app-timestamp-display
+      [value]="health().last_decision_at_ms"
+      mode="local"
+      granularity="time"
+      fallback="None"
+    />
+    @if (health().last_decision_at_ms !== null && health().decision_stale) {
+      <span class="run-timing__stale">Stale</span>
+    }
+  </span>
 </div>
 @if (runState().failed) {
   <p class="run-timing__retry" role="status">

@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
@@ -28,8 +28,6 @@ import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
-import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
-import { LensTabsComponent } from '../../../../shared/lens/lens-tabs.component';
 
 const chartMocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
@@ -76,17 +74,8 @@ class StubEventSource {
 }
 
 @Component({
-  imports: [BotPanelShellComponent, LensTabsComponent],
+  imports: [BotPanelShellComponent],
   template: `
-    @if (lensHost(); as host) {
-      <app-lens-tabs
-        [ariaLabel]="host.ariaLabel ?? 'Desk perspective'"
-        [idPrefix]="host.idPrefix ?? ''"
-        [panelId]="host.panelId ?? null"
-        [lens]="host.lens()"
-        (lensChange)="host.select($event)"
-      />
-    }
     @if (mounted()) {
       <app-bot-panel-shell
         broker="alpaca"
@@ -98,8 +87,6 @@ class StubEventSource {
   `,
 })
 class BotPanelShellReloadHost {
-  private readonly lensBridge = inject(ActiveLensBridgeService);
-  readonly lensHost = this.lensBridge.host;
   readonly mounted = signal(true);
   readonly accountId = ACCOUNT_ID;
   readonly strategyInstanceId = STRATEGY_INSTANCE_ID;
@@ -233,7 +220,10 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       await fixture.whenStable();
       shellRecreations += 1;
 
-      fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+      const orderRecords = screen.getByText('Order records').closest('details');
+      if (orderRecords === null) throw new Error('Expected the Order records fold.');
+      orderRecords.open = true;
+      fireEvent(orderRecords, new Event('toggle'));
       await fixture.whenStable();
       fixture.detectChanges();
       expect(screen.getByRole('link', { name: /^Deploy again$/ })).toBeTruthy();
@@ -273,11 +263,16 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       await fixture.whenStable();
     }
 
+    const stationEvidenceCalls = () => campaignService.getEvidence.mock.calls.filter(
+      ([, , options]) => options?.transactionRef !== undefined,
+    );
     const campaignMeasurement = {
       campaign_id: UI_CORRELATION_CAMPAIGN.component_campaign_id,
       recreation_count: shellRecreations,
       interaction_count: evidenceInteractions,
-      evidence_request_count: campaignService.getEvidence.mock.calls.length,
+      // The Order records fold also reads its audit trail once opened; the
+      // campaign counts the station evidence each interaction asked for.
+      evidence_request_count: stationEvidenceCalls().length,
       revision_sequence: [...REVISION_SEQUENCE],
       observed_revision_count: observedSseRevisions.length,
       lifecycle_request_count: campaignService.runBotAction.mock.calls.length,
@@ -299,14 +294,13 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
         () => [...REVISION_SEQUENCE],
       ).flat(),
     );
-    expect(campaignService.getEvidence).toHaveBeenNthCalledWith(
-      EXPECTED_OBSERVATION_COUNT,
+    expect(stationEvidenceCalls().at(-1)).toEqual([
       expect.objectContaining({
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: ACCOUNT_ID, entityId: STRATEGY_INSTANCE_ID,
       }),
       STRATEGY_INSTANCE_ID,
       expect.objectContaining({ transactionRef: TRANSACTION_REF }),
-    );
+    ]);
     expect(campaignService.runBotAction).not.toHaveBeenCalled();
   }, UI_CORRELATION_CAMPAIGN.timeout_seconds * 1_000);
 });

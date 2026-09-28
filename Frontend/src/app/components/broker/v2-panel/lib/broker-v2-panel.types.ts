@@ -66,7 +66,7 @@ export type StationView = components['schemas']['StationView'];
 export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
-export type PrimaryActionByLens = components['schemas']['PrimaryActionByLens'];
+export type ExitTerms = components['schemas']['ExitTerms'];
 
 /**
  * `authority_kind` names the exact Clerk account authority (real Paper vs

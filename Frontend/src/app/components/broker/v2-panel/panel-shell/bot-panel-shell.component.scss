@@ -7,29 +7,39 @@
   color: var(--text-primary);
 }
 
-:host(.bot-panel-shell--trader) {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-:host(.bot-panel-shell--trader) .bot-banner-strip { flex: 0 0 auto; }
-
 .bot-banner-strip { margin: var(--space-2) var(--space-4) var(--space-3); }
 
-:host(.bot-panel-shell--trader) #trader-panel {
-  display: flex;
-  min-height: 0;
-  flex: 1;
+.bot-page {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
 }
 
-:host(.bot-panel-shell--trader) app-trader-lens {
-  min-height: 0;
-  flex: 1;
+.bot-page__grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+  align-items: start;
+  gap: var(--space-3);
 }
+
+.bot-page__grid--market { align-items: stretch; }
+
+.observation-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  strong { color: var(--text-primary); }
+}
+
+.flatten-ticket:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .load-error {
   margin-bottom: var(--space-3);
@@ -57,7 +67,7 @@
 // Frozen, not live: the panel stays readable and its controls stay usable,
 // but it visibly stops looking current while the notice above explains why.
 :host(.is-stale) .bot-banner-strip,
-:host(.is-stale) [role='tabpanel'] {
+:host(.is-stale) .bot-page {
   filter: grayscale(0.7);
 }
 
@@ -68,18 +78,12 @@
   color: var(--text-secondary);
 }
 
-.panel-feedback { padding: 0 var(--space-4); }
 .flatten-quote-error { margin: var(--space-2) 0 0; color: var(--bear); font-size: var(--fs-xs); }
 
-@media (max-width: 800px) {
-  .panel-feedback { padding-inline: var(--space-3); }
+@media (max-width: 1100px) {
+  .bot-page__grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-@media (max-width: 1100px) {
-  :host(.bot-panel-shell--trader) {
-    display: block;
-    height: auto;
-    min-height: 100%;
-    overflow-y: auto;
-  }
+@media (max-width: 800px) {
+  .bot-page { padding-inline: var(--space-3); }
 }

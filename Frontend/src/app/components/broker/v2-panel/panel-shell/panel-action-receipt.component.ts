@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, input, output, viewChild } from '@angular/core';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 
@@ -21,4 +21,11 @@ export interface ActionReceiptView {
 export class PanelActionReceiptComponent {
   readonly receipt = input.required<ActionReceiptView>();
   readonly dismissed = output();
+
+  private readonly outcome = viewChild.required<ElementRef<HTMLElement>>('outcome');
+
+  /** Move the keyboard to the outcome, so the owner hears what an action did (story 48). */
+  focus(): void {
+    this.outcome().nativeElement.focus();
+  }
 }

@@ -25,7 +25,6 @@ import { of } from 'rxjs';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
-import { MarketDataService } from '../../../../services/market-data.service';
 import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
@@ -169,7 +168,8 @@ const PANEL: BotPanelView = {
   journal_tail_ref: '/api/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
-  primary_action_by_lens: { trader: null, operator: null },
+  primary_action: null,
+  exit_terms: null,
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,
@@ -248,10 +248,6 @@ function zeroBarHistoryResponse(
   };
 }
 
-const marketDataMock = {
-  getStockSnapshot: vi.fn().mockReturnValue(of({ success: true, snapshot: null, error: null })),
-};
-
 const brokersMock = { checkSqliteRecoveryAction: vi.fn() };
 
 /** The dual-pane chart always starts an indicator-catalog `rxResource()` on
@@ -295,7 +291,6 @@ async function renderTraderPanel(historyChart: ReturnType<typeof vi.fn>) {
       { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
       { provide: IndicatorCatalogService, useValue: indicatorCatalogMock },
       { provide: BotChartIndicatorService, useValue: chartIndicatorServiceMock },
-      { provide: MarketDataService, useValue: marketDataMock },
       { provide: BrokerV2PanelService, useValue: service },
       { provide: BrokersService, useValue: brokersMock },
       { provide: MessageService, useValue: { add: vi.fn() } },
@@ -328,7 +323,7 @@ describe('BotPanelShellComponent — Polygon history failure isolation (#2202)',
 
     // The live IBKR pane rendered — the shell did not abort its whole render
     // pass over the errored history resource.
-    expect(screen.getByRole('tab', { name: 'Live' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Live · IBKR' })).toBeTruthy();
 
     const expandButton = screen.getByRole('button', { name: 'Expand market chart' });
     await user.click(expandButton);
@@ -355,7 +350,7 @@ describe('BotPanelShellComponent — Polygon history failure isolation (#2202)',
     );
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -405,7 +400,7 @@ describe('BotPanelShellComponent — Polygon history failure isolation (#2202)',
     });
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
     expect(screen.getByText('1 candle')).toBeTruthy();
@@ -438,7 +433,6 @@ describe('BotPanelShellComponent — Polygon history failure isolation (#2202)',
         { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
         { provide: IndicatorCatalogService, useValue: indicatorCatalogMock },
         { provide: BotChartIndicatorService, useValue: chartIndicatorServiceMock },
-        { provide: MarketDataService, useValue: marketDataMock },
         { provide: BrokerV2PanelService, useValue: service },
         { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: { add: vi.fn() } },
@@ -491,7 +485,7 @@ describe('BotPanelShellComponent — zero-bar history notice classification (#22
     );
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -528,7 +522,7 @@ describe('BotPanelShellComponent — zero-bar history notice classification (#22
     );
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -542,7 +536,7 @@ describe('BotPanelShellComponent — zero-bar history notice classification (#22
     const historyChart = vi.fn().mockResolvedValue(zeroBarHistoryResponse([]));
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -561,7 +555,7 @@ describe('BotPanelShellComponent — zero-bar history notice classification (#22
     );
     const { fixture } = await renderTraderPanel(historyChart);
 
-    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await user.click(screen.getByRole('tab', { name: 'History · Polygon, 15 min delayed' }));
     await fixture.whenStable();
     fixture.detectChanges();
 

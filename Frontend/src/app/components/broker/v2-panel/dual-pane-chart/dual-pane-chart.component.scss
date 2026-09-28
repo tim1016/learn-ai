@@ -202,20 +202,6 @@
   box-shadow: 0 0 0 4px var(--info-soft), 0 0 12px rgba(41, 182, 246, 0.8);
 }
 
-.source-tab__glyph {
-  display: grid;
-  width: 1rem;
-  height: 1rem;
-  place-items: center;
-  margin-top: 0.1rem;
-  border: 1px solid color-mix(in srgb, var(--ind-cat-momentum) 55%, transparent);
-  border-radius: 50%;
-  color: var(--ind-cat-momentum);
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  font-weight: var(--fw-bold);
-}
-
 .chart-deck {
   display: flex;
   height: 100%;

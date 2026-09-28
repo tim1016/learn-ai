@@ -11,6 +11,7 @@
   background: var(--bg-elevated);
   color: var(--text-primary);
 
+  &:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
   &[data-outcome='success'] { border-left: 3px solid var(--bull); }
   &[data-outcome='unknown'] { border-left: 3px solid var(--warn); }
   div { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }

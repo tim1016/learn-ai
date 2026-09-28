@@ -266,6 +266,24 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         sseDelivered[pageLoad]?.[eventIndex]?.resolve();
         return;
       }
+      if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/evidence`)
+        && url.searchParams.get('client_hint') === 'bot-page-order-records') {
+        // The Order records fold reads its audit trail once opened: read-only,
+        // answered, and not part of this campaign's evidence-click surface.
+        await route.fulfill({ json: {
+          strategy_instance_id: STRATEGY_INSTANCE_ID, account_id: ACCOUNT_ID, transaction_ref: null,
+          entries: [], next_cursor: null, total_entries: 0, truncated: false,
+          read_by: 'operator:e2e', read_at_ms: 1_753_800_000_000,
+        } });
+        return;
+      }
+      if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/budget`)
+        || path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/chart/history`)) {
+        // The one view always shows the bot's money and its delayed history;
+        // both are reads outside this campaign, answered and not counted.
+        await route.fulfill({ status: 503, json: { detail: 'Outside this campaign.' } });
+        return;
+      }
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/evidence`)) {
         if (activeCorrelation === null) {
           await route.fulfill({ status: 409, body: 'No active SSE correlation.' });
@@ -429,18 +447,21 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       plannedPageLoad = pageLoad;
       if (pageLoad === 0) {
         await page.goto(
-          `/brokers/alpaca/clerks/${CLERK_ID}/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}?lens=operator`,
+          `/brokers/alpaca/clerks/${CLERK_ID}/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}`,
         );
       } else {
         await page.reload();
       }
-      const operatorTab = page.getByRole('tab', { name: 'Operator' });
-      const operatorTabSelected = await observeUntil(
-        () => operatorTab.getAttribute('aria-selected'),
-        (value) => value === 'true',
+      // One view (PRD #2560 D2): the transaction trace lives in the Order
+      // records fold, closed until the owner opens it.
+      const orderRecords = page.locator('details.fold', { hasText: 'Order records' });
+      await page.getByText('Order records', { exact: true }).click();
+      const orderRecordsOpen = await observeUntil(
+        () => orderRecords.getAttribute('open'),
+        (value) => value !== null,
       );
-      await acceptanceAssertion(testInfo, { check: 'operator tab selected', pageLoad }, () => {
-        expect(operatorTabSelected).toBe('true');
+      await acceptanceAssertion(testInfo, { check: 'order records fold open', pageLoad }, () => {
+        expect(orderRecordsOpen).not.toBeNull();
       });
       const deployAgainLink = page.getByRole('link', { name: /^Deploy again$/ });
       const deployAgainLinkVisible = await observeVisible(deployAgainLink);

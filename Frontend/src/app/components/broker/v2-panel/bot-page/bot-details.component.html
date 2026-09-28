@@ -1,0 +1,119 @@
+<section class="details" aria-labelledby="bot-details-title">
+  <h3 id="bot-details-title">Details</h3>
+
+  <details class="fold">
+    <summary><b>Exit terms</b> · {{ exitTerms() ? 'fixed for this bot' : 'none recorded' }}</summary>
+    <div class="fold__body">
+      @if (exitTerms(); as terms) {
+        <dl class="kv">
+          <div>
+            <dt>Exit allowance</dt>
+            <dd>{{ terms.exit_allowance_bps === null ? 'Not set' : terms.exit_allowance_bps + ' bps' }}</dd>
+          </div>
+          <div><dt>Band multiple</dt><dd>{{ terms.band_multiple }}×</dd></div>
+          <div><dt>Spread cap</dt><dd>{{ terms.spread_cap_bps }} bps</dd></div>
+        </dl>
+        @if (terms.provenance === 'backfilled') {
+          <p class="fine">These terms were filled in for a bot deployed before it recorded its own.</p>
+        }
+      } @else {
+        <p class="fine">This bot recorded no exit terms.</p>
+      }
+    </div>
+  </details>
+
+  <details class="fold">
+    <summary><b>Checks</b> · {{ panel().readiness_ready_count }} of {{ panel().readiness_checks.length }} pass</summary>
+    <div class="fold__body">
+      <app-operator-readiness
+        [panel]="panel()"
+        [bannerActionId]="panel().primary_action"
+        [actionPending]="actionPending()"
+        (actionRequested)="actionRequested.emit($event)"
+      />
+    </div>
+  </details>
+
+  <details class="fold">
+    <summary><b>Connections</b> · {{ connectionsStatus() }}</summary>
+    <div class="fold__body">
+      <app-bot-connections
+        [clerk]="panel().clerk"
+        [feedContinuity]="feedContinuity()"
+        [marketPulse]="panel().market_pulse"
+      />
+    </div>
+  </details>
+
+  <details #orderRecords class="fold" (toggle)="onOrderRecordsToggle(orderRecords.open)">
+    <summary><b>Order records</b> · {{ workingOrdersStatus() }}</summary>
+    <div class="fold__body">
+      <app-bot-order-records
+        [panel]="panel()"
+        [profile]="profile()"
+        [broker]="broker()"
+        [clerkId]="clerkId()"
+        [accountId]="accountId()"
+        [sid]="sid()"
+        [activated]="orderRecordsActivated()"
+        (transactionSelected)="transactionSelected.emit($event)"
+      />
+    </div>
+  </details>
+
+  <details class="fold">
+    <summary><b>Run evidence</b> · {{ panel().health.phase_label }}</summary>
+    <div class="fold__body">
+      <div class="program">
+        <h4>Program</h4>
+        @let build = panel().program_build;
+        <dl class="kv">
+          <div>
+            <dt>Program</dt>
+            <dd>
+              <code>{{ build.program_key }}</code>
+              @if (build.program_version; as version) { <code>{{ version }}</code> }
+            </dd>
+          </div>
+          <div>
+            <dt>Build proof</dt>
+            <dd>
+              {{ build.state | receiptLabel }}
+              <span class="fine">{{ build.explanation }}</span>
+              @if (build.next_step; as nextStep) { <span class="fine">{{ nextStep }}</span> }
+            </dd>
+          </div>
+          <div><dt>Checked</dt><dd><app-timestamp-display [value]="build.verified_at_ms" mode="local" /></dd></div>
+          @if (build.running_artifact_digest; as digest) {
+            <div><dt>Running build</dt><dd><code>{{ digest }}</code></dd></div>
+          }
+          @if (build.qualification_receipt_hash; as receiptHash) {
+            <div><dt>Qualification receipt</dt><dd><code>{{ receiptHash }}</code></dd></div>
+          }
+          @if (panel().sealed_program; as seal) {
+            <div><dt>Sealed</dt><dd><app-timestamp-display [value]="seal.sealed_at_ms" mode="local" /></dd></div>
+            <div><dt>Configuration hash</dt><dd><code>{{ seal.bot_configuration_hash }}</code></dd></div>
+            <div><dt>Signal hash</dt><dd><code>{{ seal.configured_signal_hash }}</code></dd></div>
+            <div><dt>Validation snapshot</dt><dd><code>{{ seal.validation_snapshot_sha256 }}</code></dd></div>
+          } @else {
+            <div><dt>Seal</dt><dd>No sealed program was recorded for this bot.</dd></div>
+          }
+        </dl>
+      </div>
+
+      <app-operator-run-history
+        [broker]="broker()"
+        [clerkId]="clerkId()"
+        [accountId]="accountId()"
+        [sid]="sid()"
+        [currentRunState]="currentRunState()"
+        (runRefreshRequested)="runRefreshRequested.emit()"
+        [botRunning]="panel().health.running"
+        [feedContinuity]="feedContinuity()"
+      />
+
+      <!-- Last: this card still carries an h2, and an h4 after it would skip a heading level. -->
+      <app-health-card [health]="panel().health" [startupJoin]="panel().startup_join ?? null" [exitActions]="[]" />
+    </div>
+  </details>
+</section>

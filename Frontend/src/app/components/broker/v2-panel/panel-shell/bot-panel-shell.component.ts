@@ -2,6 +2,9 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
+  Injector,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -9,11 +12,11 @@ import {
   linkedSignal,
   resource,
   signal,
+  viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
-import { firstValueFrom } from 'rxjs';
 
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -27,10 +30,6 @@ import {
   formatLimitPrice,
 } from '../../shared/extended-flatten-ticket/extended-flatten-ticket.component';
 import { FlattenFillsComponent } from '../../shared/flatten-fills/flatten-fills.component';
-import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
-import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
-import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
-import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
@@ -65,25 +64,32 @@ import {
   LANE_FENCE_REFRESH_FAILED_MESSAGE,
 } from '../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../fleet/open-lane-fence';
-import type { StockTickerSnapshot } from '../../../../graphql/types';
-import { MarketDataService } from '../../../../services/market-data.service';
 import { WorkspaceTitleContextService } from '../../../../shell/workspace-title-context.service';
-import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
   actionOutcomeToast,
   deriveActionRejection,
   extractActionErrorDetail,
   type ActionRejection,
 } from '../lib/panel-action-outcome';
-import { TraderLensComponent } from '../trader-lens/trader-lens.component';
-import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
 import { BotBannerComponent } from '../bot-banner/bot-banner.component';
+import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
+import { TradesTodayListComponent } from '../bot-page/trades-today-list.component';
+import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
+import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
+import { BotDetailsComponent } from '../bot-page/bot-details.component';
+import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
+import {
+  initialFlattenSteps,
+  runFlattenSequence,
+  type FlattenOutcome,
+  type FlattenRequest,
+  type FlattenStepId,
+  type FlattenStepView,
+} from '../bot-page/flatten-sequence';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
 } from './panel-action-receipt.component';
-
-type PanelLens = DeskLens;
 
 /** One command's ownership of this page (#2471).
  *
@@ -125,40 +131,28 @@ interface PreparedSafeFlatten {
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
 const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
 
-/** The market-tape header re-reads its delayed Polygon snapshot this often, so
- * an empty read around the open heals without a page reload (#2407). A failed
- * re-read hides the quote until the next one succeeds: no price beats a price
- * the tape can no longer vouch for. */
-const MARKET_SNAPSHOT_REFRESH_MS = 60_000;
-
-/** The snapshot's latest price, or null when it has none. Polygon reports an
- * unpopulated bar as zeros (the day bar before the delayed plan's first print),
- * and a zero is not a price. */
-function snapshotPrice(snapshot: StockTickerSnapshot | null): number | null {
-  for (const close of [snapshot?.day?.close, snapshot?.min?.close]) {
-    if (close !== null && close !== undefined && close > 0) return close;
-  }
-  return null;
-}
+/** The command each flatten step sends, named on a refusal's receipt. */
+const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_id']>> = {
+  reconcile: 'reconcile_now',
+  plan: 'prepare_safe_flatten',
+  sell: 'execute_safe_flatten',
+};
 
 /**
- * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
+ * The bot page (PRD #2560 D2): one view, no lens.
+ *
+ * Top to bottom: the header with the backend's one primary action; the last
+ * action's outcome, which takes the keyboard when it lands (story 48); for a
+ * stopped bot that still holds shares, the warning with Flatten beside it
+ * (stories 44–45); the day's chart beside "This bot's money"; fills and
+ * recent decisions; and the audit depth folded under Details (story 47).
  *
  * ## Shell responsibilities
- * - Route parameter extraction (broker, accountId, sid).
- * - Data loading: panel view (5s poll), live chart (5s poll), history chart
- *   (on preset change).
- * - Action execution (post to backend, re-poll on success).
- *
- * ## Lens architecture (S3 trader + S4 operator)
- * The `activeLens` signal determines which lens renders. The switch itself
- * lives in the global top bar (`ActiveLensBridgeService`) — this page
- * registers `activeLens` + `selectLens()` as its host while loaded, and
- * unregisters on destroy. Both lenses receive identical `panel` + `profile`
- * + `actionPending` inputs from the shell.
- *
- * The operator lens additionally receives `broker`, `accountId`, and `sid`
- * so it can call the operator-gated evidence endpoint directly.
+ * - Route parameter extraction (broker, clerk, account, sid).
+ * - Data loading: the live panel snapshot, the current run, the delayed
+ *   history chart.
+ * - Action execution, each command owned by the bot it was sent to (#2471),
+ *   including the one-confirmation Flatten sequence (hurdle H30).
  */
 @Component({
   selector: 'app-bot-panel-shell',
@@ -169,16 +163,19 @@ function snapshotPrice(snapshot: StockTickerSnapshot | null): number | null {
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
-    TraderLensComponent,
-    OperatorLensComponent,
     BotBannerComponent,
+    BotDayChartComponent,
+    BotDetailsComponent,
+    DeploymentBudgetComponent,
+    RecentDecisionsListComponent,
+    StrandedPositionWarningComponent,
     TimestampDisplayComponent,
+    TradesTodayListComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
   providers: [BotPanelLiveStore],
   host: {
-    '[class.bot-panel-shell--trader]': "activeLens() === 'trader'",
     '[class.is-stale]': 'liveStall() !== null',
   },
 })
@@ -194,28 +191,18 @@ export class BotPanelShellComponent {
 
   private readonly panelSvc = inject(BrokerV2PanelService);
   private readonly brokers = inject(BrokersService);
-  private readonly marketData = inject(MarketDataService);
   private readonly liveStore = inject(BotPanelLiveStore);
   private readonly destroyRef = inject(DestroyRef);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
-  private readonly lensPreference = inject(LensPreferenceService);
-  private readonly lensBridge = inject(ActiveLensBridgeService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly titleContext = inject(WorkspaceTitleContextService);
-
-  // ── Active lens ──────────────────────────────────────────────────────────
-  // Precedence: the `?lens=` query param, then the stored preference the
-  // account desk also shares, then 'trader'. Set via selectLens() or the
-  // shared tab widget.
+  private readonly injector = inject(Injector);
 
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
-  protected readonly activeLens = linkedSignal<PanelLens>(() =>
-    parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
-  );
 
   // ── The workspace tab this page belongs to ───────────────────────────────
   // A bot's page sits inside the account workspace, under the tab it was
@@ -270,7 +257,6 @@ export class BotPanelShellComponent {
 
   protected readonly selectedHistoryTimeframe = signal<ChartHistoryTimeframe>('1m');
   protected readonly liveResolution = signal<ChartLiveResolution>('5s');
-  protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
   /** The lane and bot this page is showing, as a value.
@@ -385,25 +371,22 @@ export class BotPanelShellComponent {
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
   });
 
-  private readonly marketSnapshot = resource({
-    params: () => this.panel()?.symbol,
-    loader: ({ params: symbol }) =>
-      firstValueFrom(this.marketData.getStockSnapshot(symbol)),
+  /** The bot holds shares: a quantity, not money, so no dollar is read here. */
+  protected readonly holdsShares = computed(() =>
+    Object.values(this.panel()?.exposure ?? {}).some((quantity) => quantity !== 0),
+  );
+
+  /** A stopped bot that still holds shares has no one managing them (H31). */
+  protected readonly stranded = computed(() => this.panel()?.health.running === false && this.holdsShares());
+
+  /** The flatten sequence's steps on this bot, once the owner confirmed one. */
+  protected readonly flattenSteps = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): readonly FlattenStepView[] | null => null,
   });
 
-  protected readonly tickerQuote = computed<TickerQuoteView | null>(() => {
-    const snapshot = this.marketSnapshot.hasValue()
-      ? this.marketSnapshot.value().snapshot
-      : null;
-    const price = snapshotPrice(snapshot);
-    if (price === null) return null;
-    return {
-      ticker: snapshot?.ticker ?? this.panel()?.symbol ?? '',
-      price,
-      change: snapshot?.todaysChange,
-      changePercent: snapshot?.todaysChangePercent ?? null,
-    };
-  });
+  private readonly receiptView = viewChild(PanelActionReceiptComponent);
+  private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
 
   /** FR-006 (#2202): history read identity is broker + clerk + account + sid
    * + timeframe only. `ResourceTarget.bindingGeneration`/`routingEpoch` fence
@@ -412,16 +395,13 @@ export class BotPanelShellComponent {
    * history underneath the user, even though nothing about what to read had
    * changed. */
   protected readonly histChart = resource({
-    params: () =>
-      this.activeLens() === 'trader'
-        ? {
-            broker: this.broker(),
-            clerkId: this.clerkId(),
-            accountId: this.accountId(),
-            sid: this.sid(),
-            timeframe: this.selectedHistoryTimeframe(),
-          }
-        : undefined,
+    params: () => ({
+      broker: this.broker(),
+      clerkId: this.clerkId(),
+      accountId: this.accountId(),
+      sid: this.sid(),
+      timeframe: this.selectedHistoryTimeframe(),
+    }),
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
         resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
@@ -438,8 +418,6 @@ export class BotPanelShellComponent {
   protected readonly isLoaded = computed(
     () => this.panel() !== null && this.profile.hasValue(),
   );
-
-  private lensUnregister: (() => void) | null = null;
 
   protected readonly loadError = computed(() => {
     const liveError = this.liveStore.error();
@@ -458,10 +436,6 @@ export class BotPanelShellComponent {
       }
     }, 5_000);
     this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
-    const snapshotPollTimer = setInterval(() => {
-      if (!this.marketSnapshot.isLoading()) this.marketSnapshot.reload();
-    }, MARKET_SNAPSHOT_REFRESH_MS);
-    this.destroyRef.onDestroy(() => clearInterval(snapshotPollTimer));
     effect(() => {
       const target = this.target();
       void this.liveStore.start({
@@ -479,36 +453,6 @@ export class BotPanelShellComponent {
     this.destroyRef.onDestroy(() => {
       this.titleContext.setBotLabel(null);
       this.liveStore.stop();
-    });
-    // The global top bar's one Trader/Operator toggle switches whichever
-    // page is mounted; this page is that host only once it has something to
-    // switch between.
-    effect(() => {
-      this.lensUnregister?.();
-      this.lensUnregister = this.isLoaded()
-        ? this.lensBridge.register({
-          lens: this.activeLens,
-          select: (lens) => this.selectLens(lens),
-          ariaLabel: 'Bot control perspective',
-        })
-        : null;
-    });
-    this.destroyRef.onDestroy(() => this.lensUnregister?.());
-  }
-
-  // ── Shell helpers for S4 extension ───────────────────────────────────────
-
-  /** Called by the shared tab widget to switch between lenses. */
-  protected selectLens(lens: PanelLens): void {
-    this.activeLens.set(lens);
-    this.lensPreference.write(lens);
-    if (lens === 'trader') {
-      this.selectedTransactionRef.set(null);
-      this.liveStore.clearSelectedTransaction();
-    }
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      ...lensNavigationExtras(lens),
     });
   }
 
@@ -544,6 +488,8 @@ export class BotPanelShellComponent {
         }
         this.actionReceipt.set(receipt);
         this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+        // The outcome takes the keyboard once it is on screen (story 48).
+        afterNextRender(() => this.receiptView()?.focus(), { injector: this.injector });
       },
     };
   }
@@ -557,7 +503,6 @@ export class BotPanelShellComponent {
   }
 
   protected onTransactionSelected(transactionRef: string): void {
-    this.selectedTransactionRef.set(transactionRef);
     void this.liveStore.selectTransaction(transactionRef);
   }
 
@@ -635,12 +580,96 @@ export class BotPanelShellComponent {
     }
   }
 
+  /**
+   * Flatten a stopped bot's stranded position on one confirmation (H30).
+   *
+   * The owner confirmed exactly this symbol and quantity; the sequence
+   * reconciles, prepares, checks the plan sells precisely that, and sends it
+   * — every step bound to the lane, account and bot the owner confirmed on.
+   * Outside regular hours it stops at the verified plan and opens the
+   * extended-hours ticket, where the owner sets the limit price.
+   */
+  protected async onFlattenConfirmed(request: FlattenRequest): Promise<void> {
+    if (this.actionPending()) return;
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.beginActionOwnership().deliverOutcome({
+        actionId: 'reconcile_now', outcome: 'conflict', receiptId: null,
+        recordedAtMs: Date.now(), message: verdict.message, remediation: null,
+      });
+      return;
+    }
+    const target = fencedTarget(this.target(), fence);
+    const sid = this.sid();
+    const ownership = this.beginActionOwnership();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    this.preparedFlatten.set(null);
+    this.flattenSteps.set(initialFlattenSteps());
+    try {
+      const outcome = await runFlattenSequence({
+        readPanel: () => this.panelSvc.getPanel(target, sid),
+        runAction: (action) => this.panelSvc.runBotAction(this.commandTarget(target), sid, action),
+        checkPlan: (prepare) => this.brokers.checkSqliteSafeFlatten(
+          target.clerkId,
+          this.requiredAccountId(target),
+          { action_id: 'prepare_safe_flatten', concurrency_token: prepare.concurrency_token },
+          sid,
+        ),
+        report: (step, state, message) => {
+          if (!ownership.stillOwns()) return;
+          this.flattenSteps.update((steps) =>
+            steps?.map((item) => (item.id === step ? { ...item, state, message } : item)) ?? null);
+        },
+      }, request);
+      this.finishFlatten(outcome, ownership, target, sid);
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  private finishFlatten(
+    outcome: FlattenOutcome,
+    ownership: ActionOwnership,
+    target: ResourceTarget,
+    sid: string,
+  ): void {
+    switch (outcome.kind) {
+      case 'sold':
+        ownership.deliverOutcome(this.successReceipt(outcome.result));
+        return;
+      case 'needs_limit':
+        if (!ownership.stillOwns()) return;
+        this.preparedFlatten.set({
+          plan: outcome.plan, pricing: outcome.pricing, receivedAtMs: Date.now(), target, sid, quoteError: null,
+        });
+        afterNextRender(() => this.flattenTicketView()?.nativeElement.focus(), { injector: this.injector });
+        return;
+      case 'failed':
+        ownership.deliverOutcome({
+          actionId: FLATTEN_STEP_ACTIONS[outcome.step],
+          outcome: outcome.rejection.outcome,
+          receiptId: null,
+          recordedAtMs: Date.now(),
+          message: outcome.rejection.message,
+          remediation: outcome.rejection.why,
+        });
+        if (outcome.rejection.reasonCode === 'clerk_binding_generation_conflict') {
+          void this.fleetDirectory.refresh().catch(() => {
+            this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+          });
+        }
+        return;
+    }
+  }
+
   private async prepareSafeFlatten(
     action: PanelAction,
     target: ResourceTarget,
     sid: string,
   ): Promise<void> {
-    this.selectLens('operator');
     const ownership = this.beginActionOwnership();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
@@ -928,10 +957,7 @@ export class BotPanelShellComponent {
   }
 
   private custodyTimelineQuery(action: PanelAction, sid: string): Record<string, string> {
-    const query: Record<string, string> = {
-      lens: 'operator',
-      timelineBot: sid,
-    };
+    const query: Record<string, string> = { timelineBot: sid };
     for (const reference of action.evidence_refs ?? []) {
       const separator = reference.indexOf(':');
       if (separator < 1 || separator === reference.length - 1) continue;
