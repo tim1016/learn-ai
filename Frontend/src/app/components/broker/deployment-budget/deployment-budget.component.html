@@ -9,8 +9,8 @@
     <p><strong>{{ report.headline }}</strong></p>
     <p>{{ report.detail }}</p>
     @if (report.state === 'ready') {
-      @if (slice(); as segments) {
-        <app-money-bar size="detail" [segments]="segments" caption="This bot's slice" />
+      @if (report.segment; as segment) {
+        <app-money-bar size="detail" [segments]="[segment]" caption="This bot's slice" />
       }
       <dl class="deployment-budget__statement">
         @for (line of statement(); track line.label) {

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
-import { BrokerV2PanelService, type DeploymentBudgetView } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type DeploymentBudgetView, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeploymentBudgetComponent } from './deployment-budget.component';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
@@ -30,6 +30,13 @@ const RUNNING: DeploymentBudgetView = {
   observed_at_ms: 1_800_000_000_000,
 };
 
+const STOPPED_SEGMENT: MoneySegment = {
+  kind: 'stopped', strategy_instance_id: 'spy-ema-b', label: 'held by stopped bot spy-ema-b', amount_usd: '670.43',
+  share_bps: 10000, released_usd: '319.54', still_claimed_usd: '0.00', palette_index: 1,
+};
+
+/** Python's stopped statement: released, still in shares and still in entry
+ * orders add up to its balance, and its slice is the one Home draws. */
 const STOPPED: DeploymentBudgetView = {
   state: 'ready', headline: 'Stopped · still holds shares',
   detail: 'Its free budget was released when it stopped. The money in its shares comes back when they are sold.',
@@ -41,14 +48,43 @@ const STOPPED: DeploymentBudgetView = {
     { label: 'Balance', amount_usd: '989.97', total: true },
     { label: 'Released at stop', amount_usd: '319.54' },
     { label: 'Still in shares, at cost', amount_usd: '670.43' },
-    { label: 'Waiting on orders, fills or fees', amount_usd: '0.00' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
   ],
-  segment: {
-    kind: 'stopped', strategy_instance_id: 'spy-ema-b', label: 'held by stopped bot spy-ema-b', amount_usd: '670.43',
-    share_bps: 10000, released_usd: '319.54', still_claimed_usd: '0.00', palette_index: 1,
-  },
+  segment: STOPPED_SEGMENT,
   note: null,
   observed_at_ms: 1_800_000_000_000,
+};
+
+/** A stopped bot whose shares cost more than its balance: Python names the overspend. */
+const OVERSPENT: DeploymentBudgetView = {
+  ...STOPPED,
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '-400.00' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '599.97', total: true },
+    { label: 'Released at stop', amount_usd: '0.00' },
+    { label: 'Still in shares, at cost', amount_usd: '670.43' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+    { label: 'Over its budget by', amount_usd: '70.46' },
+  ],
+  segment: { ...STOPPED_SEGMENT, released_usd: '0.00' },
+};
+
+/** Stopped, flat and with nothing still claimed: it holds no money, so no slice. */
+const FINISHED: DeploymentBudgetView = {
+  ...STOPPED,
+  headline: 'Stopped · fully released',
+  statement: [
+    { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
+    { label: 'Realized gains and losses', amount_usd: '-10.00' },
+    { label: 'Fees', amount_usd: '-0.03' },
+    { label: 'Balance', amount_usd: '989.97', total: true },
+    { label: 'Released at stop', amount_usd: '989.97' },
+    { label: 'Still in shares, at cost', amount_usd: '0.00' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
+  ],
+  segment: null,
 };
 
 const UNAVAILABLE: DeploymentBudgetView = {
@@ -64,7 +100,6 @@ const LEGACY: DeploymentBudgetView = {
 };
 
 interface CardInputs {
-  readonly running?: boolean;
   readonly holdsShares?: boolean;
   readonly openPnl?: number | null;
   /** The same figure as the page shell formats it. */
@@ -76,11 +111,11 @@ async function renderCard(getBudget: ReturnType<typeof vi.fn>, inputs: CardInput
   const revision = signal(1);
   const result = await render(
     `<main aria-label="Bot"><app-deployment-budget [target]="target" strategyInstanceId="spy-ema-a" [revision]="revision()"
-      [running]="running" [holdsShares]="holdsShares" [openPnl]="openPnl" [openPnlText]="openPnlText" /></main>`,
+      [holdsShares]="holdsShares" [openPnl]="openPnl" [openPnlText]="openPnlText" /></main>`,
     {
       imports: [DeploymentBudgetComponent],
       componentProperties: {
-        target: TARGET, revision, running: inputs.running ?? true,
+        target: TARGET, revision,
         holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null, openPnlText: inputs.openPnlText ?? null,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }],
@@ -137,7 +172,7 @@ describe("This bot's money", () => {
     expect(screen.queryByText('Paper')).toBeNull();
   });
 
-  it('draws the running slice as its whole balance, shaded at the backend’s basis points', async () => {
+  it('draws the running bot’s slice exactly as Python wrote it — Home’s slice, shaded by its parts', async () => {
     const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
     await screen.findByText('Holding its position');
 
@@ -152,11 +187,11 @@ describe("This bot's money", () => {
     ]);
     const legend = screen.getByRole('list', { name: "This bot's slice" });
     expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
-      .toBe('Balance $1,012.37 in shares $764.71 · in entry orders $0.00 · free $247.66');
+      .toBe('spy-ema-a $1,012.37 in shares $764.71 · in entry orders $0.00 · free $247.66');
   });
 
-  it('shows a stopped bot’s released and still-held money with a stopped slice', async () => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED), { running: false });
+  it('shows a stopped bot’s released and still-held money adding up to its balance, with Home’s striped slice', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED));
 
     await screen.findByText('Stopped · still holds shares');
     expect(statementRows()).toEqual([
@@ -166,16 +201,36 @@ describe("This bot's money", () => {
       ['Balance', '$989.97', true],
       ['Released at stop', '$319.54', false],
       ['Still in shares, at cost', '$670.43', false],
-      ['Waiting on orders, fills or fees', '$0.00', false],
+      ['Still in entry orders', '$0.00', false],
     ]);
     expect(slices(container).map((slice) => [slice.className, slice.style.flexGrow])).toEqual([
       ['money-bar__slice money-bar__slice--stopped', '10000'],
     ]);
-    expect(parts(container)).toEqual([
-      ['money-bar__part money-bar__part--shares', '10000'],
-      ['money-bar__part money-bar__part--pending', '0'],
-      ['money-bar__part money-bar__part--free', '0'],
+    expect(parts(container)).toEqual([]);
+    const legend = screen.getByRole('list', { name: "This bot's slice" });
+    expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
+      .toBe('held by stopped bot spy-ema-b $670.43 released $319.54 · still claimed $0.00');
+  });
+
+  it('names what a stopped bot spent beyond its balance, only when Python says it did', async () => {
+    await renderCard(vi.fn().mockResolvedValue(OVERSPENT));
+
+    await screen.findByText('Stopped · still holds shares');
+    expect(statementRows().slice(3)).toEqual([
+      ['Balance', '$599.97', true],
+      ['Released at stop', '$0.00', false],
+      ['Still in shares, at cost', '$670.43', false],
+      ['Still in entry orders', '$0.00', false],
+      ['Over its budget by', '$70.46', false],
     ]);
+  });
+
+  it('draws no slice for a finished bot, which holds no money', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(FINISHED));
+
+    await screen.findByText('Stopped · fully released');
+    expect(container.querySelector('app-money-bar')).toBeNull();
+    expect(statementRows()).toContainEqual(['Released at stop', '$989.97', false]);
   });
 
   it.each([['unavailable', UNAVAILABLE], ['legacy', LEGACY]])('shows only the headline and detail when the money is %s', async (_state, view) => {
@@ -240,8 +295,8 @@ describe("This bot's money", () => {
     expect(screen.getByRole('status').textContent).toBe("Reading this bot's money…");
   });
 
-  it.each([['running', RUNNING, true], ['stopped', STOPPED, false]])('has no detectable accessibility violations when %s', async (_name, view, running) => {
-    await renderCard(vi.fn().mockResolvedValue(view), { running, holdsShares: true, openPnl: 12.5, openPnlText: '$12.50' });
+  it.each([['running', RUNNING], ['stopped', STOPPED]])('has no detectable accessibility violations when %s', async (_name, view) => {
+    await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: 12.5, openPnlText: '$12.50' });
     await screen.findByText(view.headline);
 
     await expectAxeClean();

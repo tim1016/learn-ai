@@ -3,7 +3,7 @@ import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
-import { BrokerV2PanelService, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 
 let nextHeadingId = 0;
 
@@ -12,9 +12,10 @@ let nextHeadingId = 0;
  *
  * Python authors the headline, the detail, every statement line and every
  * dollar; this card renders them verbatim and in order, and does no money
- * arithmetic. The slice is the bot's whole balance — the statement's total
- * line — shaded by Python's `parts`. Open gain or loss on shares is a note,
- * never in the bar.
+ * arithmetic. The slice is the one Home draws for this bot (`segment`), as
+ * Python wrote it: a running bot's balance shaded by its parts, a stopped
+ * bot's still-held money with what it released; a finished bot has none.
+ * Open gain or loss on shares is a note, never in the bar.
  */
 @Component({
   selector: 'app-deployment-budget',
@@ -27,8 +28,6 @@ export class DeploymentBudgetComponent {
   readonly target = input.required<ResourceTarget>();
   readonly strategyInstanceId = input.required<string>();
   readonly revision = input(0);
-  /** Running shows where the balance is; stopped shows what was released and what is still held. */
-  readonly running = input.required<boolean>();
   readonly holdsShares = input(false);
   /** The bot panel's open gain or loss on shares; null when there is no current price. */
   readonly openPnl = input<number | null>(null);
@@ -46,9 +45,4 @@ export class DeploymentBudgetComponent {
   });
   protected readonly view = computed(() => this.budget.hasValue() ? this.budget.value() : null);
   protected readonly statement = computed(() => this.view()?.statement ?? []);
-  /** D6: one slice, the bot's whole balance, taken as Python wrote it. */
-  protected readonly slice = computed<readonly MoneySegment[] | null>(() => {
-    const segment = this.view()?.segment ?? null;
-    return segment === null ? null : [segment];
-  });
 }

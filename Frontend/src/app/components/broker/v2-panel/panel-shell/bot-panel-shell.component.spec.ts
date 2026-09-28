@@ -504,11 +504,15 @@ const STOPPED_BUDGET: DeploymentBudgetView = {
   ...RUNNING_BUDGET,
   headline: 'Stopped · still holds shares',
   detail: 'Its free budget was released when it stopped. The money in its shares comes back when they are sold.',
+  segment: {
+    kind: 'stopped', strategy_instance_id: 'sid-001', label: 'held by stopped bot sid-001', amount_usd: '764.71',
+    share_bps: 10000, released_usd: '235.28', still_claimed_usd: '0.00', palette_index: 0,
+  },
   statement: [
     ...BUDGET_RESULTS,
     { label: 'Released at stop', amount_usd: '235.28' },
     { label: 'Still in shares, at cost', amount_usd: '764.71' },
-    { label: 'Waiting on orders, fills or fees', amount_usd: '0.00' },
+    { label: 'Still in entry orders', amount_usd: '0.00' },
   ],
   note: null,
 };
@@ -2251,8 +2255,12 @@ describe('BotPanelShellComponent', () => {
       )).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Deploy again' }).getAttribute('href'))
         .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/deploy?from=sid-001');
-      expect(statement()).toContain('Released at stop $235.28');
-      expect(statement()).toContain('Still in shares, at cost $764.71');
+      expect(statement().slice(3)).toEqual([
+        'Balance $999.99',
+        'Released at stop $235.28',
+        'Still in shares, at cost $764.71',
+        'Still in entry orders $0.00',
+      ]);
     });
 
     it('marks a Dry Run bot as simulated cash', async () => {
