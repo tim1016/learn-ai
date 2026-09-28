@@ -22,7 +22,10 @@ const RUNNING: DeploymentBudgetView = {
     { label: 'Free to trade', amount_usd: '247.66' },
     { label: 'Short of its next entry', amount_usd: '0.00' },
   ],
-  parts: { in_shares_usd: '764.71', in_shares_bps: 7554, pending_usd: '0.00', pending_bps: 0, free_usd: '247.66', free_bps: 2446 },
+  segment: {
+    kind: 'bot', strategy_instance_id: 'spy-ema-a', label: 'spy-ema-a', amount_usd: '1012.37', share_bps: 10000, palette_index: 0,
+    parts: { in_shares_usd: '764.71', in_shares_bps: 7554, pending_usd: '0.00', pending_bps: 0, free_usd: '247.66', free_bps: 2446 },
+  },
   note: 'The budget limits new entries. Market fills and losses can go past it.',
   observed_at_ms: 1_800_000_000_000,
 };
@@ -40,7 +43,10 @@ const STOPPED: DeploymentBudgetView = {
     { label: 'Still in shares, at cost', amount_usd: '670.43' },
     { label: 'Waiting on orders, fills or fees', amount_usd: '0.00' },
   ],
-  parts: { in_shares_usd: '670.43', in_shares_bps: 10000, pending_usd: '0.00', pending_bps: 0, free_usd: '0.00', free_bps: 0 },
+  segment: {
+    kind: 'stopped', strategy_instance_id: 'spy-ema-b', label: 'held by stopped bot spy-ema-b', amount_usd: '670.43',
+    share_bps: 10000, released_usd: '319.54', still_claimed_usd: '0.00', palette_index: 1,
+  },
   note: null,
   observed_at_ms: 1_800_000_000_000,
 };
@@ -61,6 +67,8 @@ interface CardInputs {
   readonly running?: boolean;
   readonly holdsShares?: boolean;
   readonly openPnl?: number | null;
+  /** The same figure as the page shell formats it. */
+  readonly openPnlText?: string | null;
 }
 
 /** Rendered where the bot page puts it — inside a landmark — with the page shell's bindings. */
@@ -68,12 +76,12 @@ async function renderCard(getBudget: ReturnType<typeof vi.fn>, inputs: CardInput
   const revision = signal(1);
   const result = await render(
     `<main aria-label="Bot"><app-deployment-budget [target]="target" strategyInstanceId="spy-ema-a" [revision]="revision()"
-      [running]="running" [holdsShares]="holdsShares" [openPnl]="openPnl" /></main>`,
+      [running]="running" [holdsShares]="holdsShares" [openPnl]="openPnl" [openPnlText]="openPnlText" /></main>`,
     {
       imports: [DeploymentBudgetComponent],
       componentProperties: {
         target: TARGET, revision, running: inputs.running ?? true,
-        holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null,
+        holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null, openPnlText: inputs.openPnlText ?? null,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }],
     },
@@ -171,7 +179,7 @@ describe("This bot's money", () => {
   });
 
   it.each([['unavailable', UNAVAILABLE], ['legacy', LEGACY]])('shows only the headline and detail when the money is %s', async (_state, view) => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: 4.5 });
+    const { container } = await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: 4.5, openPnlText: '$4.50' });
 
     await screen.findByText(view.headline);
     expect(screen.getByText(view.detail)).toBeTruthy();
@@ -183,7 +191,7 @@ describe("This bot's money", () => {
   });
 
   it('notes the open gain or loss on shares apart from the bar while it holds shares', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: -3.25 });
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: -3.25, openPnlText: '-$3.25' });
 
     const note = await screen.findByText(/Open gain or loss on shares:/);
     expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe('Open gain or loss on shares: -$3.25, counted when sold.');
@@ -196,7 +204,7 @@ describe("This bot's money", () => {
   });
 
   it('has no open gain or loss note when it holds no shares', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: 7 });
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: 7, openPnlText: '$7.00' });
 
     await screen.findByText('Holding its position');
     expect(screen.queryByText(/Open gain or loss/)).toBeNull();
@@ -233,7 +241,7 @@ describe("This bot's money", () => {
   });
 
   it.each([['running', RUNNING, true], ['stopped', STOPPED, false]])('has no detectable accessibility violations when %s', async (_name, view, running) => {
-    await renderCard(vi.fn().mockResolvedValue(view), { running, holdsShares: true, openPnl: 12.5 });
+    await renderCard(vi.fn().mockResolvedValue(view), { running, holdsShares: true, openPnl: 12.5, openPnlText: '$12.50' });
     await screen.findByText(view.headline);
 
     await expectAxeClean();
