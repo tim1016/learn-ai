@@ -18586,8 +18586,6 @@ export interface components {
         LiveGraduationPlanView: {
             /** Account Id */
             account_id: string;
-            /** Arming Max Sessions */
-            arming_max_sessions: number;
             /** Backup Reference */
             backup_reference: string;
             /** Broker Observed At Ms */

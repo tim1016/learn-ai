@@ -24359,11 +24359,6 @@
             "title": "Account Id",
             "type": "string"
           },
-          "arming_max_sessions": {
-            "minimum": 1.0,
-            "title": "Arming Max Sessions",
-            "type": "integer"
-          },
           "backup_reference": {
             "title": "Backup Reference",
             "type": "string"
@@ -24454,7 +24449,6 @@
           "backup_reference",
           "daily_loss_fraction",
           "daily_loss_usd",
-          "arming_max_sessions",
           "extended_hours_entry_bps",
           "extended_hours_exit_bps",
           "consequence"
