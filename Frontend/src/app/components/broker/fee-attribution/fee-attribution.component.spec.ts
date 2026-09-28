@@ -50,4 +50,14 @@ describe('deployment fees', () => {
     await screen.findByText(/account Clerk is offline/);
     expect(screen.queryByText('No fee-bearing activity has been recorded.')).toBeNull();
   });
+
+  it('announces a failed fee read as an alert, like its sibling error rows', async () => {
+    const read = vi.fn().mockRejectedValue(new Error('network down'));
+    await render(FeeAttributionComponent, {
+      inputs: { target: TARGET, strategyInstanceId: null },
+      providers: [{ provide: BrokersService, useValue: { getFeeAttribution: read } }],
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Fee evidence is unavailable. Refresh to retry.');
+  });
 });
