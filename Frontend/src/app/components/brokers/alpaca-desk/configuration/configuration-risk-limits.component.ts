@@ -23,10 +23,22 @@ export class ConfigurationRiskLimitsComponent {
     params: () => this.clerkId(),
     loader: ({ params }) => this.service.readRiskLimits(params),
   });
-  protected readonly draft = linkedSignal(() => ({
-    loss_fraction: this.state.hasValue() ? this.state.value().loss_fraction : null,
-    loss_usd: this.state.hasValue() ? this.state.value().loss_usd : null,
-  }));
+  // Seeded from a `computed` with an explicit `equal`, like every other draft
+  // editor on this surface: a `linkedSignal` source *function* re-seeds
+  // whenever its dependencies change even if its value has not, and a refusal
+  // banner's "Reload configuration" reloads this same `state` resource —
+  // which would silently discard a typed-but-unapplied edit.
+  private readonly storedLimits = computed(
+    () => ({
+      loss_fraction: this.state.hasValue() ? this.state.value().loss_fraction : null,
+      loss_usd: this.state.hasValue() ? this.state.value().loss_usd : null,
+    }),
+    { equal: (a, b) => a.loss_fraction === b.loss_fraction && a.loss_usd === b.loss_usd },
+  );
+  protected readonly draft = linkedSignal({
+    source: this.storedLimits,
+    computation: (limits) => limits,
+  });
   protected readonly fields = form(this.draft);
   protected readonly busy = linkedSignal(() => { this.clerkId(); return false; });
   protected readonly refusal = linkedSignal<string, ConfigurationRefusal | null>({ source: this.clerkId, computation: () => null });
