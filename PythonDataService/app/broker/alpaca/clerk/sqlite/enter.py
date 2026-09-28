@@ -228,6 +228,7 @@ def accept_enter(
                 leg=leg,
                 reference_price=reference_price,
                 now_ms=repo.clock(),
+                strategy_instance_id=strategy_instance_id,
             )
         )
         effect_operation_id = f"effect:{idempotency_key}"
@@ -243,6 +244,8 @@ def accept_enter(
             effect_kind="ENTER",
             decision_id=decision_id,
             leg=leg.model_dump(mode="json"),
+            cash_reference_price=None if reservation is None else reservation.exact_reference_price,
+            fee_provision_cents=0 if reservation is None else reservation.fee_provision_cents,
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
@@ -257,7 +260,9 @@ def accept_enter(
             clerk_observed_at_ms=repo.clock(),
             summary_code="ENTER_ACCEPTED",
             facts_json=facts.to_facts_json(),
-            envelope_reservation=reservation,
+            envelope_reservation=(
+                reservation if reservation is None or reservation.exact_reference_price is None else None
+            ),
         )
 
     outcome = repo.commit_first_transition(

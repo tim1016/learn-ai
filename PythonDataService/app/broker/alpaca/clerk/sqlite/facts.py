@@ -196,9 +196,15 @@ class EnterAcceptedFacts:
     # already-dumped, already-validated leg is the one shape that keeps every
     # facts dataclass here going through the same to/from_facts_json pair.
     leg: dict[str, Any]
+    cash_reference_price: str | None = None
+    fee_provision_cents: int = 0
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        facts = asdict(self)
+        if self.cash_reference_price is None:
+            facts.pop("cash_reference_price")
+            facts.pop("fee_provision_cents")
+        return canonicalize(facts)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> EnterAcceptedFacts:

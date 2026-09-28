@@ -13,6 +13,7 @@ clock, like every other stamp on this path.
 
 from __future__ import annotations
 
+from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_CASH_EXCEEDED,
     LIVE_ENVELOPE_DISAGREEMENT,
@@ -20,13 +21,15 @@ from app.broker.alpaca.clerk.live_envelope import (
     EnvelopeReservation,
     LiveEnvelopeGate,
 )
-from app.broker.alpaca.clerk.money import MoneyInputError, cash_admits, notional
+from app.broker.alpaca.clerk.money import MoneyInputError, cash_admits, money_context, normalize_money, notional
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     Capability,
     CapabilityDecision,
 )
+from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
 
 
@@ -48,6 +51,7 @@ def require_envelope_admission(
     leg: BrokerOrderLeg,
     reference_price: float | None,
     now_ms: int,
+    strategy_instance_id: str | None = None,
 ) -> EnvelopeReservation:
     """Admit one ENTER against the envelope, or raise; returns what it reserves."""
     if leg.side is not OrderSide.BUY:
@@ -82,7 +86,21 @@ def require_envelope_admission(
         reserved = repo.reserved_cash_decimal(seen_before_ms=observation.fills_seen_before_ms)
         required = notional(leg.quantity, price)
         affordable = cash_admits(cash=observation.cash_available_usd, claims=reserved, required=required)
-    except MoneyInputError as exc:
+        if strategy_instance_id is not None and repo.deployment_budget(strategy_instance_id) is not None:
+            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms)
+            own = next(budget for budget in projection.deployments if budget.strategy_instance_id == strategy_instance_id)
+            required, fee_cents = entry_requirement(quantity=leg.quantity, price=price, at_ms=now_ms)
+            with money_context():
+                affordable = own.active and required <= own.free and cash_admits(
+                    cash=observation.cash_available_usd,
+                    claims=projection.active_free_claims - own.cash_claim + projection.order_claims + projection.fee_claims,
+                    required=required,
+                )
+            reservation = EnvelopeReservation(
+                quantity=leg.quantity, reference_price=float(price),
+                exact_reference_price=str(normalize_money(price)), fee_provision_cents=fee_cents,
+            )
+    except (MoneyInputError, BudgetUnavailable, RateNotPinnedError) as exc:
         raise _refuse(LIVE_ENVELOPE_UNOBSERVED, str(exc)) from exc
     if not affordable:
         raise _refuse(

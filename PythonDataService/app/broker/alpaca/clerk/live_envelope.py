@@ -209,10 +209,12 @@ class EnvelopeReservation:
 
     quantity: float
     reference_price: float
+    exact_reference_price: str | None = None
+    fee_provision_cents: int = 0
 
     @property
     def notional_usd(self) -> float:
-        return float(notional(self.quantity, self.reference_price))
+        return float(notional(self.quantity, self.exact_reference_price or self.reference_price))
 
 
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:

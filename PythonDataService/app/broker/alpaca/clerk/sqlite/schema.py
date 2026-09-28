@@ -18,6 +18,7 @@ import sqlite3
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite.account_risk import SCHEMA_V19_STATEMENTS
+from app.broker.alpaca.clerk.sqlite.budget_schema import BUDGET_SCHEMA_DDL, BUDGET_SCHEMA_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     COMMAND_SUBJECT_COMPATIBILITY_DDL,
     CUSTODY_SUBJECT_IDENTITY_DDL,
@@ -38,7 +39,7 @@ from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_un
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -752,6 +753,8 @@ SCHEMA_DDL = (
     + "\n\n"
     + SCHEMA_V18_DDL
     + "\n".join(f"{statement};" for statement in SCHEMA_V19_STATEMENTS)
+    + "\n\n"
+    + BUDGET_SCHEMA_DDL
 ).rstrip("\n")
 
 
@@ -979,6 +982,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     16: SCHEMA_V17_STATEMENTS,
     17: SCHEMA_V18_STATEMENTS,
     18: SCHEMA_V19_STATEMENTS,
+    19: BUDGET_SCHEMA_STATEMENTS,
 }
 
 

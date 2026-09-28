@@ -59,13 +59,15 @@ def append_envelope_reservation_row(
     """Insert one reservation. Caller supplies the open transaction."""
     conn.execute(
         "INSERT INTO envelope_reservations "
-        "(effect_operation_id, quantity, reference_price, reserved_at_ms) "
-        "VALUES (?, ?, ?, ?)",
+        "(effect_operation_id, quantity, reference_price, reserved_at_ms, exact_reference_price, fee_provision_cents) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             effect_operation_id,
             reservation.quantity,
             reservation.reference_price,
             reserved_at_ms,
+            reservation.exact_reference_price,
+            reservation.fee_provision_cents,
         ),
     )
 
@@ -79,6 +81,7 @@ class EntryCashClaim:
     unfilled_cost: Decimal
     unseen_fill_cost: Decimal
     unseen_reported_fees: Decimal
+    unfilled_fee: Decimal = ZERO
 
 
 def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple[EntryCashClaim, ...]:
@@ -107,7 +110,8 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
 
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
-        "SELECT r.quantity AS quantity, r.reference_price AS reference_price, "
+        "SELECT r.quantity AS quantity, COALESCE(r.exact_reference_price,r.reference_price) AS reference_price, "
+        "r.fee_provision_cents, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
         "LOWER(o.broker_state) AS state, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
@@ -146,6 +150,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,
                 unfilled_cost=unfilled, unseen_fill_cost=unseen_cost,
                 unseen_reported_fees=unseen_fees,
+                unfilled_fee=Decimal(first["fee_provision_cents"]) / 100 if unfilled > ZERO else ZERO,
             ))
     return tuple(claims)
 
@@ -159,7 +164,7 @@ def reserved_cash_decimal(conn: sqlite3.Connection, *, seen_before_ms: int) -> D
     Validated against: tests/broker/alpaca/clerk/sqlite/test_envelope_reservations.py.
     """
     with money_context():
-        return sum((claim.unfilled_cost + claim.unseen_fill_cost for claim in
+        return sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in
                     entry_cash_claims(conn, seen_before_ms=seen_before_ms)), ZERO)
 
 

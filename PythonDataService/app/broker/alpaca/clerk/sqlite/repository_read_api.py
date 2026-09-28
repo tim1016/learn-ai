@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.budgets import AccountBudget
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 
@@ -749,3 +750,18 @@ class ClerkSqliteRepositoryReadApi:
         """Canonical exact claim total for cash admission, under the write fence."""
         with self._write_lock:
             return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)
+
+    def deployment_budget(self: ClerkSqliteRepository, strategy_instance_id: str) -> dict | None:
+        """Immutable consent and its durable launch/release outcome."""
+        with self._write_lock:
+            row = self._conn.execute("SELECT * FROM deployment_budgets WHERE strategy_instance_id=?", (strategy_instance_id,)).fetchone()
+            return None if row is None else dict(row)
+
+    def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int) -> AccountBudget:
+        """One revision-coherent money authority for preview and admission."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget
+        from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
+
+        with self._write_lock:
+            fees = custody_fee_attribution(self._conn, now_ms=self.clock())
+            return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees)

@@ -29,3 +29,17 @@ actual execution prices, reported fees, observation grace and correction
 lineage (#2441/#2442). Exact decimal results use equality (zero tolerance).
 Compatibility float assertions retain the existing tests' tolerance; these
 adapters never determine admission.
+
+The deployment projection is `clerk/budgets.py`, composed over canonical
+FIFO, effective fills and fee attribution by `sqlite/budget_projection.py`.
+An active deployment claims only its positive free balance. Working orders,
+unseen fills and unsettled fees retain separate, disjoint claims after Stop.
+A historical deficit cannot reserve future deposits. The immutable commitment
+and launch/release outcomes replay through the existing custody mirror.
+
+Independent conservation fixtures in `test_budgets.py` cover the $1,000/$600
+example, partial fills, observed cash, settlement replacement and historical
+deficits. Real repository tests in `sqlite/test_budget_commands.py` prove
+concurrent commitment exclusion, response-loss idempotency, startup-failure
+release and mirror rebuild retaining stopped order claims. Exact decimal
+assertions use zero tolerance. These tests do not claim complete UI delivery.

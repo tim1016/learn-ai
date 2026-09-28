@@ -1046,6 +1046,27 @@ class ClerkSqliteRepository(
     # own domain module built on top of this and append_transition().
     # ------------------------------------------------------------------
 
+    def record_deploy_launched(self, *, strategy_instance_id: str, lifecycle_run_id: str) -> None:
+        """Idempotently record process launch while the consent's run is active."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+
+        with self._write_lock:
+            budget = self.deployment_budget(strategy_instance_id)
+            if budget is None:
+                raise BudgetUnavailable("No deployment consent exists for this run.")
+            run = self.active_run(strategy_instance_id)
+            if run is None or run.lifecycle_run_id != lifecycle_run_id or budget["released_at_ms"] is not None:
+                raise BudgetUnavailable("A stopped deployment cannot launch again.")
+            if budget["launched_at_ms"] is not None:
+                return
+            self.append_transition(TransitionInput(
+                strategy_instance_id=strategy_instance_id, run_id=run.run_id,
+                command_id=budget["command_id"], transition_kind="DEPLOY_LAUNCHED",
+                custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded", clerk_observed_at_ms=self.clock(),
+                summary_code="DEPLOY_LAUNCHED", facts_json="{}",
+            ))
+
     def commit_first_transition(
         self,
         *,
