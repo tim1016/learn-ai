@@ -20,6 +20,13 @@ import {
 } from './live-graduation.service';
 
 type CeremonyPhase = 'idle' | 'planning' | 'review' | 'activating' | 'applying' | 'restarting';
+type StageProgress = 'done' | 'current' | 'todo';
+
+/** A stage's progress in words, so the rail never states it by colour alone. */
+const PROGRESS_LABEL: Readonly<Record<Exclude<StageProgress, 'todo'>, string>> = {
+  done: 'done',
+  current: 'now',
+};
 
 function refusalMessage(error: unknown): string {
   if (!(error instanceof HttpErrorResponse)) {
@@ -56,6 +63,21 @@ export class LiveGraduationComponent {
   protected readonly status = resource({
     params: () => ({ clerkId: this.clerkId(), accountId: this.accountId() }),
     loader: ({ params }) => this.service.readStatus(params.clerkId, params.accountId),
+  });
+  protected readonly PROGRESS_LABEL = PROGRESS_LABEL;
+  /** Shadow → Review → Live, each stage's progress read from the backend's state. */
+  protected readonly stages = computed(() => {
+    const status = this.status.hasValue() ? this.status.value() : null;
+    const graduated = status?.state === 'graduated';
+    const progress = (done: boolean, current = false): StageProgress =>
+      done ? 'done' : current ? 'current' : 'todo';
+    return [
+      { key: 'shadow', number: 1, name: 'Shadow', note: 'simulated fills',
+        progress: progress(status !== null && status.authority !== 'unavailable') },
+      { key: 'review', number: 2, name: 'Review', note: 'evidence checked',
+        progress: progress(graduated, status?.state === 'review_available') },
+      { key: 'live', number: 3, name: 'Live', note: 'real orders', progress: progress(graduated) },
+    ] as const;
   });
   protected readonly busy = computed(() =>
     ['planning', 'activating', 'applying', 'restarting'].includes(this.phase()),

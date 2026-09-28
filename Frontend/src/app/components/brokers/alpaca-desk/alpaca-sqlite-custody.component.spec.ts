@@ -205,9 +205,9 @@ describe('AlpacaSqliteCustodyComponent', () => {
     await renderCustody({ getSqliteClerkProjection });
 
     await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledOnce());
-    expect(screen.queryByRole('heading', { name: 'Custody and recovery' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Recovery' })).toBeNull();
     expect(screen.getByRole('alert').textContent).toContain(
-      'New broker actions remain blocked',
+      'New broker actions stay blocked',
     );
   });
 
@@ -225,16 +225,17 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
 
     expect(await screen.findByText('Durable Clerk state has no unresolved uncertainty.')).toBeTruthy();
-    // #2183: "Custody and recovery" carries the eyebrow look itself now; the
-    // separate "Order record" label above it is retired.
-    expect(screen.getByRole('heading', { name: 'Custody and recovery' })).toBeTruthy();
+    // #2183: the section heading carries the eyebrow look itself now; the
+    // separate "Order record" label above it is retired. PRD #2560: trader
+    // copy, no internal terms.
+    expect(screen.getByRole('heading', { name: 'Recovery' })).toBeTruthy();
     expect(screen.queryByText('Order record')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
     expect((await screen.findAllByText('effect:enter:12')).length).toBeGreaterThan(0);
     expect(screen.getByText('Source event')).toBeTruthy();
-    expect(screen.getByText('Clerk observed')).toBeTruthy();
-    expect(screen.getByText('Durably recorded')).toBeTruthy();
+    expect(screen.getByText('Seen by the Clerk')).toBeTruthy();
+    expect(screen.getByText('Recorded')).toBeTruthy();
   });
 
   it('identifies the affected bot and links directly to its recovery controls', async () => {
@@ -565,7 +566,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     view.fixture.detectChanges();
     stalePage.reject(new Error('stale lane unavailable'));
 
-    await waitFor(() => expect(screen.queryByText('The custody timeline is temporarily unavailable.')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('The order timeline is temporarily unavailable.')).toBeNull());
     await waitFor(() => expect(
       screen.getByRole('button', { name: 'Load more events' }).hasAttribute('disabled'),
     ).toBe(false));
@@ -596,7 +597,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     fireEvent.click(await screen.findByRole('button', { name: /effect:enter:11/i }));
 
     expect(getSqliteClerkTimeline).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText('Selected immutable evidence').textContent).toContain(
+    expect(screen.getByLabelText('Selected event').textContent).toContain(
       'effect:enter:11',
     );
   });
@@ -649,7 +650,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     staleTimeline.reject(new Error('stale lane unavailable'));
 
     expect((await screen.findAllByText('effect:enter:11')).length).toBeGreaterThan(0);
-    expect(screen.queryByText('The custody timeline is temporarily unavailable.')).toBeNull();
+    expect(screen.queryByText('The order timeline is temporarily unavailable.')).toBeNull();
   });
 
   it('explains when an exact evidence filter has no matching immutable transition', async () => {
@@ -666,9 +667,9 @@ describe('AlpacaSqliteCustodyComponent', () => {
     );
 
     expect(
-      await screen.findByText('No immutable transitions match these exact filters.'),
+      await screen.findByText('No recorded events match these filters.'),
     ).toBeTruthy();
-    expect(screen.queryByLabelText('Selected immutable evidence')).toBeNull();
+    expect(screen.queryByLabelText('Selected event')).toBeNull();
   });
 
   it('labels an unverified activation identity without presenting generation zero', async () => {
@@ -681,7 +682,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
       }),
     });
 
-    expect(await screen.findByText(/activation identity unverified/i)).toBeTruthy();
+    expect(await screen.findByText(/not verified yet/i)).toBeTruthy();
     expect(screen.queryByText(/generation 0/i)).toBeNull();
   });
 

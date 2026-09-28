@@ -106,7 +106,7 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(rendered.fixture.componentInstance.draft().xh_entry_bps).toBe(12.5);
   });
 
-  it('reveals legacy startup defaults and directs active risk edits to Apply risk limits', async () => {
+  it('reveals legacy startup defaults and directs active risk edits to Daily loss limit', async () => {
     const rendered = await render(HostComponent);
     await userEvent.selectOptions(screen.getByLabelText('Endpoint'), 'live');
     await rendered.fixture.whenStable();
@@ -117,7 +117,7 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(screen.queryByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeNull();
     expect(screen.queryByRole('spinbutton', { name: 'Shadow sessions required' })).toBeNull();
     expect(screen.getByText(/Every Live deployment/)).toBeTruthy();
-    expect(screen.getByText(/Use Apply risk limits above/)).toBeTruthy();
+    expect(screen.getByText(/Use Daily loss limit at the top of Settings/)).toBeTruthy();
   });
 
   it('starts every live value blank rather than proposing a limit', async () => {

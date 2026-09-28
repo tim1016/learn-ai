@@ -30,26 +30,8 @@ import { BrokerConfigurationService } from './configuration/broker-configuration
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
 import {
   BrokersService,
-  type SqliteTimelineQuery,
+  sqliteTimelineQueryFromParams,
 } from '../../../services/brokers.service';
-
-function timelineQueryFromRoute(params: { get(name: string): string | null }): SqliteTimelineQuery | null {
-  const rawSequence = params.get('timelineSequence');
-  const sequence = rawSequence === null ? undefined : Number(rawSequence);
-  const query: SqliteTimelineQuery = {
-    strategyInstanceId: params.get('timelineBot') ?? undefined,
-    orderRef: params.get('timelineOrderRef') ?? undefined,
-    effectOperationId: params.get('timelineOperationRef') ?? undefined,
-    uncertaintyId: params.get('timelineUncertaintyId') ?? undefined,
-    executionId: params.get('timelineExecutionId') ?? undefined,
-    transitionKind: params.get('timelineTransitionKind') ?? undefined,
-    sequence:
-      typeof sequence === 'number' && Number.isInteger(sequence) && sequence > 0
-        ? sequence
-        : undefined,
-  };
-  return Object.values(query).some((value) => value !== undefined) ? query : null;
-}
 
 /**
  * One account's Overview tab — the account workspace's empty child
@@ -113,7 +95,7 @@ export class AlpacaDeskComponent {
   protected readonly lens = linkedSignal<DeskLens>(() =>
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
-  protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
+  protected readonly timelineQuery = computed(() => sqliteTimelineQueryFromParams(this.queryParams()));
   private readonly routedOrderPrefill = computed(() =>
     parseManualOrderTicketQuery(this.queryParams()),
   );
@@ -212,7 +194,7 @@ export class AlpacaDeskComponent {
   protected reviewAccount(choice: AlpacaDeskSelectionSummary | null): void {
     const target = this.contextTarget();
     if (target === null) return;
-    const commands = ['/brokers', 'alpaca', 'clerks', target.clerkId, 'configuration'];
+    const commands = ['/brokers', 'alpaca', 'clerks', target.clerkId, 'settings'];
     if (choice === null) {
       void this.router.navigate(commands);
       return;

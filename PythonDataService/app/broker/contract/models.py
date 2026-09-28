@@ -171,7 +171,12 @@ class BrokerAccountSnapshot(_ContractModel):
 
 
 class BrokerPosition(_ContractModel):
-    """A single open position (symbol, quantity, entry, value, unrealized PnL)."""
+    """A single open position (symbol, quantity, entry, value, unrealized PnL).
+
+    ``prior_close_price`` is the broker's price for the instrument at the
+    previous regular-session close -- the same close the account's
+    previous-close equity describes -- or ``None`` when the broker gives none.
+    """
 
     broker: str
     symbol: str
@@ -186,6 +191,7 @@ class BrokerPosition(_ContractModel):
     unrealized_pl: float
     unrealized_plpc: float | None
     observed_at_ms: int
+    prior_close_price: float | None = None
 
 
 class BrokerOrderEvent(_ContractModel):
@@ -269,9 +275,11 @@ class BrokerActivityEvidence(_ContractModel):
     """A bounded activity read with explicit provider pagination exhaustion.
 
     ``history_complete`` is true only when a provider returned a short final
-    page. A consumer must not infer it from the filtered activity list's length.
-    ``next_page_token`` continues an unfinished newest-first walk exactly where
-    this read stopped; it is absent when complete or the provider gave none.
+    page -- or, for a read bounded to a window, when the newest-first walk
+    reached a row older than the window. A consumer must not infer it from the
+    filtered activity list's length. ``next_page_token`` continues an
+    unfinished newest-first walk exactly where this read stopped; it is absent
+    when complete or the provider gave none.
     """
 
     activities: list[BrokerActivity]

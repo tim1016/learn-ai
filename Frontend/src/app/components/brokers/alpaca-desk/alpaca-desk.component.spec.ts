@@ -260,7 +260,7 @@ describe('AlpacaDeskComponent', () => {
     // workspace's header — the Overview tab renders none of them itself.
     expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Alpaca clerk lanes' })).toBeNull();
-    expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
+    expect(await screen.findByLabelText("The Clerk's records and Alpaca agree")).toBeTruthy();
     expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
     expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
 
@@ -313,7 +313,7 @@ describe('AlpacaDeskComponent', () => {
     await fireEvent.click(screen.getByRole('radio', { name: /Strategy lab · PA-123/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Select Paper account' }));
 
-    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
+    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'settings'], {
       queryParams: { profileId: 'paper-profile', revision: 3 },
     });
   });
@@ -389,7 +389,7 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: pending.action.label }));
-    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
+    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'settings'], {
       queryParams: { profileId: 'live-profile', revision: 1 },
     });
   });

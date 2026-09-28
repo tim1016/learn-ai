@@ -1,33 +1,59 @@
-<section aria-label="Account risk limits">
-  <h3>Account risk limits</h3>
-  <p>Apply changes immediately to new entries in this account. Draft edits do nothing until applied.
-    Existing bots keep their exit terms and working orders.</p>
+<section class="loss-limit" aria-labelledby="loss-limit-title">
+  <h3 id="loss-limit-title">Daily loss limit</h3>
+  <p>New entries stop for the rest of the day once this account loses more than this limit.
+    It applies right away. Running bots keep their budgets and exit terms, and exits always run.</p>
+
   @if (state.error()) {
-    <p role="alert">Risk limits could not be read. <button type="button" (click)="state.reload()">Reload risk limits</button></p>
+    <p role="alert">The daily loss limit could not be read.
+      <button type="button" (click)="state.reload()">Try again</button></p>
   } @else if (state.hasValue()) {
     @let current = state.value();
-    <p>Account {{ current.account_id }} · Revision {{ current.risk_revision }}</p>
+    <div class="loss-limit__status" [attr.data-state]="current.entry_state">
+      <p><strong>{{ ENTRY_STATE_LABEL[current.entry_state] }}</strong> {{ current.detail }}</p>
+      @if (current.hold_loss_limit_usd !== null) {
+        <p>This hold keeps the {{ current.hold_loss_limit_usd | currency:'USD' }} limit it was raised
+          under, so changing the limit does not clear it. Clearing checks fresh account evidence
+          against that limit and the current one.</p>
+        <button type="button" [disabled]="busy()" (click)="clearHold()">Clear hold</button>
+      } @else if (current.entry_state === 'unknown' && !current.limit_missing) {
+        <button type="button" [disabled]="busy() || state.isLoading()" (click)="checkAgain()">Check again</button>
+      }
+    </div>
+
     @if (current.loss_fraction !== null && current.loss_usd !== null) {
-      <p>Effective limit: {{ current.loss_fraction | percent:'1.0-4' }} of session baseline equity,
-        capped at {{ current.loss_usd | currency:'USD' }}.</p>
+      <p>In force: {{ current.loss_fraction | percent:'1.0-4' }} of the day's starting equity,
+        at most {{ current.loss_usd | currency:'USD' }}.
+        @if (current.applied_at_ms !== null) {
+          Applied <app-timestamp-display [value]="current.applied_at_ms" mode="local" />.
+        }
+      </p>
+    } @else {
+      <p>No limit is in force yet.</p>
     }
-    <p role="status">{{ current.detail }}</p>
-    @if (current.hold_loss_limit_usd !== null) {
-      <p>Standing hold retains its original {{ current.hold_loss_limit_usd | currency:'USD' }} limit.
-        Clearing checks fresh evidence against both the original hold and current limits.</p>
-      <button type="button" [disabled]="busy()" (click)="apply(true)">Clear loss hold</button>
-    }
+
     <fieldset [disabled]="busy()">
-      <legend>Review new limits</legend>
-      <label>Loss fraction (0 to 1) <input type="number" step="any" [formField]="fields.loss_fraction" /></label>
-      <label>Loss cap (USD) <input type="number" step="0.01" [formField]="fields.loss_usd" /></label>
-      <button type="button" [disabled]="!valid() || busy()" (click)="apply()">Apply risk limits</button>
+      <legend>Change the limit</legend>
+      <div class="loss-limit__field">
+        <label [for]="ids.fraction">Share of the day's starting equity (0 to 1)</label>
+        <input [id]="ids.fraction" type="number" step="any" [formField]="fields.loss_fraction" />
+      </div>
+      <div class="loss-limit__field">
+        <label [for]="ids.cap">At most (USD)</label>
+        <input [id]="ids.cap" type="number" step="0.01" [formField]="fields.loss_usd" />
+      </div>
+      <button type="button" [disabled]="!valid() || busy()" (click)="applyLimit()">Apply daily loss limit</button>
     </fieldset>
-    @if (applied()) { <p role="status">Risk limits applied. No restart or redeployment is needed.</p> }
+
+    @if (outcome(); as done) {
+      <p #outcomeRegion class="loss-limit__outcome" role="status" tabindex="-1">{{ OUTCOME_COPY[done] }}</p>
+    }
   } @else {
-    <p role="status">Reading account risk limits…</p>
+    <p role="status">Reading the daily loss limit…</p>
   }
+
   @if (refusal(); as detail) {
-    <app-configuration-refusal [refusal]="detail" (reloadRequested)="state.reload()" />
+    <div #refusalRegion tabindex="-1">
+      <app-configuration-refusal [refusal]="detail" (reloadRequested)="state.reload()" />
+    </div>
   }
 </section>

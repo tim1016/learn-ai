@@ -508,6 +508,31 @@ async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     assert sync.envelope.fresh_observation(NOON) is None
 
 
+async def test_a_breached_reading_still_shows_the_accounts_money_until_it_ages_or_the_read_fails(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """PRD #2560 review A6: withdrawing admission is not forgetting the read.
+
+    The money bar shows the last reading while a loss hold stands; it is
+    forgotten, like the envelope's, when the read itself fails, and ages out
+    on the envelope's own freshness bound.
+    """
+    read = _Read(unrealized=-5_000.0)
+    sync = make_sync(day_pnl_repo, read)
+    assert await sync.tick() == "hold_raised"
+
+    assert sync.envelope.fresh_observation(NOON) is None
+    shown = sync.display_observation(NOON)
+    assert shown is not None and shown.equity_usd == 95_000.0
+    assert sync.display_observation(NOON + OBSERVATION_MAX_AGE_MS + 1) is None
+
+    read.activity_error = BrokerEvidenceUnavailable("Alpaca transfer activity evidence was malformed.")
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await sync.observe()
+    assert sync.display_observation(NOON) is None
+
+
 async def test_a_hold_that_stands_over_an_unjudgeable_account_says_so(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],

@@ -13,8 +13,8 @@
   @if (failed()) {
     <div class="account-list__state account-list__state--failed" role="alert">
       <p>
-        The fleet directory is unavailable, so the accounts cannot be listed.
-        @if (retryFailed()) { It is still unavailable. }
+        Your accounts could not be loaded, so none can be listed right now.
+        @if (retryFailed()) { They still could not be loaded. }
       </p>
       <p class="account-list__next">
         <button type="button" class="account-list__retry" [disabled]="loading()" (click)="retry()">Try again</button>

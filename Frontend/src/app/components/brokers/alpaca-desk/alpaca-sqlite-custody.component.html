@@ -1,13 +1,13 @@
 @if (projection.isLoading()) {
-  <p class="sqlite-custody__state" role="status">Loading order custody details…</p>
+  <p class="sqlite-custody__state" role="status">Loading order records…</p>
 } @else if (projection.error()) {
   <p class="sqlite-custody__state sqlite-custody__state--error" role="alert">
-    Order custody details are unavailable. New broker actions remain blocked until the account record recovers.
+    Order records are unavailable right now. New broker actions stay blocked until they can be read again.
   </p>
 } @else if (projection.value(); as custody) {
   <section class="sqlite-custody" aria-labelledby="sqlite-custody-title">
     <header>
-      <h2 id="sqlite-custody-title">Custody and recovery</h2>
+      <h2 id="sqlite-custody-title">Recovery</h2>
       <span class="sqlite-custody__health">{{ custody.authority_health | receiptLabel }}</span>
     </header>
 
@@ -32,7 +32,7 @@
     }
 
     @if (custody.uncertainties.length > 0) {
-      <ul class="sqlite-custody__uncertainties" aria-label="Open custody uncertainties">
+      <ul class="sqlite-custody__uncertainties" aria-label="Orders that need review">
         @for (uncertainty of custody.uncertainties; track uncertainty.uncertainty_id) {
           <li>
             <strong>{{ uncertainty.headline }}</strong>
@@ -69,7 +69,7 @@
       </ul>
     }
 
-    <div class="sqlite-custody__actions" aria-label="Evidence-bound recovery actions">
+    <div class="sqlite-custody__actions" aria-label="Recovery actions">
       @for (action of custody.recovery_actions; track trackAction($index, action)) {
         <div class="sqlite-action">
           <button
@@ -88,18 +88,18 @@
     </div>
 
     <details class="sqlite-custody__technical">
-      <summary>Technical authority details</summary>
+      <summary>Record details</summary>
       <dl>
         <div><dt>Record owner</dt><dd>{{ custody.custody_owner | receiptLabel }}</dd></div>
-        <div><dt>Snapshot revision</dt><dd>{{ custody.control_revision }}</dd></div>
-        <div><dt>Authority generation</dt><dd>
+        <div><dt>Record revision</dt><dd>{{ custody.control_revision }}</dd></div>
+        <div><dt>Record generation</dt><dd>
           @if (custody.db_identity_token === 'unverified-activation') {
-            Activation identity unverified
+            Not verified yet
           } @else {
             {{ custody.authority_generation }}
           }
         </dd></div>
-        <div><dt>Database identity</dt><dd><code>{{ custody.db_identity_token }}</code></dd></div>
+        <div><dt>Record identity</dt><dd><code>{{ custody.db_identity_token }}</code></dd></div>
       </dl>
     </details>
 
@@ -132,7 +132,7 @@
 
     @if (timelineOpen()) {
       <section class="sqlite-custody__timeline" aria-labelledby="sqlite-timeline-title">
-        <h3 id="sqlite-timeline-title">Custody timeline</h3>
+        <h3 id="sqlite-timeline-title">Order timeline</h3>
         <form class="sqlite-custody__timeline-filters" (submit)="$event.preventDefault(); applyTimelineFilters()">
           <label>
             Bot
@@ -151,7 +151,7 @@
             />
           </label>
           <label>
-            Uncertainty ID
+            Review item ID
             <input
               type="text"
               [value]="timelineFilters().uncertaintyId ?? ''"
@@ -167,7 +167,7 @@
             />
           </label>
           <label>
-            Transition kind
+            Event kind
             <input
               type="text"
               [value]="timelineFilters().transitionKind ?? ''"
@@ -201,7 +201,7 @@
         } @else {
           <p aria-live="polite">{{ timeline().length }} of {{ timelineTotalEntries() }}</p>
           @if (timeline().length === 0) {
-            <p>No immutable transitions match these exact filters.</p>
+            <p>No recorded events match these filters.</p>
           } @else {
             <ol>
               @for (entry of timeline(); track trackTimeline($index, entry)) {
@@ -220,8 +220,8 @@
                   @if (entry.source_event_at_ms) {
                     <div><dt>Source event</dt><dd><app-timestamp-display [value]="entry.source_event_at_ms" mode="local" /></dd></div>
                   }
-                  <div><dt>Clerk observed</dt><dd><app-timestamp-display [value]="entry.clerk_observed_at_ms" mode="local" /></dd></div>
-                  <div><dt>Durably recorded</dt><dd><app-timestamp-display [value]="entry.recorded_at_ms" mode="local" /></dd></div>
+                  <div><dt>Seen by the Clerk</dt><dd><app-timestamp-display [value]="entry.clerk_observed_at_ms" mode="local" /></dd></div>
+                  <div><dt>Recorded</dt><dd><app-timestamp-display [value]="entry.recorded_at_ms" mode="local" /></dd></div>
                 </dl>
                   </button>
                 </li>
@@ -229,13 +229,13 @@
             </ol>
           }
           @if (selectedTimelineEntry(); as selected) {
-            <section class="sqlite-custody__timeline-detail" aria-label="Selected immutable evidence">
-              <h4>Selected immutable evidence</h4>
+            <section class="sqlite-custody__timeline-detail" aria-label="Selected event">
+              <h4>Selected event</h4>
               <dl>
                 <div><dt>Operation reference</dt><dd><code>{{ selected.operation_ref }}</code></dd></div>
-                <div><dt>Transition sequence</dt><dd>{{ selected.sequence }}</dd></div>
+                <div><dt>Event sequence</dt><dd>{{ selected.sequence }}</dd></div>
                 <div><dt>Order reference</dt><dd><code>{{ selected.order_ref ?? 'None' }}</code></dd></div>
-                <div><dt>Execution authority</dt><dd>{{ selected.execution_authority | receiptLabel }}</dd></div>
+                <div><dt>Handled by</dt><dd>{{ selected.execution_authority | receiptLabel }}</dd></div>
                 <div><dt>Proof reference</dt><dd><code>{{ selected.proof_reference ?? 'None' }}</code></dd></div>
               </dl>
             </section>

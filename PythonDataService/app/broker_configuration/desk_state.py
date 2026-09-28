@@ -322,7 +322,7 @@ def project_desk_state(
         selection_label = "Choose an account configuration"
         consequence = (
             "Choosing here only opens the saved configuration for review. Stage and Apply "
-            "remain explicit actions on the Configuration page."
+            "remain explicit actions under Broker connection in Settings."
         )
         action = DeskAction(
             kind="review_configuration",
@@ -405,12 +405,12 @@ def project_desk_state(
             None
             if choices
             else (
-                "No verified accounts are ready to choose. Finish account verification on "
-                "the Configuration page."
+                "No verified accounts are ready to choose. Finish account verification "
+                "under Broker connection in Settings."
                 if profiles_requiring_setup
                 else (
-                    "All saved account configurations are archived. Restore one on the "
-                    "Configuration page, or set up a new account."
+                    "All saved account configurations are archived. Restore one under "
+                    "Broker connection in Settings, or set up a new account."
                     if has_archived_profiles
                     else "No account configurations are saved yet. Set one up to continue."
                 )

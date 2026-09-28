@@ -22,8 +22,8 @@
   font-size: var(--fs-md);
 }
 
-.status__state h3,
-.status__outcome h3 {
+.status__state h5,
+.status__outcome h5 {
   margin: 0 0 var(--space-1);
   color: var(--text-secondary);
   font-size: var(--fs-xs);
@@ -106,7 +106,7 @@
   border-top: 1px solid var(--border-light);
 }
 
-.status__outcome--refused h3 {
+.status__outcome--refused h5 {
   color: var(--bear);
 }
 

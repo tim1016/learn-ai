@@ -241,7 +241,7 @@ class AlpacaLiveGraduationService:
             raise LiveGraduationRefused(
                 "graduation_plan_mismatch",
                 "The reviewed plan does not belong to this account.",
-                "Prepare a fresh review from this account's Configuration page.",
+                "Prepare a fresh review from this account's Settings page.",
             )
         # Re-observe broker state now, at apply time — never reuse prepare()'s
         # snapshot. apply_cutover() refuses when this evidence disagrees with
@@ -354,11 +354,11 @@ class AlpacaLiveGraduationService:
                     or selection.effective_account_id != account_id
                     or binding is None or binding.profile_id != selection.effective_profile_id
                     or binding.revision != selection.effective_revision):
-                raise CutoverRefused("The effective Shadow account or profile changed. Refresh Configuration.")
+                raise CutoverRefused("The effective Shadow account or profile changed. Reload Settings.")
             with repo.write_fence():
                 policy = repo.account_risk_policy()
                 if policy is None:
-                    raise CutoverRefused("Apply account risk limits in Configuration before reviewing graduation.")
+                    raise CutoverRefused("Set a daily loss limit in Settings before reviewing graduation.")
                 try:
                     require_whole_cent_loss_cap(policy.loss_usd)
                 except InvalidLiveEnvelope as exc:

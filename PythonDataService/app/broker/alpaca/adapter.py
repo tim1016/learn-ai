@@ -258,6 +258,7 @@ def from_alpaca_position(
         unrealized_pl=to_float(payload["unrealized_pl"]),
         unrealized_plpc=opt_float(payload.get("unrealized_plpc")),
         observed_at_ms=_observed(observed_at_ms),
+        prior_close_price=opt_float(payload.get("lastday_price")),
     )
 
 

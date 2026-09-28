@@ -3,13 +3,14 @@ import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { accountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
-import { resourceTarget, laneKey } from '../../../fleet/resource-target';
+import { resourceTarget, sameResourceTarget } from '../../../fleet/resource-target';
 import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 
@@ -41,11 +42,11 @@ export class AlpacaDeskAccountDataService {
   /** The account this desk reads.
    *
    * The URL names it on every account-scoped tab, and that is the only answer
-   * those tabs ever take. The workspace's lane-scoped tabs — Configuration and
+   * those tabs ever take. The workspace's lane-scoped tabs — Settings and
    * the not-ready Bots and Gallery (FR-092) — name no account at all, and for
    * those the lane's own confirmed binding is the account the header is about:
-   * "Configuration … renders inside the workspace from the lane's confirmed
-   * account" (ADR 0064, FR-092).
+   * Settings stays lane-scoped and renders inside the workspace from the
+   * lane's confirmed account (ADR 0064, FR-092).
    *
    * Read through `accountWorkspaceLocation`, not this service's own
    * `ActivatedRoute`: that route is the one the parent shell is provided on
@@ -83,9 +84,7 @@ export class AlpacaDeskAccountDataService {
       bindingGeneration: lane.effective_binding_generation ?? null,
       routingEpoch: lane.routing_epoch ?? null,
     });
-  }, { equal: (left, right) => left === right || (left !== null && right !== null
-    && laneKey(left.broker, left.clerkId, left.routingEpoch, left.bindingGeneration, left.accountId)
-      === laneKey(right.broker, right.clerkId, right.routingEpoch, right.bindingGeneration, right.accountId)) });
+  }, { equal: sameResourceTarget });
 
   /** Route identity — clerk + account. Alongside explicit operator review,
    * this is the only reason the desk's command fence may re-derive.
@@ -146,17 +145,20 @@ export class AlpacaDeskAccountDataService {
     },
   });
 
+  /** Whether this account's lane declares the bot-panel read the money read
+   * is served under — `null` while no lane is resolved. A lane that does not
+   * has no money read to fail. */
+  private readonly moneyCapable = computed(() => {
+    const target = this.target();
+    if (target === null) return null;
+    return this.fleetDirectory.lane('alpaca', target.clerkId)?.capabilities.includes('bot_panel_read') ?? null;
+  });
+
   /** Where this account's money is, confirmed against the routed account on
-   * the same terms as `account`. Read only from a lane that declares the
-   * bot-panel read it is served under; a lane that does not has no money
-   * read to fail. */
+   * the same terms as `account`. Render `moneyState`, not this: it is the one
+   * projection of this read every money surface shares. */
   readonly money = resource({
-    params: () => {
-      const target = this.target();
-      if (target === null) return undefined;
-      const lane = this.fleetDirectory.lane('alpaca', target.clerkId);
-      return lane?.capabilities.includes('bot_panel_read') ? target : undefined;
-    },
+    params: () => (this.moneyCapable() ? this.target() ?? undefined : undefined),
     loader: async ({ params }) => {
       const money = await this.panel.getAccountMoney(params);
       if (!sameAlpacaAccount(money.account_id, params.accountId)) {
@@ -165,4 +167,16 @@ export class AlpacaDeskAccountDataService {
       return money;
     },
   });
+
+  /** This account's money as every surface on its pages renders it — the
+   * header's figures, Home's bar, Deploy's Money step, a bot's slice:
+   * loading, not served by this lane, unavailable with the backend's reason
+   * and next step, or ready (`accountMoneyState`). */
+  readonly moneyState = computed(() =>
+    accountMoneyState({
+      capable: this.moneyCapable(),
+      view: this.money.hasValue() ? this.money.value() : undefined,
+      error: this.money.error(),
+    }),
+  );
 }

@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
@@ -14,19 +15,43 @@ const SCRIPT =
   + 'worker_service="${FLEET_WORKER_SERVICE:?set it}"\n'
   + 'echo "handoff $worker_service"\n';
 
+const SCRIPT_URL = '/assets/scripts/alpaca-paper-to-live-handoff.sh';
+
 async function renderScript(restartCommand: string | null | undefined) {
   const view = await render(ConfigurationHandoffScriptComponent, {
     inputs: { restartCommand },
     providers: [provideHttpClient(), provideHttpClientTesting()],
   });
-  TestBed.inject(HttpTestingController)
-    .expectOne('/assets/scripts/alpaca-paper-to-live-handoff.sh')
-    .flush(SCRIPT);
+  await userEvent.click(screen.getByRole('button', { name: 'Show script' }));
+  TestBed.inject(HttpTestingController).expectOne(SCRIPT_URL).flush(SCRIPT);
   await view.fixture.whenStable();
   return view;
 }
 
 describe('ConfigurationHandoffScriptComponent', () => {
+  it('keeps the script folded, and unfetched, until Show script is pressed (#2566)', async () => {
+    await render(ConfigurationHandoffScriptComponent, {
+      inputs: { restartCommand: 'podman compose restart alpaca-paper-clerk' },
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+
+    const toggle = screen.getByRole('button', { name: 'Show script' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByText(/never launches a Live bot/)).toBeTruthy();
+    expect(document.querySelector('.handoff__source')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy Paper-to-Live handoff script' })).toBeNull();
+    expect(TestBed.inject(HttpTestingController).match(SCRIPT_URL)).toHaveLength(0);
+  });
+
+  it('folds the script away again on Hide script', async () => {
+    await renderScript('podman compose restart alpaca-paper-clerk');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Hide script' }));
+
+    expect(document.querySelector('.handoff__source')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show script' }).getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('shows the executable asset with this lane worker service spliced in', async () => {
     await renderScript('podman compose restart alpaca-paper-clerk');
 

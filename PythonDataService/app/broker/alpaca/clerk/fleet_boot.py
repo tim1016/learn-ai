@@ -201,6 +201,12 @@ LANE_QUIET_OBSERVATION_TIMEOUT_S = 5.0
 #: account this beat — no answer, never a "not quiet" one.
 LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
 
+#: This lane's own counts for its account card (PRD #2560), keyed as
+#: ``records.LANE_COUNT_KEYS``; a count the lane could not take is absent,
+#: never zero. Installed by the composition root, like ``LaneQuietProbe``, so
+#: the fleet lane never imports up into the services it reports on.
+LaneCountsProbe = Callable[[], Awaitable[Mapping[str, int]]]
+
 #: Stops every bot this lane runs through the lane-wide stop (#2268's
 #: ``stop_all_bots_on_lane``) and says whether every one stopped (#2351).
 LaneBotsStop = Callable[[], Awaitable[bool]]
@@ -329,6 +335,10 @@ class FleetLaneBoot:
     #: exist; ``None`` on a lane with no clerk, which then never confirms and
     #: exits through ``force-retire``.
     lane_quiet_probe: LaneQuietProbe | None = field(default=None, repr=False)
+    #: How this lane counts its bots and attention items for its account card
+    #: (PRD #2560), read on every beat. Installed by the composition root;
+    #: ``None`` reports no counts at all -- unknown, never zero.
+    lane_counts_probe: LaneCountsProbe | None = field(default=None, repr=False)
     #: The outstanding conditions of the last answer the coordinator accepted,
     #: so the log records a change rather than repeating every beat.
     lane_quiet_outstanding: tuple[str, ...] | None = None
@@ -931,16 +941,23 @@ async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> st
     return nickname
 
 
-async def _guarded_lane_counts() -> Mapping[str, int]:
+async def _guarded_lane_counts(boot: FleetLaneBoot) -> Mapping[str, int]:
     """This lane's bot and attention counts for its account card (PRD #2560).
 
-    Read fresh every beat, like the nickname, and just as unable to end it:
-    each count is taken and guarded on its own by ``lane_counts``, and a count
-    it could not take is simply absent from this beat -- never sent as zero.
+    Read fresh every beat through the installed probe, like the nickname, and
+    just as unable to end it: a probe that fails is logged and this beat
+    reports no counts -- absent, never sent as zero.
     """
-    from app.services.broker_v2_panel.lane_summary import lane_counts
-
-    return (await lane_counts()).reported()
+    if boot.lane_counts_probe is None:
+        return {}
+    try:
+        return await boot.lane_counts_probe()
+    except Exception:
+        logger.warning(
+            "Lane counts unavailable; omitting them from this beat",
+            exc_info=True, extra={"clerk_id": boot.clerk_id, "action": "lane_counts_unavailable"},
+        )
+        return {}
 
 
 def _summary_with_live_facts(
@@ -1219,7 +1236,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         clerk_id=boot.clerk_id,
                         account_id=account_id if isinstance(account_id, str) else None,
                     ),
-                    await _guarded_lane_counts(),
+                    await _guarded_lane_counts(boot),
                 )
                 try:
                     learned_lifecycle = await boot.presence.observe(

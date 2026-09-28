@@ -1,17 +1,17 @@
-<section class="activity-panel" aria-labelledby="today-activity-heading">
+<section class="activity-panel" aria-labelledby="orders-cash-heading">
   <header class="activity-panel__header">
     <div>
-      <h2 id="today-activity-heading">Activity</h2>
-      <p>Broker-reported events, newest first.</p>
+      <h2 id="orders-cash-heading">Orders and cash moves</h2>
+      <p>Fills, fees and cash moves Alpaca reported, newest first.</p>
     </div>
   </header>
 
   @if (unavailable()) {
-    <p class="state" role="alert">Today's account activity is unavailable right now.</p>
+    <p class="state" role="alert">Orders and cash moves are unavailable right now.</p>
   } @else if (activities() === undefined) {
-    <p class="state" role="status">Loading today's account activity…</p>
+    <p class="state" role="status">Loading orders and cash moves…</p>
   } @else if (rows().length === 0) {
-    <p class="state">No account activity has been recorded today.</p>
+    <p class="state">No orders or cash moves were recorded in this period.</p>
   } @else {
     <p-table
       #activityTable
@@ -39,7 +39,7 @@
             pInputText
             type="search"
             placeholder="Search activity"
-            aria-label="Search today's activity"
+            aria-label="Search orders and cash moves"
             (input)="activityTable.filterGlobal(inputValue($event), 'contains')"
           />
           <button

@@ -255,6 +255,16 @@ class EnvelopeReservation:
         return float(notional(self.quantity, self.exact_reference_price or self.reference_price))
 
 
+def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_age_ms: int) -> bool:
+    """The one freshness rule for a published or a displayed observation.
+
+    Fresh means ``0 <= age <= max_age``: an observation dated *after* the
+    clock is not fresh either, so a backward clock step cannot make obsolete
+    cash look current for the whole rollback.
+    """
+    return 0 <= now_ms - observation.observed_at_ms <= max_age_ms
+
+
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:
     return min(values.loss_fraction * last_equity_usd, values.loss_usd)
 
@@ -361,7 +371,7 @@ class LiveEnvelopeGate:
         would keep bounding against obsolete cash for the whole rollback.
         """
         observation = self._observation
-        if observation is None or not (0 <= now_ms - observation.observed_at_ms <= self._max_age_ms):
+        if observation is None or not observation_is_fresh(observation, now_ms=now_ms, max_age_ms=self._max_age_ms):
             return None
         return observation
 
@@ -387,4 +397,5 @@ __all__ = [
     "envelope_agreement",
     "loss_breached",
     "loss_limit_usd",
+    "observation_is_fresh",
 ]

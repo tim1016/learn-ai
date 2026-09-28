@@ -318,14 +318,22 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // User-owned broker configuration profiles (ADR 0060). Declared before the
-    // desk so the intent of the deeper path is readable next to it; Angular
-    // would backtrack to it either way, since the desk route consumes no
-    // trailing segments.
+    // The account Settings tab — including the broker configuration profiles
+    // (ADR 0060) under its Broker connection section. Declared before the desk
+    // so the intent of the deeper path is readable next to it; Angular would
+    // backtrack to it either way, since the desk route consumes no trailing
+    // segments.
     //
-    // Delivery C: configuration is canonical only under an explicit clerk.
-    path: "brokers/alpaca/configuration",
+    // Delivery C: Settings is canonical only under an explicit clerk.
+    path: "brokers/alpaca/settings",
     loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    // The tab was Configuration until PRD #2560 (FR-092 keeps it
+    // lane-scoped); old bookmarks keep working.
+    path: "brokers/alpaca/configuration",
+    redirectTo: "/brokers/alpaca/settings",
+    pathMatch: "full",
   },
   {
     // ── The account workspace (ADR 0064 Decision 1, PRD §13/FR-092) ─────────
@@ -337,7 +345,7 @@ export const routes: Routes = [
     // `paramsInheritanceStrategy: 'always'` (see `app.config.ts`).
     //
     // The shell sits at the CLERK level, not the account level, because two of
-    // its four tabs name no account: Configuration is lane-scoped wherever it
+    // its four tabs name no account: Settings is lane-scoped wherever it
     // is opened from (FR-092), and a lane with no confirmed account still
     // keeps its workspace, with Bots and Gallery explaining in place why they
     // cannot open (FR-096). `accounts/:accountId` is a componentless child
@@ -357,19 +365,26 @@ export const routes: Routes = [
       ).then((m) => m.AlpacaAccountWorkspaceComponent),
     children: [
       {
-        // The lane's configuration surface — repair stays reachable without a
-        // confirmed binding (configuration-access readiness), which is why it
-        // is the one tab an unbound lane can still serve.
-        path: 'configuration',
+        // The lane's Settings — repair stays reachable without a confirmed
+        // binding (configuration-access readiness), which is why it is the
+        // one tab an unbound lane can still serve.
+        path: 'settings',
         loadComponent: () =>
           import(
-            './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component'
-          ).then((m) => m.AlpacaConfigurationPageComponent),
+            './components/brokers/alpaca-desk/configuration/alpaca-settings-page.component'
+          ).then((m) => m.AlpacaSettingsPageComponent),
+      },
+      {
+        // Settings was the Configuration tab until PRD #2560; the redirect
+        // keeps a bookmark's `?profileId&revision` review request with it.
+        path: 'configuration',
+        redirectTo: 'settings',
+        pathMatch: 'full',
       },
       {
         // The lane-scoped Bots tab: the in-place explanation for why this
         // lane's roster cannot open (not ready, unbound, or without the
-        // capability), plus its way to Configuration. Never redirected to
+        // capability), plus its way to Settings. Never redirected to
         // another lane (FR-096).
         path: 'bots',
         data: { surface: 'bots' },
@@ -422,6 +437,16 @@ export const routes: Routes = [
               ).then((m) => m.BotGalleryPageComponent),
           },
           {
+            // Activity — the account's history and records (PRD #2560):
+            // Today / 30D / 60D money, fees per bot, orders and cash moves,
+            // the sync check, and order records and recovery.
+            path: 'activity',
+            loadComponent: () =>
+              import(
+                './components/brokers/alpaca-desk/activity/alpaca-activity-page.component'
+              ).then((m) => m.AlpacaActivityPageComponent),
+          },
+          {
             // Deploy — binds a validated strategy to this account, inline in
             // the tab strip rather than as an overlay drawer.
             path: 'deploy',
@@ -441,10 +466,10 @@ export const routes: Routes = [
         ],
       },
       {
-        // A lane deep link without a tab: its configuration is the lane's own
-        // home (the account list is the broker-level surface).
+        // A lane deep link without a tab: its Settings is the lane's own home
+        // (the account list is the broker-level surface).
         path: '',
-        redirectTo: 'configuration',
+        redirectTo: 'settings',
         pathMatch: 'full',
       },
     ],
@@ -561,8 +586,13 @@ export const routes: Routes = [
   // after refusal. Literal Alpaca routes above win first; these parametric
   // fallbacks prevent wrong-provider links from reaching the app wildcard.
   {
-    path: 'brokers/:broker/clerks/:clerkId/configuration',
+    path: 'brokers/:broker/clerks/:clerkId/settings',
     loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    path: 'brokers/:broker/clerks/:clerkId/configuration',
+    redirectTo: '/brokers/:broker/clerks/:clerkId/settings',
+    pathMatch: 'full',
   },
   {
     path: 'brokers/:broker/clerks/:clerkId/accounts/:accountId/bots/:sid',

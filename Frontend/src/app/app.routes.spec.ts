@@ -14,9 +14,10 @@ import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-b
 import { AlpacaAccountWorkspaceComponent } from './components/brokers/alpaca-workspace/alpaca-account-workspace.component';
 import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component';
-import { AlpacaConfigurationPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component';
+import { AlpacaSettingsPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-settings-page.component';
 import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk/alpaca-account-list-page.component';
 import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
+import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
 import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
@@ -190,6 +191,20 @@ describe('routes', () => {
     expect(router.url).toBe('/brokers/alpaca');
   });
 
+  it.each([
+    ['/brokers/alpaca/configuration', '/brokers/alpaca/settings'],
+    ['/brokers/ibkr/clerks/clrk_other/configuration', '/brokers/ibkr/clerks/clrk_other/settings'],
+  ])('redirects the Configuration bookmark %s to its Settings equivalent %s (#2566)', async (from, to) => {
+    // Neither address can prove an Alpaca lane, so both still render the
+    // in-place lane-unavailable page — under the Settings address.
+    TestBed.configureTestingModule({ providers: appConfig.providers });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(from);
+
+    expect(router.url).toBe(to);
+  });
+
   describe('the account workspace (ADR 0064)', () => {
     const workspace = routes.find(
       (candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId',
@@ -199,10 +214,11 @@ describe('routes', () => {
     it('nests every tab — account-scoped and lane-scoped — under one workspace route', async () => {
       expect(await workspace?.loadComponent?.()).toBe(AlpacaAccountWorkspaceComponent);
       // The shell sits at the clerk level because two tabs name no account:
-      // Configuration is lane-scoped (FR-092), and a lane with no confirmed
-      // account still keeps its Bots and Gallery tabs (FR-096).
+      // Settings is lane-scoped (FR-092), and a lane with no confirmed
+      // account still keeps its Bots and Gallery tabs (FR-096). The retired
+      // `configuration` segment stays as a redirect for old bookmarks.
       expect(workspace?.children?.map((child) => child.path)).toEqual([
-        'configuration', 'bots', 'gallery', 'accounts/:accountId', '',
+        'settings', 'configuration', 'bots', 'gallery', 'accounts/:accountId', '',
       ]);
       // Overview is the account's empty child, so the account's own URL opens
       // it and the canonical URLs are unchanged. `bots/:sid` is declared
@@ -211,7 +227,7 @@ describe('routes', () => {
       // is one of the five tabs (ADR 0064 Decision 1 extended), routed
       // inline rather than opened as an overlay.
       expect(account?.children?.map((child) => child.path)).toEqual([
-        'bots/:sid', 'bots', 'gallery', 'deploy', '',
+        'bots/:sid', 'bots', 'gallery', 'activity', 'deploy', '',
       ]);
     });
 
@@ -227,16 +243,16 @@ describe('routes', () => {
     });
 
     it('opens a lane deep link without a tab on the one tab it can always serve', () => {
-      // Configuration access needs no confirmed binding, so it is the lane's
-      // own home — and the operator's way to bind an account.
+      // Settings needs no confirmed binding, so it is the lane's own home —
+      // and the owner's way to connect an account.
       expect(workspace?.children?.find((child) => child.path === '')).toMatchObject({
-        redirectTo: 'configuration',
+        redirectTo: 'settings',
         pathMatch: 'full',
       });
     });
 
     it.each([
-      ['configuration', AlpacaConfigurationPageComponent],
+      ['settings', AlpacaSettingsPageComponent],
       ['bots', AlpacaSurfaceNotReadyTabComponent],
       ['gallery', AlpacaSurfaceNotReadyTabComponent],
     ])('loads the lane-scoped %s tab', async (path, expectedComponent) => {
@@ -261,8 +277,9 @@ describe('routes', () => {
       ['', AlpacaDeskComponent, 'the account overview'],
       ['bots', BotsListPageComponent, 'the bots roster'],
       ['gallery', BotGalleryPageComponent, 'the gallery'],
+      ['activity', AlpacaActivityPageComponent, 'the account activity'],
     ])(
-      'keeps the %s tab on its own operational component — never a redirect to configuration',
+      'keeps the %s tab on its own operational component — never a redirect to Settings',
       async (path, expectedComponent, _surfaceLabel) => {
         // Regression: an operator reported a clerk-scoped Bots URL landing on
         // the broker configuration page. No such redirect exists in the table;
@@ -281,6 +298,7 @@ describe('routes', () => {
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'the Overview tab'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'the Bots tab'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'the Gallery tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', 'the Activity tab'],
     ])('carries clerk and account identity into %s', async (url) => {
       // Asserted through the app's own router configuration, not a local one:
       // a non-empty child only inherits its parent's params under
@@ -298,7 +316,7 @@ describe('routes', () => {
     });
 
     it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/configuration', 'Configuration'],
+      ['/brokers/alpaca/clerks/clrk_spec/settings', 'Settings'],
       ['/brokers/alpaca/clerks/clrk_spec/bots', 'the not-ready Bots tab'],
       ['/brokers/alpaca/clerks/clrk_spec/gallery', 'the not-ready Gallery tab'],
     ])('carries clerk identity — and no account — into %s', async (url) => {
@@ -311,6 +329,24 @@ describe('routes', () => {
       while (route.firstChild !== null) route = route.firstChild;
       expect(route.params).toMatchObject({ clerkId: 'clrk_spec' });
       expect(route.params['accountId']).toBeUndefined();
+    });
+
+    it.each([
+      ['/brokers/alpaca/clerks/clrk_spec/configuration', '/brokers/alpaca/clerks/clrk_spec/settings'],
+      [
+        '/brokers/alpaca/clerks/clrk_spec/configuration?profileId=profile-paper&revision=2',
+        '/brokers/alpaca/clerks/clrk_spec/settings?profileId=profile-paper&revision=2',
+      ],
+      ['/brokers/alpaca/clerks/clrk_spec', '/brokers/alpaca/clerks/clrk_spec/settings'],
+    ])('redirects the retired Configuration address %s to %s (#2566)', async (from, to) => {
+      // Configuration became Settings (PRD #2560, FR-092). A bookmark keeps
+      // working, and a review request from the desk keeps its query with it.
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(from);
+
+      expect(router.url).toBe(to);
     });
 
     it("puts a bot's own page inside the workspace, not beside it", async () => {
@@ -331,6 +367,7 @@ describe('routes', () => {
     it.each([
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'bots/:sid'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'bots'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', 'activity'],
     ])('resolves %s to the %s child', async (url, path) => {
       // The two siblings differ by one segment, so this pins that both still
       // resolve — the Bots tab and one bot's page, in the app's own table.

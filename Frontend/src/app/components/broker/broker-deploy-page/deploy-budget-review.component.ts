@@ -68,6 +68,14 @@ export class DeployBudgetReviewComponent {
     return completed?.context === this.context() && completed?.amount === this.draft().amount ? completed.view : null;
   });
   protected readonly view = computed(() => this.reviewView() ?? this.initialView());
+  /** Why the amount just reviewed was refused (too little, more than is free,
+   * risk limits changed), in the backend's words. A refusal arrives as an
+   * answer, not an error: no `review_token`, and the account's bar as it is
+   * today in `money_after`. */
+  protected readonly refusal = computed(() => {
+    const review = this.reviewView();
+    return review?.state === 'unavailable' ? review.detail : null;
+  });
   private readonly priceRechecks = linkedSignal({ source: this.context, computation: () => 0 });
   protected readonly ready = computed<ReviewedDeploymentBudget | null>(() => {
     const view = this.reviewView();

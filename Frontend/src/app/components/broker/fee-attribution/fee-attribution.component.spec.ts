@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ActivityPeriod } from '../../../api/alpaca.types';
 import type { components } from '../../../api/broker.types';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { BrokersService } from '../../../services/brokers.service';
@@ -16,24 +17,29 @@ const VIEW: components['schemas']['DeploymentFeeAttribution'] = {
   ],
 };
 
-async function show(view = VIEW, strategyInstanceId: string | null = null) {
+async function show(
+  view = VIEW,
+  strategyInstanceId: string | null = null,
+  options: { period?: ActivityPeriod | null; headingLevel?: 2 | 3 } = {},
+) {
   const read = vi.fn().mockResolvedValue(view);
   await render(FeeAttributionComponent, {
-    inputs: { target: TARGET, strategyInstanceId },
+    inputs: { target: TARGET, strategyInstanceId, ...options },
     providers: [{ provide: BrokersService, useValue: { getFeeAttribution: read } }],
   });
   return read;
 }
 
 describe('deployment fees', () => {
-  it('shows exact server totals and distinguishes provision, model and broker evidence', async () => {
+  it('shows exact server totals and distinguishes estimate, settlement and Alpaca charge', async () => {
     await show();
     await screen.findByText('Stopped bot A');
     expect(screen.getByText('Bot B')).toBeTruthy();
     expect(screen.getByText('$0.07')).toBeTruthy();
-    expect(screen.getAllByText('Estimated, awaiting settlement')).toHaveLength(2);
-    expect(screen.getAllByText('Observed broker charges')).toHaveLength(2);
-    expect(screen.getAllByText('Modelled settled')).toHaveLength(2);
+    expect(screen.getAllByText('Estimated')).toHaveLength(2);
+    expect(screen.getAllByText('Settled')).toHaveLength(2);
+    expect(screen.getAllByText('Charged by Alpaca')).toHaveLength(2);
+    expect(screen.getAllByText('Total')).toHaveLength(2);
   });
 
   it('asks for the deployment authority and keeps account uncertainty visible on a bot', async () => {
@@ -41,14 +47,45 @@ describe('deployment fees', () => {
     await screen.findByText('Stopped bot A');
     expect(screen.queryByText('Bot B')).toBeNull();
     expect(screen.getByText(/Reconcile account executions/)).toBeTruthy();
-    expect(screen.getByText(/Account charges awaiting attribution: \$1.25/)).toBeTruthy();
-    expect(read).toHaveBeenCalledWith(TARGET, 'a');
+    expect(screen.getByText(/Account charges not yet matched to a bot: \$1.25/)).toBeTruthy();
+    expect(read).toHaveBeenCalledWith(TARGET, 'a', null);
+    expect(screen.getByRole('heading', { name: 'Fees', level: 3 })).toBeTruthy();
+  });
+
+  it("reads one Activity period's account fees and names an outside order by its order number", async () => {
+    const read = await show(
+      {
+        ...VIEW,
+        period: '30d',
+        period_start_ms: 1_797_400_000_000,
+        rows: [
+          ...VIEW.rows,
+          {
+            subject_id: 'external:ord-7f3a', strategy_instance_id: null, label: 'Outside order · MSFT', order_id: 'ord-7f3a',
+            estimated_usd: '0', modelled_settled_usd: '0', observed_usd: '0.05', total_usd: '0.05',
+          },
+        ],
+      },
+      null,
+      { period: '30d', headingLevel: 2 },
+    );
+
+    await screen.findByText('Outside order · MSFT');
+    expect(read).toHaveBeenCalledWith(TARGET, null, '30d');
+    expect(screen.getByText('ord-7f3a')).toBeTruthy();
+    expect(screen.getByText(/Last 30 trading days/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Fees', level: 2 })).toBeTruthy();
   });
 
   it('never turns an unavailable projection into no fees', async () => {
     await show({ ...VIEW, available: false, known: false, rows: [], account_unattributed_usd: null, messages: ['Fee evidence is unavailable while the account Clerk is offline.'] });
     await screen.findByText(/account Clerk is offline/);
-    expect(screen.queryByText('No fee-bearing activity has been recorded.')).toBeNull();
+    expect(screen.queryByText('No fees have been recorded.')).toBeNull();
+  });
+
+  it('says a period had no fees only when the fee record is known', async () => {
+    await show({ ...VIEW, rows: [], period: 'today', period_start_ms: 1_800_000_000_000 }, null, { period: 'today' });
+    expect(await screen.findByText('No fees were charged in this period.')).toBeTruthy();
   });
 
   it('announces a failed fee read as an alert, like its sibling error rows', async () => {
@@ -58,6 +95,6 @@ describe('deployment fees', () => {
       providers: [{ provide: BrokersService, useValue: { getFeeAttribution: read } }],
     });
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Fee evidence is unavailable. Refresh to retry.');
+    expect((await screen.findByRole('alert')).textContent).toContain('Fees could not be read. Refresh to retry.');
   });
 });

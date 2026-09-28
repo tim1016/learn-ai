@@ -8,7 +8,13 @@
         <dl class="kv">
           <div>
             <dt>Exit allowance</dt>
-            <dd>{{ terms.exit_allowance_bps === null ? 'Not set' : terms.exit_allowance_bps + ' bps' }}</dd>
+            <dd>
+              @if (terms.exit_allowance_bps === null) {
+                Not set
+              } @else {
+                {{ terms.exit_allowance_bps }} bps
+              }
+            </dd>
           </div>
           <div><dt>Band multiple</dt><dd>{{ terms.band_multiple }}×</dd></div>
           <div><dt>Spread cap</dt><dd>{{ terms.spread_cap_bps }} bps</dd></div>

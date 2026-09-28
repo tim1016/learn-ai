@@ -15,10 +15,14 @@ fenced by its instance and epoch can move them.
 from __future__ import annotations
 
 import json
+import logging
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+
+logger = logging.getLogger(__name__)
 
 
 class StoredLifecycleState(StrEnum):
@@ -115,6 +119,15 @@ _ACCOUNT_NICKNAME_MAX_CHARS = 120
 #: an arbitrary number.
 LANE_COUNT_KEYS = ("running_count", "dry_run_count", "attention_count")
 _LANE_COUNT_MAX = 100_000
+_SUMMARY_KEYS = frozenset({"endpoint_mode", "authority_state", "detail", "account_nickname", *LANE_COUNT_KEYS})
+#: Lane-summary keys this build does not know, dropped at parse and counted
+#: here by key (#2561 review B1). A newer agent's new summary field must
+#: never refuse an older coordinator's liveness -- a refused beat
+#: re-registers, bumping the routing epoch on every beat -- so an unknown key
+#: is dropped (never stored or projected), counted, and logged the first time
+#: this process sees it. Known keys stay strictly validated.
+DROPPED_SUMMARY_KEYS: Counter[str] = Counter()
+_DROPPED_KEY_LOG_CHARS = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +181,9 @@ class ProviderSummaryObservation:
 
         Returns ``None`` for ``None``; raises ``ValueError`` for anything that
         is present but not a valid bounded observation, so ingestion can
-        refuse agent-authored free-form JSON instead of projecting it.
+        refuse agent-authored free-form JSON instead of projecting it. A key
+        this build does not know is dropped and counted, never refused
+        (``DROPPED_SUMMARY_KEYS``): summary fields roll out in either order.
         """
         if raw is None:
             return None
@@ -181,11 +196,7 @@ class ProviderSummaryObservation:
             payload = dict(raw)
         else:
             raise ValueError("a lane summary must be a JSON object")
-        if set(payload) - {"endpoint_mode", "authority_state", "detail", "account_nickname", *LANE_COUNT_KEYS}:
-            raise ValueError(
-                "a lane summary carries only endpoint_mode, authority_state, "
-                "detail, account_nickname and the lane's bot and attention counts"
-            )
+        _drop_unknown_summary_keys(payload)
         mode = payload.get("endpoint_mode")
         if mode not in tuple(item.value for item in SummaryEndpointMode):
             raise ValueError(f"unknown endpoint_mode {mode!r}")
@@ -215,6 +226,23 @@ class ProviderSummaryObservation:
             detail=detail,
             account_nickname=account_nickname,
             **counts,
+        )
+
+
+def _drop_unknown_summary_keys(payload: dict[object, object]) -> None:
+    """Remove keys this build does not know from ``payload``, counted and logged."""
+    unknown = sorted(str(key)[:_DROPPED_KEY_LOG_CHARS] for key in payload if key not in _SUMMARY_KEYS)
+    if not unknown:
+        return
+    for key in [key for key in payload if key not in _SUMMARY_KEYS]:
+        del payload[key]
+    first_seen = [key for key in unknown if not DROPPED_SUMMARY_KEYS[key]]
+    DROPPED_SUMMARY_KEYS.update(unknown)
+    if first_seen:
+        logger.warning(
+            "A lane summary carried keys this build does not know; they are dropped, "
+            "never stored or projected",
+            extra={"action": "lane_summary_unknown_keys_dropped", "keys": first_seen},
         )
 
 

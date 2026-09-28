@@ -10,7 +10,7 @@ describe('AlpacaTraderActivityTableComponent', () => {
       inputs: { activities: [activity('newer', 'NVDA', 20), activity('older', 'SPY', 10)] },
     });
 
-    const table = screen.getByRole('table', { name: "Today's account activity" });
+    const table = screen.getByRole('table', { name: 'Orders and cash moves' });
     for (const column of [
       'Time (local)', 'Instrument', 'Activity', 'Side', 'Quantity', 'Price', 'Net amount',
     ]) {
@@ -18,9 +18,10 @@ describe('AlpacaTraderActivityTableComponent', () => {
     }
     expect(screen.getAllByTitle('NVDA').length).toBeGreaterThan(0);
     expect(screen.getAllByTitle('SPY').length).toBeGreaterThan(0);
-    // #2183: "Activity" carries the eyebrow look itself now; the separate
-    // "Today" label above it is retired.
-    expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    // #2183: the heading carries the eyebrow look itself now; the separate
+    // "Today" label above it is retired. PRD #2560 names it for what it
+    // lists, in every period its host reads.
+    expect(screen.getByRole('heading', { name: 'Orders and cash moves' })).toBeTruthy();
     expect(screen.queryByText('Today')).toBeNull();
   });
 
@@ -29,7 +30,7 @@ describe('AlpacaTraderActivityTableComponent', () => {
       inputs: { activities: [activity('newer', 'NVDA', 20), activity('older', 'SPY', 10)] },
     });
 
-    fireEvent.input(screen.getByRole('searchbox', { name: "Search today's activity" }), {
+    fireEvent.input(screen.getByRole('searchbox', { name: 'Search orders and cash moves' }), {
       target: { value: 'SPY' },
     });
     await waitFor(() => expect(screen.queryByTitle('NVDA')).toBeNull());

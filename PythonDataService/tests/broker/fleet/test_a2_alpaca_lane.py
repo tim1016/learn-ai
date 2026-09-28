@@ -1306,6 +1306,76 @@ async def test_a_nickname_set_after_confirmation_reaches_the_next_beat_without_a
         service.close()
 
 
+async def test_every_beat_carries_the_lanes_own_counts_from_its_installed_probe(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2561 review B1/B2: ``start_heartbeat`` really sends the counts the
+    composition root's probe takes, per beat; a count the probe stops taking
+    is absent on the next beat, and nothing re-registers to carry them."""
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_report,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    counts = {"running_count": 2, "dry_run_count": 1, "attention_count": 3}
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def probe() -> dict[str, int]:
+            return dict(counts)
+
+        boot.lane_counts_probe = probe
+        await reserve_account(boot, external_account_id=account_id)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="paper",
+        )
+        clock.advance(1)
+
+        first = await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+        first_summary = ProviderSummaryObservation.parse(first.reported_summary_json)
+        assert first_summary is not None and first_summary.counts() == counts
+
+        del counts["attention_count"]
+        clock.advance(1)
+        second = await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+        second_summary = ProviderSummaryObservation.parse(second.reported_summary_json)
+        assert second_summary is not None and second_summary.counts() == {"running_count": 2, "dry_run_count": 1}
+        assert second.routing_epoch == first.routing_epoch
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_close_fleet_lane_stops_the_heartbeat(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

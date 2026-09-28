@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import (
+    ENVELOPE_SYNC_INTERVAL_S,
     LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
     AccountObservation,
@@ -30,6 +31,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, LossHoldCause
 
+# The envelope cadence re-reads the account on its own; there is no manual
+# refresh, so the copy says when the next reading comes instead of asking for one.
+_NEXT_READING = f"The account is read again every {ENVELOPE_SYNC_INTERVAL_S:g} seconds."
+
 
 @dataclass(frozen=True)
 class RiskReadiness:
@@ -37,6 +42,8 @@ class RiskReadiness:
     reason_code: str | None = None
     detail: str = "Current account risk evidence permits new exposure."
     breach_cause: LossHoldCause | None = None
+    # No limit is set at all: the fix is setting one, not waiting for evidence.
+    limit_missing: bool = False
 
     @property
     def allowed(self) -> bool:
@@ -53,30 +60,45 @@ def current_risk_readiness(
     """
     with repo._write_lock:
         if envelope.agreement == "disagreed":
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_DISAGREEMENT, detail="The effective account risk configuration disagrees. Review Configuration.")
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_DISAGREEMENT, detail="This account's saved risk limits disagree. Review the daily loss limit in Settings.")
         if repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, strategy_instance_id=None) is not None:
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, detail="The account loss hold stands. Review it in Configuration.")
-        observation = envelope.fresh_observation(now_ms)
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, detail="The account loss hold stands. Review it in Settings.")
         policy = repo.account_risk_policy()
         revision = None if policy is None else policy.revision
-        if observation is None or observation.risk_revision != revision or observation.last_equity_usd is None:
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Fresh account evidence for the current risk limits is unavailable. Refresh account evidence.")
+        synthetic = repo.account_id.startswith("sim:")
+        values = policy if policy is not None else (envelope.in_force if envelope.values is not None else None)
+        # A missing limit is judged before any observation: without one there
+        # is nothing to observe against, and naming stale evidence instead sent
+        # the owner looking for a refresh that could never help (#2566, H6/H7).
+        if values is None and not synthetic:
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, limit_missing=True,
+                detail="No daily loss limit is set for this account, so new entries are refused. Set one in Settings.")
+        observation = envelope.fresh_observation(now_ms)
+        if observation is None:
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"Alpaca has not confirmed this account's cash and equity recently, so new entries wait. {_NEXT_READING}")
+        if observation.risk_revision != revision:
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"The daily loss limit changed after the last account reading, so new entries wait. {_NEXT_READING}")
+        if observation.last_equity_usd is None:
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"Alpaca has not reported this account's starting equity for the day, so the loss limit cannot be judged. {_NEXT_READING}")
         if repo.account_id.startswith(("sim:", "shadow:")) and (
             observation.simulation_session_start_ms != et_day_window_ms(now_ms)[0]
             or (observation.simulation_marks_valid_until_ms is not None and now_ms > observation.simulation_marks_valid_until_ms)
         ):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Refresh the simulation session baseline and current market prices before deploying.")
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"The simulated account's session baseline or current market prices are out of date, so new entries wait. {_NEXT_READING}")
         if observation.risk_fill_sequence != risk_fill_sequence(repo):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Executions changed after the account observation. Refresh account evidence before deploying.")
-        synthetic = repo.account_id.startswith("sim:")
-        values = policy if policy is not None else (envelope.in_force if envelope.values is not None else None)
-        if values is None and not synthetic:
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Apply account risk limits in Configuration before deploying.")
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"Executions changed after the last account reading, so new entries wait. {_NEXT_READING}")
         if observation.equity_usd is None:
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Current account equity is unavailable. Refresh account evidence.")
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail=f"Alpaca has not reported this account's current equity, so new entries wait. {_NEXT_READING}")
         pnl = observed_day_pnl(observation=observation, now_ms=now_ms)
         if not pnl.known or not math.isfinite(observation.last_equity_usd) or not risk_evidence_ready(repo, now_ms=now_ms):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Current account evidence is incomplete. Refresh transfers and fees and reconcile executions before deploying.")
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                detail="Current account evidence is incomplete: some transfers, fees or executions are not accounted for yet, so new entries wait.")
         # Dry Run retains its explicit daily-loss-policy exemption while money,
         # fees, execution evidence and ordinary custody holds still apply.
         if not synthetic:
@@ -84,7 +106,7 @@ def current_risk_readiness(
             if loss_breached(day_pnl_usd=pnl.total_usd, loss_limit_usd=limit):
                 cause = LossHoldCause(pnl.day_start_ms, pnl.total_usd, limit, observation.last_equity_usd, observation.observed_at_ms, revision)
                 return RiskReadiness(reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-                    detail="The current account loss limit is breached. Review the loss hold in Configuration.", breach_cause=cause)
+                    detail="The current account loss limit is breached. Review the loss hold in Settings.", breach_cause=cause)
         return RiskReadiness(observation=observation)
 
 

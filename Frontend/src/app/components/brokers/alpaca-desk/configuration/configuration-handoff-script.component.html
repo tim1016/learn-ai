@@ -1,7 +1,7 @@
 <section class="handoff" aria-labelledby="handoff-script-title">
   <header class="handoff__header">
     <div>
-      <h2 id="handoff-script-title">Paper → Live handoff script</h2>
+      <h4 id="handoff-script-title">Paper → Live handoff script</h4>
       <p>
         Run this from the repository root only after Alpaca reports the disposable Paper
         account flat and order-free. It performs the supported Paper reset, opens this page
@@ -9,14 +9,13 @@
       </p>
     </div>
 
-    @if (script.hasValue()) {
-      <app-copy-button
-        variant="button"
-        [text]="renderedScript()"
-        label="Copy handoff script"
-        copiedLabel="Script copied"
-        ariaLabel="Copy Paper-to-Live handoff script" />
-    }
+    <button
+      type="button"
+      class="handoff__toggle"
+      [attr.aria-expanded]="shown()"
+      aria-controls="handoff-script-body"
+      (click)="shown.set(!shown())"
+    >{{ shown() ? 'Hide script' : 'Show script' }}</button>
   </header>
 
   <p class="handoff__warning" role="note">
@@ -24,22 +23,32 @@
     reset targets, rechecks current safety evidence, and never launches a Live bot.
   </p>
 
-  @if (restartCommand() === null) {
-    <p class="handoff__command-unknown" role="note">
-      This deployment did not declare this lane's worker service, so the copied script cannot
-      fill it in. Export FLEET_WORKER_SERVICE (and its compose context, if this lane needs one)
-      yourself before running it.
-    </p>
-  }
+  <div id="handoff-script-body" class="handoff__body">
+    @if (shown()) {
+      @if (restartCommand() === null) {
+        <p class="handoff__command-unknown" role="note">
+          This deployment did not declare this lane's worker service, so the copied script cannot
+          fill it in. Export FLEET_WORKER_SERVICE (and its compose context, if this lane needs one)
+          yourself before running it.
+        </p>
+      }
 
-  @if (script.error()) {
-    <p class="handoff__error" role="alert">
-      The local handoff script could not be loaded.
-      <a [href]="scriptUrl">Open the script directly</a>.
-    </p>
-  } @else if (script.hasValue()) {
-    <pre class="handoff__source" tabindex="0"><code>{{ renderedScript() }}</code></pre>
-  } @else {
-    <p class="handoff__loading" role="status">Loading the local handoff script…</p>
-  }
+      @if (script.error()) {
+        <p class="handoff__error" role="alert">
+          The local handoff script could not be loaded.
+          <a [href]="scriptUrl">Open the script directly</a>.
+        </p>
+      } @else if (script.hasValue()) {
+        <app-copy-button
+          variant="button"
+          [text]="renderedScript()"
+          label="Copy handoff script"
+          copiedLabel="Script copied"
+          ariaLabel="Copy Paper-to-Live handoff script" />
+        <pre class="handoff__source" tabindex="0"><code>{{ renderedScript() }}</code></pre>
+      } @else {
+        <p class="handoff__loading" role="status">Loading the local handoff script…</p>
+      }
+    }
+  </div>
 </section>

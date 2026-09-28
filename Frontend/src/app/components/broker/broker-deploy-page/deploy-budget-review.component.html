@@ -5,7 +5,7 @@
   @if (evidence.isLoading()) { <p role="status">Reading available money…</p> }
   @if (evidence.error()) { <p role="alert">Budget evidence is unavailable. Refresh to retry.</p> }
   @if (view(); as facts) {
-    <p role="status">{{ facts.detail }}</p>
+    @if (refusal(); as refused) { <p role="alert">{{ refused }}</p> } @else { <p role="status">{{ facts.detail }}</p> }
     @if (facts.risk_limits_summary) { <p>{{ facts.risk_limits_summary }}</p> }
     <dl>
       <div><dt>World / account</dt><dd>{{ worldLabels[facts.world] }} · {{ facts.custody_account_id }}</dd></div>

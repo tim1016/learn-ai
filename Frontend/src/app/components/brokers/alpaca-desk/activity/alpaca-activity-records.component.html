@@ -1,0 +1,43 @@
+<details class="activity-records" [open]="opened()" (toggle)="onToggle($event)">
+  <summary>
+    <h2 class="activity-records__title">Order records and recovery</h2>
+    <span>Every order from acceptance to Alpaca's answer, and how to resolve one whose outcome is unknown.</span>
+  </summary>
+
+  @if (opened()) {
+    <div class="activity-records__body">
+      <app-alpaca-custody-resolution [target]="target()">
+        <p>Use the recovery actions in this section to resolve the difference.</p>
+      </app-alpaca-custody-resolution>
+
+      <app-alpaca-sqlite-custody
+        [target]="target()"
+        [fence]="fence()"
+        [accountId]="accountId()"
+        [projectionRefreshVersion]="refreshVersion()"
+        [timelineQuery]="timelineQuery()"
+        (projectionInvalidated)="refresh()"
+      />
+
+      @if (window(); as span) {
+        <app-account-desk-transaction-history
+          [target]="target()"
+          [fence]="fence()"
+          [accountId]="accountId()"
+          [fromMs]="span.fromMs"
+          [toMs]="span.toMs"
+          [refreshVersion]="refreshVersion()"
+          [showScopeControl]="false"
+          [pageSize]="5"
+        />
+      } @else if (windowReading()) {
+        <p class="activity-card__state" role="status">Reading this period's order records…</p>
+      } @else {
+        <div class="activity-card__state" role="alert">
+          <p>This period's order records can't be listed until its window is read.</p>
+          <button type="button" class="activity-button" (click)="retry.emit()">Retry</button>
+        </div>
+      }
+    </div>
+  }
+</details>

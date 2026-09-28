@@ -17,7 +17,6 @@ import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chi
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
 import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
-import type { AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import {
   ACCOUNT_WORKSPACE_TABS,
   accountWorkspaceLocation,
@@ -30,6 +29,7 @@ import { laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
 /** How often the header re-reads the account's money, its account read and
  * its Clerk status — the shared reads its tabs render too. Carried over from
@@ -37,13 +37,6 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
  * equity and the reconciliation verdict all move while an operator sits on
  * one tab, and none is pushed. */
 const ACCOUNT_POLL_MS = 15_000;
-
-/** The header's money figures, or why there are none. Every figure is a
- * backend-authored string from the account-money read; the header adds
- * nothing up and never shows an unknown as $0. */
-type HeaderMoney =
-  | { readonly kind: 'ready'; readonly view: AccountMoneyView }
-  | { readonly kind: 'reason'; readonly text: string };
 
 /** Why the Overview tab is not offered on a lane with no confirmed account:
  * it is that account's own page, and there is no account. */
@@ -91,6 +84,7 @@ type WorkspaceAccountStatus =
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,
+    TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-account-workspace.component.html',
   styleUrl: './alpaca-account-workspace.component.scss',
@@ -197,16 +191,24 @@ export class AlpacaAccountWorkspaceComponent {
     return laneIsReady(lane) ? { kind: 'unbound' } : { kind: 'lifecycle', state: lane.lifecycle_state };
   });
 
-  protected readonly money = computed<HeaderMoney>(() => {
-    const money = this.accountData.money;
-    if (money.hasValue()) {
-      const view = money.value();
-      return view.state === 'ready' ? { kind: 'ready', view } : { kind: 'reason', text: view.detail };
-    }
-    if (money.error() !== undefined) return { kind: 'reason', text: 'Account money could not be read.' };
-    return money.status() === 'idle'
-      ? { kind: 'reason', text: 'This lane does not report account money.' }
-      : { kind: 'reason', text: 'Reading account money…' };
+  /** The header's money figures, or why there are none — the account data
+   * service's one money state, which every other money surface on these
+   * pages renders too. Every figure is a backend-authored string; the header
+   * adds nothing up and never shows an unknown as $0. */
+  protected readonly money = this.accountData.moneyState;
+
+  /** Alpaca's own Equity and Today when the money read cannot draw the bar
+   * but its reading knew them — a stale or refused bar never blanks the
+   * broker's figures. They carry the instant they were read, which the header
+   * states, since without the bar beside them nothing else dates them. `null`
+   * for a ready read (its figures are the full row) and for one that knows
+   * neither. */
+  protected readonly brokerReading = computed(() => {
+    const state = this.money();
+    if (state.kind !== 'unavailable' || state.view === null) return null;
+    const { equity_usd: equity = null, today_pnl_usd: today = null, observed_at_ms: observedAtMs = null } = state.view;
+    if (observedAtMs === null || (equity === null && today === null)) return null;
+    return { equity, today, observedAtMs };
   });
 
   private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
