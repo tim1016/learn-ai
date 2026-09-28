@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
 import pytest
