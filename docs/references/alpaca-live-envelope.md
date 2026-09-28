@@ -453,11 +453,18 @@ rebuild are covered by `tests/broker/alpaca/clerk/sqlite/test_account_risk_polic
 arithmetic oracle in `tests/broker/alpaca/clerk/sqlite/test_simulated_account.py`
 uses a Shadow initial baseline of $1,000, BUY 2 at $100, SELL 1 at $120, and a
 $130 mark. With current reference cash of $1,200, available cash is exactly
-`1200 - 200 + 120 = 1120`; open P&L is $30. A later real deposit cannot change
+`1200 - 200 + 120 = 1120`; open P&L is $30. Current risk equity is
+`1000 + 20 + 30 - .03 = 1049.97`, including accrued modelled fees before
+settlement. Pending provisions remain separate cash claims; they are not
+deducted twice from cash or risk equity. A later real deposit cannot change
 the retained $1,000 risk baseline. Once the date settles the canonical modelled
 fees ($0.01 SEC + $0.01 TAF + $0.01 CAT), a $1,500 reference gives exact cash
 `1500 - 200 + 120 - .03 = 1419.97`. The next baseline is
 `1000 + 20 + 30 - .03 = 1049.97`, using the exact previous scheduled close mark.
+Both effective fills and fee inputs are cut off inclusively at that close;
+after-hours fills belong to the next loss window. Regression cases cover an
+after-close BUY with no prior-close position and an after-close SELL whose
+realized gain must not leak into the previous close baseline.
 
 Cash assertions use exact Decimal equality. Existing canonical FIFO outputs
 use absolute tolerance `1e-9`, relative tolerance zero; this is composition of

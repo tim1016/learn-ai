@@ -212,11 +212,17 @@ The initial positive risk capital is captured before the first simulated fill.
 Immutable `SIMULATION_SESSION_BASELINE` custody transitions retain this capital
 and each session's equity; they rebuild with the existing mirror. Later
 baselines use that initial capital plus cumulative own realized and marked open
-P&L minus modelled fees before the new ET session, with exact prior scheduled
-NYSE-close marks from the canonical calendar. A restart may reconstruct a
+P&L minus canonical accrued modelled fees, with effective fills and fee inputs
+cut off inclusively at the prior scheduled NYSE close and marks from that same
+calendar boundary. Current marked equity includes accrued modelled fees even
+before settlement; cash subtracts settled fees only, while pending provisions
+remain cash claims. A restart may reconstruct a
 missed boundary only from complete retained close evidence; it cannot invent a
 baseline or substitute current real equity. Changes to reference cash or risk
 limits cannot rewrite a retained baseline or clear a standing loss hold.
+After session rollover, the existing obligation-resolution proof reads only
+the selected simulated custody world; foreign real positions or orders cannot
+block clearance of a resolved simulated hold.
 
 Dry Run uses its explicitly reviewed starting cash: transient consent before
 Deploy commits, then the private account's durable committed cents. It retains

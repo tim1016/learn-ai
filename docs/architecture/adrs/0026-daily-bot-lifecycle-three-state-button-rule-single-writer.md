@@ -1,5 +1,10 @@
 # ADR-0026: Daily bot lifecycle — three durable states, the Button Rule, and the single-writer evaluator
 
+> **2026-09-27 lifecycle supersession:** Active Alpaca bots now use Deploy, Stop
+> and a fresh Deploy again. Pause, Continue and Resume described below are
+> historical; same-run feed/order recovery and guarded Flatten remain. See
+> [ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path).
+
 > **⚠️ Partially superseded 2026-08-18 — read this before implementing anything below.**
 >
 > **§4 "Single-writer evaluator; reads are pure", and the *evaluator-ownership

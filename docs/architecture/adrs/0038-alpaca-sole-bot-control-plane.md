@@ -14,7 +14,8 @@
 
 Owner decision in [PRD #2540](https://github.com/tim1016/learn-ai/issues/2540),
 implemented by [#2541](https://github.com/tim1016/learn-ai/issues/2541), supersedes
-all active Alpaca Pause, Continue and Resume behavior in ADRs 0034–0038 and the
+all active Alpaca Pause, Continue and Resume behavior in ADRs 0004, 0010, 0011,
+0026, 0033–0038 and the
 legacy lifecycle vocabulary. The lifecycle is **Deploy → Running → Stop**.
 Terminal failure also ends that deployment's right to make new decisions.
 
