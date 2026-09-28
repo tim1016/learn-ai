@@ -1254,8 +1254,13 @@ def _terminal_exposure_notices(
             }, exc_info=True)
             notices.append(ExposureNoticeView(
                 strategy_instance_id=sid, symbol=str(registration["symbol"]),
-                kind="position_unverified", label="Position could not be verified; check the broker",
-                explanation="This bot's lifecycle or custody evidence could not be read. Check its position and working orders at the broker.",
+                kind="position_unverified", label="Position could not be verified",
+                # Every fix it names is in the app (hurdle H29).
+                explanation=(
+                    "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
+                    "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
+                    "available once the position is proven."
+                ),
                 action_label="Open bot",
             ))
     return notices

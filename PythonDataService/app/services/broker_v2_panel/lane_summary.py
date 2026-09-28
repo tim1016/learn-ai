@@ -260,8 +260,13 @@ def _bot_items(
             items.append(LaneAttentionItem(
                 condition_id=f"lifecycle-unreadable:{sid}", reason_code="LIFECYCLE_UNREADABLE",
                 kind="position_unverified", severity="warning", strategy_instance_id=sid, symbol=bot.symbol,
-                headline=f"{sid}'s lifecycle could not be read, so what it holds is unknown. Check it at the broker.",
-                action=_OPEN_BOT,
+                # Its fix is in the app (hurdle H29): reconciling re-reads
+                # what the account holds at Alpaca.
+                headline=(
+                    f"{sid}'s lifecycle could not be read, so what it holds is unknown. "
+                    "Reconcile now to re-read the account at Alpaca."
+                ),
+                action=_ORDER_RECORDS,
             ))
         elif bot.group == "holding" and sid not in already_named:
             items.append(_stopped_holding_item(repository, sid))

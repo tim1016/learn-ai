@@ -31,22 +31,30 @@ def observe_loss_hold(runtime: ActiveClerkRuntime | None) -> LossHoldState:
     return "held" if active is not None else "clear"
 
 
-def _readiness(runtime: ActiveClerkRuntime | None, *, held: bool) -> tuple[int, DeploymentReadiness]:
+def _readiness(runtime: ActiveClerkRuntime | None, *, held: bool) -> tuple[int, DeploymentReadiness, str]:
+    """The account's Deploy readiness and the sentence the pill's tooltip says about it.
+
+    A current-risk refusal is worded by the shared risk check itself, so the
+    pill names the same fix Deploy and Settings do -- a missing daily loss
+    limit is "set one in Settings", never "evidence is unavailable" (H7).
+    """
     repo = None if runtime is None else runtime.sqlite_repository
     if repo is None:
-        return 0, "not_applicable"
+        return 0, "not_applicable", _READINESS_COPY["not_applicable"]
     version = repo.budget_authority_version()
     if version < 2:
-        return version, "upgrade_required"
+        return version, "upgrade_required", _READINESS_COPY["upgrade_required"]
     if held:
-        return version, "loss_hold"
+        return version, "loss_hold", _READINESS_COPY["loss_hold"]
     sync = runtime.envelope_sync
     if sync is None:
-        return version, "risk_not_observed"
+        return version, "risk_not_observed", _READINESS_COPY["risk_not_observed"]
     current = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    if current.reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE:
+        return version, "loss_hold", _READINESS_COPY["loss_hold"]
     if not current.allowed:
-        return version, ("loss_hold" if current.reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE else "risk_not_observed")
-    return version, "ready"
+        return version, "risk_not_observed", current.detail
+    return version, "ready", _READINESS_COPY["ready"]
 
 
 _READINESS_COPY: dict[DeploymentReadiness, str] = {
@@ -78,7 +86,7 @@ def alpaca_live_verdict(
         "unobserved" if account_id is None or refusal == "BROKER_ACCOUNT_UNAVAILABLE" else "agreed"
     )
     hold = observe_loss_hold(runtime) if loss_hold is None else loss_hold
-    version, readiness = _readiness(runtime, held=hold == "held")
+    version, readiness, readiness_copy = _readiness(runtime, held=hold == "held")
     common = {
         "configured_mode": "unconfigured" if settings is None else settings.mode,
         "observed_account_id": account_id,
@@ -101,12 +109,12 @@ def alpaca_live_verdict(
     if settings.is_paper:
         return AlpacaLiveVerdict(**common, final_verdict="paper",
             headline="Paper account — no real money at risk",
-            detail="Orders reach Alpaca's paper endpoint only. " + _READINESS_COPY[readiness])
+            detail="Orders reach Alpaca's paper endpoint only. " + readiness_copy)
     live_id = None if account_id is None else live_account_id_for_shadow_account(account_id)
     if authority == "shadow":
         return AlpacaLiveVerdict(**common, final_verdict="shadow",
             headline=f"LIVE account {live_id} — Shadow simulation, nothing submitted",
-            detail="Every fill is simulated and no order is submitted to the live account. " + _READINESS_COPY[readiness])
+            detail="Every fill is simulated and no order is submitted to the live account. " + readiness_copy)
     return AlpacaLiveVerdict(**common, final_verdict="live",
         headline=f"LIVE account {live_id} — real money",
-        detail="Live orders can reach this account only through its installed Live authority. " + _READINESS_COPY[readiness])
+        detail="Live orders can reach this account only through its installed Live authority. " + readiness_copy)

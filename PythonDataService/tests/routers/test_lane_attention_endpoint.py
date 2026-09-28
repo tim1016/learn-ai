@@ -352,6 +352,15 @@ async def test_corrupt_lifecycle_preserves_sibling_recovery_notices(tmp_path: Pa
         assert unreadable["strategy_instance_id"] == "ema-1"
         assert unreadable["kind"] == "position_unverified"
         assert "could not be read" in unreadable["explanation"]
+        # Hurdle H29: the fix is in the app, never "at the broker".
+        [line] = [item for item in items if item["reason_code"] == "LIFECYCLE_UNREADABLE"]
+        assert line["headline"] == (
+            "ema-1's lifecycle could not be read, so what it holds is unknown. "
+            "Reconcile now to re-read the account at Alpaca."
+        )
+        assert line["action"] == {"label": "Open order records", "destination": "activity"}
+        for text in (line["headline"], unreadable["label"], unreadable["explanation"]):
+            assert "at the broker" not in text and "check the broker" not in text.lower()
     finally:
         repo.close()
 
