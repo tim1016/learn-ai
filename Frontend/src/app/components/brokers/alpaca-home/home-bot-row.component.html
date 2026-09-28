@@ -7,7 +7,9 @@
     }
     <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
   </span>
-  <span class="home-row__meta">{{ bot.strategy_label }} · {{ bot.symbol }}</span>
+  <span class="home-row__meta">
+    {{ bot.strategy_label }} · <app-asset-identity class="home-row__symbol" [symbol]="bot.symbol" size="xs" />
+  </span>
 </div>
 
 <div class="home-row__status">

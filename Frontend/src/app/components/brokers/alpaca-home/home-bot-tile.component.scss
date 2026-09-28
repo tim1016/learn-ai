@@ -52,6 +52,10 @@
   font-weight: var(--fw-semi);
 }
 
+.home-tile__symbol {
+  vertical-align: middle;
+}
+
 .home-tile__foot {
   display: flex;
   flex-wrap: wrap;

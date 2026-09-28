@@ -41,6 +41,10 @@
   font-size: var(--fs-xs);
 }
 
+.home-row__symbol {
+  vertical-align: middle;
+}
+
 .home-row__status {
   display: flex;
   flex-wrap: wrap;

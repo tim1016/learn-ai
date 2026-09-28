@@ -5,6 +5,7 @@ import {
   accountWorkspaceBotRoute,
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
@@ -30,7 +31,14 @@ const GROUP_WORDS: Readonly<Record<HomeBot['bot']['group'], string>> = {
 @Component({
   selector: 'app-home-bot-tile',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, HomeBotActionComponent, HomeSparklineComponent, MoneyBarComponent, RouterLink],
+  imports: [
+    AssetIdentityComponent,
+    AuthoredUsdPipe,
+    HomeBotActionComponent,
+    HomeSparklineComponent,
+    MoneyBarComponent,
+    RouterLink,
+  ],
   templateUrl: './home-bot-tile.component.html',
   styleUrl: './home-bot-tile.component.scss',
   host: {

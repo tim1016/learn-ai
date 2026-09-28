@@ -357,6 +357,26 @@ describe('AlpacaHomeComponent', () => {
     expect(wall.start).toHaveBeenCalledWith('alpaca', TEST_CLERK_ID, TEST_ACCOUNT_ID, expect.anything(), expect.anything());
   });
 
+  it('names every bot’s symbol through the shared asset identity at its compact size, on the List and the Wall', async () => {
+    const { view } = await renderHome();
+
+    const rows = Array.from(view.container.querySelectorAll<HTMLElement>('app-home-bot-row'));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.querySelector('app-asset-identity.asset-identity--xs')?.textContent).toContain('SPY');
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wall' }));
+    await view.fixture.whenStable();
+    await screen.findByText('STOPPED · STILL HOLDING');
+
+    const tiles = Array.from(view.container.querySelectorAll<HTMLElement>('app-home-bot-tile'));
+    expect(tiles).toHaveLength(3);
+    for (const tile of tiles) {
+      expect(tile.querySelector('app-asset-identity.asset-identity--xs')?.textContent).toContain('SPY');
+    }
+  });
+
   it('asks before Stop, then lands the keyboard on the outcome', async () => {
     const { panel } = await renderHome();
 
