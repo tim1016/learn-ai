@@ -94,6 +94,9 @@
             />
 
             <app-deploy-parameters-section
+              [qualifiedConfiguration]="selectedStrategy()?.qualified_configuration ?? null"
+              (qualifiedConfigurationSelected)="useQualifiedConfiguration($event)"
+              (dryRunRequested)="setExecutionMode('dry_run')"
               [paramsSchema]="paramsSchema()"
               [values]="ticket().parameters"
               (parameterChange)="setParameter($event)"

@@ -49,7 +49,7 @@ function parseStrictNumber(raw: string, type: string | null | undefined): number
 export class DeployParametersSectionComponent {
   readonly qualifiedConfiguration = input<QualifiedDeployConfiguration | null>(null);
   readonly qualifiedConfigurationSelected = output<QualifiedDeployConfiguration>();
-  readonly dryRunRequested = output<void>();
+  readonly dryRunRequested = output();
   protected readonly qualifiedPicker = viewChild<InstrumentCardComponent>('qualifiedPicker');
   protected readonly qualifiedPickerValue: TickerRange = { symbol: '', from: '', to: '', resolution: 'daily' };
   protected readonly coverageDetailsOpen = signal(false);

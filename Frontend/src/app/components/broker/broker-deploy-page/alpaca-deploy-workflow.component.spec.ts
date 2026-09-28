@@ -1316,4 +1316,27 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
   });
 
+  it('applies the explicit qualified tuple atomically and requires a fresh budget review', async () => {
+    const view: DeployBotView = { ...DEPLOY_VIEW, strategies: [{ ...EMA_STRATEGY,
+      golden_validation_scope: false, validation_case_symbol: 'SPY', validation_case_parameters: { gap: 5 },
+      qualified_configuration: { symbol: 'AAPL', parameters: { gap: 0.75 }, explanation: 'This exact tuple has retained qualified evidence.' },
+    }] };
+    const service = mockService(RECEIPT, view);
+    const { fixture } = await renderWorkflow(service);
+    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'qualified-budget' } });
+    await reviewMoney();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    await vi.waitFor(() => expect(symbolPicker(fixture).symbol()).toBe('AAPL'));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(true);
+    expect(screen.queryByText(/Reviewed budget:/)).toBeNull();
+    await reviewMoney();
+    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'AAPL', parameters: { gap: 0.75 }, budget: { amount_usd: '1000.00' } });
+    await vi.waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    expect(screen.getByText(/Reviewed budget:/)).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
 });

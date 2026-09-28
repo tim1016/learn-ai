@@ -75,6 +75,18 @@ export class BrokerConfigurationService {
     );
   }
 
+  readBudgetAuthority(target: ResourceTarget): Promise<components['schemas']['BudgetAuthorityState']> {
+    return firstValueFrom(this.http.get<components['schemas']['BudgetAuthorityState']>(
+      operationUrl('configuration_budget_authority_read', target),
+    ));
+  }
+
+  applyBudgetAuthority(target: ResourceTarget, payload: components['schemas']['BudgetAuthorityApplyRequest']): Promise<components['schemas']['BudgetAuthorityState']> {
+    return firstValueFrom(this.http.post<components['schemas']['BudgetAuthorityState']>(
+      operationUrl('configuration_budget_authority_apply', target), this.commandBody(target, payload),
+    ));
+  }
+
   readRiskLimits(clerkId: string): Promise<components['schemas']['AccountRiskStateResponse']> {
     return firstValueFrom(this.http.get<components['schemas']['AccountRiskStateResponse']>(
       operationUrl('configuration_risk_limits_read', { broker: 'alpaca', clerkId }),

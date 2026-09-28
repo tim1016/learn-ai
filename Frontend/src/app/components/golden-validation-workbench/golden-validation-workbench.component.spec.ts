@@ -315,7 +315,7 @@ it("presents provenance honestly and requires a deliberate Manual override ackno
     providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
   });
   const user = userEvent.setup();
-  expect(await screen.findByText(affected.evidence_applicability!.explanation)).toBeTruthy();
+  expect(await screen.findByText(affected.evidence_applicability?.explanation ?? "Missing evidence disposition")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open saved configuration to rerun" }).getAttribute("href")).toBe("/strategy-lab?run=44");
   await user.type(screen.getByRole("textbox", { name: "Review note" }), "I accept the recorded limitation.");
   await user.click(screen.getByRole("button", { name: "Save review" }));

@@ -141,6 +141,8 @@ class FakeConfigurationService {
   readonly applied: number[] = [];
   stageRefusal: HttpErrorResponse | null = null;
 
+  readBudgetAuthority = vi.fn(async () => ({ state: 'budget', account_id: this.current.effective_account_id,
+    authorization_version: 2, active_run_count: 0, review_token: 'test-authority', detail: 'Budgets are enabled.' }));
   listCredentialSlots = vi.fn(async (_clerkId: string) => SLOTS);
   listNicknames = vi.fn(async (_clerkId: string) => this.nicknames);
   listProfiles = vi.fn(async (

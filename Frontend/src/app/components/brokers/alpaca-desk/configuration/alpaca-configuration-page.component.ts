@@ -26,6 +26,7 @@ import {
   toConfigurationRefusal,
 } from './broker-configuration-refusal';
 import { BrokerConfigurationService, type RevisionContent } from './broker-configuration.service';
+import { ConfigurationBudgetAuthorityComponent } from './configuration-budget-authority.component';
 import { ConfigurationRiskLimitsComponent } from './configuration-risk-limits.component';
 import { ConfigurationHandoffScriptComponent } from './configuration-handoff-script.component';
 import { ConfigurationLifecycleTrackerComponent } from './configuration-lifecycle-tracker.component';
@@ -104,6 +105,7 @@ function sameClerkRevisionRef(
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ConfigurationRiskLimitsComponent,
+    ConfigurationBudgetAuthorityComponent,
     ConfigurationProfileCreateComponent,
     ConfigurationProfileDetailComponent,
     ConfigurationProfileListComponent,

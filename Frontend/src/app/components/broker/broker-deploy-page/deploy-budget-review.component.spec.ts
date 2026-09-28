@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
@@ -85,4 +86,15 @@ describe('deployment budget review', () => {
     expect(reviewed.mock.calls.at(-1)?.[0]).toBeNull();
     expect(screen.queryByText(/Reviewed budget:/)).toBeNull();
   });
+  it('renders a fleet-authored refusal without changing the chosen dollar amount', async () => {
+    const { previewBudget, reviewed } = await setup();
+    previewBudget.mockRejectedValueOnce(new HttpErrorResponse({ status: 409,
+      error: { reason: 'budget_review_changed', message: 'Risk limits changed. Refresh and review these dollars again.' } }));
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '617.28' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+    await screen.findByText('Risk limits changed. Refresh and review these dollars again.');
+    expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('617.28');
+    expect(reviewed.mock.calls.at(-1)?.[0]).toBeNull();
+  });
+
 });

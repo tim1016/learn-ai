@@ -1,8 +1,8 @@
 import { CurrencyPipe } from '@angular/common';
-import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, resource, signal, untracked } from '@angular/core';
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
 
+import { extractServerMessage } from '../operation-error';
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -39,7 +39,7 @@ export class DeployBudgetReviewComponent {
     readOnly(path.confirmation, () => this.disabled());
     required(path.amount, { message: 'Enter a dollar budget.' });
     maxLength(path.amount, 40);
-    pattern(path.amount, /^\d+(\.\d{1,2})?$/, { message: 'Use dollars and at most two decimal places.' });
+    pattern(path.amount, /^(?=.*[1-9])\d+(\.\d{1,2})?$/, { message: 'Enter a positive dollar amount with at most two decimal places.' });
   });
   protected readonly context = computed(() => {
     const body = this.body();
@@ -111,8 +111,7 @@ export class DeployBudgetReviewComponent {
       if (context === this.context() && amount === this.draft().amount) this.completed.set({ context, amount, view });
     } catch (error) {
       if (context === this.context() && amount === this.draft().amount) {
-        this.failure.set(error instanceof HttpErrorResponse && typeof error.error?.detail?.message === 'string'
-          ? error.error.detail.message : 'The budget could not be reviewed. Refresh the account evidence and try again.');
+        this.failure.set(extractServerMessage(error, 'The budget could not be reviewed. Refresh the account evidence and try again.'));
       }
     } finally {
       this.reviewing.set(false);

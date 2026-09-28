@@ -31,6 +31,7 @@ import {
   type DeployBotView,
   type DeployExecutionMode,
   type DeployStrategyParamsSchema,
+  type QualifiedDeployConfiguration,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
@@ -802,6 +803,19 @@ export class AlpacaDeployWorkflowComponent {
       ...current,
       parameters: { ...current.parameters, [change.field]: change.value },
     }));
+  }
+
+  protected useQualifiedConfiguration(configuration: QualifiedDeployConfiguration): void {
+    // The shared instrument card already proved this pick's lake coverage.
+    // Apply the exact server tuple together; never merge it with old overrides.
+    const current = this.ticket();
+    if (current.symbol === configuration.symbol && sameParameterValues(current.parameters, configuration.parameters)
+      && this.invalidParameterFields().size === 0) return;
+    this.clearAdmission();
+    this.budgetConsent.set(null);
+    this.invalidParameterFields.set(new Set());
+    this.ticket.update(ticket => ({ ...ticket, symbol: configuration.symbol, parameters: { ...configuration.parameters } }));
+    this.scheduleSymbolScope(configuration.symbol);
   }
 
   protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
