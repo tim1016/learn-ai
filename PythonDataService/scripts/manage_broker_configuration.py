@@ -120,8 +120,7 @@ class ConfigurationOperatorRefusal(ValueError):
 
     Distinct from ``ConfigurationImportRefused``, which is the *ceremony*
     refusing something it understood. A plan file that is not a plan is exit 1;
-    a plan that no longer verifies is exit 2. Same split the budget authority
-CLI makes between a malformed request and a refused one.
+    a plan that no longer verifies is exit 2.
     """
 
 
