@@ -36,6 +36,10 @@ LIVE_ENVELOPE_LOSS_HOLD_CLEARED = "LIVE_ENVELOPE_LOSS_HOLD_CLEARED"
 # anyway needs to read that the number is the armed one, not the edited one.
 _SEALED_LIMIT = "sealed at arming"
 _CONFIGURED_LIMIT = "configured in the environment"
+_DAY_PNL_BASIS = (
+    "current account equity minus prior regular-session-close equity, "
+    "net of deposits and withdrawals after that close"
+)
 
 _ClearOutcome = Literal["cleared", "no_hold", "refused"]
 
@@ -77,9 +81,9 @@ def _unjudgeable_detail(reading: EnvelopeReading) -> str:
             "The hold stands."
         )
     return (
-        "Day P&L is unknown (an external order was seen today, or the broker "
-        "reported no previous-close equity, or a risk figure the broker "
-        "reported was not a finite number). The hold stands."
+        "Account day P&L is unknown (the broker reported no prior-close equity, "
+        "the cash-transfer activity read was incomplete, or a risk figure the "
+        "broker reported was not finite). The hold stands."
     )
 
 
@@ -153,7 +157,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             outcome="refused",
             reason_code=LIVE_ENVELOPE_LOSS_HOLD_STANDS,
             detail=(
-                f"Day P&L {day_pnl.total_usd:.2f} USD is still at or below the "
+                f"Account day P&L ({_DAY_PNL_BASIS}) is "
+                f"{day_pnl.total_usd:.2f} USD, still at or below the "
                 f"{loss_limit_usd:.2f} USD loss limit {limit_source}. The hold stands."
             ),
         )
@@ -174,7 +179,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
         outcome="cleared",
         reason_code=None,
         detail=(
-            f"Loss hold cleared: day P&L {day_pnl.total_usd:.2f} USD is above the "
+            f"Loss hold cleared: account day P&L ({_DAY_PNL_BASIS}) is "
+            f"{day_pnl.total_usd:.2f} USD, above the "
             f"{loss_limit_usd:.2f} USD loss limit {limit_source}. New entries are "
             "admitted again."
         ),

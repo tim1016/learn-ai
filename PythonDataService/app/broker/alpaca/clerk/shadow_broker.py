@@ -615,8 +615,14 @@ class ShadowAccountReadPort:
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]:
-        return await self._live.list_activities(after_ms=after_ms, limit=limit)
+        activity_filter = (
+            {} if activity_type is None else {"activity_type": activity_type}
+        )
+        return await self._live.list_activities(
+            after_ms=after_ms, limit=limit, **activity_filter
+        )
 
     async def list_assets(
         self,

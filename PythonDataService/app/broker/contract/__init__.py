@@ -12,6 +12,7 @@ from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerEvidenceUnavailable,
     BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
@@ -42,6 +43,7 @@ __all__ = [
     "BrokerCapabilities",
     "BrokerClockEvidence",
     "BrokerError",
+    "BrokerEvidenceUnavailable",
     "BrokerOrder",
     "BrokerOrderEvent",
     "BrokerOrderRejected",

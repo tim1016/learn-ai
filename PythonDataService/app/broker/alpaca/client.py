@@ -332,6 +332,7 @@ class AlpacaTradingClient:
         *,
         limit: int,
         page_token: str | None = None,
+        activity_type: str | None = None,
     ) -> list[dict[str, Any]]:
         # Alpaca's ``after`` parameter filters a different vendor timestamp
         # than the contract's ``occurred_at_ms``. Fetch a bounded page here;
@@ -339,8 +340,11 @@ class AlpacaTradingClient:
         params = {"page_size": limit, "direction": "desc"}
         if page_token is not None:
             params["page_token"] = page_token
+        path = "/account/activities"
+        if activity_type is not None:
+            path = f"{path}/{activity_type}"
         return await self._call(
-            lambda c: c.get("/account/activities", data=params),
+            lambda c: c.get(path, data=params),
             describe="activities",
         )
 

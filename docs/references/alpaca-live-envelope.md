@@ -1,6 +1,7 @@
 # Alpaca live envelope — cash bound, day P&L, and the loss hold
 
-**Status:** canonical for ADR 0059 slice 5 (2026-09-08). Lineage: live.
+**Status:** canonical for ADR 0059 slice 5 (2026-09-08), account-day-P&L
+semantics amended 2026-09-24 by owner decision #2423. Lineage: live.
 
 ## What it is
 
@@ -21,9 +22,9 @@ precedes either one. Neither rule ever runs inside a Signal Program
    bounded by its limit price, and a recorded fill reserves its actual cost
    until the next broker read supersedes it. A refusal
    (`LIVE_ENVELOPE_CASH_EXCEEDED`) changes no other state.
-2. **Daily loss hold.** `day_pnl` is account-wide: every custody subject's
-   realized session P&L, plus broker-observed unrealized P&L over every open
-   position, net of every journaled fee. When it breaches
+2. **Daily loss hold.** `day_pnl` is account-wide: current broker equity minus
+   broker `last_equity` at the prior regular-session close, minus signed
+   deposits and withdrawals after that same close. When it breaches
    `min(loss_fraction × last_equity, loss_usd)` from the sealed envelope, the
    account enters loss hold — every ENTER refused `LIVE_ENVELOPE_LOSS_HOLD`,
    every EXIT still running so each program keeps managing its own open
@@ -118,18 +119,14 @@ notional cap, no symbol allowlist, no session restriction.
   fills would have spent — to get `cash_available_usd`; under real custody the
   broker's own cash already reflects it.
 - **The observation is dated when its reads are issued** (fixed 2026-09-24,
-  #2441). `observed_at_ms` is stamped before `get_account` and
-  `list_positions` go out, never when they return: a broker answer is only
+  #2441). `observed_at_ms` is stamped before the bracketed cash-transfer and
+  account reads go out, never when they return: a broker answer is only
   known to be at least as recent as its request. Stamped on return, the
   observation released the reservation of a fill the Clerk recorded during
   the round trip — which the broker's answer could predate — and a second
   instance was admitted against cash the first had already spent. One slow
-  account read was enough; the parallel positions read was not the cause.
-  Freshness is aged from the same instant (it errs old by the round trip). The
-  day-P&L window does *not* end there: it ends at a clock read taken after the
-  reads return, because a losing SELL recorded mid-read may already be gone
-  from the positions answer, and a window ending at the stamp would count
-  that loss nowhere and publish an unbreached observation (#2473 review).
+  account read was enough.
+  Freshness is aged from the same instant (it errs old by the round trip).
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
   fill counts as seen only when the Clerk recorded it before the observation's
@@ -187,12 +184,49 @@ notional cap, no symbol allowlist, no session restriction.
   from `cash_available_usd` and still reserved until the next observation
   issued past the grace. For up to one tick the rehearsal refuses an ENTER
   the true free cash would cover; it never admits one that cash cannot.
-- **Day P&L, the unknown rule.** `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py::day_pnl_at`
-  composes realized FIFO P&L (via `SqliteEconomicProjectionReader.account_pnl_attribution`)
-  less reported fees, plus the same tick's broker-observed `unrealized_pl_usd`.
-  `DayPnl.known` is `False` — never zero — whenever an external order was
-  observed on the account today, because its realized P&L was never
-  journaled.
+- **Account day P&L, the prior-close rule.**
+  `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py::day_pnl_at`
+  computes `current equity − last_equity − net cash flows after the prior
+  regular-session close`.
+  Alpaca defines `last_equity` as the previous trading day's 16:00 ET equity
+  ([Account Object](https://docs.alpaca.markets/us/v1.1/docs/account-plans))
+  and recommends `equity - last_equity` for the account's day change
+  ([Working with /account](https://docs.alpaca.markets/us/docs/working-with-account)).
+  The start is the canonical close of the trading day before the current ET
+  calendar day. It therefore does not advance after today's session closes,
+  and weekends, holidays, and early closes cannot make the cash-flow horizon
+  disagree with the `last_equity` baseline. The sync reads the complete
+  `TRANS` window immediately before and
+  after its account snapshot and accepts it only when both economic row sets
+  match. It subtracts signed `CSD` deposits and `CSW` withdrawals, whose
+  `net_amount` sign is part of Alpaca's activity contract: a deposit must be
+  strictly positive and a withdrawal strictly negative; zero or a
+  contradictory sign makes the result unknown
+  ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
+  The dedicated `TRANS` pagination validates newest-first continuity and reads
+  one proof page beyond the first page that crosses the date boundary; a
+  missing, repeated, cyclic, or out-of-order cursor raises instead of returning
+  a partial set. Non-object rows, rows that cannot be mapped, rows lacking a
+  nonblank broker id, rows not definitively `executed`, and rows whose raw
+  `net_amount` is missing, non-numeric, non-finite, or a JSON boolean make the
+  read unavailable. This rejected-evidence condition withdraws the prior
+  envelope observation immediately; only a transient transport failure uses
+  the normal freshness age-out. Duplicate activity ids carrying different
+  economic evidence do the same; economically identical duplicates are
+  collapsed. The canonical evaluator defensively treats contract activities
+  with missing or non-finite amounts as unknown too. Missing timestamps and a
+  date-only transfer on the boundary session make `DayPnl.known` false rather
+  than turning an
+  unclassified cash movement into profit or loss. A sync tick whose account
+  snapshot lands in a different ET loss window than its transfer queries is
+  also unknown and withdraws the prior observation.
+  Broker equity already includes every carried
+  position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
+  composition participates in this account fact.
+- **Positions are not a loss input.** Current equity already includes every
+  open position. The sync therefore does not call the positions endpoint for
+  this verdict; `AccountObservation.position_count` remains `None` rather
+  than letting a diagnostic read suppress a loss hold or guarded clear.
 - **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
   to `None` when the arming inputs cannot be read (a corrupt ledger row, a
   binding store that will not open), and *there* the fallback would be a
@@ -215,11 +249,12 @@ notional cap, no symbol allowlist, no session restriction.
   is a handful of small files today; if the fleet grows enough for that to
   matter, the read moves off the request path, not the freshness rule.
 
-- **`last_equity`.** The loss limit is `min(loss_fraction × last_equity,
-  loss_usd)`, both factors read off `LiveEnvelopeGate.in_force` — the sealed
-  envelope where one exists. A broker snapshot with no `last_equity` leaves
-  nothing to compute the limit against, which is unjudgeable in the same way
-  an unknown day P&L is.
+- **`last_equity`.** This one broker field is both the prior-close baseline in
+  account day P&L and the equity base in `min(loss_fraction × last_equity,
+  loss_usd)`; the configured factors are read off
+  `LiveEnvelopeGate.in_force` — the sealed envelope where one exists. A broker
+  snapshot with no `last_equity` leaves neither fact computable and is
+  unjudgeable.
 - **Extended-hours allowances.** `xh_entry_bps` / `xh_exit_bps` are sealed at
   arming with every other envelope value, so the marketable-limit anchor
   (`PythonDataService/app/broker/alpaca/marketable_limit.py`) widens from the
@@ -249,7 +284,7 @@ notional cap, no symbol allowlist, no session restriction.
 
 | Code | Fires when | Scope |
 |---|---|---|
-| `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the sync withdrew its last observation because the reading was unjudgeable (day P&L / `last_equity`) **or breached** | ENTER refusal |
+| `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the sync withdrew its last observation because the reading was unjudgeable (missing prior-close or complete transfer evidence, non-finite cash/equity, unreadable seal) **or breached** | ENTER refusal |
 | `LIVE_ENVELOPE_CASH_EXCEEDED` | The ENTER's notional plus reserved notional would exceed cash available | ENTER refusal |
 | `LIVE_ENVELOPE_DISAGREEMENT` | The envelope sealed by the account's newest arming record disagrees with the effective profile revision's envelope values ([alpaca-live-arming](alpaca-live-arming.md)) | ENTER refusal |
 | `LIVE_ENVELOPE_LOSS_HOLD` | The account-wide loss hold stands — checked earlier, by `require_admission` | ENTER refusal |
@@ -353,23 +388,11 @@ it to every facade authority.
   it reserves at its actual cost until the next broker read supersedes it.
   What remains estimated is the decision-to-fill window and the
   not-yet-recorded remainder of a filled order, both priced at the reference.
-- **Unrealized P&L under shadow is the live account's.** The sync's
-  `envelope_read` is the live read port, not the shadow book, so
-  `unrealized_pl_usd` (and the cash and position facts it derives from)
-  describe the live account net of what the Clerk's own synthesized fills
-  would have spent — never the synthesized positions' own marks.
-- **A live external order is invisible to the shadow rehearsal.** Under shadow
-  the sweep reconciles the synthesized book (`ShadowAccountReadPort.list_orders`),
-  so an order a human works on the *live* account today is never recorded as an
-  external order: R5 does not withdraw day P&L to unknown for it, and its
-  realized P&L is absent from the rehearsal's day P&L. Under live composition
-  the sweep reads the live account and R5 applies unchanged. Whether the shadow
-  sync should consult the live port's orders instead — which would refuse every
-  rehearsal ENTER for the whole day a human trades that account — is an owner
-  decision deferred to the arming ceremony (slice 6).
-- **External orders make the fact unknown.** Any order the Clerk did not
-  accept but observes on the account today withdraws day P&L to unknown for
-  the rest of that day; nothing after that is inferred back to zero.
+- **Account day P&L under shadow is the live account's.** The sync's
+  `envelope_read` is the live read port, not the shadow book, so `equity`,
+  `last_equity`, transfer activities, and cash describe the live account.
+  Simulated fills affect the shadow rehearsal's available-cash
+  subtraction but do not invent broker equity.
 - **A mirror rebuild loses the reservations of still-working ENTERs.** The
   `envelope_reservations` side table is product evidence *outside* the custody
   hash chain (plan R9), which is what makes it safe to write inside
@@ -391,7 +414,14 @@ it to every facade authority.
 [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md)
 Decision 4 (the risk envelope); owner rulings 2026-09-08 fix the reservation
 shape (a working *or filled* order reserves; a dead order reserves only its
-post-observation fills), the simulated-custody cash subtraction, withdrawal on
-a missing `last_equity`, an external order or a breach (R-A′), the sync as the
-loss hold's sole raiser that never releases it, and every ENTER-time refusal
-staying transient at the runner.
+post-observation fills), the simulated-custody cash subtraction, the sync as
+the loss hold's sole raiser that never releases it, and every ENTER-time
+refusal staying transient at the runner. Owner decision #2423 on 2026-09-24
+replaces the old FIFO-plus-lifetime-unrealized day-P&L composition with the
+cash-flow-adjusted prior-close equity change and requires withdrawal on a
+missing baseline or incomplete transfer evidence.
+
+The independently hand-computed golden fixture `PNL-001` applies the cited
+Alpaca field semantics to no-flow, deposit, withdrawal, and mixed-flow cases.
+It pins the canonical result with `atol=1e-9, rtol=0`, so the accepted dollar
+error stays far below one cent and never grows with account magnitude.

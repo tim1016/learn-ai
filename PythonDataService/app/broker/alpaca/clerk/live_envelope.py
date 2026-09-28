@@ -183,9 +183,12 @@ class AccountObservation:
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float
+    equity_usd: float
     last_equity_usd: float | None
-    unrealized_pl_usd: float
-    position_count: int
+    # Diagnostic only; the equity loss verdict never depends on the positions
+    # endpoint, so the sync leaves this unknown rather than coupling safety to
+    # a second broker surface.
+    position_count: int | None
 
     @property
     def fills_seen_before_ms(self) -> int:

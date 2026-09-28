@@ -102,6 +102,14 @@ class BrokerUnavailable(BrokerError):
     http_status: ClassVar[int] = 503
 
 
+class BrokerEvidenceUnavailable(BrokerUnavailable):
+    """Broker answered, but its evidence cannot support a safety verdict.
+
+    This remains a 503 at the HTTP boundary while allowing safety consumers to
+    distinguish malformed or contradictory evidence from a transient outage.
+    """
+
+
 class BrokerSubmissionHeld(BrokerError):
     """New submission is refused by the account-level exposure hold (phase-2 S6).
 

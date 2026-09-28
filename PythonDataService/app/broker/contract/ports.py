@@ -62,6 +62,7 @@ class BrokerReadPort(Protocol):
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]: ...
 
     async def list_assets(

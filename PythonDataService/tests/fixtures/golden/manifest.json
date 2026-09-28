@@ -1706,6 +1706,51 @@
       "validated_by": [
         "tests/broker/v2panel/test_qualification_recorded_history.py::test_golden_batch_matches_the_committed_fixture"
       ]
+    },
+    {
+      "id": "PNL-001",
+      "name": "Alpaca cash-flow-adjusted account-day P&L",
+      "category": "broker-risk",
+      "canonical_module": "PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py",
+      "canonical_callable": "day_pnl_at",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "independent decimal arithmetic over Alpaca account and transfer field semantics",
+        "citation": "Alpaca Account Object and Account Activities documentation (verified 2026-09-27), ADR 0059 D4; see docs/references/alpaca-live-envelope.md and the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": "Alpaca field semantics",
+        "generated_by": "PythonDataService/scripts/fixture_generators/alpaca_account_day_pnl.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Absolute accumulated-P&L tolerance from numerical-rigor.md. It is far below one cent; rtol=0 prevents account magnitude from widening the accepted dollar error."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "83bc24edc901c0e5ddcce123aecbd964f98c0c407e8641c9ca3278dc8f247478",
+            "output.json": "b84b1f38b49631a4909a75c51ff86998b145dfdf5af27d977ba11d894c27986b",
+            "attribution.md": "73b148176cfee14635180c67195568e09622206ad8abf974d60f50b2a062c055"
+          },
+          "file_sha256": {
+            "input.json": "19f63c575c935142fb18f396f27e61c5a987d54ab1649ec16a42e83584e29b50",
+            "output.json": "2d14ba603db6d76465a5b20da23bae7d49e223db4150b91271ff3269ee88d9ce",
+            "attribution.md": "73b148176cfee14635180c67195568e09622206ad8abf974d60f50b2a062c055"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_alpaca_account_day_pnl_fixture.py::test_account_day_pnl_matches_the_hand_computed_alpaca_fixture"
+      ]
     }
   ]
 }
