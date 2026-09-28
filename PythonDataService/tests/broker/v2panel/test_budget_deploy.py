@@ -29,7 +29,7 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
-from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel import bot_custody, budget_deploy
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
@@ -109,7 +109,8 @@ def authority(tmp_path, monkeypatch):
     gate.publish(observation)
     runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=_Sync(gate, observation, snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
-    monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: None)
+    monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: runtime)
+    monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: None)
     monkeypatch.setattr(budget_deploy, "get_broker_configuration_service", lambda: SimpleNamespace(owner=lambda: SimpleNamespace(owner_id="server-owner")))
     market_liveness.reset_market_liveness_store_for_testing()
     _publish_book(("SPY", 100.001))
@@ -311,8 +312,10 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
 
         recovered = registry()
         assert recovered.bindings_for_broker("alpaca") == []
-        monkeypatch.setattr(budget_deploy, "_primary", lambda account: SimpleNamespace(sqlite_repository=primary_repo))
-        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: recovered)
+        primary = SimpleNamespace(sqlite_repository=primary_repo)
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: primary)
+        monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: primary)
+        monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: recovered)
 
         receipt = await budget_deploy.command_receipt("PARENT", sid)
 
@@ -586,8 +589,7 @@ async def test_a_dry_run_budget_never_appears_on_the_accounts_money(authority: t
         await dry.clerk.register_strategy_run(binding)
         # Positive control: the Dry Run's own authority holds a real budget.
         assert dry.sqlite_repository.deployment_budget(sid)["committed_cents"] == 50_000
-        monkeypatch.setattr(budget_deploy, "get_clerk_runtime", get_clerk_runtime)
-        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: registry)
+        monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: registry)
 
         after = await budget_deploy.account_money_view(repo.account_id)
     finally:

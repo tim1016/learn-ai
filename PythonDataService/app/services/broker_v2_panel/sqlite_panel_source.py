@@ -848,7 +848,7 @@ async def execute_sqlite_panel_action(
     """Execute through the same policy that authored the presented action.
 
     ``facade`` is the authority the bot's panel was read from
-    (``panel_data_source.bot_custody_authority``): a Dry Run's own
+    (``bot_custody``'s one selection): a Dry Run's own
     ``sim:`` Clerk, whose ports are its simulator, or the account's. Acting
     anywhere else is how a Dry Run's recovery used to ask the real account
     about a bot it has never held (hurdle H33). ``None`` means no SQLite

@@ -20,6 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
@@ -139,8 +140,14 @@ def _binding() -> BrokerBotBinding:
 
 
 @pytest.fixture
+def binding_recorded() -> bool:
+    """Whether the Deploy lived to record the bot's binding; a test overrides it."""
+    return True
+
+
+@pytest.fixture
 async def crashed_dry_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding_recorded: bool,
 ) -> AsyncIterator[_World]:
     """A Dry Run that bought 1 simulated SPY at $600 and then crashed, runtime released."""
     reset_broker_registry_for_testing()
@@ -162,7 +169,8 @@ async def crashed_dry_run(
     set_bot_task_registry(registry)
     binding = _binding()
     try:
-        registry._bindings.record_launch(binding, launch_reason="deploy")
+        if binding_recorded:
+            registry._bindings.record_launch(binding, launch_reason="deploy")
         authority = registry._authority_for(binding)
         await authority.ensure_recoverable()
         runtime = get_clerk_runtime(SIM_ACCOUNT)
@@ -408,3 +416,36 @@ async def test_a_bot_without_custody_is_refused_in_owner_words(
 
     assert "sqlite" not in str(refused.value).lower()
     assert SID in str(refused.value)
+
+
+@pytest.mark.parametrize("binding_recorded", [False])
+async def test_a_dry_run_whose_deploy_crashed_before_its_binding_is_served_by_its_own_simulator(
+    crashed_dry_run: _World,
+) -> None:
+    """Review A4: with no binding written, the bot's money was read from its
+    ``sim:`` authority while its per-bot routes and recovery went to the real
+    account's. Every per-bot route now shares one selection."""
+    async with alpaca_clerk_sqlite._bot_facade(ACCT, SID) as facade:
+        assert facade.account_id == SIM_ACCOUNT
+
+    snapshot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
+    timeline = await alpaca_clerk_sqlite.get_bot_timeline(
+        ACCT, SID, cursor=None, page_size=25, order_ref=None, effect_operation_id=None, uncertainty_id=None,
+        execution_id=None, transition_kind=None, sequence=None,
+    )
+    money = await budget_deploy.budget_view(ACCT, SID)
+
+    assert (snapshot.account_id, snapshot.strategy_instance_id) == (SIM_ACCOUNT, SID)
+    assert [(position.symbol, position.attributed_qty) for position in snapshot.positions] == [("SPY", 1.0)]
+    assert timeline.account_id == SIM_ACCOUNT and timeline.entries
+    assert (money.world, money.headline) == ("synthetic", "Stopped · still holds shares")
+    # Recovery is judged in the simulator, which knows the bot and asks for its
+    # own reconciliation first -- the real account never heard of it (a 404).
+    action = next(action for action in snapshot.recovery_actions if action.action_id == "prepare_safe_flatten")
+    with pytest.raises(HTTPException) as refused:
+        await alpaca_clerk_sqlite.check_bot_recovery_action(
+            ACCT, SID, RecoveryActionCheckRequest(action_id=action.action_id, concurrency_token=action.concurrency_token),
+        )
+    assert (refused.value.status_code, refused.value.detail["reason"]) == (409, "recovery_action_unavailable")
+    assert "reconciliation" in refused.value.detail["message"]
+    assert crashed_dry_run.alpaca.calls == []

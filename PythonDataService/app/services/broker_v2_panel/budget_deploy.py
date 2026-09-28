@@ -10,7 +10,7 @@ import asyncio
 import logging
 import math
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.account_money import (
     released_cents,
     stopped_holding,
 )
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime, get_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.budgets import AccountBudget, DeploymentBudget, budget_entry_decision, entry_requirement
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, AccountObservation
@@ -64,8 +64,8 @@ from app.schemas.deployment_budget import (
     MoneyParts,
     MoneySegment,
 )
-from app.services.bot_runner import UnknownBotError, get_bot_task_registry
-from app.services.broker_v2_panel.panel_errors import PanelRunnerError
+from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
+from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
 from app.services.market_liveness import prepared_top_of_book
 
 logger = logging.getLogger(__name__)
@@ -229,39 +229,21 @@ def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resol
 
 @asynccontextmanager
 async def _deployment_runtime(account_id: str, sid: str) -> AsyncIterator[ActiveClerkRuntime]:
+    """The authority that holds this bot's budget: the one ``bot_custody`` selection.
+
+    A stopped Dry Run releases its process runtime, not its receipt, so its
+    simulator is reopened for the read; one whose Deploy crashed before the
+    binding was written is found by its simulator's own activation.
+    """
     primary = _primary(account_id)
-    synthetic = get_clerk_runtime(synthetic_account_id_for_strategy(sid))
-    if synthetic is not None and synthetic.sqlite_repository is not None and synthetic.sqlite_repository.deployment_budget(sid) is not None:
-        yield synthetic
-        return
-    registry = get_bot_task_registry()
-    if registry is not None:
+    async with AsyncExitStack() as stack:
         try:
-            binding = registry.binding_for_control("alpaca", sid)
-        except UnknownBotError:
-            binding = None
-        if binding is not None and binding.mode == "dry_run":
-            # Reuse the same durable-authority reader as the bot panel. A
-            # stopped Dry Run releases its process runtime, not its receipt.
-            async with registry.synthetic_runtime_for_projection(binding) as runtime:
-                yield _recoverable_dry_run(runtime)
-            return
-        assert primary.sqlite_repository is not None
-        if binding is None and primary.sqlite_repository.deployment_budget(sid) is None:
-            # A Dry Run commits in its private authority before the launch
-            # records a binding; a crash in between leaves that authority's own
-            # activation as the only way to find the committed command.
-            async with registry.unbound_synthetic_runtime_for_projection(sid) as runtime:
-                if runtime is not None:
-                    yield _recoverable_dry_run(runtime)
-                    return
-    yield primary
-
-
-def _recoverable_dry_run(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
-    if runtime.sqlite_repository is None:
-        raise BudgetUnavailable("Dry Run custody recovery is unavailable. Restore it before recovering this command.")
-    return runtime
+            runtime = await stack.enter_async_context(bot_clerk_runtime("alpaca", sid))
+        except PanelUnavailableError as exc:
+            raise BudgetUnavailable(f"{exc} {exc.detail}") from exc
+        if runtime is not primary and (runtime is None or runtime.sqlite_repository is None):
+            raise BudgetUnavailable("Dry Run custody recovery is unavailable. Restore it before recovering this command.")
+        yield runtime
 
 
 async def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest | None = None) -> BudgetDeployCommandReceipt | None:

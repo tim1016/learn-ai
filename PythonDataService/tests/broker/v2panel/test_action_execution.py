@@ -391,7 +391,12 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     async def _validated(*_args, **_kwargs) -> str:
         return "account-1"
 
-    monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
+    async def _panel_from_authority(*_args, **_kwargs):
+        return await _panel(), [], None
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source._get_panel_with_entries_from_authority", _panel_from_authority,
+    )
     monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.validate_account", _validated)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
@@ -689,7 +694,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     sentinel = SimpleNamespace()
     monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "active_sqlite_facade", lambda _broker: SimpleNamespace(
+    monkeypatch.setattr(panel_data_source, "custody_facade", lambda _runtime: SimpleNamespace(
         account_id="account-1", repository=None, program_leg_policy=ProgramLegPolicy.regular_only(),
         flatten_send_verdict=lambda: None,
     ))
@@ -819,7 +824,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: wall["now"])
     monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "active_sqlite_facade", lambda _broker: SimpleNamespace(
+    monkeypatch.setattr(panel_data_source, "custody_facade", lambda _runtime: SimpleNamespace(
         account_id="account-1", repository=None, program_leg_policy=ProgramLegPolicy.regular_only(),
         flatten_send_verdict=lambda: None,
     ))
