@@ -1,0 +1,57 @@
+{
+  "as_of_ms": 1788883200000,
+  "prior_close_ms": 1788552000000,
+  "cases": [
+    {
+      "case": "market_loss_without_cash_flow",
+      "current_equity_usd": "95000.00",
+      "prior_close_equity_usd": "100000.00",
+      "cash_flows": []
+    },
+    {
+      "case": "deposit_is_not_profit",
+      "current_equity_usd": "110000.00",
+      "prior_close_equity_usd": "100000.00",
+      "cash_flows": [
+        {
+          "activity_id": "deposit-1",
+          "activity_type": "CSD",
+          "net_amount_usd": "10000.00",
+          "occurred_at_ms": 1788552000001
+        }
+      ]
+    },
+    {
+      "case": "withdrawal_is_not_loss",
+      "current_equity_usd": "90000.00",
+      "prior_close_equity_usd": "100000.00",
+      "cash_flows": [
+        {
+          "activity_id": "withdrawal-1",
+          "activity_type": "CSW",
+          "net_amount_usd": "-10000.00",
+          "occurred_at_ms": 1788552000001
+        }
+      ]
+    },
+    {
+      "case": "mixed_flows_preserve_market_loss",
+      "current_equity_usd": "102345.67",
+      "prior_close_equity_usd": "100000.00",
+      "cash_flows": [
+        {
+          "activity_id": "deposit-2",
+          "activity_type": "CSD",
+          "net_amount_usd": "7500.00",
+          "occurred_at_ms": 1788552000001
+        },
+        {
+          "activity_id": "withdrawal-2",
+          "activity_type": "CSW",
+          "net_amount_usd": "-1250.00",
+          "occurred_at_ms": 1788552000002
+        }
+      ]
+    }
+  ]
+}

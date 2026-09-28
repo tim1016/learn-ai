@@ -16,6 +16,9 @@ from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 
+PNL_ATOL = 1e-9
+PNL_RTOL = 0.0
+
 
 def _observation(
     *, current_equity: float = 95_000.0, prior_close_equity: float | None = 100_000.0
@@ -56,10 +59,14 @@ def test_day_pnl_is_current_equity_minus_prior_close_equity() -> None:
 
     assert pnl.day_start_ms == previous_completed_session_close_ms(NOON)
     assert pnl.day_end_ms == NOON
-    assert pnl.current_equity_usd == pytest.approx(95_000.0)
-    assert pnl.prior_close_equity_usd == pytest.approx(100_000.0)
+    assert pnl.current_equity_usd == pytest.approx(
+        95_000.0, abs=PNL_ATOL, rel=PNL_RTOL
+    )
+    assert pnl.prior_close_equity_usd == pytest.approx(
+        100_000.0, abs=PNL_ATOL, rel=PNL_RTOL
+    )
     assert pnl.net_cash_flow_usd == 0.0
-    assert pnl.total_usd == pytest.approx(-5_000.0)
+    assert pnl.total_usd == pytest.approx(-5_000.0, abs=PNL_ATOL, rel=PNL_RTOL)
     assert pnl.known
 
 
@@ -82,8 +89,10 @@ def test_same_day_deposits_and_withdrawals_are_not_pnl(
     )
 
     assert pnl.cash_flow_count == 1
-    assert pnl.net_cash_flow_usd == pytest.approx(net_amount)
-    assert pnl.total_usd == pytest.approx(0.0)
+    assert pnl.net_cash_flow_usd == pytest.approx(
+        net_amount, abs=PNL_ATOL, rel=PNL_RTOL
+    )
+    assert pnl.total_usd == pytest.approx(0.0, abs=PNL_ATOL, rel=PNL_RTOL)
     assert pnl.known
 
 
@@ -102,8 +111,10 @@ def test_a_transfer_after_friday_close_is_in_the_tuesday_post_holiday_window() -
     )
 
     assert pnl.day_start_ms == prior_close_ms
-    assert pnl.net_cash_flow_usd == pytest.approx(10_000.0)
-    assert pnl.total_usd == pytest.approx(0.0)
+    assert pnl.net_cash_flow_usd == pytest.approx(
+        10_000.0, abs=PNL_ATOL, rel=PNL_RTOL
+    )
+    assert pnl.total_usd == pytest.approx(0.0, abs=PNL_ATOL, rel=PNL_RTOL)
     assert pnl.known
 
 
@@ -117,8 +128,10 @@ def test_after_hours_keeps_the_previous_trading_day_close_as_its_baseline() -> N
     )
 
     assert pnl.day_start_ms == prior_close_ms
-    assert pnl.net_cash_flow_usd == pytest.approx(10_000.0)
-    assert pnl.total_usd == pytest.approx(0.0)
+    assert pnl.net_cash_flow_usd == pytest.approx(
+        10_000.0, abs=PNL_ATOL, rel=PNL_RTOL
+    )
+    assert pnl.total_usd == pytest.approx(0.0, abs=PNL_ATOL, rel=PNL_RTOL)
     assert pnl.known
 
 

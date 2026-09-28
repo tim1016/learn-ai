@@ -190,16 +190,18 @@ notional cap, no symbol allowlist, no session restriction.
   match. It subtracts signed `CSD` deposits and `CSW` withdrawals, whose
   `net_amount` sign is part of Alpaca's activity contract
   ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
-  The dedicated `TRANS` pagination continues until it proves the date boundary;
-  a missing, repeated, or cyclic cursor raises instead of returning a partial
-  set. Rows that cannot be mapped, lack a nonblank broker id, or are not
-  definitively `executed` make the read unavailable. Duplicate activity ids
-  carrying different economic evidence do the same; economically identical
-  duplicates are collapsed. Missing timestamps, missing or non-finite amounts,
-  and a date-only transfer on the boundary session make `DayPnl.known` false
-  rather than turning an unclassified cash movement into profit or loss. A
-  sync tick whose account snapshot lands in a different ET loss window than
-  its transfer queries is also unknown and withdraws the prior observation.
+  The dedicated `TRANS` pagination validates newest-first continuity and reads
+  one proof page beyond the first page that crosses the date boundary; a
+  missing, repeated, cyclic, or out-of-order cursor raises instead of returning
+  a partial set. Non-object rows, rows that cannot be mapped, rows lacking a
+  nonblank broker id, and rows not definitively `executed` make the read
+  unavailable. Duplicate activity ids carrying different economic evidence do
+  the same; economically identical duplicates are collapsed. Missing
+  timestamps, missing or non-finite amounts, and a date-only transfer on the
+  boundary session make `DayPnl.known` false rather than turning an
+  unclassified cash movement into profit or loss. A sync tick whose account
+  snapshot lands in a different ET loss window than its transfer queries is
+  also unknown and withdraws the prior observation.
   Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
@@ -396,3 +398,8 @@ refusal staying transient at the runner. Owner decision #2423 on 2026-09-24
 replaces the old FIFO-plus-lifetime-unrealized day-P&L composition with the
 cash-flow-adjusted prior-close equity change and requires withdrawal on a
 missing baseline or incomplete transfer evidence.
+
+The independently hand-computed golden fixture `PNL-001` applies the cited
+Alpaca field semantics to no-flow, deposit, withdrawal, and mixed-flow cases.
+It pins the canonical result with `atol=1e-9, rtol=0`, so the accepted dollar
+error stays far below one cent and never grows with account magnitude.

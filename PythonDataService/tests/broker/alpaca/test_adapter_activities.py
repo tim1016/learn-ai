@@ -308,6 +308,19 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
         )
 
 
+async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_evidence() -> None:
+    broker = AlpacaBroker(
+        client=_ActivitiesClient({None: [None]})  # type: ignore[list-item, arg-type]
+    )
+
+    with pytest.raises(BrokerUnavailable, match="evidence was malformed"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=25,
+            activity_type="TRANS",
+        )
+
+
 @pytest.mark.parametrize("invalid_id", [None, "", "   "])
 async def test_transfer_cursor_rejects_a_missing_or_blank_activity_id(
     load_alpaca_fixture: AlpacaFixtureLoader,
@@ -406,3 +419,42 @@ async def test_transfer_cursor_deduplicates_equivalent_activity_ids(
     )
 
     assert [activity.activity_id for activity in activities] == ["duplicate", "cursor"]
+
+
+async def test_transfer_cursor_rejects_an_in_window_row_after_the_boundary_page(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    newest = {
+        **non_trade,
+        "id": "newest",
+        "activity_type": "CSD",
+        "date": "2026-07-22",
+    }
+    before_boundary = {
+        **non_trade,
+        "id": "before-boundary",
+        "activity_type": "CSD",
+        "date": "2026-07-20",
+    }
+    out_of_order = {
+        **non_trade,
+        "id": "out-of-order",
+        "activity_type": "CSD",
+        "date": "2026-07-21",
+    }
+    broker = AlpacaBroker(
+        client=_ActivitiesClient(  # type: ignore[arg-type]
+            {
+                None: [newest, before_boundary],
+                "before-boundary": [out_of_order],
+            }
+        )
+    )
+
+    with pytest.raises(BrokerUnavailable, match="not newest-first"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T20:00:00Z"),
+            limit=2,
+            activity_type="TRANS",
+        )

@@ -17,6 +17,9 @@ process-wide settings lazily on first use, exactly as it always has.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from itertools import pairwise
+
 from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
@@ -82,8 +85,10 @@ def _same_activity_evidence(left: BrokerActivity, right: BrokerActivity) -> bool
     )
 
 
-def _validate_transfer_payload(payload: dict[str, object]) -> None:
+def _validate_transfer_payload(payload: object) -> None:
     """Require identity and finality before a transfer can affect day P&L."""
+    if not isinstance(payload, Mapping):
+        raise TypeError("Alpaca transfer activity row must be an object")
     activity_id = payload.get("id")
     if not isinstance(activity_id, str) or not activity_id.strip():
         raise BrokerUnavailable(
@@ -100,6 +105,33 @@ def _validate_transfer_payload(payload: dict[str, object]) -> None:
                 "pending or statusless rows are unavailable evidence."
             ),
         )
+
+
+def _transfer_page_oldest_ms(
+    activities: list[BrokerActivity],
+    *,
+    previous_page_oldest_ms: int | None,
+) -> int | None:
+    """Validate newest-first ordering and return the page's oldest instant.
+
+    An undated row already makes day P&L unknown. It also prevents the date
+    boundary from proving pagination complete, so callers continue until a
+    short page instead of trusting an order that cannot be checked.
+    """
+    occurred_at_ms = [activity.occurred_at_ms for activity in activities]
+    if not occurred_at_ms or any(value is None for value in occurred_at_ms):
+        return None
+    dated = [value for value in occurred_at_ms if value is not None]
+    if any(newer < older for newer, older in pairwise(dated)) or (
+        previous_page_oldest_ms is not None
+        and dated[0] > previous_page_oldest_ms
+    ):
+        raise BrokerUnavailable(
+            "Alpaca transfer activity history was not newest-first.",
+            broker=BROKER_ID,
+            detail="Transfer pagination cannot prove the prior-close boundary.",
+        )
+    return dated[-1]
 
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
@@ -239,6 +271,8 @@ class AlpacaBroker:
             activities: list[BrokerActivity] = []
             seen_activities: dict[str, BrokerActivity] = {}
             issued_page_tokens: set[str | None] = set()
+            previous_page_oldest_ms: int | None = None
+            boundary_crossed_on_previous_page = False
             page_token: str | None = None
             while True:
                 issued_page_tokens.add(page_token)
@@ -247,9 +281,9 @@ class AlpacaBroker:
                     page_token=page_token,
                     **activity_filter,
                 )
-                for payload in payloads:
-                    _validate_transfer_payload(payload)
                 try:
+                    for payload in payloads:
+                        _validate_transfer_payload(payload)
                     mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
                 except (AttributeError, KeyError, TypeError, ValueError) as exc:
                     raise BrokerUnavailable(
@@ -257,6 +291,10 @@ class AlpacaBroker:
                         broker=BROKER_ID,
                         detail="A transfer row could not be mapped to the broker contract.",
                     ) from exc
+                page_oldest_ms = _transfer_page_oldest_ms(
+                    mapped,
+                    previous_page_oldest_ms=previous_page_oldest_ms,
+                )
                 for activity in mapped:
                     previous = seen_activities.get(activity.activity_id)
                     if previous is not None:
@@ -276,11 +314,18 @@ class AlpacaBroker:
                         after_ms=after_ms,
                     ):
                         activities.append(activity)
-                if len(payloads) < limit or _transfer_page_crossed_window(
-                    mapped,
-                    after_ms=after_ms,
-                ):
+                if len(payloads) < limit:
                     break
+                if boundary_crossed_on_previous_page and page_oldest_ms is not None:
+                    break
+                boundary_crossed_on_previous_page = (
+                    page_oldest_ms is not None
+                    and _transfer_page_crossed_window(
+                        mapped,
+                        after_ms=after_ms,
+                    )
+                )
+                previous_page_oldest_ms = page_oldest_ms
                 next_page_token = payloads[-1].get("id")
                 if (
                     not isinstance(next_page_token, str)
