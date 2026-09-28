@@ -64,7 +64,7 @@ def submit_budgeted_deploy(
 
     def build_transition() -> TransitionInput:
         if repo.budget_authority_version() != 2:
-            raise BudgetUnavailable("Switch this account to budgets in Configuration before Deploy.")
+            raise BudgetUnavailable("Switch this account to budgets in Settings before Deploy.")
         require_strategy_instance(repo, strategy_instance_id)
         instance = repo.strategy_instance(strategy_instance_id)
         assert instance is not None
@@ -84,7 +84,7 @@ def submit_budgeted_deploy(
         if effective_revision != risk_revision:
             raise BudgetUnavailable("Account risk limits changed; review Deploy again.")
         if world != "synthetic" and (policy is None or observation.risk_revision != policy.revision):
-            raise BudgetUnavailable("Apply account risk limits in Configuration and wait for current risk evidence.")
+            raise BudgetUnavailable("Set a daily loss limit in Settings and wait for current risk evidence.")
         try:
             projection = repo.account_budget(
                 cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,

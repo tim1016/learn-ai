@@ -140,7 +140,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.getAttribute('aria-label')).not.toContain('armed');
     expect(status.getAttribute('title')).toContain('Review a budget in Deploy');
     // The account number names the account but guards nothing here — the lane
-    // label already names it, and the number belongs only on Configuration and
+    // label already names it, and the number belongs only on Settings and
     // in the confirmation of a consequential action (ADR 0064; #2188). It can
     // still appear inside the server's own `headline` sentence, which the
     // accessible name always carried — that is unchanged by this pill.
@@ -558,7 +558,7 @@ describe('AlpacaLiveBannerComponent', () => {
       );
     });
 
-    it("opens an unconfirmed account's Configuration, the one tab its lane can serve", async () => {
+    it("opens an unconfirmed account's Settings, the one tab its lane can serve", async () => {
       const unbound = testLane({
         clerk_id: 'clrk_paper',
         display_label: 'Paper',
@@ -567,7 +567,7 @@ describe('AlpacaLiveBannerComponent', () => {
       await renderAt('/data-lab', unbound);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
-        '/brokers/alpaca/clerks/clrk_paper/configuration',
+        '/brokers/alpaca/clerks/clrk_paper/settings',
       );
     });
 

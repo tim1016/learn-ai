@@ -137,7 +137,7 @@ async def test_desk_state_reports_no_active_account_through_one_read_model(
         "selection_label": "Choose an account configuration",
         "consequence": (
             "Choosing here only opens the saved configuration for review. Stage and Apply "
-            "remain explicit actions on the Configuration page."
+            "remain explicit actions under Broker connection in Settings."
         ),
         "action": {
             "kind": "review_configuration",
@@ -255,8 +255,8 @@ async def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installat
     assert response.status_code == 200
     assert response.json()["choices"] == []
     assert response.json()["empty_choices_message"] == (
-        "All saved account configurations are archived. Restore one on the Configuration "
-        "page, or set up a new account."
+        "All saved account configurations are archived. Restore one under Broker "
+        "connection in Settings, or set up a new account."
     )
     assert response.json()["action"] == {
         "kind": "review_configuration",

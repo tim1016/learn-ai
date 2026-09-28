@@ -143,7 +143,7 @@ async def select_shadow_clerk_runtime(
             "SHADOW_ACTIVATION_REQUIRED",
             account_id=shadow.account_id,
             recovery=(
-                "Open this account’s Configuration and choose Activate Shadow."
+                "Open this account’s Settings and choose Activate Shadow under Account stage."
             ),
         )
 

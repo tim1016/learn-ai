@@ -47,7 +47,7 @@ type LaneCardState =
  * One account's card in the Alpaca account list (ADR 0064 Decision 2).
  *
  * The whole card is a single click target into that account's workspace —
- * its Overview, or Configuration for a lane with no confirmed account, which
+ * its Overview, or Settings for a lane with no confirmed account, which
  * is the one tab such a lane can serve and where binding it happens anyway.
  * The destination is the navigation resolver's to decide
  * (`accountWorkspaceEntryRoute`), never composed here, so a card and a shell
@@ -57,7 +57,7 @@ type LaneCardState =
  * Paper/Live mode, and either the money and bots on it or why it is not ready
  * yet — and none of the lane mechanics (endpoint mode, authority state,
  * binding generation, the raw account id) the card used to list. Those are
- * the workspace's and Configuration's facts; a list exists to choose from.
+ * the workspace's and Settings' facts; a list exists to choose from.
  *
  * Every fact is this card's own `resource()` read against this lane's frozen
  * target: one account's failed equity, roster or readiness read is that
@@ -122,7 +122,7 @@ export class AlpacaLaneCardComponent {
 
   /** The card's one destination: this lane's confirmed account, whatever the
    * lane can currently report about itself. The resolver substitutes
-   * Configuration only for a lane with no account at all — the same
+   * Settings only for a lane with no account at all — the same
    * substitution a carried deploy intent falls back to when this lane has no
    * account for Deploy to target either. */
   protected readonly openRoute = computed(() => {
@@ -173,7 +173,7 @@ export class AlpacaLaneCardComponent {
 
   /** The backend-authored readiness sentence a *ready but unbound* account
    * shows in place of its money and bots. Operator prose the server owns,
-   * rendered verbatim — the same `headline` the Configuration tab states, so
+   * rendered verbatim — the same `headline` the Settings tab states, so
    * the list and the tab cannot describe one lane's readiness differently.
    *
    * A lane that is *down* is never asked: its clerk is by definition not

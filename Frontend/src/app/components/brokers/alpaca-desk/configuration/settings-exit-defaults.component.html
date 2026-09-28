@@ -1,0 +1,40 @@
+@let view = defaults();
+<section class="defaults" aria-labelledby="exit-defaults-title">
+  <h3 id="exit-defaults-title">Defaults for new bots</h3>
+  <p class="defaults__lede">
+    Deploy starts each new bot's exit terms from these. Every bot keeps the exit terms it
+    was deployed with.
+  </p>
+
+  @if (view.kind === 'ready') {
+    @if (view.terms; as terms) {
+      <dl class="defaults__terms">
+        <div><dt>Exit allowance</dt><dd>{{ terms.exit_allowance_bps }} bps</dd></div>
+        <div><dt>Band multiple</dt><dd>{{ terms.band_multiple }}×</dd></div>
+        <div><dt>Spread cap</dt><dd>{{ terms.spread_cap_bps }} bps</dd></div>
+      </dl>
+    } @else {
+      <p>No defaults are set, so Deploy asks for exit terms each time.</p>
+    }
+    <p class="defaults__source">
+      @if (view.profileName; as name) {
+        They are saved with the broker connection profile in use, {{ name }}.
+      } @else {
+        They are saved with the broker connection profile in use.
+      }
+      A change is saved as a new revision there and takes effect after Apply and a restart.
+    </p>
+  } @else if (view.kind === 'none') {
+    <p>No broker connection is in use yet, so there are no defaults to start from.</p>
+  } @else if (view.kind === 'unavailable') {
+    <p role="alert">The defaults could not be read. Broker connection below shows why.</p>
+  } @else {
+    <p role="status">Reading the defaults…</p>
+  }
+
+  @if (view.kind !== 'loading') {
+    <button type="button" class="defaults__change" (click)="changeRequested.emit()">
+      Change defaults in Broker connection
+    </button>
+  }
+</section>

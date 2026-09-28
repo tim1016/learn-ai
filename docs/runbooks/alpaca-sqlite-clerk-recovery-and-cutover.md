@@ -1,7 +1,7 @@
 # Alpaca SQLite Clerk recovery and cutover subprocedure
 
 **Status:** Implemented. Shadow-to-Live graduation is available from the Alpaca
-account Configuration page; the offline CLI remains the recovery and general-cutover fallback.
+account Settings page (**Account stage**); the offline CLI remains the recovery and general-cutover fallback.
 
 **Authority:** This is the focused Alpaca SQLite subprocedure incorporated by
 `docs/broker-clerk-fleet-authority.md`. It does not authorize a cutover by itself and
@@ -150,7 +150,7 @@ Any write changes the planned evidence, so apply is expected to refuse and the o
 must capture fresh broker evidence and create a new plan. There is no caller-authored
 empty-list bypass.
 
-The one bounded exception is the Configuration page's **Shadow-to-Live graduation**
+The one bounded exception is the Settings page's **Shadow-to-Live graduation**
 (ADR 0059, 2026-09-17 amendment). The running Shadow Clerk owns an isolated
 `shadow:<live_account_id>` database and cannot submit; the target Live database is new,
 inactive, and unopened. Every governed bot must still be durably stopped. A process-wide
@@ -344,7 +344,7 @@ authority file, or symlink refuses reset before any authority file is moved.
 ## UI graduation: review, confirm, restart
 
 For an effective Live profile whose account currently runs the Shadow authority, open
-the account's **Configuration** tab and choose **Review Live graduation**. The page is a
+the account's **Settings** tab and, under **Account stage**, choose **Review Live graduation**. The page is a
 view over the server-owned ceremony; it does not calculate readiness.
 
 The review is available only when authenticated control and a supervised worker restart

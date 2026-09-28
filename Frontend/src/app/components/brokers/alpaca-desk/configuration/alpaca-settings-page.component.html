@@ -1,0 +1,180 @@
+<main class="settings" aria-labelledby="settings-title">
+  <header class="settings__titlebar">
+    <!-- No account chrome and no way back of its own: this is the
+         workspace's Settings tab (ADR 0064), and the account header and
+         tab strip above it are how the owner moves. -->
+    <h2 id="settings-title">Settings</h2>
+    @if (effectiveAccountId(); as accountId) {
+      <p class="settings__account">Account <strong>{{ accountId }}</strong></p>
+    } @else if (currentSelection()) {
+      <p class="settings__account">
+        No Alpaca account is connected to this lane yet, so its limits and budgets have
+        nothing to act on.
+        <button type="button" class="settings__link-button" (click)="openConnection()">
+          Connect one under Broker connection
+        </button>
+      </p>
+    }
+  </header>
+
+  <div class="settings__sections">
+    @if (effectiveAccountId(); as accountId) {
+      <app-configuration-risk-limits [clerkId]="clerkId()" />
+      <app-configuration-budget-authority [clerkId]="clerkId()" [accountId]="accountId" />
+      @if (isLiveLane()) {
+        <app-live-graduation [clerkId]="clerkId()" [accountId]="accountId" />
+      }
+    }
+    <app-settings-exit-defaults [defaults]="exitDefaults()" (changeRequested)="editExitDefaults()" />
+  </div>
+
+  <details
+    #connection
+    class="settings__connection"
+    [open]="connectionOpen()"
+    (toggle)="connectionOpen.set(connection.open)"
+  >
+    <summary>
+      <h3 class="settings__connection-title">Broker connection</h3>
+      <span class="settings__connection-hint">which Alpaca account this installation connects to</span>
+    </summary>
+
+    <div #profileArea class="settings__connection-body" tabindex="-1">
+      <p class="settings__lede">
+        The broker connection chooses which Alpaca account this installation talks to, for
+        example switching the whole installation from a paper account to a live one. A change
+        is staged, applied and takes effect when the worker restarts; it never moves bots or
+        money, and no credential is ever entered here.
+      </p>
+      <p class="settings__lede">
+        It is not the account stage. The account stage (Shadow → Review → Live, shown on the
+        Live account) decides whether a connected live account trades with simulated fills or
+        with real money. Both are sometimes called “going Live”; only the account stage lets a
+        Live account spend real money.
+      </p>
+
+      @if (reviewContext(); as context) {
+        <p class="settings__review-context" role="status">
+          <span>{{ context.introduction }}</span>
+          @if (context.detail; as detail) { <span>{{ detail }}</span> }
+          @if (context.consequence; as consequence) { <span>{{ consequence }}</span> }
+        </p>
+      }
+
+      @if (requestedRevisionMissing()) {
+        <p class="settings__error" role="alert">
+          The selected revision is no longer available. Nothing was staged or applied.
+        </p>
+      }
+
+      @if (refusal(); as detail) {
+        <app-configuration-refusal [refusal]="detail" (reloadRequested)="reloadAll()" />
+      }
+
+      @if (supplementalReadFailed()) {
+        <p class="settings__error" role="alert">
+          Some configuration details could not be read. Their values remain unavailable.
+          <button type="button" (click)="reloadAll()">Retry</button>
+        </p>
+      }
+
+      @if (selection.error()) {
+        <p class="settings__error" role="alert">
+          The configuration service did not answer, so staged and effective state are unknown.
+          <button type="button" (click)="reloadAll()">Retry</button>
+        </p>
+      } @else if (currentSelection(); as current) {
+        <app-configuration-lifecycle-tracker
+          [selection]="current"
+          [deskState]="deskState.hasValue() ? deskState.value() : null"
+        />
+        <app-configuration-status-panel
+          [selection]="current"
+          [profiles]="profiles.hasValue() ? profiles.value() : []"
+          [effectiveNickname]="effectiveNickname()"
+          [stagedEndpointMode]="stagedEndpointMode()"
+          [effectiveEndpointMode]="effectiveEndpointMode()"
+          [busy]="writesDisabled()"
+          (applyRequested)="applySelection()"
+        />
+      } @else {
+        <p class="settings__loading" role="status">Reading the installation's selection…</p>
+      }
+
+      <app-configuration-switch-guide [restartCommand]="restartCommand()" />
+      @if (!isLiveLane()) {
+        <app-configuration-handoff-script [restartCommand]="restartCommand()" />
+      }
+
+      <section class="settings__profiles" aria-labelledby="settings-profiles-title">
+        <div class="settings__profiles-head">
+          <h4 id="settings-profiles-title">Profiles</h4>
+          <label class="settings__filter">
+            <input
+              type="checkbox"
+              [checked]="includeArchived()"
+              (change)="includeArchived.set(!includeArchived())"
+            />
+            <span>Show archived</span>
+          </label>
+        </div>
+
+        @if (profiles.error()) {
+          <p class="settings__error" role="alert">
+            The profile list could not be read.
+            <button type="button" (click)="reloadAll()">Retry</button>
+          </p>
+        } @else if (profiles.isLoading()) {
+          <p class="settings__loading" role="status">Reading saved profiles…</p>
+        } @else {
+          <app-configuration-profile-list
+            [profiles]="profiles.value()"
+            [selection]="currentSelection()"
+            [selectedProfileId]="selectedProfileId()"
+            [busy]="writesDisabled()"
+            (opened)="openProfile($event)"
+            (staged)="stageProfile($event)"
+            (archiveToggled)="setArchived($event)"
+          />
+        }
+
+        @if (slots.error()) {
+          <p class="settings__error" role="alert">
+            The credential slots could not be read, so a profile cannot be created here.
+            <button type="button" (click)="reloadAll()">Retry</button>
+          </p>
+        } @else if (slots.hasValue() && !slots.isLoading()) {
+          <app-configuration-profile-create
+            [slots]="slots.value()"
+            [busy]="busy()"
+            (created)="createProfile($event)"
+          />
+        }
+      </section>
+
+      @if (detail.error()) {
+        <p class="settings__error" role="alert">
+          This profile could not be read, so nothing about it is shown.
+          <button type="button" (click)="reloadAll()">Retry</button>
+        </p>
+      } @else if (detail.value(); as openProfileDetail) {
+        <app-configuration-profile-detail
+          [detail]="openProfileDetail"
+          [revisions]="revisions.hasValue() ? revisions.value() : null"
+          [slots]="slots.hasValue() ? slots.value() : []"
+          [observed]="observedAccounts()"
+          [nickname]="detailNickname()"
+          [reviewRevision]="reviewRevision()"
+          [busy]="writesDisabled()"
+          (renamed)="renameProfile($event)"
+          (cloned)="cloneProfile($event)"
+          (revisionSaved)="saveRevision($event)"
+          (revisionStaged)="stageRevision($event)"
+          (verifyRequested)="verifyAccount()"
+          (pinRequested)="pinAccount($event)"
+          (nicknameSubmitted)="saveNickname($event)"
+        />
+      }
+    </div>
+  </details>
+</main>

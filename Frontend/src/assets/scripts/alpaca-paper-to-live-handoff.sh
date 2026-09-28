@@ -18,12 +18,12 @@ fi
 # compose-context siblings are declared only inside compose service
 # environments (compose.yaml, compose.fleet.dev.yaml, compose.fleet.yaml),
 # so a host shell never sees them unless something sets them first. The
-# Configuration page's "Copy handoff script" button is that something — it
+# Settings page's "Copy handoff script" button is that something — it
 # fills in this lane's exact values before you paste. Running the raw asset
 # without going through that button requires exporting FLEET_WORKER_SERVICE
 # yourself; there is no default, because a wrong guess here means silently
 # restarting the wrong container.
-worker_service="${FLEET_WORKER_SERVICE:?Set FLEET_WORKER_SERVICE to the compose service for this lane, or copy this script from the Configuration page, which fills it in for you.}"
+worker_service="${FLEET_WORKER_SERVICE:?Set FLEET_WORKER_SERVICE to the compose service for this lane, or copy this script from the Settings page, which fills it in for you.}"
 compose_words=(podman compose)
 if [[ -n "${FLEET_COMPOSE_PROJECT:-}" ]]; then
   compose_words+=(--project-name "$FLEET_COMPOSE_PROJECT")
@@ -68,7 +68,7 @@ echo "Resetting the disposable Paper workspace after its own safety checks..."
   --account-id "$PAPER_ACCOUNT_ID" \
   dev-reset --runner-artifacts-root /app/artifacts
 
-echo "Starting the worker so the Configuration page can record Apply..."
+echo "Starting the worker so the Settings page can record Apply..."
 "${compose_words[@]}" start "$worker_service"
 worker_stopped=0
 trap - EXIT
@@ -85,7 +85,7 @@ published_host_address() {
   printf '%s' "$published"
 }
 
-# Who serves the Configuration surface, and therefore whose control secret
+# Who serves the Settings page's broker connection, and therefore whose control secret
 # the ceremony needs, depends on the posture (#2158):
 #
 # - Combined: the worker behind 127.0.0.1:8000 is also the clerk, answers
@@ -95,7 +95,7 @@ published_host_address() {
 #   (_ROLE_RUNS_CLERK, PythonDataService/app/main.py), the lanes publish
 #   nothing on the host, and a lane carries no control secret at all —
 #   only the coordinator does. The same surface is reached the way the
-#   Configuration page reaches it: the coordinator's clerk-scoped fleet
+#   Settings page reaches it: the coordinator's clerk-scoped fleet
 #   catalog route /api/brokers/{broker}/clerks/{clerk_id}
 #   (PythonDataService/app/routers/broker_clerks.py), authenticated with
 #   that same control secret.
@@ -128,7 +128,7 @@ else
   control_secret="$( ( "${compose_words[@]}" exec -T "$worker_service" printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null || true) | tr -d '\r\n' )"
 fi
 if [[ -z "$control_secret" ]]; then
-  echo "The data-plane control credential is unavailable. The worker is running; use the Configuration page manually." >&2
+  echo "The data-plane control credential is unavailable. The worker is running; use the Settings page manually." >&2
   exit 1
 fi
 fleet_clerk_id="$( ( "${compose_words[@]}" exec -T "$worker_service" printenv FLEET_CLERK_ID 2>/dev/null || true) | tr -d '\r\n' )"
@@ -149,24 +149,24 @@ for _ in {1..30}; do
   sleep 1
 done
 if [[ -z "$selection_json" ]]; then
-  echo "The Configuration page did not become ready. The worker is running; inspect the page before continuing." >&2
+  echo "The Settings page did not become ready. The worker is running; inspect the page before continuing." >&2
   exit 1
 fi
 
 # The page the operator must use is clerk-scoped on fleet postures: the
-# compatibility /brokers/alpaca/configuration URL renders
-# BrokerLaneUnavailableComponent there, while the real Configuration page
+# compatibility /brokers/alpaca/settings URL renders
+# BrokerLaneUnavailableComponent there, while the real Settings page
 # lives under the clerk route (Frontend/src/app/app.routes.ts,
-# brokers/alpaca/clerks/:clerkId → configuration).
+# brokers/alpaca/clerks/:clerkId → settings).
 if [[ -n "$fleet_clerk_id" ]]; then
-  configuration_url="http://localhost:4200/brokers/alpaca/clerks/$fleet_clerk_id/configuration"
+  settings_url="http://localhost:4200/brokers/alpaca/clerks/$fleet_clerk_id/settings"
 else
-  configuration_url="http://localhost:4200/brokers/alpaca/configuration"
+  settings_url="http://localhost:4200/brokers/alpaca/settings"
 fi
 if command -v open >/dev/null 2>&1; then
-  open "$configuration_url"
+  open "$settings_url"
 fi
-echo "Open $configuration_url"
+echo "Open $settings_url"
 echo "Stage the saved Live profile if needed, then click Apply staged revision."
 read -r -p "Press Enter only after the page says Apply is recorded... "
 
@@ -205,5 +205,5 @@ for _ in {1..30}; do
   sleep 1
 done
 
-echo "The restart finished without proving the Live profile effective. Read Last Apply on the Configuration page." >&2
+echo "The restart finished without proving the Live profile effective. Read Last Apply under Broker connection on the Settings page." >&2
 exit 1

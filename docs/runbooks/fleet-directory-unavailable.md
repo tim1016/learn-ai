@@ -13,7 +13,7 @@ Two distinct states are easy to confuse:
 - *Error banner* ("unavailable") — the HTTP call failed. This runbook.
 - *"No Alpaca clerk lanes are registered"* — the call succeeded (`200`) and the registry is simply empty; run the enrolment ceremony in §4.
 
-While the directory is down, **clerk-scoped routes keep working** — `/brokers/alpaca/clerks/{clerkId}...` are statically declared with no directory-dependent guard. A down directory degrades discovery, not operation. Deep-link URLs are stable: `brokers/alpaca/clerks/:clerkId/configuration`, `.../accounts/:accountId` (desk), `.../bots`, `.../gallery`.
+While the directory is down, **clerk-scoped routes keep working** — `/brokers/alpaca/clerks/{clerkId}...` are statically declared with no directory-dependent guard. A down directory degrades discovery, not operation. Deep-link URLs are stable: `brokers/alpaca/clerks/:clerkId/settings` (the old `.../configuration` redirects there), `.../accounts/:accountId` (desk), `.../bots`, `.../gallery`.
 
 ## 1. Reproduce and classify (the feedback loop)
 

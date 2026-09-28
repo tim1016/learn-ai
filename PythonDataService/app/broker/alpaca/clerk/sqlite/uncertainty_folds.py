@@ -130,7 +130,7 @@ def account_hold_envelope(
         )
         operator_impact = "New submits are paused account-wide; exits are unaffected."
         next_step = (
-            "In Configuration, use Clear loss hold after recovery. In a new session, "
+            "In Settings, use Clear hold after recovery. In a new session, "
             "the same action first proves previous obligations resolved and both loss "
             "limits safe. Session rollover never clears a hold automatically."
         )

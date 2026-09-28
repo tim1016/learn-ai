@@ -1,17 +1,62 @@
 import { CurrencyPipe, PercentPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal, resource } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  Injector,
+  afterNextRender,
+  computed,
+  effect,
+  inject,
+  input,
+  linkedSignal,
+  resource,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { FormField, form } from '@angular/forms/signals';
 
+import type { components } from '../../../../api/broker.types';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
-import { resourceTarget } from '../../../../fleet/resource-target';
+import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { AlpacaLiveVerdictService } from '../../../../services/alpaca-live-verdict.service';
+import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokerConfigurationService } from './broker-configuration.service';
 import { ConfigurationRefusalComponent } from './configuration-refusal.component';
 import { type ConfigurationRefusal, toConfigurationRefusal } from './broker-configuration-refusal';
 
+/** The hold status a loss-limit read reports, in words: status is never carried
+ * by colour alone. The backend's own `detail` follows each. */
+const ENTRY_STATE_LABEL = {
+  held: 'On hold.',
+  ready: 'No hold.',
+  unknown: 'New entries wait.',
+} as const;
+
+/** What a finished action changed, stated where focus lands afterwards. */
+const OUTCOME_COPY = {
+  applied: 'Applied. New entries use this limit now; no restart or redeploy is needed.',
+  cleared: 'Hold cleared. The status above is the account’s current state.',
+} as const;
+type Outcome = keyof typeof OUTCOME_COPY;
+
+type AccountRiskState = components['schemas']['AccountRiskStateResponse'];
+type ReviewedRisk = components['schemas']['AccountRiskClearRequest'];
+
+let nextFieldId = 0;
+
+/**
+ * The Daily loss limit section of Settings (PRD #2560): the limit in force,
+ * the loss hold beside it, Apply (effective immediately) and Clear hold.
+ *
+ * The section re-reads itself when the lane's loss-hold state changes — the
+ * shell's live verdict, polled for every lane, carries it — so a hold raised
+ * while Settings is open appears without a reload (#2552).
+ */
 @Component({
   selector: 'app-configuration-risk-limits',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormField, CurrencyPipe, PercentPipe, ConfigurationRefusalComponent],
+  imports: [FormField, CurrencyPipe, PercentPipe, ConfigurationRefusalComponent, TimestampDisplayComponent],
   templateUrl: './configuration-risk-limits.component.html',
   styleUrl: './configuration-risk-limits.component.scss',
 })
@@ -19,6 +64,18 @@ export class ConfigurationRiskLimitsComponent {
   readonly clerkId = input.required<string>();
   private readonly service = inject(BrokerConfigurationService);
   private readonly directory = inject(FleetDirectoryService);
+  private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
+  private readonly injector = inject(Injector);
+  private readonly outcomeRegion = viewChild<ElementRef<HTMLElement>>('outcomeRegion');
+  private readonly refusalRegion = viewChild<ElementRef<HTMLElement>>('refusalRegion');
+
+  protected readonly ids = (() => {
+    const id = nextFieldId++;
+    return { fraction: `loss-limit-fraction-${id}`, cap: `loss-limit-cap-${id}` };
+  })();
+  protected readonly ENTRY_STATE_LABEL = ENTRY_STATE_LABEL;
+  protected readonly OUTCOME_COPY = OUTCOME_COPY;
+
   protected readonly state = resource({
     params: () => this.clerkId(),
     loader: ({ params }) => this.service.readRiskLimits(params),
@@ -42,17 +99,65 @@ export class ConfigurationRiskLimitsComponent {
   protected readonly fields = form(this.draft);
   protected readonly busy = linkedSignal(() => { this.clerkId(); return false; });
   protected readonly refusal = linkedSignal<string, ConfigurationRefusal | null>({ source: this.clerkId, computation: () => null });
-  protected readonly applied = linkedSignal(() => { this.clerkId(); return false; });
+  protected readonly outcome = linkedSignal<string, Outcome | null>({ source: this.clerkId, computation: () => null });
   protected readonly valid = computed(() => {
     const draft = this.draft();
     return draft.loss_fraction !== null && draft.loss_fraction > 0 && draft.loss_fraction < 1
       && draft.loss_usd !== null && draft.loss_usd > 0;
   });
+  /** A limit is in force, so an undecided state is about the account's evidence
+   * and re-reading can settle it; without one, setting a limit is the fix. */
+  protected readonly limitInForce = computed(() =>
+    this.state.hasValue() && this.state.value().loss_fraction !== null && this.state.value().loss_usd !== null,
+  );
 
-  protected async apply(clearHold = false): Promise<void> {
+  /** This lane's loss-hold state from the shell's live verdict, or `null`
+   * before it has been read. */
+  private readonly lossHold = computed(
+    () => this.liveVerdicts.stateFor(this.clerkId()).verdict?.loss_hold ?? null,
+  );
+
+  constructor() {
+    let seen: { readonly clerkId: string; readonly hold: string | null } | null = null;
+    effect(() => {
+      const next = { clerkId: this.clerkId(), hold: this.lossHold() };
+      const previous = seen;
+      seen = next;
+      // Only a change on the same lane, between two known states, is news:
+      // a new lane re-reads through `state` itself, and the verdict's first
+      // arrival says nothing this section's own read did not.
+      if (previous === null || previous.clerkId !== next.clerkId) return;
+      if (previous.hold === null || next.hold === null || previous.hold === next.hold) return;
+      untracked(() => {
+        if (!this.busy()) this.state.reload();
+      });
+    });
+  }
+
+  protected checkAgain(): void {
+    this.outcome.set(null);
+    this.state.reload();
+  }
+
+  protected applyLimit(): void {
+    const { loss_fraction, loss_usd } = this.draft();
+    if (loss_fraction === null || loss_usd === null || !this.valid()) return;
+    void this.run('applied', (target, reviewed) =>
+      this.service.applyRiskLimits(target, { ...reviewed, loss_fraction, loss_usd }));
+  }
+
+  protected clearHold(): void {
+    void this.run('cleared', (target, reviewed) => this.service.clearRiskHold(target, reviewed));
+  }
+
+  /** One reviewed write at a time, fenced on the revision and selection
+   * generation this section read. Never retried: a stale fence is a refusal. */
+  private async run(
+    outcome: Outcome,
+    write: (target: ResourceTarget, reviewed: ReviewedRisk) => Promise<AccountRiskState>,
+  ): Promise<void> {
     const state = this.state.hasValue() ? this.state.value() : null;
-    const draft = this.draft();
-    if (this.busy() || state === null || draft.loss_fraction === null || draft.loss_usd === null || (!clearHold && !this.valid())) return;
+    if (this.busy() || state === null) return;
     const clerkId = this.clerkId();
     const lane = this.directory.lane('alpaca', clerkId);
     const target = resourceTarget('alpaca', clerkId, {
@@ -62,24 +167,27 @@ export class ConfigurationRiskLimitsComponent {
     });
     this.busy.set(true);
     this.refusal.set(null);
-    this.applied.set(false);
+    this.outcome.set(null);
     try {
-      const reviewed = {
+      const updated = await write(target, {
         expected_risk_revision: state.risk_revision,
         expected_selection_generation: state.selection_generation,
-      };
-      const updated = clearHold
-        ? await this.service.clearRiskHold(target, reviewed)
-        : await this.service.applyRiskLimits(target, {
-          ...reviewed, loss_fraction: draft.loss_fraction, loss_usd: draft.loss_usd,
-        });
+      });
       if (this.clerkId() !== clerkId) return;
       this.state.set(updated);
-      this.applied.set(!clearHold);
+      this.outcome.set(outcome);
+      this.focusAfterRender(this.outcomeRegion);
     } catch (error) {
-      if (this.clerkId() === clerkId) this.refusal.set(toConfigurationRefusal(error));
+      if (this.clerkId() !== clerkId) return;
+      this.refusal.set(toConfigurationRefusal(error));
+      this.focusAfterRender(this.refusalRegion);
     } finally {
       if (this.clerkId() === clerkId) this.busy.set(false);
     }
+  }
+
+  /** Move the keyboard to what the action produced once it has rendered. */
+  private focusAfterRender(region: () => ElementRef<HTMLElement> | undefined): void {
+    afterNextRender({ write: () => region()?.nativeElement.focus() }, { injector: this.injector });
   }
 }

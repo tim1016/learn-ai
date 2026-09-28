@@ -28,8 +28,8 @@
         }
         @case ('unbound') {
           This lane has no confirmed account binding yet, so its
-          {{ surfaceName() }} has no account to serve. Confirm an account
-          binding in this lane's configuration to open it.
+          {{ surfaceName() }} has no account to serve. Connect an account
+          in this lane's Settings to open it.
         }
         @case ('capability') {
           This lane does not declare the
@@ -38,8 +38,8 @@
         }
       }
     </p>
-    @if (configurationRoute(); as configuration) {
-      <a class="surface-not-ready__primary" [routerLink]="configuration">Open lane configuration</a>
+    @if (settingsRoute(); as settings) {
+      <a class="surface-not-ready__primary" [routerLink]="settings">Open Settings</a>
     }
   }
 </main>

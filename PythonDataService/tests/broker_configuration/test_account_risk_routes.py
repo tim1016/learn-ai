@@ -131,3 +131,40 @@ async def test_risk_read_rejudges_new_fee_evidence_without_writing_a_hold(risk_c
     assert "account evidence is incomplete" in response.json()["detail"]
     assert repo.custody_transitions() == before
     assert gate.latest_observation() == observation
+
+
+async def test_an_unapplied_limit_is_named_as_the_cause_not_stale_evidence(risk_client: RiskClient) -> None:
+    """#2566 (H6): a Paper account with no limit said "Refresh account evidence",
+    which no control could do. The missing limit is the cause, and Settings is
+    where it is set, so the read names it in place."""
+    client, _read, _ = risk_client
+    response = await client.get(f"{routes.PREFIX}/risk-limits")
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert state["entry_state"] == "unknown"
+    assert state["detail"] == (
+        "No daily loss limit is set for this account, so new entries are refused. Set one below and apply it."
+    )
+    assert "Refresh" not in state["detail"]
+
+
+async def test_readiness_names_a_missing_limit_before_any_observation(risk_client: RiskClient) -> None:
+    """#2566 (H7): the shared readiness Deploy reads judged the observation first,
+    so a never-set limit surfaced as stale evidence. A missing limit now wins;
+    once a limit exists, an absent reading says when the next one comes."""
+    from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
+    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+
+    runtime = routes.get_active_clerk_runtime()
+    repo, sync = runtime.sqlite_repository, runtime.envelope_sync
+    missing = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    assert not missing.allowed and missing.limit_missing
+    assert missing.detail.endswith("Set one in Settings.")
+
+    sync.discard_observation()
+    sync.apply_risk_policy(AccountRiskPolicy(revision=1, loss_fraction=.1, loss_usd=100, profile_id="p", profile_revision=1,
+        actor="owner", applied_at_ms=repo.clock()), expected_revision=0)
+    unobserved = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    assert not unobserved.allowed and not unobserved.limit_missing
+    assert "Refresh" not in unobserved.detail
+    assert unobserved.detail.endswith("The account is read again every 15 seconds.")
