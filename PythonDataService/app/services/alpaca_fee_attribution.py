@@ -54,6 +54,11 @@ class FeeFill:
     # When the broker executed it (int64 ms UTC); external fills carry it so
     # the account-money read can lot them in execution order.
     occurred_at_ms: int | None = None
+    # An external execution dated before custody began (H35): its shares are
+    # inside the flat account custody started from, so it proves its order's
+    # filled quantity and holds its cash claim, but is never lotted and its
+    # sale is never counted as proceeds still settling.
+    pre_custody: bool = False
 
 
 @dataclass(frozen=True)

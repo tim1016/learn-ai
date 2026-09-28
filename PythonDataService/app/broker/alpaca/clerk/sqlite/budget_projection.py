@@ -160,7 +160,7 @@ def project_account_money(
             if fill.side is OrderSide.SELL and fill.recorded_at_ms is not None and fill.recorded_at_ms >= seen_before_ms
         ), ZERO) + sum((
             fill.quantity * fill.price for fill in fees.external_fills
-            if fill.side is OrderSide.SELL and fill.observed_at_ms >= seen_before_ms
+            if fill.side is OrderSide.SELL and not fill.pre_custody and fill.observed_at_ms >= seen_before_ms
         ), ZERO)
     return account_money(
         projected.budget, unseen_fills=projected.unseen_fills, unseen_sales=unseen_sales,
@@ -173,7 +173,28 @@ def _long_cost(lots: Iterable[OpenLot]) -> Decimal:
 
 
 def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
-    return [f"{lot.exact_qty:f} {lot.symbol} sold short by {holder}" for lot in lots if lot.side is not OrderSide.BUY]
+    """One holder's open shorts as one phrase, a total per symbol (H35).
+
+    FIFO keeps one open lot per sale; the note names the position, not each
+    lot: "4 TSLA, 8 QQQ and 8 AAPL sold short by outside orders".
+    """
+    short: dict[str, Decimal] = {}
+    for lot in lots:
+        if lot.side is not OrderSide.BUY:
+            short[lot.symbol] = short.get(lot.symbol, ZERO) + lot.exact_qty
+    if not short:
+        return []
+    return [f"{_and_list([f'{_quantity(qty)} {symbol}' for symbol, qty in short.items()])} sold short by {holder}"]
+
+
+def _quantity(value: Decimal) -> str:
+    """A share count as plain digits: ``4``, never ``4.000000`` or ``4E+0``."""
+    return f"{value.normalize():f}"
+
+
+def _and_list(items: Sequence[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
@@ -182,14 +203,22 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     The execution population is the one ``_external_cash_claim`` already
     proved complete; each fill's symbol is its external order's. A fill whose
     order or execution time is unknown cannot be lotted, so it is named.
+
+    An execution from before custody began is never lotted (H35): custody
+    starts from a flat account, so its shares -- and the purchase a sale of
+    them closed -- are inside the starting cash. Lotting one alone read the
+    closing sale of an older purchase as a short.
     """
     symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
     records: list[FillRecord] = []
-    unpriced: list[str] = []
+    unpriced: dict[str, Decimal] = {}
     for fill in fees.external_fills:
+        if fill.pre_custody:
+            continue
         symbol = symbols.get(fill.native_order_id) if fill.native_order_id is not None else None
         if symbol is None or fill.occurred_at_ms is None:
-            unpriced.append(f"{fill.quantity:f} shares from outside order {fill.native_order_id or fill.fill_id}")
+            order = fill.native_order_id or fill.fill_id
+            unpriced[order] = unpriced.get(order, ZERO) + fill.quantity
             continue
         records.append(FillRecord(
             account_id="", sid=f"external:{symbol}", intent_id=fill.fill_id, order_ref=fill.native_order_id or fill.fill_id,
@@ -202,8 +231,9 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     for lot in fifo.open_lots:
         if lot.side is OrderSide.BUY:
             held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_qty * lot.exact_cost
-    unpriced += _shorts(fifo.open_lots, holder="outside orders")
-    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], unpriced
+    named = [f"{_quantity(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
+    named += _shorts(fifo.open_lots, holder="outside orders")
+    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named
 
 
 def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:

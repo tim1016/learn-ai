@@ -228,6 +228,65 @@ def test_outside_shares_that_cannot_be_valued_are_named_never_dropped(tmp_path: 
         repo.close()
 
 
+def _outside_sale(order_id: str, symbol: str, *, at_ms: int) -> tuple[BrokerOrder, BrokerActivity]:
+    """One filled one-share outside sale and its execution, both dated ``at_ms``."""
+    order = _external_order(state="filled", filled=1, observed_at=at_ms).model_copy(update={
+        "order_id": order_id, "symbol": symbol, "side": "sell", "quantity": 1,
+    })
+    fill = _external_fill(quantity=1).model_copy(update={
+        "activity_id": f"{order_id}-fill", "native_order_id": order_id, "symbol": symbol, "side": "sell",
+        "occurred_at_ms": at_ms,
+    })
+    return order, fill
+
+
+def test_outside_shorts_are_named_once_per_symbol_never_once_per_lot(tmp_path: Path) -> None:
+    """H35: FIFO keeps one open lot per one-share sale, and the note listed
+    every lot ("1 TSLA sold short by outside orders" four times). It names
+    the position instead: one phrase, a total per symbol."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        sales = [
+            _outside_sale(f"sale-{index}", symbol, at_ms=NOON + index)
+            for index, symbol in enumerate(["TSLA", "TSLA", "QQQ", "QQQ", "QQQ", "AAPL"])
+        ]
+        for order, _ in sales:
+            observe_external_order(repo, order=order)
+        record_fee_evidence(repo, [fill for _, fill in sales], checked_at_ms=NOON, history_complete=True)
+        money = repo.account_money(cash=1600, seen_before_ms=NOON + 10)
+        assert money.unvalued == ("2 TSLA, 3 QQQ and 1 AAPL sold short by outside orders",)
+    finally:
+        repo.close()
+
+
+def test_an_outside_sale_from_before_custody_began_is_never_a_short(tmp_path: Path) -> None:
+    """H35 (paper account PA3KWXU1C4C3): a tracked outside order that sold
+    before custody began closed a purchase made before custody too. Lotting
+    the sale alone read it as a short -- on an account Alpaca reported flat.
+    Custody starts from a flat account, so the execution only proves its
+    order's filled quantity: never a lot, a short, or an unseen sale."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        before_custody = NOON - 4 * 86_400_000
+        order, fill = _outside_sale("old-sale", "AAPL", at_ms=before_custody)
+        observe_external_order(repo, order=order)
+        # Recorded now (observed at NOON), as the paper clerk's startup
+        # recovery recorded its old outside orders' history.
+        record_fee_evidence(repo, [fill], checked_at_ms=NOON, history_complete=True)
+
+        money = repo.account_money(cash=1000, seen_before_ms=NOON)
+
+        assert money.unvalued == ()
+        assert not money.holds_positions
+        assert money.total == Decimal(1000) and money.unseen_sales == 0
+    finally:
+        repo.close()
+
+
 @pytest.mark.parametrize("status,reported,recorded", [("filled", 10, 0), ("canceled", 3, 0), ("canceled", 3, 2.9999999999)])
 def test_missing_legacy_terminal_execution_is_unknown_until_reconciled(
     day_pnl_repo, status: str, reported: float, recorded: float,

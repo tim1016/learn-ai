@@ -430,6 +430,7 @@ def custody_fee_attribution(
                 native_order_id=row.native_order_id,
                 observed_at_ms=row.observed_at_ms,
                 occurred_at_ms=row.occurred_at_ms,
+                pre_custody=day is None,
             )
             if day is not None:
                 grouped[day].append(external)
