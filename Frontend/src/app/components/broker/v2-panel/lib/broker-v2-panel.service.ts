@@ -96,6 +96,11 @@ export type DeploySubmissionStatus = BudgetDeployReceipt | DeploySubmissionUncom
 export function committedReceipt(status: DeploySubmissionStatus): BudgetDeployReceipt | null {
   return 'receipt_id' in status ? status : null;
 }
+
+/** The uncommitted claim inside a recovery answer, or `null` once it committed. */
+export function uncommittedClaim(status: DeploySubmissionStatus): DeploySubmissionUncommitted | null {
+  return 'receipt_id' in status ? null : status;
+}
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
 export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];

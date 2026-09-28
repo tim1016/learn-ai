@@ -12,6 +12,13 @@
       <h2 id="deploy-recovery-title">Checking the recorded deployment</h2>
       @if (recoveryNotCommitted(); as notCommitted) {
         <p>{{ notCommitted }}</p>
+      } @else if (recoveryClaim(); as claim) {
+        <p><strong>{{ claim.message }}</strong></p>
+        <p>{{ claim.explanation }}</p>
+        <p>Next: {{ claim.next_action }}</p>
+        @if (claim.status === 'in_flight') {
+          <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
+        }
       } @else {
         <p>Checking never starts a second bot. The recorded result shows whether money was set aside and the bot started.</p>
         @if (recoveredCommand.error()) {
@@ -157,13 +164,16 @@
             [checks]="ticket().executionMode === 'dry_run' ? null : view.readiness_checks"
             [checksObservedAtMs]="view.evaluated_at_ms"
             [admissionDecision]="admissionDecision()"
-            [submitError]="submitError()"
+            [submitError]="confirmError()"
+            [canCheckStatus]="outcomeUnknown()"
+            [checkingStatus]="checkingStatus()"
             [confirmationText]="review?.confirmation_text ?? null"
             [(consent)]="liveConsent"
             [canSubmit]="canSubmit()"
             [submitting]="submitting()"
             [guidance]="submitGuidance()"
             (deploy)="submit()"
+            (checkStatus)="checkSubmission()"
           >
             @if (overrideRequired() && selectedStrategy(); as strategy) {
               <app-deploy-evidence-override

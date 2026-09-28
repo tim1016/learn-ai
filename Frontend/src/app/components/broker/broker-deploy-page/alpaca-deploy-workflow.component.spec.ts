@@ -15,6 +15,7 @@ import {
   type DeployBotView,
   type DeploymentBudgetPreview,
   type DeploySubmissionBody,
+  type DeploySubmissionUncommitted,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
@@ -215,6 +216,36 @@ async function chooseMoney(amount = '1000.00'): Promise<void> {
 
 function deployButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>('button', { name: /^Deploy/ });
+}
+
+/** The recovery read's answers for a claimed key that has not committed. */
+const IN_FLIGHT: DeploySubmissionUncommitted = {
+  status: 'in_flight',
+  submission_key: 'claimed-submission-1',
+  strategy_instance_id: 'spy-dv-20260929-0931',
+  claimed_at_ms: 1_700_000_000_000,
+  message: 'spy-dv-20260929-0931 is being deployed now',
+  explanation: 'Nothing is committed for it yet.',
+  next_action: 'Check again in a moment; checking never starts a second bot.',
+};
+const NOT_COMMITTED: DeploySubmissionUncommitted = {
+  ...IN_FLIGHT,
+  status: 'not_committed',
+  message: 'spy-dv-20260929-0931 was not deployed',
+  explanation: 'Its Deploy never committed, so nothing was set aside for it.',
+  next_action: 'Deploy again when ready; the bot is named from the minute you do.',
+};
+
+/** A $1,000 Deploy whose outcome is not settled, then its amount changed to $1,200. */
+async function lostThenEdited(service: ServiceDouble) {
+  const rendered = await renderWorkflow(service);
+  await chooseMoney('1000.00');
+  fireEvent.click(deployButton());
+  await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+  await screen.findByRole('alert', { name: 'Outcome unknown' });
+  await chooseMoney('1200.00');
+  await rendered.fixture.whenStable();
+  return rendered;
 }
 
 function submittedBody(service: ServiceDouble, call = 0): DeploySubmissionBody {
@@ -497,7 +528,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole('alert', { name: 'Outcome unknown' })).toBeTruthy();
-    expect(screen.getByText(/returns the same bot; it never starts a second one/)).toBeTruthy();
+    expect(screen.getByText('Checking its status, or pressing Deploy again, never starts a second bot.')).toBeTruthy();
     await fixture.whenStable();
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
@@ -509,8 +540,11 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(firstTarget).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
   });
 
-  it('mints a new submission key when the settings change after a Deploy was sent', async () => {
-    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+  it('mints a new submission key when the settings change after a Deploy was refused', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({
+      status: 409,
+      error: { detail: { outcome: 'conflict', message: 'The budget is more than this account can set aside.', why: null, next_action: null } },
+    }));
     const { fixture } = await renderWorkflow(service);
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
@@ -524,6 +558,146 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(submittedBody(service, 1).submission_key).not.toBe(submittedBody(service, 0).submission_key);
     expect(service.deployBudgetBot.mock.calls[1][0].idempotencyKey)
       .not.toBe(service.deployBudgetBot.mock.calls[0][0].idempotencyKey);
+    expect(screen.queryByRole('button', { name: 'Check deployment status' })).toBeNull();
+  });
+
+  it('keeps the submission key after a lost response, even when the amount changes (stories 63, 66)', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    await lostThenEdited(service);
+
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
+    expect(submittedBody(service, 1).budget?.amount_usd).toBe('1200.00');
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      answer: 'This Deploy is already being sent.',
+      detail: {
+        outcome: 'conflict', message: 'This Deploy is already being sent.', why: 'A second copy of it was not started.',
+        next_action: 'Check its status in a moment; checking never starts a second bot.', reason_code: 'deploy_submission_in_flight',
+      },
+    },
+    {
+      answer: 'This Deploy was already sent with other settings.',
+      detail: {
+        outcome: 'conflict', message: 'This Deploy was already sent with other settings.',
+        why: 'This Deploy was already sent with different settings as spy-dv-20260929-0931. Nothing new was set aside or started.',
+        next_action: 'Check its status; checking never starts a second bot.', reason_code: 'deploy_submission_settings_conflict',
+      },
+    },
+  ])('keeps the submission key when Deploy answers “$answer”', async ({ detail }) => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 409, error: { detail } }));
+    await lostThenEdited(service);
+
+    const refusal = screen.getByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByText(detail.message)).toBeTruthy();
+    expect(within(refusal).getByText(detail.why)).toBeTruthy();
+    expect(within(refusal).getByText(`Next: ${detail.next_action}`)).toBeTruthy();
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
+  });
+
+  it('shows the receipt when the status read finds the lost Deploy committed, and sends nothing again', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    service.getDeploySubmission.mockResolvedValue({ ...RECEIPT, account_id: 'PA9' });
+    const { fixture } = await lostThenEdited(service);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
+    const receipt = await screen.findByRole('status', { name: RECEIPT.message });
+    await fixture.whenStable();
+
+    expect(service.getDeploySubmission.mock.calls[0][1]).toBe(submittedBody(service, 0).submission_key);
+    await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+    expect(service.deployBudgetBot).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      kind: 'in_flight',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockResolvedValue(IN_FLIGHT),
+      title: 'Still being deployed',
+      shows: [IN_FLIGHT.message, IN_FLIGHT.explanation, `Next: ${IN_FLIGHT.next_action}`],
+      keepsKey: true,
+    },
+    {
+      kind: 'not_committed',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockResolvedValue(NOT_COMMITTED),
+      title: 'Not deployed',
+      shows: [NOT_COMMITTED.message, NOT_COMMITTED.explanation, `Next: ${NOT_COMMITTED.next_action}`],
+      keepsKey: false,
+    },
+    {
+      kind: 'no record (404)',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({
+        status: 404,
+        error: { detail: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.' },
+      })),
+      title: 'Not deployed',
+      shows: ['No Deploy was committed for this submission. Nothing was set aside and nothing started.'],
+      keepsKey: false,
+    },
+    {
+      kind: 'no bot runner (503)',
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({
+        status: 503,
+        error: { detail: { outcome: 'blocked', message: 'The bot runner is not available.', why: 'The service is still starting or has shut down.' } },
+      })),
+      title: 'Outcome unknown',
+      shows: ['The bot runner is not available.', 'Whether the bot started is still not known; checking never starts a second bot.'],
+      keepsKey: true,
+    },
+  ])('after a lost response, a $kind status read decides whether the next Deploy keeps its key', async ({ read, title, shows, keepsKey }) => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    read(service);
+    const { fixture } = await lostThenEdited(service);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
+    const refusal = await screen.findByRole('alert', { name: title });
+    for (const line of shows) expect(within(refusal).getByText(line)).toBeTruthy();
+    expect(within(refusal).queryByRole('button', { name: 'Check deployment status' }) !== null).toBe(keepsKey);
+
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key === submittedBody(service, 0).submission_key).toBe(keepsKey);
+  });
+
+  it('reads nothing back after its own Deploy succeeds', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+
+    fireEvent.click(deployButton());
+    await screen.findByRole('status', { name: RECEIPT.message });
+    await fixture.whenStable();
+
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+  });
+
+  it('checks its own pending Deploy without sending it again', async () => {
+    const pending: BudgetDeployReceipt = {
+      ...RECEIPT, status: 'pending', outcome: 'pending',
+      message: 'spy-dv-20260929-0931 is committed; its launch is not confirmed yet',
+    };
+    const service = mockService(DEPLOY_VIEW, pending);
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('heading', { name: pending.message });
+    await fixture.whenStable();
+
+    service.getDeploySubmission.mockResolvedValue({ ...RECEIPT, account_id: 'PA9' });
+    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
+
+    await screen.findByRole('heading', { name: RECEIPT.message });
+    expect(service.getDeploySubmission.mock.calls.at(-1)?.[1]).toBe(submittedBody(service).submission_key);
+    expect(service.deployBudgetBot).toHaveBeenCalledOnce();
   });
 
   it('moves focus to the receipt, which names the bot, the money, the world and the bot’s page', async () => {
@@ -592,6 +766,22 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     service.getDeploySubmission.mockResolvedValue({ ...pending, status: 'deployed', outcome: 'success', message: RECEIPT.message });
     fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
     await screen.findByRole('heading', { name: RECEIPT.message });
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { answer: IN_FLIGHT, offersCheck: true },
+    { answer: NOT_COMMITTED, offersCheck: false },
+  ])('shows a reloaded $answer.status Deploy in the backend’s own words', async ({ answer, offersCheck }) => {
+    const service = mockService();
+    service.getDeploySubmission.mockResolvedValue(answer);
+    await renderWithQuery(service, { submission: 'reloaded-submission-1' });
+
+    const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    expect(await within(recovery).findByText(answer.message)).toBeTruthy();
+    expect(within(recovery).getByText(answer.explanation)).toBeTruthy();
+    expect(within(recovery).getByText(`Next: ${answer.next_action}`)).toBeTruthy();
+    expect(within(recovery).queryByRole('button', { name: 'Check deployment status' }) !== null).toBe(offersCheck);
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
@@ -673,6 +863,27 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
     expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
   });
 
+  it('Clear keeps a lost Deploy’s key until its status is read', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const { fixture } = await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the prefilled settings' }));
+    await fixture.whenStable();
+    await vi.waitFor(() => expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
+  });
+
   it('says when the earlier bot’s settings cannot be read, and offers a fresh form', async () => {
     const service = mockService();
     service.getDeployPrefill.mockRejectedValue(new HttpErrorResponse({
@@ -730,6 +941,41 @@ describe('AlpacaDeployWorkflowComponent — the session draft (H9)', () => {
     expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('750.00');
     await screen.findByText(/would be set aside for this bot/, {}, { timeout: 3000 });
     expect(service.previewBudget.mock.calls.length).toBeGreaterThan(previewsBefore);
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — a lost Deploy across leaving and coming back', () => {
+  it('still offers its status read and keeps its key when the owner returns and edits', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    const { fixture } = await render(DeployHostComponent, {
+      providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+    });
+    await screen.findByRole('heading', { name: 'What' });
+    await fixture.whenStable();
+    await chooseMoney('1000.00');
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+
+    fixture.componentInstance.shown.set(false);
+    await fixture.whenStable();
+    fixture.componentInstance.shown.set(true);
+    await fixture.whenStable();
+    await screen.findByRole('heading', { name: 'What' });
+
+    const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    await chooseMoney('1200.00');
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
   });
 });
 

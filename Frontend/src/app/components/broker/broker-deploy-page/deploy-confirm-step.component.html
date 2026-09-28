@@ -59,6 +59,11 @@
           <p>Recorded <app-timestamp-display [value]="error.recordedAtMs" mode="local" /></p>
         }
       }
+      @if (canCheckStatus()) {
+        <button type="button" [disabled]="checkingStatus()" [attr.aria-busy]="checkingStatus()" (click)="checkStatus.emit()">
+          Check deployment status
+        </button>
+      }
       @if (blockedDecision(); as decision) {
         <p>{{ decision.explanation }}</p>
         @if (decision.next_step) { <p>Next: {{ decision.next_step }}</p> }

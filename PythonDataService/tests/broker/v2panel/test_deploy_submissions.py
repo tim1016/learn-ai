@@ -413,7 +413,10 @@ async def test_the_same_key_with_other_settings_is_refused_with_409_and_nothing_
     assert changed.json()["detail"]["why"] == (
         f"This Deploy was already sent with different settings as {DEPLOYED_SID}. Nothing new was set aside or started."
     )
-    assert changed.json()["detail"]["next_action"] == "Start a new Deploy from the form."
+    # Other settings under a sent key settle nothing about its first Deploy:
+    # the client keeps the key and reads what it recorded.
+    assert changed.json()["detail"]["next_action"] == "Check its status; checking never starts a second bot."
+    assert changed.json()["detail"]["reason_code"] == "deploy_submission_settings_conflict"
     assert len(budgeted.registry.deploy_calls) == 1
 
 
@@ -490,6 +493,7 @@ async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_and_a_res
     assert in_flight.json()["status"] == "in_flight" and in_flight.json()["strategy_instance_id"] == DEPLOYED_SID
     assert in_flight.json()["message"] == f"{DEPLOYED_SID} is being deployed now"
     assert resent.status_code == 409 and resent.json()["detail"]["message"] == "This Deploy is already being sent."
+    assert resent.json()["detail"]["reason_code"] == "deploy_submission_in_flight"
     assert sent.status_code == 201 and sent.json()["strategy_instance_id"] == DEPLOYED_SID
     assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID]
 

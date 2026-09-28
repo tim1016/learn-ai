@@ -232,6 +232,13 @@ def _runner() -> BotTaskRegistry:
 #: ``in_flight`` for exactly these.
 _SENDING: set[str] = set()
 
+#: The two refusals that settle nothing about a key's first Deploy — a second
+#: copy while it is being sent, and the key resent with other settings. A
+#: client keeps the key and reads its recorded outcome rather than treating
+#: either as "not deployed" and starting a second bot under a new key.
+SUBMISSION_IN_FLIGHT = "deploy_submission_in_flight"
+SUBMISSION_SETTINGS_CONFLICT = "deploy_submission_settings_conflict"
+
 
 @contextmanager
 def _sending(submission_key: str) -> Iterator[None]:
@@ -241,6 +248,7 @@ def _sending(submission_key: str) -> Iterator[None]:
             detail="A second copy of it was not started.",
             next_action="Check its status in a moment; checking never starts a second bot.",
             http_status=409,
+            reason_code=SUBMISSION_IN_FLIGHT,
         )
     _SENDING.add(submission_key)
     try:
@@ -257,8 +265,9 @@ def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
     return PanelRunnerError(
         "This Deploy was already sent with other settings.",
         detail=f"{exc} Nothing new was set aside or started.",
-        next_action="Start a new Deploy from the form.",
+        next_action="Check its status; checking never starts a second bot.",
         http_status=409,
+        reason_code=SUBMISSION_SETTINGS_CONFLICT,
     )
 
 

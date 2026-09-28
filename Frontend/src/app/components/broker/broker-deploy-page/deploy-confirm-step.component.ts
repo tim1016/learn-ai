@@ -84,6 +84,9 @@ export class DeployConfirmStepComponent {
   readonly checksObservedAtMs = input<number | null>(null);
   readonly admissionDecision = input<RunAdmissionDecision | null>(null);
   readonly submitError = input<DeployError | null>(null);
+  /** The last Deploy's outcome is not known: offer to read what it recorded. */
+  readonly canCheckStatus = input(false);
+  readonly checkingStatus = input(false);
   /** Live's phrase to type, exactly as the backend authored it. */
   readonly confirmationText = input<string | null>(null);
   readonly consent = model('');
@@ -92,6 +95,7 @@ export class DeployConfirmStepComponent {
   readonly guidance = input('');
 
   readonly deploy = output();
+  readonly checkStatus = output();
 
   protected readonly consentField = form(this.consent, (consent) => {
     readOnly(consent, () => this.submitting());

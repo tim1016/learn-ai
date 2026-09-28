@@ -39,16 +39,20 @@ export interface DeployStepEditing {
  * `submissionKey` is the opaque idempotency input of the next Deploy
  * (#2551): minted when the draft is created, and kept with the settings it
  * was first sent with (`submittedContent`) so that a retry — a double click,
- * a lost response, a return from another page — asks for the same bot. The
- * typed dollar amount is the owner's own choice and is kept; its review and
- * any typed consent never are, so a restored amount is always re-previewed
- * and re-confirmed.
+ * a lost response, a return from another page — asks for the same bot. While
+ * `outcomeUnknown`, the key is kept whatever the settings become: only its
+ * status read, or a definite answer, frees the form for a new key. The typed
+ * dollar amount is the owner's own choice and is kept; its review and any
+ * typed consent never are, so a restored amount is always re-previewed and
+ * re-confirmed.
  */
 export interface DeployDraft {
   readonly settings: DeployTicketSettings;
   readonly amount: string;
   readonly submissionKey: string;
   readonly submittedContent: string | null;
+  /** A Deploy was sent under `submissionKey` and no answer settled it. */
+  readonly outcomeUnknown: boolean;
   readonly editing: DeployStepEditing;
   /** Deploy again's display-only lineage: the bot this one follows. */
   readonly replaces: string | null;
@@ -74,6 +78,7 @@ export function freshDeployDraft(settings: DeployTicketSettings = EMPTY_DEPLOY_S
     amount: '',
     submissionKey: crypto.randomUUID(),
     submittedContent: null,
+    outcomeUnknown: false,
     editing: { what: false, how: false },
     replaces: null,
   };

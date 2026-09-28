@@ -29,6 +29,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import {
   BrokerV2PanelService,
   committedReceipt,
+  uncommittedClaim,
   type BotDeployPrefill,
   type BudgetDeployReceipt,
   type DeployBotBody,
@@ -36,6 +37,7 @@ import {
   type DeployBotView,
   type DeployExecutionMode,
   type DeploySubmissionBody,
+  type DeploySubmissionUncommitted,
   type DeploymentBudgetInput,
   type DeployStrategyParamsSchema,
   type QualifiedDeployConfiguration,
@@ -94,6 +96,36 @@ const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 /** The recovery hint a Deploy writes before it is sent, so a reload can read
  * what that submission recorded instead of starting a second bot. */
 const SUBMISSION_PARAM = 'submission';
+
+/** The Deploy refusals that settle nothing about the key's first Deploy: a
+ * second copy while it is being sent, and the key resent with other
+ * settings. Like a lost response, each leaves its outcome to be read. */
+const SUBMISSION_UNSETTLED_REASONS: ReadonlySet<string> = new Set([
+  'deploy_submission_in_flight',
+  'deploy_submission_settings_conflict',
+]);
+
+/** What Confirm says about a Deploy that no receipt answered for. */
+function deployNotice(
+  outcome: DeployError['outcome'],
+  title: string,
+  message: string,
+  explanation: string | null = null,
+  nextAction: string | null = null,
+): DeployError {
+  return { outcome, title, message, explanation, nextAction, receiptId: null, recordedAtMs: null };
+}
+
+/** A Deploy that got no answer, in the owner's words. */
+const UNKNOWN_OUTCOME = deployNotice(
+  'unknown',
+  'Outcome unknown',
+  'No answer came back from Deploy, so whether the bot started is not known yet.',
+  'Checking its status, or pressing Deploy again, never starts a second bot.',
+  'Check deployment status.',
+);
+
+const NOT_COMMITTED_MESSAGE = 'No Deploy was committed for this submission. Nothing was set aside and nothing started.';
 
 /**
  * The symbol input fires per keystroke. Scoping the readiness fetch to every
@@ -363,8 +395,15 @@ export class AlpacaDeployWorkflowComponent {
   private readonly submissionKey = signal<string>(crypto.randomUUID());
   /** The settings `submissionKey` was first sent with; a Deploy with any
    * other settings mints a new key rather than reuse one the backend would
-   * refuse as a conflict. */
+   * refuse as a conflict — unless that Deploy's outcome is unknown. */
   private readonly submittedContent = signal<string | null>(null);
+  /** A Deploy went out under `submissionKey` and no answer settled it (a lost
+   * response, or "already being sent"). The key is kept whatever the form now
+   * says until its status read answers (PRD #2560 stories 63, 66). */
+  protected readonly outcomeUnknown = signal(false);
+  protected readonly checkingStatus = signal(false);
+  /** The `?submission=` this page last wrote, just before sending it. */
+  private readonly writtenKey = signal<string | null>(null);
   protected readonly editing = signal<DeployStepEditing>({ what: false, how: false });
   /** Deploy again's display-only lineage: the bot this one follows. */
   protected readonly replaces = signal<string | null>(null);
@@ -382,7 +421,9 @@ export class AlpacaDeployWorkflowComponent {
     const target = this.target();
     return [target.broker, target.clerkId, this.accountId().trim().toLowerCase()].join('\u0000');
   });
-  private restoredDraftKey: string | null = null;
+  /** The account whose draft the form holds; a recovery read waits for it,
+   * so it never mistakes the draft's own Deploy for someone else's. */
+  private readonly restoredDraftKey = signal<string | null>(null);
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
     required(ticket.exitAllowanceBps);
@@ -674,6 +715,9 @@ export class AlpacaDeployWorkflowComponent {
     if (this.submitting()) {
       return { canSubmit: false, guidance: 'Deployment is in progress.' };
     }
+    if (this.checkingStatus()) {
+      return { canSubmit: false, guidance: 'Checking the last Deploy’s status…' };
+    }
     if (this.admissionDecision()?.allowed === false) {
       return { canSubmit: false, guidance: this.admissionDecision()?.next_step ?? this.submitError()?.message ?? 'Refresh the Deploy checks before deploying.' };
     }
@@ -798,11 +842,15 @@ export class AlpacaDeployWorkflowComponent {
 
   // ── Recovery and receipt ──────────────────────────────────────────────────
 
-  /** A submission this page did not just send — a reload, or a return after
-   * the form moved on — whose recorded outcome is read, never re-sent. */
+  /** A submission this page does not hold — a reload, or a return by the
+   * browser's history — whose recorded outcome is read, never re-sent. The
+   * page's own Deploy is read only while its receipt is still pending; one
+   * whose answer was lost is read when the owner asks (`checkSubmission`). */
   protected readonly recoveryKey = computed(() => {
     const key = this.queryParams().get(SUBMISSION_PARAM);
-    return key !== null && SUBMISSION_KEY_RE.test(key) && key !== this.submissionKey() ? key : null;
+    if (key === null || !SUBMISSION_KEY_RE.test(key) || this.restoredDraftKey() !== this.draftKey()) return null;
+    const own = key === this.submissionKey() || key === this.writtenKey();
+    return !own || this.receipt()?.status === 'pending' ? key : null;
   });
   protected readonly recoveredCommand = resource({
     params: () => {
@@ -815,9 +863,19 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly recoveryNotCommitted = computed(() => {
     const error = this.recoveredCommand.error();
     return error instanceof HttpErrorResponse && error.status === 404
-      ? extractServerMessage(error, 'No Deploy was committed for this submission. Nothing was set aside and nothing started.')
+      ? extractServerMessage(error, NOT_COMMITTED_MESSAGE)
       : null;
   });
+  /** The recovery read found the key claimed but not committed. */
+  protected readonly recoveryClaim = computed(() =>
+    this.recoveredCommand.hasValue() ? uncommittedClaim(this.recoveredCommand.value()) : null,
+  );
+
+  /** What Confirm says went wrong: the last answer, or — back on a form
+   * whose Deploy got none — that its outcome is still unknown. */
+  protected readonly confirmError = computed(() =>
+    this.submitError() ?? (this.outcomeUnknown() ? UNKNOWN_OUTCOME : null),
+  );
   protected readonly shownReceipt = computed(() => {
     const own = this.receipt();
     const recovered = this.recoveredCommand.hasValue() ? committedReceipt(this.recoveredCommand.value()) : null;
@@ -871,11 +929,12 @@ export class AlpacaDeployWorkflowComponent {
         amount: this.amount(),
         submissionKey: this.submissionKey(),
         submittedContent: this.submittedContent(),
+        outcomeUnknown: this.outcomeUnknown(),
         editing: this.editing(),
         replaces: this.replaces(),
       };
-      if (key !== this.restoredDraftKey) {
-        this.restoredDraftKey = key;
+      if (key !== untracked(this.restoredDraftKey)) {
+        this.restoredDraftKey.set(key);
         untracked(() => this.restoreDraft(this.drafts.read(key) ?? freshDeployDraft()));
         return;
       }
@@ -1009,6 +1068,7 @@ export class AlpacaDeployWorkflowComponent {
     this.amount.set(draft.amount);
     this.submissionKey.set(draft.submissionKey);
     this.submittedContent.set(draft.submittedContent);
+    this.outcomeUnknown.set(draft.outcomeUnknown);
     this.editing.set(draft.editing);
     this.replaces.set(draft.replaces);
     this.moneyReview.set(null);
@@ -1017,6 +1077,15 @@ export class AlpacaDeployWorkflowComponent {
     this.termsSeeded = draft.settings.exitAllowanceBps !== null;
     this.lastValidationScope = null;
     if (draft.settings.symbol) this.scheduleSymbolScope(draft.settings.symbol);
+  }
+
+  /** A fresh form. A Deploy whose outcome is not known yet keeps its key
+   * through it: the key goes only when its status read settles it. */
+  private freshDraft(settings: DeployTicketSettings, replaces: string | null = null): DeployDraft {
+    const fresh = { ...freshDeployDraft(settings), replaces };
+    return this.outcomeUnknown()
+      ? { ...fresh, submissionKey: this.submissionKey(), submittedContent: this.submittedContent(), outcomeUnknown: true }
+      : fresh;
   }
 
   /** Deploy again: a fresh draft from the earlier bot's sealed settings. Its
@@ -1028,9 +1097,8 @@ export class AlpacaDeployWorkflowComponent {
     this.frozenCommand.set(null);
     this.clearAdmission();
     this.submitError.set(null);
-    this.restoreDraft({
-      ...freshDeployDraft(),
-      settings: {
+    this.restoreDraft(this.freshDraft(
+      {
         ...EMPTY_DEPLOY_SETTINGS,
         strategyKey: prefill.strategy_key,
         symbol: prefill.symbol.trim().toUpperCase(),
@@ -1043,23 +1111,20 @@ export class AlpacaDeployWorkflowComponent {
         bandMultiple: terms?.band_multiple ?? current.bandMultiple,
         spreadCapBps: terms?.spread_cap_bps ?? current.spreadCapBps,
       },
-      replaces: prefill.source_strategy_instance_id,
-    });
+      prefill.source_strategy_instance_id,
+    ));
   }
 
   /** Clear: back to a fresh form on this account's default strategy, and
    * the earlier bot is no longer named. */
   protected async clearPrefill(): Promise<void> {
     const current = this.ticket();
-    this.restoreDraft({
-      ...freshDeployDraft(),
-      settings: {
-        ...EMPTY_DEPLOY_SETTINGS,
-        exitAllowanceBps: current.exitAllowanceBps,
-        bandMultiple: current.bandMultiple,
-        spreadCapBps: current.spreadCapBps,
-      },
-    });
+    this.restoreDraft(this.freshDraft({
+      ...EMPTY_DEPLOY_SETTINGS,
+      exitAllowanceBps: current.exitAllowanceBps,
+      bandMultiple: current.bandMultiple,
+      spreadCapBps: current.spreadCapBps,
+    }));
     const view = this.currentView();
     const strategy = view?.strategies.find((candidate) => candidate.selectable) ?? view?.strategies[0];
     if (strategy) this.setStrategyKey(strategy.strategy_key);
@@ -1296,6 +1361,7 @@ export class AlpacaDeployWorkflowComponent {
     const submission = this.submissionFor(settings, view.account_id);
     const commandTarget = this.commandTargetFor(submission, view.account_id);
     let refused = false;
+    let sent = false;
 
     try {
       // The Start plan judges the settings alone: no submission key, no lineage.
@@ -1308,27 +1374,19 @@ export class AlpacaDeployWorkflowComponent {
       }
       // A read-only recovery hint survives a reload; the server's recorded
       // outcome for this key stays the authority on what was committed.
-      await this.router.navigate([], {
-        relativeTo: this.route,
-        queryParams: { [SUBMISSION_PARAM]: submission.submission_key },
-        queryParamsHandling: 'merge',
-        replaceUrl: true,
-      });
+      await this.writeSubmissionParam(submission.submission_key);
       if (!this.submissionStillCurrent(settings)) return;
-      this.receipt.set(await this.panelService.deployBudgetBot(commandTarget, submission));
-      this.frozenCommand.set(null);
-      // The next Deploy from this form is a new bot: a new key, and fresh
-      // money and consent. Its settings stay for a twin.
-      this.submissionKey.set(crypto.randomUUID());
-      this.submittedContent.set(null);
-      this.amount.set('');
-      this.replaces.set(null);
-      this.focusAfterRender(() => this.receiptPanel()?.focus());
+      sent = true;
+      this.acceptReceipt(await this.panelService.deployBudgetBot(commandTarget, submission));
     } catch (error) {
       refused = true;
       const decision = this.admissionFromError(error);
       if (decision) this.admissionDecision.set(decision);
-      this.submitError.set(this.toDeployError(error));
+      const failure = this.toDeployError(error);
+      this.submitError.set(failure);
+      // An answer that does not settle this key keeps it for the status read;
+      // a definite refusal frees the form to mint a new one on an edit.
+      if (sent) this.outcomeUnknown.set(failure.outcome === 'unknown');
       if (error instanceof HttpErrorResponse && error.status === 409
         && ['clerk_binding_generation_conflict', 'clerk_routing_epoch_conflict'].includes(error.error?.detail?.reason ?? error.error?.detail?.reason_code)) {
         this.frozenCommand.set(null);
@@ -1339,6 +1397,95 @@ export class AlpacaDeployWorkflowComponent {
       this.submitting.set(false);
       if (refused) this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
     }
+  }
+
+  /** A Deploy's receipt, from its own answer or from its status read. */
+  private acceptReceipt(receipt: BudgetDeployReceipt): void {
+    this.receipt.set(receipt);
+    this.frozenCommand.set(null);
+    this.submitError.set(null);
+    this.outcomeUnknown.set(false);
+    // The next Deploy from this form is a new bot: a new key, and fresh
+    // money and consent. Its settings stay for a twin.
+    this.submissionKey.set(crypto.randomUUID());
+    this.submittedContent.set(null);
+    this.amount.set('');
+    this.replaces.set(null);
+    this.focusAfterRender(() => this.receiptPanel()?.focus());
+  }
+
+  /** The sent Deploy is known not to have committed, so nothing was set
+   * aside: the next Deploy is a new submission under a new key. */
+  private releaseSubmission(): void {
+    this.outcomeUnknown.set(false);
+    this.submissionKey.set(crypto.randomUUID());
+    this.submittedContent.set(null);
+    this.frozenCommand.set(null);
+  }
+
+  /**
+   * "Check deployment status" for a Deploy whose outcome is unknown: reads
+   * what its key recorded and never sends it again. A receipt shows the bot;
+   * `in_flight` or an unreadable answer keeps the key; only `not_committed`
+   * or no record at all frees the form for a new key.
+   */
+  protected async checkSubmission(): Promise<void> {
+    const key = this.submissionKey();
+    if (!this.outcomeUnknown() || this.checkingStatus()) return;
+    this.checkingStatus.set(true);
+    try {
+      const answer = await this.panelService.getDeploySubmission(this.deployTarget(this.accountId().trim()), key);
+      if (key !== this.submissionKey()) return;
+      if ('receipt_id' in answer) {
+        this.acceptReceipt(answer);
+        // Its receipt, like one Deploy answered with, is re-read on a reload.
+        await this.writeSubmissionParam(key);
+        return;
+      }
+      this.submitError.set(this.claimError(answer));
+      if (answer.status === 'not_committed') this.settleNotCommitted();
+    } catch (error) {
+      if (key !== this.submissionKey()) return;
+      if (error instanceof HttpErrorResponse && error.status === 404) {
+        this.submitError.set(deployNotice('blocked', 'Not deployed', extractServerMessage(error, NOT_COMMITTED_MESSAGE)));
+        this.settleNotCommitted();
+      } else {
+        // No runner, or no answer: still unknown, never "not deployed".
+        this.submitError.set(deployNotice(
+          'unknown',
+          'Outcome unknown',
+          extractServerMessage(error, 'The deployment result could not be read.'),
+          'Whether the bot started is still not known; checking never starts a second bot.',
+          'Check deployment status again in a moment.',
+        ));
+      }
+    } finally {
+      this.checkingStatus.set(false);
+    }
+  }
+
+  /** Not committed: the Check button goes, so the keyboard moves to the answer. */
+  private settleNotCommitted(): void {
+    this.releaseSubmission();
+    this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
+  }
+
+  /** An uncommitted claim, in the backend's own words. */
+  private claimError(claim: DeploySubmissionUncommitted): DeployError {
+    return claim.status === 'in_flight'
+      ? deployNotice('unknown', 'Still being deployed', claim.message, claim.explanation, claim.next_action)
+      : deployNotice('blocked', 'Not deployed', claim.message, claim.explanation, claim.next_action);
+  }
+
+  /** Names `key` in the URL — the hint a reload reads — as this page's own. */
+  private async writeSubmissionParam(key: string): Promise<void> {
+    this.writtenKey.set(key);
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [SUBMISSION_PARAM]: key },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   private focusAfterRender(focus: () => void): void {
@@ -1392,6 +1539,9 @@ export class AlpacaDeployWorkflowComponent {
    * token or typed phrase, which prove the click rather than describe the
    * bot). Other settings under the same key would be refused as a conflict,
    * so they mint a new key: a new bot, by the owner's own changed choice.
+   * Not while that Deploy's outcome is unknown: a new key then could start a
+   * second bot beside one that committed, so the key stays and the backend
+   * answers for it.
    */
   private submissionFor(settings: DeployBotBody & { budget: DeploymentBudgetInput }, accountId: string): DeploySubmission {
     const content = canonicalJson({
@@ -1399,7 +1549,7 @@ export class AlpacaDeployWorkflowComponent {
       settings: { ...settings, budget: { amount_usd: settings.budget.amount_usd, risk_revision: settings.budget.risk_revision } },
     });
     const prior = this.submittedContent();
-    if (prior !== null && prior !== content) this.submissionKey.set(crypto.randomUUID());
+    if (prior !== null && prior !== content && !this.outcomeUnknown()) this.submissionKey.set(crypto.randomUUID());
     this.submittedContent.set(content);
     const replaces = this.replaces();
     return {
@@ -1492,9 +1642,12 @@ export class AlpacaDeployWorkflowComponent {
         message?: string;
         why?: string | null;
         next_action?: string | null;
+        reason_code?: string | null;
       } | undefined;
       if (detail?.message) {
-        const outcome = detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
+        const outcome = SUBMISSION_UNSETTLED_REASONS.has(detail.reason_code ?? '')
+          ? 'unknown'
+          : detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
         return {
           outcome,
           title: this.errorTitle(outcome),
@@ -1506,15 +1659,7 @@ export class AlpacaDeployWorkflowComponent {
         };
       }
     }
-    return {
-      outcome: 'unknown',
-      title: 'Outcome unknown',
-      message: 'No answer came back from Deploy, so whether the bot started is not known yet.',
-      explanation: 'Deploying again with the same settings returns the same bot; it never starts a second one.',
-      nextAction: 'Check your connection, then press Deploy again.',
-      receiptId: null,
-      recordedAtMs: null,
-    };
+    return UNKNOWN_OUTCOME;
   }
 
   private errorTitle(outcome: DeployError['outcome']): string {
