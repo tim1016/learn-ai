@@ -36,6 +36,14 @@
       }
     }
 
+    @if (deployRoute(); as route) {
+      <a
+        class="account-workspace__deploy"
+        [routerLink]="route"
+        [attr.aria-current]="activeTab() === 'deploy' ? 'page' : null"
+      >Deploy a bot</a>
+    }
+
     @if (botsPageActions(); as actions) {
       <div class="account-workspace__actions">
         <button

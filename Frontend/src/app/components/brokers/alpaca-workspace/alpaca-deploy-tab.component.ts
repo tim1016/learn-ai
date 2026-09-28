@@ -15,16 +15,17 @@ const DEPLOY_WITHOUT_CAPABILITY = 'This clerk does not declare Deploy capability
 const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 
 /**
- * The Deploy tab (ADR 0064 Decision 1, extended): binds a validated strategy
- * to this account inline, in the tab strip, rather than as an overlay drawer.
+ * The Deploy page (ADR 0064 Decision 1, extended; PRD #2560 D3): opened from
+ * the header's "Deploy a bot" button at its routed `deploy` URL — no longer a
+ * tab in the strip — and never an overlay drawer.
  *
  * Reads the workspace shell's own `AlpacaDeskAccountDataService` instance —
  * provided on `AlpacaAccountWorkspaceComponent` and inherited by every tab
- * under it — so this tab can never target a different account than the one
+ * under it — so this page can never target a different account than the one
  * the header names. Blocked-state messaging mirrors the other lane-scoped
- * tabs (Bots, Gallery): the tab always has a route once an account is
- * confirmed, and explains in place why it cannot deploy rather than being
- * hidden or disabled from the tab strip (FR-096).
+ * pages (Bots, Gallery): the page always has a route once an account is
+ * confirmed, and explains in place why it cannot deploy rather than the
+ * button being hidden or disabled (FR-096).
  */
 @Component({
   selector: 'app-alpaca-deploy-tab',

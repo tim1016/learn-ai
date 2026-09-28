@@ -3,58 +3,18 @@
   strategy().paper_access_state === "enabled"
 ) {
   @if (flow(); as state) {
-    <section
-      class="grid min-w-0 gap-3 rounded-[var(--radius-md)] border border-[var(--border-light)] border-l-[3px] border-l-[var(--accent)] bg-[var(--bg-surface)] p-4"
-      aria-labelledby="paper-access-title"
-    >
-      <header class="flex items-start justify-between gap-3">
-        <h2
-          id="paper-access-title"
-          class="mt-0.5 mb-0 eyebrow-heading"
-        >
-          {{ modeLabel() }} access
-        </h2>
-        @if (
-          strategy().paper_access_state === "enabled" ||
-          state.kind === "complete"
-        ) {
-          <span
-            class="rounded-full border border-emerald-500 bg-emerald-500/10 px-2 py-0.5 text-[length:var(--fs-xs)] font-semibold text-emerald-600"
-          >
-            Enabled
-          </span>
-        } @else {
-          <span
-            class="rounded-full border border-[var(--border-strong)] px-2 py-0.5 text-[length:var(--fs-xs)] font-semibold text-[var(--text-secondary)]"
-          >
-            Off
-          </span>
-        }
-      </header>
-
-      @if (
-        strategy().paper_access_state === "enabled" || state.kind === "complete"
-      ) {
-        <div class="grid gap-1" role="status">
-          <strong class="text-emerald-600">{{ modeLabel() }} access enabled</strong>
-          <p class="m-0 leading-normal text-[var(--text-secondary)]">
-            This strategy may use {{ modeLabel() }} on this account. Deploying a
-            bot remains a separate action.
-          </p>
-        </div>
+    <div class="permission-line grid min-w-0 gap-2" role="group" [attr.aria-label]="groupLabel()">
+      @if (strategy().paper_access_state === "enabled" || state.kind === "complete") {
+        <p class="m-0 font-semibold text-[var(--bull)]" role="status">
+          <span aria-hidden="true">✓</span> {{ allowedLabel() }}
+        </p>
       } @else {
         @switch (state.kind) {
           @case ("idle") {
-            <p class="m-0 leading-normal text-[var(--text-secondary)]">
-              {{ modeLabel() }} trading is off for
-              <strong>{{ strategy().label }}</strong> on this account. Dry Run
-              stays available.
+            <p class="m-0 flex flex-wrap items-center gap-2 leading-normal text-[var(--text-secondary)]">
+              <p-button [label]="allowLabel()" size="small" (onClick)="prepare()" />
+              <span>A one-time permission for this strategy; it never spends money.</span>
             </p>
-            <p-button
-              [label]="reviewLabel()"
-              class="justify-self-start"
-              (onClick)="prepare()"
-            />
           }
           @case ("preparing") {
             <p class="m-0 italic text-[var(--text-secondary)]" role="status">
@@ -62,172 +22,69 @@
             </p>
           }
           @case ("review") {
-            <div
-              class="grid gap-3 border-t border-[var(--border-light)] pt-2"
-              role="region"
-              [attr.aria-label]="reviewRegionLabel()"
-            >
-              <div>
-                <h3 class="mt-0.5 mb-1 eyebrow-heading">
-                  Confirm {{ modeLabel() }} access
-                </h3>
-                <p class="m-0 leading-normal text-[var(--text-secondary)]">
-                  This enables eligibility for one exact strategy and account.
-                  It does not deploy a bot or place an order.
-                </p>
+            <div class="grid gap-2">
+              <p class="m-0 leading-normal">
+                Allow <strong>{{ strategy().label }}</strong> on this {{ modeLabel() }} account?
+                A one-time permission for this strategy; it never spends money, deploys a bot or places an order.
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <p-button [label]="confirmLabel()" size="small" (onClick)="confirm()" />
+                <p-button label="Cancel" size="small" severity="secondary" [outlined]="true" (onClick)="cancel()" />
               </div>
-
-              <dl
-                class="m-0 grid grid-cols-2 gap-x-4 gap-y-2 max-[520px]:grid-cols-1"
-              >
-                <div class="min-w-0">
-                  <dt
-                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                  >
-                    Strategy
-                  </dt>
-                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
-                    {{ strategy().label }}
-                  </dd>
-                </div>
-                <div class="min-w-0">
-                  <dt
-                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                  >
-                    Account
-                  </dt>
-                  <dd
-                    class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
-                  >
-                    <code>{{ state.plan.account_id }}</code>
-                  </dd>
-                </div>
-                <div class="min-w-0">
-                  <dt
-                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                  >
-                    Validation
-                  </dt>
-                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
-                    Current
-                  </dd>
-                </div>
-                <div class="min-w-0">
-                  <dt
-                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                  >
-                    Program build
-                  </dt>
-                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
-                    Verified
-                  </dd>
-                </div>
-                <div class="min-w-0">
-                  <dt
-                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                  >
-                    Review expires
-                  </dt>
-                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
-                    {{
-                      state.plan.expires_at_ms
-                        | timestampDisplay: "local" : "time"
-                    }}
-                  </dd>
-                </div>
-              </dl>
-
-              <details class="border-y border-[var(--border-light)] py-2">
-                <summary
-                  class="cursor-pointer text-[length:var(--fs-sm)] text-[var(--text-secondary)]"
-                >
-                  Audit details
-                </summary>
+              <details class="text-[length:var(--fs-sm)]">
+                <summary class="cursor-pointer text-[var(--text-secondary)]">Details</summary>
                 <dl class="mt-2 grid gap-2">
                   <div class="min-w-0">
-                    <dt
-                      class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                    >
-                      Validation event
-                    </dt>
-                    <dd
-                      class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
-                    >
-                      <code>{{ state.plan.evidence.validation_event_id }}</code>
-                    </dd>
+                    <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Account</dt>
+                    <dd class="m-0 [overflow-wrap:anywhere]"><code>{{ state.plan.account_id }}</code></dd>
                   </div>
                   <div class="min-w-0">
-                    <dt
-                      class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                    >
-                      Plan receipt
-                    </dt>
-                    <dd
-                      class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
-                    >
-                      <code>{{ state.plan.plan_id }}</code>
-                    </dd>
+                    <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Validation</dt>
+                    <dd class="m-0">Current</dd>
+                  </div>
+                  <div class="min-w-0">
+                    <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Program build</dt>
+                    <dd class="m-0">Verified</dd>
+                  </div>
+                  <div class="min-w-0">
+                    <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Validation event</dt>
+                    <dd class="m-0 [overflow-wrap:anywhere]"><code>{{ state.plan.evidence.validation_event_id }}</code></dd>
+                  </div>
+                  <div class="min-w-0">
+                    <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Plan receipt</dt>
+                    <dd class="m-0 [overflow-wrap:anywhere]"><code>{{ state.plan.plan_id }}</code></dd>
                   </div>
                   @if (state.plan.evidence.git_provenance; as lineage) {
                     <div class="min-w-0">
-                      <dt
-                        class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
-                      >
-                        Qualified source
-                      </dt>
-                      <dd
-                        class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
-                      >
+                      <dt class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]">Qualified source</dt>
+                      <dd class="m-0 [overflow-wrap:anywhere]">
                         <code>{{ lineage.commit_sha }}</code>
-                        {{
-                          lineage.dirty
-                            ? "— uncommitted edits included"
-                            : "— committed bytes"
-                        }}
+                        {{ lineage.dirty ? "— uncommitted edits included" : "— committed bytes" }}
                       </dd>
                     </div>
                   }
                 </dl>
               </details>
-
-              <div class="flex flex-wrap gap-2 max-[520px]:grid">
-                <p-button
-                  [label]="enableLabel()"
-                  (onClick)="confirm()"
-                />
-                <p-button
-                  label="Cancel"
-                  severity="secondary"
-                  [outlined]="true"
-                  (onClick)="cancel()"
-                />
-              </div>
             </div>
           }
           @case ("confirming") {
             <p class="m-0 italic text-[var(--text-secondary)]" role="status">
-              Enabling this exact strategy and account pairing…
+              Allowing this strategy on this account…
             </p>
           }
           @case ("error") {
-            <div
-              class="grid gap-1 rounded-[var(--radius)] border border-red-500 bg-red-500/10 p-3"
-              role="alert"
-            >
-              <strong class="text-red-600">{{ state.failure.message }}</strong>
+            <div class="grid gap-1 rounded-[var(--radius)] border border-[var(--bear)] p-3" role="alert">
+              <strong>{{ state.failure.message }}</strong>
               @if (state.failure.explanation; as explanation) {
-                <p class="m-0 leading-normal text-[var(--text-secondary)]">
-                  {{ explanation }}
-                </p>
+                <p class="m-0 leading-normal text-[var(--text-secondary)]">{{ explanation }}</p>
               }
               @if (state.failure.nextAction; as nextAction) {
-                <p class="m-0 leading-normal text-[var(--text-secondary)]">
-                  {{ nextAction }}
-                </p>
+                <p class="m-0 leading-normal text-[var(--text-secondary)]">{{ nextAction }}</p>
               }
             </div>
             <p-button
-              [label]="state.retry === null ? 'Try review again' : 'Try enable again'"
+              [label]="state.retry === null ? 'Try again' : 'Try allowing again'"
+              size="small"
               severity="secondary"
               [outlined]="true"
               class="justify-self-start"
@@ -236,6 +93,6 @@
           }
         }
       }
-    </section>
+    </div>
   }
 }

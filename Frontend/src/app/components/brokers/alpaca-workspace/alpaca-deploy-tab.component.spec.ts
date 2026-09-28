@@ -94,7 +94,8 @@ async function renderDeployTab(options: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
           getCatalog: vi.fn().mockResolvedValue([]),
           previewStartAdmission: vi.fn(),
-          deployBot: vi.fn(),
+          previewBudget: vi.fn().mockResolvedValue({ state: 'ready', detail: 'Money is ready.', world: 'real_paper',
+            custody_account_id: 'PA9', risk_revision: 1, shortcuts: [] }),
         },
       },
     ],
@@ -114,22 +115,24 @@ describe('AlpacaDeployTabComponent', () => {
         { provide: BrokersService, useValue: { getAccount, getClerkStatus: vi.fn().mockResolvedValue({ account_id: 'PA9' }) } },
         { provide: BrokerV2PanelService, useValue: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW), getCatalog: vi.fn().mockResolvedValue([]),
+          previewBudget: vi.fn().mockResolvedValue({ state: 'ready', detail: 'Money is ready.', world: 'real_paper',
+            custody_account_id: 'PA9', risk_revision: 1, shortcuts: [] }),
         } },
       ],
     });
-    await screen.findByRole('heading', { name: 'Bot binding' });
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'my-edited-bot' } });
+    await screen.findByRole('heading', { name: 'What' });
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '750.00' } });
     directory.rebind({ observed_at_ms: 2, clerks: [{ ...lane }] });
     await directory.useValue.refresh?.();
     fixture.detectChanges();
     await fixture.whenStable();
-    expect((screen.getByLabelText('Bot name') as HTMLInputElement).value).toBe('my-edited-bot');
+    expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('750.00');
     expect(getAccount).toHaveBeenCalledTimes(1);
     getAccount.mockRejectedValueOnce(new Error('Account unavailable'));
     TestBed.inject(AlpacaDeskAccountDataService).account.reload();
     fixture.detectChanges();
     expect(await screen.findByText('Alpaca has not confirmed this account yet.')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Bot binding' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'What' })).toBeNull();
   });
 
   it('renews the opening fence only after a rejected attempt and explicit account review', async () => {
@@ -155,36 +158,30 @@ describe('AlpacaDeployTabComponent', () => {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW), getCatalog: vi.fn().mockResolvedValue([]), previewStartAdmission: preview,
           previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
             state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,
-            shortcuts: [], review_token: body.budget ? 'reviewed-money' : null,
+            shortcuts: [], review_token: body.budget ? 'reviewed-money' : null, budget_usd: body.budget?.amount_usd ?? null,
           })),
         } },
       ],
     });
-    await screen.findByRole('heading', { name: 'Bot binding' });
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'reviewed-retry' } });
+    await screen.findByRole('heading', { name: 'What' });
     await fixture.whenStable();
     fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
-    await screen.findByText(/Reviewed budget:/);
+    await screen.findByText(/would be set aside for this bot/);
     directory.rebind({ observed_at_ms: 2, clerks: [{ ...lane, effective_binding_generation: 4, routing_epoch: 8 }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Deploy paper bot/ }));
     await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
     const desk = TestBed.inject(AlpacaDeskAccountDataService);
     await vi.waitFor(() => expect(desk.target()?.bindingGeneration).toBe(4));
     expect(desk.fence()).toEqual({ bindingGeneration: 3, routingEpoch: 7 });
     expect(preview.mock.calls[0][0].bindingGeneration).toBe(3);
-    expect((await screen.findByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await screen.findByRole('button', { name: /^Deploy paper bot/ }) as HTMLButtonElement).disabled).toBe(true);
     const review = await screen.findByRole('button', { name: 'Review refreshed account' });
     await vi.waitFor(() => expect((review as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(review);
     fixture.detectChanges();
     await fixture.whenStable();
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'reviewed-retry' } });
-    await fixture.whenStable();
-    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
-    await screen.findByText(/Reviewed budget:/);
-    const deploy = screen.getByRole('button', { name: 'Deploy paper bot' });
+    await screen.findByText(/would be set aside for this bot/);
+    const deploy = screen.getByRole('button', { name: /^Deploy paper bot/ });
     await vi.waitFor(() => expect((deploy as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(deploy);
     await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
@@ -196,7 +193,7 @@ describe('AlpacaDeployTabComponent', () => {
   it('hosts the deploy workflow inline when the lane declares deploy capability and the account is confirmed', async () => {
     await renderDeployTab();
 
-    expect(await screen.findByRole('heading', { name: 'Bot binding' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'What' })).toBeTruthy();
   });
 
   it('explains in place when this clerk has no resolved lane', async () => {

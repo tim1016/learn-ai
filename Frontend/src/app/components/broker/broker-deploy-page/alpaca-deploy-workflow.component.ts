@@ -3,6 +3,8 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  Injector,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -10,6 +12,7 @@ import {
   resource,
   signal,
   untracked,
+  viewChild,
 } from '@angular/core';
 import {
   FormField,
@@ -21,15 +24,18 @@ import {
   validate,
 } from '@angular/forms/signals';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import {
   BrokerV2PanelService,
-  type DeployBotBody,
+  type BotDeployPrefill,
   type BudgetDeployReceipt,
+  type DeployBotBody,
   type DeployBotStrategy,
   type DeployBotView,
   type DeployExecutionMode,
+  type DeploySubmissionBody,
+  type DeploymentBudgetInput,
   type DeployStrategyParamsSchema,
   type QualifiedDeployConfiguration,
   type RunAdmissionDecision,
@@ -41,27 +47,52 @@ import {
   fencedTarget,
   type LaneFence,
 } from '../../../fleet/lane-fence';
-import { DeployBudgetReviewComponent, budgetReviewContext, type ReviewedDeploymentBudget } from './deploy-budget-review.component';
+import {
+  DEPLOY_AGAIN_QUERY_PARAM,
+  accountWorkspaceBotRoute,
+  accountWorkspaceTabRoute,
+  type AccountWorkspaceLink,
+} from '../../../fleet/account-workspace';
+import { extractServerMessage } from '../operation-error';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
+import {
+  DeployConfirmStepComponent,
+  type DeployBlocker,
+  type DeployError,
+} from './deploy-confirm-step.component';
+import {
+  DeployDraftStore,
+  EMPTY_DEPLOY_SETTINGS,
+  canonicalJson,
+  freshDeployDraft,
+  type DeployDraft,
+  type DeployStepEditing,
+  type DeployTicketSettings,
+} from './deploy-draft.store';
 import {
   DeployExecutionSectionComponent,
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
-import {
-  DeployAdmissionColumnComponent,
-  type DeployError,
-} from './deploy-admission-column.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
+import { DeployMoneyStepComponent, budgetReviewContext, type MoneyReview } from './deploy-money-step.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
+import { DeployStepComponent } from './deploy-step.component';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 
+/** A bot id as the backend's path-safe validator admits it (Deploy again's `?from=`). */
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** A submission key as the backend admits it (`?submission=`). */
+const SUBMISSION_KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
+
+/** The recovery hint a Deploy writes before it is sent, so a reload can read
+ * what that submission recorded instead of starting a second bot. */
+const SUBMISSION_PARAM = 'submission';
 
 /**
  * The symbol input fires per keystroke. Scoping the readiness fetch to every
@@ -79,24 +110,30 @@ function sameParameterValues(
     && leftKeys.every((key) => Object.hasOwn(right, key) && Object.is(left[key], right[key]));
 }
 
-interface AlpacaDeployTicket {
-  exitAllowanceBps: number | null;
-  bandMultiple: number | null;
-  spreadCapBps: number | null;
-  instanceId: string;
-  strategyKey: DeployBotStrategy['strategy_key'] | '';
-  symbol: string;
-  sizingPreset: 'safe_canary' | 'custom';
-  quantity: number;
-  // Spelled out, not `Extract<DeployExecutionMode['mode'], ...>`: the backend
-  // enum is these four today, so `Extract` narrows nothing and quietly widens
-  // with the wire. Written as its own union, a fifth backend mode fails to
-  // compile at `setExecutionMode` instead of silently becoming settable.
-  executionMode: 'dry_run' | 'paper' | 'shadow' | 'live';
-  allowCarryover: boolean;
-  parameters: Record<string, unknown>;
+/** The form's model: the draftable settings plus the evidence-only
+ * acknowledgement, which is consent and so never kept in a draft. */
+interface AlpacaDeployTicket extends DeployTicketSettings {
   overrideAcknowledged: boolean;
   overrideReason: string;
+}
+
+function ticketOf(settings: DeployTicketSettings): AlpacaDeployTicket {
+  return { ...settings, overrideAcknowledged: false, overrideReason: '' };
+}
+
+function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
+  return {
+    exitAllowanceBps: ticket.exitAllowanceBps,
+    bandMultiple: ticket.bandMultiple,
+    spreadCapBps: ticket.spreadCapBps,
+    strategyKey: ticket.strategyKey,
+    symbol: ticket.symbol,
+    sizingPreset: ticket.sizingPreset,
+    quantity: ticket.quantity,
+    executionMode: ticket.executionMode,
+    allowCarryover: ticket.allowCarryover,
+    parameters: ticket.parameters,
+  };
 }
 
 interface ValidationScopeSeed {
@@ -125,6 +162,13 @@ function sameValidationScope(left: ValidationScopeSeed | null, right: Validation
 
 const OVERRIDE_REASON_MIN_LENGTH = 10;
 
+/** The owner-facing name of each world, as the permission and summaries word it. */
+const WORLD_LABELS: Readonly<Record<'paper' | 'shadow' | 'live', 'Paper' | 'Shadow' | 'Live'>> = {
+  paper: 'Paper',
+  shadow: 'Shadow',
+  live: 'Live',
+};
+
 interface DeploySubmissionReadiness {
   canSubmit: boolean;
   guidance: string;
@@ -137,20 +181,38 @@ interface FrozenDeployCommand {
   readonly target: ResourceTarget;
 }
 
+type DeploySubmission = DeploySubmissionBody & { budget: DeploymentBudgetInput };
+
+/**
+ * Deploy (PRD #2560 D8/D9): four steps on one page — What → How → Money →
+ * Confirm.
+ *
+ * What and How fold to one line once complete, and stay open (with Done)
+ * once the owner is working in them, so a step never folds away under the
+ * keyboard. Money renders only the backend's previewed `money_after`, and
+ * consent binds to the preview's review token and Live phrase. The backend
+ * names the bot (#2551): each Deploy carries an opaque submission key, kept
+ * with the settings it was first sent with, so a retry — a double click, a
+ * lost response, a reload — returns the same bot. The form is kept per
+ * account for the session (H9); Deploy again (`?from=<sid>`) pre-fills
+ * everything but money and consent.
+ */
 @Component({
   selector: 'app-alpaca-deploy-workflow',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    DeployAdmissionColumnComponent,
     DeployBindingStripComponent,
+    DeployConfirmStepComponent,
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
-    DeployBudgetReviewComponent,
+    DeployMoneyStepComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
-    TimestampDisplayComponent,
+    DeployStepComponent,
     FormField,
+    RouterLink,
+    SymbolPickerComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
@@ -166,13 +228,15 @@ export class AlpacaDeployWorkflowComponent {
   readonly laneReviewRequired = input(false);
 
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly drafts = inject(DeployDraftStore);
   private termsSeeded = false;
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly injector = inject(Injector);
 
-  /** Still read for the `?strategy=` deep link; the lens param is gone. */
+  /** The `?strategy=`, `?from=` and `?submission=` deep links. */
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
@@ -192,6 +256,9 @@ export class AlpacaDeployWorkflowComponent {
     () =>
       !laneFenceIsEnforceable(this.fence()),
   );
+
+  private readonly receiptPanel = viewChild(DeployLaunchReceiptComponent);
+  private readonly confirmStep = viewChild(DeployConfirmStepComponent);
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -233,12 +300,12 @@ export class AlpacaDeployWorkflowComponent {
   /**
    * The last readiness view that actually loaded, with the account AND symbol
    * it describes. Retaining it lets a failed *refresh* degrade to an explicit
-   * staleness banner over the gates the operator already has, instead of
-   * collapsing the pane — and the whole ticket with it — back to an error.
+   * staleness banner over the checks the owner already has, instead of
+   * collapsing the page — and the whole form with it — back to an error.
    *
    * The symbol is half the identity, not decoration. Without it a SPY-scoped
-   * set of gates silently backed a QQQ ticket; with it, a mismatch is a
-   * condition the pane can name and refuse to deploy on.
+   * set of checks silently backed a QQQ ticket; with it, a mismatch is a
+   * condition the page can name and refuse to deploy on.
    */
   private readonly lastLoadedView = signal<{
     accountId: string;
@@ -254,7 +321,7 @@ export class AlpacaDeployWorkflowComponent {
 
   /**
    * True when what is on screen is not current admission truth for this
-   * ticket: a refresh failed, or the gates that loaded describe a different
+   * ticket: a refresh failed, or the checks that loaded describe a different
    * symbol than the one now scoped. Either way nothing may be deployed on
    * them — a `role="alert"` staleness banner beside a live Deploy button is
    * the worst of both.
@@ -266,50 +333,57 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   /**
-   * The operator-facing half of the above: the sentence that names what is on
-   * screen and what it is not. Silently serving stale admission truth is what
-   * makes a deployment decision unsafe.
+   * The owner-facing half of the above: the sentence that names what is on
+   * screen and what it is not. Silently serving stale checks is what makes a
+   * deployment decision unsafe.
    */
   protected readonly stalenessNotice = computed<string | null>(() => {
     const retained = this.lastLoadedView();
     if (retained === null || this.currentView() === null) return null;
     if (!this.admissionIsStale()) return null;
     // A refresh still in flight is refreshing, not stale. Raising an alert
-    // for every settled keystroke would teach the operator to ignore it;
+    // for every settled keystroke would teach the owner to ignore it;
     // `admissionIsStale` still refuses the deploy meanwhile.
     if (this.deployView.isLoading()) return null;
     const shown = retained.symbol ?? 'this account';
     const wanted = this.scopedSymbol() ?? 'this account';
     return wanted === shown
-      ? `Deployment readiness for ${shown} could not be refreshed. ` +
-        'The gates below are the last that loaded.'
-      : `Deployment readiness for ${wanted} could not be refreshed. ` +
-        `The gates below describe ${shown}.`;
+      ? `Deploy checks for ${shown} could not be refreshed. ` +
+        'The checks shown are the last that loaded.'
+      : `Deploy checks for ${wanted} could not be refreshed. ` +
+        `The checks shown describe ${shown}.`;
   });
 
-  protected readonly ticket = signal<AlpacaDeployTicket>({
-    exitAllowanceBps: null, bandMultiple: null, spreadCapBps: null,
-    instanceId: '',
-    strategyKey: '',
-    symbol: '',
-    sizingPreset: 'safe_canary',
-    quantity: 1,
-    executionMode: 'paper',
-    allowCarryover: false,
-    parameters: {},
-    overrideAcknowledged: false,
-    overrideReason: '',
-  });
+  protected readonly ticket = signal<AlpacaDeployTicket>(ticketOf(EMPTY_DEPLOY_SETTINGS));
+  /** The owner's typed dollar amount (Money). Kept in the draft; its review
+   * and any typed consent never are. */
+  protected readonly amount = signal('');
+  /** The opaque idempotency input of the next Deploy (#2551). */
+  private readonly submissionKey = signal<string>(crypto.randomUUID());
+  /** The settings `submissionKey` was first sent with; a Deploy with any
+   * other settings mints a new key rather than reuse one the backend would
+   * refuse as a conflict. */
+  private readonly submittedContent = signal<string | null>(null);
+  protected readonly editing = signal<DeployStepEditing>({ what: false, how: false });
+  /** Deploy again's display-only lineage: the bot this one follows. */
+  protected readonly replaces = signal<string | null>(null);
+  /** The Money step's accepted review for the amount on screen. */
+  protected readonly moneyReview = signal<MoneyReview | null>(null);
+  /** Live's typed phrase. Never kept: a new review clears it. */
+  protected readonly liveConsent = signal('');
 
   private readonly overrideReasonTouched = signal(false);
   private lastValidationScope: ValidationScopeSeed | null = null;
   private lastRequestedStrategyKey: string | null = null;
 
+  /** One draft per account, whatever the lane's routing epoch. */
+  private readonly draftKey = computed(() => {
+    const target = this.target();
+    return [target.broker, target.clerkId, this.accountId().trim().toLowerCase()].join('\u0000');
+  });
+  private restoredDraftKey: string | null = null;
+
   protected readonly ticketForm = form(this.ticket, (ticket) => {
-    required(ticket.instanceId, { message: 'Enter a deployment name.' });
-    pattern(ticket.instanceId, INSTANCE_ID_RE, {
-      message: 'Use letters, numbers, periods, underscores, or hyphens.',
-    });
     required(ticket.exitAllowanceBps);
     min(ticket.exitAllowanceBps, 0);
     max(ticket.exitAllowanceBps, 9999.999);
@@ -373,21 +447,19 @@ export class AlpacaDeployWorkflowComponent {
     return 'paper';
   });
 
-  /** The account's one broker world, as the access-grant copy words it. */
-  protected readonly brokerModeLabel = computed<'Paper' | 'Shadow' | 'Live'>(() => {
-    const mode = this.brokerMode();
-    return mode === 'live' ? 'Live' : mode === 'shadow' ? 'Shadow' : 'Paper';
-  });
+  /** The account's one broker world, as the permission copy words it. */
+  protected readonly brokerModeLabel = computed(() => WORLD_LABELS[this.brokerMode()]);
 
   /**
    * True when the ticket's mode contacts the broker. Dry Run is the only
    * mode that holds no custody, so Paper, Shadow and Live share every gate
    * the backend applies to a broker deploy (`_require_broker_deploy_request`),
-   * the evidence-only override included.
+   * the evidence-only override included. False until a world is chosen.
    */
-  protected readonly brokerModeSelected = computed(
-    () => this.ticket().executionMode !== 'dry_run',
-  );
+  protected readonly brokerModeSelected = computed(() => {
+    const mode = this.ticket().executionMode;
+    return mode !== null && mode !== 'dry_run';
+  });
 
   /** A Golden review authorizes one exact broker configuration, not a strategy family. */
   protected readonly goldenScopeMatchesTicket = computed(() => {
@@ -396,6 +468,13 @@ export class AlpacaDeployWorkflowComponent {
     const ticket = this.ticket();
     return ticket.symbol.trim().toUpperCase() === strategy.validation_case_symbol
       && sameParameterValues(ticket.parameters, strategy.validation_case_parameters);
+  });
+
+  /** Other settings are typed only where they may trade: in Dry Run, or for
+   * a strategy whose review is not scoped to one Golden configuration. */
+  protected readonly parametersEditable = computed(() => {
+    const strategy = this.selectedStrategy();
+    return strategy === null || !strategy.golden_validation_scope || this.ticket().executionMode === 'dry_run';
   });
 
   // A broker deploy of an evidence-only strategy carries the durable human
@@ -413,20 +492,6 @@ export class AlpacaDeployWorkflowComponent {
     return this.ticket().overrideReason.trim().length >= OVERRIDE_REASON_MIN_LENGTH
       ? null
       : 'Give at least 10 characters explaining why this risk is accepted.';
-  });
-
-  // The behavioral verdict renders in every mode. The backend's
-  // `admissible_modes` is the sole authority on whether a mode is reachable;
-  // the frontend never re-derives that from `evidence_status`.
-  protected readonly evidenceSummaryLabel = computed(() => {
-    switch (this.selectedStrategy()?.evidence_status) {
-      case 'evidence_only':
-        return 'Evidence only';
-      case 'blocked':
-        return 'Blocked';
-      default:
-        return 'Accepted';
-    }
   });
 
   // Backend-authored reason this account's own broker option — Paper, Shadow
@@ -450,22 +515,6 @@ export class AlpacaDeployWorkflowComponent {
     return strategy.blocked_explanation ?? null;
   });
 
-  /**
-   * The admission column's own headline. It replaces the separate eligibility
-   * banner the lens split needed: with the gates always on screen there is one
-   * place that says whether launch is admitted and how many gates back that up.
-   */
-  protected readonly readinessSummary = computed(() => {
-    const view = this.currentView();
-    if (view === null) return null;
-    const checks = view.readiness_checks;
-    const ready = checks.filter((check) => check.ready).length;
-    return {
-      label: this.canSubmit() ? 'Ready' : 'Blocked',
-      counts: `${ready} of ${checks.length}`,
-    };
-  });
-
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
     return view?.execution_modes.find(
@@ -473,23 +522,100 @@ export class AlpacaDeployWorkflowComponent {
     ) ?? null;
   });
 
-  protected readonly executionLabel = computed(() =>
-    this.selectedExecutionMode()?.label ?? 'Broker-authored',
-  );
-
-  protected readonly effectiveQuantity = computed(() =>
-    this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity,
-  );
-
   protected readonly quantityLabel = computed(() => {
-    const quantity = this.effectiveQuantity();
+    const quantity = this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity;
     return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
   });
+
+  protected readonly tradesSummary = computed(() => `${this.ticket().symbol || 'No symbol yet'} · ${this.quantityLabel()}`);
+
+  protected readonly exitsSummary = computed(() => {
+    const terms = this.exitTerms();
+    return terms === null
+      ? 'Exit terms not set'
+      : `Exit allowance ${terms.exit_allowance_bps} bps, band ${terms.band_multiple}×, spread cap ${terms.spread_cap_bps} bps · fixed for this bot’s life`;
+  });
+
+  // ── Steps ─────────────────────────────────────────────────────────────────
+
+  /** What: a strategy, a valid symbol and parseable settings. */
+  protected readonly whatComplete = computed(() =>
+    this.selectedStrategy() !== null
+      && !this.ticketForm.symbol().invalid()
+      && this.invalidParameterFields().size === 0,
+  );
+
+  /** How: an offered world this strategy admits, a size and exit terms. */
+  protected readonly howComplete = computed(() => {
+    const mode = this.ticket().executionMode;
+    const strategy = this.selectedStrategy();
+    return mode !== null
+      && strategy !== null
+      && strategy.admissible_modes.includes(mode)
+      && this.selectedExecutionMode()?.availability === 'available'
+      && !(this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid())
+      && this.exitTerms() !== null;
+  });
+
+  protected readonly whatOpen = computed(() => this.editing().what || !this.whatComplete());
+  protected readonly howOpen = computed(() => this.editing().how || !this.howComplete());
+
+  protected readonly permissionSummary = computed(() => {
+    const state = this.selectedStrategy()?.paper_access_state;
+    const world = this.brokerModeLabel();
+    if (state === 'enabled') return `Allowed on this ${world} account`;
+    if (state === 'available') return `Not yet allowed on ${world}`;
+    return null;
+  });
+
+  protected readonly whatSummary = computed(() => {
+    const strategy = this.selectedStrategy();
+    if (strategy === null) return '';
+    const permission = this.permissionSummary();
+    const trade = `${strategy.label} on ${this.ticket().symbol}`;
+    return permission === null ? trade : `${trade} · ${permission}`;
+  });
+
+  protected readonly howSummary = computed(() => {
+    const mode = this.selectedExecutionMode()?.label ?? 'Where it trades is not chosen';
+    return `${mode} · ${this.quantityLabel()} · ${this.exitsSummary()}`;
+  });
+
+  // ── Deploy again ──────────────────────────────────────────────────────────
+
+  protected readonly deployAgainSid = computed(() => {
+    const sid = this.queryParams().get(DEPLOY_AGAIN_QUERY_PARAM);
+    return sid !== null && INSTANCE_ID_RE.test(sid) ? sid : null;
+  });
+
+  /** Deploy again: the earlier bot's sealed settings, never its money or consent. */
+  protected readonly prefill = resource({
+    params: () => {
+      const sid = this.deployAgainSid();
+      return sid === null ? undefined : { sid, accountId: this.accountId().trim() };
+    },
+    loader: ({ params }) => this.panelService.getDeployPrefill(this.deployTarget(params.accountId), params.sid),
+  });
+  protected readonly prefillError = computed(() => {
+    const error = this.prefill.error();
+    return error === undefined
+      ? null
+      : extractServerMessage(error, 'Nothing was pre-filled; the earlier bot’s settings could not be read.');
+  });
+  /** The earlier bot's strategy is no longer one this account offers. */
+  protected readonly prefillStrategyMissing = computed(() => {
+    const view = this.currentView();
+    if (view === null || this.replaces() === null || !this.prefill.hasValue()) return false;
+    const key = this.prefill.value().strategy_key;
+    return !view.strategies.some((strategy) => strategy.strategy_key === key);
+  });
+
+  // ── Submission ────────────────────────────────────────────────────────────
 
   protected readonly submissionReadiness = computed<DeploySubmissionReadiness>(() => {
     const view = this.currentView();
     if (!view) {
-      return { canSubmit: false, guidance: 'Loading deployment readiness…' };
+      return { canSubmit: false, guidance: 'Loading this account’s Deploy checks…' };
     }
     if (!sameAlpacaAccount(view.account_id, this.accountId()) || !sameAlpacaAccount(this.target().accountId ?? '', this.accountId())) {
       return { canSubmit: false, guidance: 'Refreshing the selected account before deployment.' };
@@ -497,120 +623,179 @@ export class AlpacaDeployWorkflowComponent {
     if (this.laneUnenforceable()) {
       return { canSubmit: false, guidance: LANE_FENCE_UNENFORCEABLE_MESSAGE };
     }
-    if (this.exitTerms() === null) {
-      return { canSubmit: false, guidance: "Set this bot’s exit allowance, band multiple and spread cap." };
-    }
     if (this.laneConflict() || this.laneReviewRequired()) {
       return {
         canSubmit: false,
         guidance: 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
     }
-    if (this.admissionIsStale()) {
-      return {
-        canSubmit: false,
-        guidance: 'Refresh deployment readiness before launch.',
-      };
+    const selectedStrategy = this.selectedStrategy();
+    if (selectedStrategy === null) {
+      return { canSubmit: false, guidance: 'Choose a strategy in What.' };
     }
-    const eligibility = this.brokerModeSelected() ? view.eligibility : (view.dry_run_eligibility ?? view.eligibility);
+    const mode = this.ticket().executionMode;
+    if (mode === null) {
+      return { canSubmit: false, guidance: 'Choose where this bot trades in How.' };
+    }
+    if (this.exitTerms() === null) {
+      return { canSubmit: false, guidance: 'Set this bot’s exit allowance, band multiple and spread cap in How.' };
+    }
+    if (this.admissionIsStale()) {
+      return { canSubmit: false, guidance: 'Refresh the Deploy checks before deploying.' };
+    }
+    const eligibility = this.brokerModeSelected() ? view.eligibility : view.dry_run_eligibility;
     if (!eligibility.eligible) {
       return {
         canSubmit: false,
-        guidance: eligibility.next_action || 'Resolve the current blocker before launch.',
+        guidance: eligibility.next_action || 'Resolve the failing check before deploying.',
       };
     }
     if (this.submitting()) {
       return { canSubmit: false, guidance: 'Deployment is in progress.' };
     }
     if (this.admissionDecision()?.allowed === false) {
-      return { canSubmit: false, guidance: this.admissionDecision()?.next_step ?? this.submitError()?.message ?? 'Refresh deployment readiness before launch.' };
-    }
-    if (this.ticketForm.instanceId().invalid()) {
-      return { canSubmit: false, guidance: 'Fix the bot name before deployment.' };
-    }
-    const selectedStrategy = this.selectedStrategy();
-    if (selectedStrategy === null) {
-      return { canSubmit: false, guidance: 'Choose a deployment strategy.' };
+      return { canSubmit: false, guidance: this.admissionDecision()?.next_step ?? this.submitError()?.message ?? 'Refresh the Deploy checks before deploying.' };
     }
     // Mode-aware, not strategy-wide (#1702): a blocked strategy is still
     // Dry-Run-admissible, so admissibility is checked against the ticket's
     // chosen mode, not `selectable` — which means admissible in this
     // account's one broker world, Paper or Shadow.
-    if (!selectedStrategy.admissible_modes.includes(this.ticket().executionMode)) {
-      const reason = this.ticket().executionMode === 'dry_run'
+    if (!selectedStrategy.admissible_modes.includes(mode)) {
+      const reason = mode === 'dry_run'
         ? this.dryRunUnavailableReason()
         : this.brokerModeUnavailableReason();
       return {
         canSubmit: false,
-        guidance: reason ?? 'This strategy is not admissible for the selected mode.',
+        guidance: reason ?? 'This strategy cannot trade in the selected world.',
       };
     }
     if (this.selectedExecutionMode()?.availability !== 'available') {
-      return { canSubmit: false, guidance: 'Choose an available execution mode.' };
+      return { canSubmit: false, guidance: 'Choose an available world in How.' };
     }
     if (this.ticketForm.symbol().invalid()) {
-      return { canSubmit: false, guidance: 'Fix the trading symbol before deployment.' };
+      return { canSubmit: false, guidance: 'Fix the trading symbol in What.' };
     }
     if (this.brokerModeSelected() && !this.goldenScopeMatchesTicket()) {
       return {
         canSubmit: false,
-        guidance: 'Broker deployment is limited to the selected Golden Validation symbol and parameters.',
+        guidance: `${this.brokerModeLabel()} trades only this strategy’s qualified symbol and settings. `
+          + 'Use the qualified settings in What, or try others in Dry Run.',
       };
     }
     if (this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) {
-      return { canSubmit: false, guidance: 'Fix the position size before deployment.' };
+      return { canSubmit: false, guidance: 'Fix the position size in How.' };
     }
     if (this.invalidParameterFields().size > 0) {
-      return { canSubmit: false, guidance: 'Fix the highlighted strategy parameter before deployment.' };
+      return { canSubmit: false, guidance: 'Fix the highlighted strategy setting in What.' };
     }
     if (this.overrideRequired()) {
       if (!this.ticket().overrideAcknowledged) {
         return {
           canSubmit: false,
-          guidance: 'Acknowledge the evidence-only deployment risk before launch.',
+          guidance: 'Acknowledge the evidence-only deployment risk before deploying.',
         };
       }
       if (this.ticket().overrideReason.trim().length < OVERRIDE_REASON_MIN_LENGTH) {
         return {
           canSubmit: false,
-          guidance: 'Record the operator reason for the evidence-only override.',
+          guidance: 'Record why this evidence-only strategy is being deployed.',
         };
       }
     }
     if (!this.ticketForm().valid()) {
-      return { canSubmit: false, guidance: 'Complete the highlighted deployment fields.' };
+      return { canSubmit: false, guidance: 'Complete the highlighted Deploy fields.' };
     }
     return { canSubmit: true, guidance: 'Ready to deploy this bot.' };
   });
 
-  protected readonly budgetTarget = computed(() => this.deployTarget(this.accountId().trim()));
-  protected readonly budgetConsent = signal<ReviewedDeploymentBudget | null>(null);
+  /** Checks that fail for the chosen world, each with its fix — shown only
+   * when one fails. Dry Run makes no broker contact, so its one verdict is
+   * the Dry Run eligibility, never the broker checks. */
+  protected readonly blockers = computed<readonly DeployBlocker[]>(() => {
+    const view = this.currentView();
+    const mode = this.ticket().executionMode;
+    if (view === null || mode === null) return [];
+    if (mode === 'dry_run') {
+      const eligibility = view.dry_run_eligibility;
+      return eligibility.eligible
+        ? []
+        : [{ id: eligibility.reason_code, label: eligibility.headline, headline: eligibility.explanation, fix: eligibility.next_action }];
+    }
+    return view.readiness_checks
+      .filter((check) => !check.ready)
+      .map((check) => ({ id: check.gate_id, label: check.label, headline: check.headline, fix: check.recovery }));
+  });
+
+  protected readonly budgetTarget = computed(() => this.deployTarget(this.accountId().trim()), {
+    equal: (left, right) => canonicalJson(left) === canonicalJson(right),
+  });
+  /** The settings the Money step previews. Compared by content, so an edit
+   * that changes nothing a preview judges (an override reason) does not
+   * re-preview the money. */
   protected readonly budgetBody = computed<DeployBotBody | null>(() => {
     const strategy = this.selectedStrategy();
-    if (strategy === null || this.exitTerms() === null || this.ticketForm.instanceId().invalid()
+    const mode = this.ticket().executionMode;
+    if (strategy === null || mode === null || this.exitTerms() === null
       || this.ticketForm.symbol().invalid() || this.ticketForm.quantity().invalid() || this.invalidParameterFields().size > 0) return null;
-    return this.deployBody(this.ticket(), strategy);
-  });
-  private readonly validBudget = computed(() => {
-    const consent = this.budgetConsent();
+    return this.deployBody(this.ticket(), strategy, mode);
+  }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
+
+  /** The Money step's review, while it still describes these exact settings. */
+  protected readonly currentMoneyReview = computed(() => {
+    const review = this.moneyReview();
     const body = this.budgetBody();
-    return consent && body && consent.context === budgetReviewContext(this.budgetTarget(), body)
-      ? consent.budget : null;
+    return review !== null && body !== null && review.context === budgetReviewContext(this.budgetTarget(), body)
+      ? review : null;
   });
+  private readonly reviewToken = computed(() => this.currentMoneyReview()?.preview.review_token ?? null);
+
+  private readonly validBudget = computed<DeploymentBudgetInput | null>(() => {
+    const review = this.currentMoneyReview();
+    if (review === null || !review.preview.review_token) return null;
+    const phrase = review.preview.confirmation_text ?? null;
+    if (phrase !== null && this.liveConsent() !== phrase) return null;
+    return {
+      amount_usd: review.amount,
+      risk_revision: review.preview.risk_revision ?? 0,
+      review_token: review.preview.review_token,
+      live_confirmation: phrase === null ? null : this.liveConsent(),
+    };
+  });
+
   protected readonly canSubmit = computed(() => this.submissionReadiness().canSubmit && this.validBudget() !== null);
-  protected readonly submitGuidance = computed(() => this.submissionReadiness().canSubmit && this.validBudget() === null
-    ? 'Review a dollar budget and complete any Live confirmation before deploying.' : this.submissionReadiness().guidance);
+  protected readonly submitGuidance = computed(() => {
+    const readiness = this.submissionReadiness();
+    if (!readiness.canSubmit) return readiness.guidance;
+    const review = this.currentMoneyReview();
+    if (review === null) return 'Choose a dollar budget in Money. It is previewed before you can deploy.';
+    const phrase = review.preview.confirmation_text ?? null;
+    if (phrase !== null && this.liveConsent() !== phrase) return 'Type the phrase above exactly to confirm this real-money Deploy.';
+    return readiness.guidance;
+  });
+
   protected readonly hasFrozenCommand = computed(() => this.frozenCommand() !== null);
-  protected readonly recoverySid = computed(() => {
-    const sid = this.queryParams().get('deployment');
-    return sid && INSTANCE_ID_RE.test(sid) ? sid : null;
+
+  // ── Recovery and receipt ──────────────────────────────────────────────────
+
+  /** A submission this page did not just send — a reload, or a return after
+   * the form moved on — whose recorded outcome is read, never re-sent. */
+  protected readonly recoveryKey = computed(() => {
+    const key = this.queryParams().get(SUBMISSION_PARAM);
+    return key !== null && SUBMISSION_KEY_RE.test(key) && key !== this.submissionKey() ? key : null;
   });
   protected readonly recoveredCommand = resource({
     params: () => {
-      const sid = this.recoverySid();
-      return sid && INSTANCE_ID_RE.test(sid) ? { sid, target: this.deployTarget(this.accountId()) } : undefined;
+      const key = this.recoveryKey();
+      return key === null ? undefined : { key, accountId: this.accountId().trim() };
     },
-    loader: ({ params }) => this.panelService.getDeployCommand(params.target, params.sid),
+    loader: ({ params }) => this.panelService.getDeploySubmission(this.deployTarget(params.accountId), params.key),
+  });
+  /** The recovery read found no committed Deploy for the key. */
+  protected readonly recoveryNotCommitted = computed(() => {
+    const error = this.recoveredCommand.error();
+    return error instanceof HttpErrorResponse && error.status === 404
+      ? extractServerMessage(error, 'No Deploy was committed for this submission. Nothing was set aside and nothing started.')
+      : null;
   });
   protected readonly shownReceipt = computed(() => {
     const own = this.receipt();
@@ -618,13 +803,36 @@ export class AlpacaDeployWorkflowComponent {
     const receipt = own?.status === 'pending' && recovered?.command_id === own.command_id ? recovered : (own ?? recovered);
     return receipt && sameAlpacaAccount(receipt.account_id, this.accountId()) ? receipt : null;
   });
+  protected readonly receiptBotLink = computed<AccountWorkspaceLink | null>(() => {
+    const receipt = this.shownReceipt();
+    if (receipt === null) return null;
+    const target = this.target();
+    return accountWorkspaceBotRoute(
+      { broker: target.broker, clerkId: target.clerkId, accountId: this.accountId() },
+      receipt.strategy_instance_id,
+      'bots',
+    );
+  });
+
+  /** Where this account's defaults for new bots are set (H3). */
+  protected readonly settingsRoute = computed(() => {
+    const target = this.target();
+    return accountWorkspaceTabRoute({ broker: target.broker, clerkId: target.clerkId, accountId: this.accountId() }, 'configuration');
+  });
 
   protected async newDeployment(): Promise<void> {
+    // The recovery hint leaves the URL first, so the form returns without a
+    // recovery read flashing in between.
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [SUBMISSION_PARAM]: null, [DEPLOY_AGAIN_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
     this.receipt.set(null);
     this.frozenCommand.set(null);
-    this.budgetConsent.set(null);
-    this.ticket.update(ticket => ({ ...ticket, instanceId: '' }));
-    await this.router.navigate([], { relativeTo: this.route, queryParams: { deployment: null }, queryParamsHandling: 'merge', replaceUrl: true });
+    this.moneyReview.set(null);
+    this.liveConsent.set('');
   }
 
   constructor() {
@@ -632,32 +840,45 @@ export class AlpacaDeployWorkflowComponent {
       if (this.symbolScopeTimer !== null) clearTimeout(this.symbolScopeTimer);
     });
 
+    // The draft: restored when the page opens on an account, and kept on
+    // every change after (H9). Created first so a restore lands before any
+    // other effect reads the form.
+    effect(() => {
+      const key = this.draftKey();
+      const draft: DeployDraft = {
+        settings: settingsOf(this.ticket()),
+        amount: this.amount(),
+        submissionKey: this.submissionKey(),
+        submittedContent: this.submittedContent(),
+        editing: this.editing(),
+        replaces: this.replaces(),
+      };
+      if (key !== this.restoredDraftKey) {
+        this.restoredDraftKey = key;
+        untracked(() => this.restoreDraft(this.drafts.read(key) ?? freshDeployDraft()));
+        return;
+      }
+      this.drafts.write(key, draft);
+    });
+
     effect(() => {
       const view = this.currentView();
       if (view && !this.termsSeeded) {
-        this.termsSeeded = true;
         const terms = view.default_exit_terms;
-        if (terms) this.ticket.update(ticket => ({ ...ticket, exitAllowanceBps: terms.exit_allowance_bps,
-          bandMultiple: terms.band_multiple, spreadCapBps: terms.spread_cap_bps }));
-      }
-      // The ticket opens on 'paper' because most accounts are paper; the
-      // loaded view is what says which broker world this account actually
-      // has. Seeding here rather than at construction keeps the default a
-      // consequence of the view, and stays idempotent: once the mode is one
-      // the view offers, the guard below makes every later pass a no-op.
-      // `brokerMode()` answers 'paper' whenever no view is loaded, so a
-      // 'shadow' or 'live' answer already implies one.
-      const mode = this.brokerMode();
-      if (mode !== 'paper') {
-        this.ticket.update((ticket) =>
-          ticket.executionMode === 'paper' ? { ...ticket, executionMode: mode } : ticket,
-        );
+        // Pre-filled from this account's defaults for new bots (H3). A view
+        // with no defaults leaves the terms to the owner, and the next view
+        // that has them may still seed.
+        if (terms) {
+          this.termsSeeded = true;
+          this.ticket.update(ticket => ({ ...ticket, exitAllowanceBps: terms.exit_allowance_bps,
+            bandMultiple: terms.band_multiple, spreadCapBps: terms.spread_cap_bps }));
+        }
       }
       const current = untracked(this.ticket);
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
       // Route reuse keeps this component alive while its query parameters
-      // change. A newly supplied strategy deep link is explicit operator
-      // intent and must outrank the ticket's prior selection once; later
+      // change. A newly supplied strategy deep link is explicit owner intent
+      // and must outrank the ticket's prior selection once; later
       // symbol-scoped catalog refreshes keep the current ticket strategy
       // ahead of the unchanged link.
       const requestedSelectionChanged = requestedKey !== null && requestedKey !== this.lastRequestedStrategyKey;
@@ -682,7 +903,7 @@ export class AlpacaDeployWorkflowComponent {
       const strategyChanged = strategyKey !== current.strategyKey;
       if (strategyChanged) {
         // Route-driven selection is semantically the same strategy switch as
-        // the binding-strip control: a prior strategy's admission result and
+        // the strategy control: a prior strategy's admission result and
         // evidence-only acknowledgement must never carry into the new one.
         this.clearAdmission();
         this.overrideReasonTouched.set(false);
@@ -704,6 +925,52 @@ export class AlpacaDeployWorkflowComponent {
       if (symbol !== current.symbol) this.applySymbol(symbol);
     });
 
+    // No world is chosen for the owner (H17) — except this lane's own Paper
+    // or Shadow, which never spends real money. Live is always the owner's
+    // own click.
+    effect(() => {
+      const view = this.currentView();
+      const strategy = this.selectedStrategy();
+      const lane = this.brokerMode();
+      if (view === null || strategy === null || lane === 'live') return;
+      const offered = view.execution_modes.some((mode) => mode.mode === lane && mode.availability === 'available');
+      if (!offered || !strategy.admissible_modes.includes(lane)) return;
+      untracked(() => this.ticket.update((ticket) =>
+        ticket.executionMode === null ? { ...ticket, executionMode: lane } : ticket,
+      ));
+    });
+
+    // A step the owner is working in stays open until they press Done: a
+    // step that folded the moment it became complete would take the control
+    // they were using away from under the keyboard.
+    effect(() => {
+      if (this.currentView() === null || this.selectedStrategy() === null) return;
+      const what = !this.whatComplete();
+      const how = !this.howComplete();
+      untracked(() => this.editing.update((editing) =>
+        (what && !editing.what) || (how && !editing.how)
+          ? { what: editing.what || what, how: editing.how || how }
+          : editing,
+      ));
+    });
+
+    // Deploy again pre-fills once per earlier bot; a draft that already came
+    // from it keeps the owner's edits.
+    effect(() => {
+      if (!this.prefill.hasValue()) return;
+      const prefill = this.prefill.value();
+      untracked(() => {
+        if (this.replaces() !== prefill.source_strategy_instance_id) this.applyPrefill(prefill);
+      });
+    });
+
+    // Live's typed phrase proves one review: a new amount, new settings or a
+    // new review clears it (PRD #2560 story 60).
+    effect(() => {
+      this.reviewToken();
+      untracked(() => this.liveConsent.set(''));
+    });
+
     effect(() => this.syncFrozenCommandDrift());
     effect(() => {
       this.fence();
@@ -713,6 +980,73 @@ export class AlpacaDeployWorkflowComponent {
         this.laneConflict.set(false);
         this.submitError.set(null);
       });
+    });
+  }
+
+  private restoreDraft(draft: DeployDraft): void {
+    this.ticket.set(ticketOf(draft.settings));
+    this.amount.set(draft.amount);
+    this.submissionKey.set(draft.submissionKey);
+    this.submittedContent.set(draft.submittedContent);
+    this.editing.set(draft.editing);
+    this.replaces.set(draft.replaces);
+    this.moneyReview.set(null);
+    this.liveConsent.set('');
+    this.overrideReasonTouched.set(false);
+    this.termsSeeded = draft.settings.exitAllowanceBps !== null;
+    this.lastValidationScope = null;
+    if (draft.settings.symbol) this.scheduleSymbolScope(draft.settings.symbol);
+  }
+
+  /** Deploy again: a fresh draft from the earlier bot's sealed settings. Its
+   * money and consent are never copied, and it gets its own submission key. */
+  private applyPrefill(prefill: BotDeployPrefill): void {
+    const current = this.ticket();
+    const terms = prefill.exit_terms ?? null;
+    this.receipt.set(null);
+    this.frozenCommand.set(null);
+    this.clearAdmission();
+    this.submitError.set(null);
+    this.restoreDraft({
+      ...freshDeployDraft(),
+      settings: {
+        ...EMPTY_DEPLOY_SETTINGS,
+        strategyKey: prefill.strategy_key,
+        symbol: prefill.symbol.trim().toUpperCase(),
+        sizingPreset: prefill.sizing.preset ?? 'safe_canary',
+        quantity: prefill.sizing.quantity ?? 1,
+        parameters: { ...prefill.parameters },
+        // Terms the earlier bot never recorded in full start from this
+        // account's defaults for new bots.
+        exitAllowanceBps: terms?.exit_allowance_bps ?? current.exitAllowanceBps,
+        bandMultiple: terms?.band_multiple ?? current.bandMultiple,
+        spreadCapBps: terms?.spread_cap_bps ?? current.spreadCapBps,
+      },
+      replaces: prefill.source_strategy_instance_id,
+    });
+  }
+
+  /** Clear: back to a fresh form on this account's default strategy, and
+   * the earlier bot is no longer named. */
+  protected async clearPrefill(): Promise<void> {
+    const current = this.ticket();
+    this.restoreDraft({
+      ...freshDeployDraft(),
+      settings: {
+        ...EMPTY_DEPLOY_SETTINGS,
+        exitAllowanceBps: current.exitAllowanceBps,
+        bandMultiple: current.bandMultiple,
+        spreadCapBps: current.spreadCapBps,
+      },
+    });
+    const view = this.currentView();
+    const strategy = view?.strategies.find((candidate) => candidate.selectable) ?? view?.strategies[0];
+    if (strategy) this.setStrategyKey(strategy.strategy_key);
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [DEPLOY_AGAIN_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
     });
   }
 
@@ -752,9 +1086,12 @@ export class AlpacaDeployWorkflowComponent {
     }
   }
 
-  protected setInstanceId(value: string): void {
-    this.clearAdmission();
-    this.ticket.update((current) => ({ ...current, instanceId: value.trim() }));
+  protected editStep(step: keyof DeployStepEditing): void {
+    this.editing.update((editing) => ({ ...editing, [step]: true }));
+  }
+
+  protected foldStep(step: keyof DeployStepEditing): void {
+    this.editing.update((editing) => ({ ...editing, [step]: false }));
   }
 
   protected setStrategyKey(value: DeployBotStrategy['strategy_key']): void {
@@ -765,7 +1102,7 @@ export class AlpacaDeployWorkflowComponent {
     const previous = this.currentView()?.strategies.find(
       (candidate) => candidate.strategy_key === current.strategyKey,
     );
-    // An operator's own symbol survives a strategy switch; a symbol that was
+    // An owner's own symbol survives a strategy switch; a symbol that was
     // only the previous strategy's validation case is replaced by the new
     // strategy's.
     const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
@@ -812,7 +1149,6 @@ export class AlpacaDeployWorkflowComponent {
     if (current.symbol === configuration.symbol && sameParameterValues(current.parameters, configuration.parameters)
       && this.invalidParameterFields().size === 0) return;
     this.clearAdmission();
-    this.budgetConsent.set(null);
     this.invalidParameterFields.set(new Set());
     this.ticket.update(ticket => ({ ...ticket, symbol: configuration.symbol, parameters: { ...configuration.parameters } }));
     this.scheduleSymbolScope(configuration.symbol);
@@ -830,17 +1166,16 @@ export class AlpacaDeployWorkflowComponent {
   /**
    * The single writer of the ticket symbol, and therefore the single place
    * readiness is re-scoped. All three paths that move the symbol go through
-   * here: the view's seeding effect, a strategy switch, and the operator's
-   * own typing.
+   * here: the view's seeding effect, a strategy switch, and the owner's own
+   * pick.
    *
-   * Two of the three used to write the ticket directly. That left the pane
+   * Two of the three used to write the ticket directly. That left the page
    * showing ACCOUNT-level channel health under a populated symbol on first
-   * paint — the scoping this work exists to wire, inactive exactly when it
-   * was needed — and, after a strategy switch, symbol-A's gates under symbol
-   * B, with `canSubmit` gating on them.
+   * paint, and, after a strategy switch, symbol-A's checks under symbol B,
+   * with `canSubmit` gating on them.
    *
    * The loop this used to be feared for stays closed downstream, in
-   * `scheduleSymbolScope`: it stops as soon as the gates on screen already
+   * `scheduleSymbolScope`: it stops as soon as the checks on screen already
    * describe the symbol being applied, which is what the returning view
    * re-seeds.
    */
@@ -858,14 +1193,14 @@ export class AlpacaDeployWorkflowComponent {
       // A half-typed ticker is not a scope. Wait for a symbol the broker
       // contract would actually accept rather than round-tripping a 422.
       if (!SYMBOL_RE.test(symbol)) return;
-      // The gates that actually loaded already describe this symbol — the
+      // The checks that actually loaded already describe this symbol — the
       // condition that closes the seed loop, and the one that lets a failed
       // scope be retried (the requested scope alone cannot tell them apart).
       if (this.lastLoadedView()?.symbol === symbol) return;
       this.scopedSymbol.set(symbol);
       // A resource mid-load refuses `reload()`. Re-arm instead of dropping
-      // the newer scope on the floor: dropped, it strands the pane on gates
-      // for a symbol the operator has already left, with no way back.
+      // the newer scope on the floor: dropped, it strands the page on checks
+      // for a symbol the owner has already left, with no way back.
       if (!this.deployView.reload()) this.scheduleSymbolScope(symbol);
     }, SYMBOL_SCOPE_DEBOUNCE_MS);
   }
@@ -906,10 +1241,6 @@ export class AlpacaDeployWorkflowComponent {
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
   }
 
-  protected touchInstanceId(): void {
-    this.ticketForm.instanceId().markAsTouched();
-  }
-
   protected touchQuantity(): void {
     this.ticketForm.quantity().markAsTouched();
   }
@@ -933,32 +1264,47 @@ export class AlpacaDeployWorkflowComponent {
     this.markFormTouched();
     const view = this.currentView();
     const strategy = this.selectedStrategy();
-    if (!view || !strategy || !this.canSubmit()) return;
+    const mode = this.ticket().executionMode;
+    const budget = this.validBudget();
+    if (!view || !strategy || mode === null || budget === null || !this.canSubmit()) return;
 
     this.submitting.set(true);
     this.submitError.set(null);
     this.admissionDecision.set(null);
-    const ticket = this.ticket();
-    const budget = this.validBudget();
-    if (budget === null) { this.submitting.set(false); return; }
-    const body = { ...this.deployBody(ticket, strategy), budget };
-    const commandTarget = this.commandTargetFor(body, view.account_id);
+    const settings = { ...this.deployBody(this.ticket(), strategy, mode), budget };
+    const submission = this.submissionFor(settings, view.account_id);
+    const commandTarget = this.commandTargetFor(submission, view.account_id);
+    let refused = false;
 
     try {
-      const decision = await this.panelService.previewStartAdmission(
-        commandTarget,
-        body,
-      );
-      if (!this.submissionStillCurrent(body)) return;
+      // The Start plan judges the settings alone: no submission key, no lineage.
+      const decision = await this.panelService.previewStartAdmission(commandTarget, settings);
+      if (!this.submissionStillCurrent(settings)) return;
       this.admissionDecision.set(decision);
-      if (!decision.allowed) return;
-      // A read-only recovery hint survives refresh; the server receipt remains
-      // the authority for whether this command committed or started anything.
-      await this.router.navigate([], { relativeTo: this.route, queryParams: { deployment: body.strategy_instance_id }, queryParamsHandling: 'merge', replaceUrl: true });
-      if (!this.submissionStillCurrent(body)) return;
-      this.receipt.set(await this.panelService.deployBudgetBot(commandTarget, body));
+      if (!decision.allowed) {
+        refused = true;
+        return;
+      }
+      // A read-only recovery hint survives a reload; the server's recorded
+      // outcome for this key stays the authority on what was committed.
+      await this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { [SUBMISSION_PARAM]: submission.submission_key },
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      });
+      if (!this.submissionStillCurrent(settings)) return;
+      this.receipt.set(await this.panelService.deployBudgetBot(commandTarget, submission));
       this.frozenCommand.set(null);
+      // The next Deploy from this form is a new bot: a new key, and fresh
+      // money and consent. Its settings stay for a twin.
+      this.submissionKey.set(crypto.randomUUID());
+      this.submittedContent.set(null);
+      this.amount.set('');
+      this.replaces.set(null);
+      this.focusAfterRender(() => this.receiptPanel()?.focus());
     } catch (error) {
+      refused = true;
       const decision = this.admissionFromError(error);
       if (decision) this.admissionDecision.set(decision);
       this.submitError.set(this.toDeployError(error));
@@ -970,25 +1316,30 @@ export class AlpacaDeployWorkflowComponent {
       }
     } finally {
       this.submitting.set(false);
+      if (refused) this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
     }
+  }
+
+  private focusAfterRender(focus: () => void): void {
+    afterNextRender({ write: focus }, { injector: this.injector });
   }
 
   private deployBody(
     ticket: AlpacaDeployTicket,
     strategy: DeployBotStrategy,
+    mode: NonNullable<AlpacaDeployTicket['executionMode']>,
   ): DeployBotBody {
     const exitTerms = this.exitTerms();
     if (exitTerms === null) throw new Error("Exit terms are required before deployment.");
     const body: DeployBotBody = {
       exit_terms: exitTerms,
-      strategy_instance_id: ticket.instanceId.trim(),
       strategy_key: strategy.strategy_key,
       symbol: ticket.symbol.trim().toUpperCase(),
       sizing: {
         preset: ticket.sizingPreset,
         quantity: ticket.sizingPreset === 'safe_canary' ? 1 : ticket.quantity,
       },
-      execution_mode: ticket.executionMode,
+      execution_mode: mode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
       // `parameters` genuinely varies by strategy (unlike `params_schema`,
       // which has one uniform shape typed at the OpenAPI boundary) — the
@@ -997,12 +1348,12 @@ export class AlpacaDeployWorkflowComponent {
       // noted in strategy-lab-runner.service.ts's own `params` construction.
       parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
-    // The durable evidence-only override rides the broker request — Paper or
-    // Shadow alike, which hold the same custody (operator decision
+    // The durable evidence-only override rides the broker request — Paper,
+    // Shadow or Live alike, which hold the same custody (operator decision
     // 2026-08-24, restoring what #1702 re-pointed at Live). Only an
     // evidence-only strategy carries it — the backend rejects an override on
     // an accepted strategy as superfluous.
-    if (strategy.evidence_status === 'evidence_only' && this.brokerModeSelected()) {
+    if (strategy.evidence_status === 'evidence_only' && mode !== 'dry_run') {
       body.evidence_override = {
         acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
         reason: ticket.overrideReason.trim(),
@@ -1012,11 +1363,37 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   /**
+   * The Deploy command for these settings, under the submission key the
+   * backend dedupes on (#2551).
+   *
+   * The key is reused only for exactly the settings it was first sent with —
+   * the same content the backend's fingerprint hashes (never the review
+   * token or typed phrase, which prove the click rather than describe the
+   * bot). Other settings under the same key would be refused as a conflict,
+   * so they mint a new key: a new bot, by the owner's own changed choice.
+   */
+  private submissionFor(settings: DeployBotBody & { budget: DeploymentBudgetInput }, accountId: string): DeploySubmission {
+    const content = canonicalJson({
+      account: accountId,
+      settings: { ...settings, budget: { amount_usd: settings.budget.amount_usd, risk_revision: settings.budget.risk_revision } },
+    });
+    const prior = this.submittedContent();
+    if (prior !== null && prior !== content) this.submissionKey.set(crypto.randomUUID());
+    this.submittedContent.set(content);
+    const replaces = this.replaces();
+    return {
+      ...settings,
+      submission_key: this.submissionKey(),
+      ...(replaces === null ? {} : { replaces_strategy_instance_id: replaces }),
+    };
+  }
+
+  /**
    * Preview and apply (including an uncertain-outcome retry) are one durable
    * command. A changed ticket or route produces a different context and
    * explicitly abandons the prior key before minting another.
    */
-  private commandTargetFor(body: DeployBotBody, accountId: string): ResourceTarget {
+  private commandTargetFor(body: DeploySubmission, accountId: string): ResourceTarget {
     const lane = fencedTarget(this.target(), this.fence());
     const context = JSON.stringify({
       broker: lane.broker,
@@ -1052,27 +1429,13 @@ export class AlpacaDeployWorkflowComponent {
     );
   }
 
-  private submissionStillCurrent(submitted: DeployBotBody): boolean {
+  /** The settings and reviewed budget on screen are still the ones sent. */
+  private submissionStillCurrent(submitted: DeployBotBody & { budget: DeploymentBudgetInput }): boolean {
     const strategy = this.selectedStrategy();
-    if (!strategy) return false;
-    const current = this.deployBody(this.ticket(), strategy);
-    return JSON.stringify(this.validBudget()) === JSON.stringify(submitted.budget)
-      && JSON.stringify(current.exit_terms) === JSON.stringify(submitted.exit_terms)
-      && current.strategy_instance_id === submitted.strategy_instance_id
-      && current.strategy_key === submitted.strategy_key
-      && current.symbol === submitted.symbol
-      && current.sizing?.preset === submitted.sizing?.preset
-      && current.sizing?.quantity === submitted.sizing?.quantity
-      && current.execution_mode === submitted.execution_mode
-      && current.carryover_policy === submitted.carryover_policy
-      && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters)
-      && JSON.stringify(current.evidence_override ?? null)
-        === JSON.stringify(submitted.evidence_override ?? null);
-  }
-
-  protected instanceIdError(): string | null {
-    if (!this.ticketForm.instanceId().touched()) return null;
-    return this.ticketForm.instanceId().errors()[0]?.message ?? null;
+    const mode = this.ticket().executionMode;
+    if (!strategy || mode === null) return false;
+    return canonicalJson({ ...this.deployBody(this.ticket(), strategy, mode), budget: this.validBudget() })
+      === canonicalJson(submitted);
   }
 
   protected symbolError(): string | null {
@@ -1092,8 +1455,8 @@ export class AlpacaDeployWorkflowComponent {
     const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
     return admission ?? null;
   }
+
   private markFormTouched(): void {
-    this.ticketForm.instanceId().markAsTouched();
     this.ticketForm.strategyKey().markAsTouched();
     this.ticketForm.symbol().markAsTouched();
     this.ticketForm.quantity().markAsTouched();
@@ -1125,17 +1488,17 @@ export class AlpacaDeployWorkflowComponent {
     return {
       outcome: 'unknown',
       title: 'Outcome unknown',
-      message: 'The deployment service did not return an authored receipt.',
-      explanation: 'The request may not have reached the Alpaca paper control boundary.',
-      nextAction: 'Check data-plane connectivity, then reload current deployment readiness.',
+      message: 'No answer came back from Deploy, so whether the bot started is not known yet.',
+      explanation: 'Deploying again with the same settings returns the same bot; it never starts a second one.',
+      nextAction: 'Check your connection, then press Deploy again.',
       receiptId: null,
       recordedAtMs: null,
     };
   }
 
   private errorTitle(outcome: DeployError['outcome']): string {
-    if (outcome === 'conflict') return 'State changed before launch';
-    if (outcome === 'blocked') return 'Deployment blocked';
+    if (outcome === 'conflict') return 'The account changed before Deploy';
+    if (outcome === 'blocked') return 'Deploy refused';
     return 'Outcome unknown';
   }
 }

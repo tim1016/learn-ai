@@ -20,7 +20,7 @@ import type { DeployReadinessCheck } from '../v2-panel/lib/broker-v2-panel.servi
   styleUrl: './deploy-readiness-section.component.scss',
 })
 export class DeployReadinessSectionComponent {
-  readonly checks = input.required<DeployReadinessCheck[]>();
+  readonly checks = input.required<readonly DeployReadinessCheck[]>();
 
   /** Blocked gates open by default; ready gates stay collapsed until the operator opens them. */
   protected readonly defaultOpenGateIds = computed(() =>

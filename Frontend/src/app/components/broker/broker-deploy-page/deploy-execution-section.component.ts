@@ -2,8 +2,6 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 import { InputTextModule } from 'primeng/inputtext';
 import { TooltipModule } from 'primeng/tooltip';
 
-import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
-
 import type {
   DeployExecutionMode,
   DeploySizingOption,
@@ -23,7 +21,7 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 @Component({
   selector: 'app-deploy-execution-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [InputTextModule, TooltipModule, SymbolPickerComponent],
+  imports: [InputTextModule, TooltipModule],
   templateUrl: './deploy-execution-section.component.html',
   styleUrl: './deploy-execution-section.component.scss',
 })
@@ -44,10 +42,9 @@ export class DeployExecutionSectionComponent {
   // (#1703) — `null` unless the strategy has no registered runtime at all;
   // every other row stays Dry-Run-admissible regardless of validation state.
   readonly dryRunUnavailableReason = input<string | null>(null);
-  readonly selectedMode = input.required<DeployExecutionMode['mode']>();
-  readonly actionPlanExplanation = input.required<string>();
-  readonly symbol = input.required<string>();
-  readonly symbolError = input<string | null>(null);
+  /** `null` until the owner chooses: no world is preselected for them
+   * unless it is this lane's own Paper or Shadow (H17). */
+  readonly selectedMode = input.required<DeployExecutionMode['mode'] | null>();
   readonly sizingOptions = input.required<DeploySizingOption[]>();
   readonly sizingPreset = input.required<DeploySizingPreset>();
   readonly quantity = input.required<number>();
@@ -57,7 +54,6 @@ export class DeployExecutionSectionComponent {
   readonly carryoverExplanation = input.required<string>();
   readonly carryoverAllowed = input.required<boolean>();
 
-  readonly symbolChange = output<string>();
   readonly sizingPresetChange = output<DeploySizingPreset>();
   readonly quantityChange = output<number>();
   readonly quantityBlur = output();
@@ -90,16 +86,6 @@ export class DeployExecutionSectionComponent {
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {
     return deploySizingLabel(preset);
-  }
-
-  /**
-   * The shared picker owns symbol selection (ADR 0066): every listed symbol
-   * offered, unheld picks gated on their backfill. The parent's normalization
-   * and Signal Forms rules stay — a strategy change can still set the symbol
-   * programmatically, outside the picker.
-   */
-  protected onSymbolPicked(symbol: string): void {
-    this.symbolChange.emit(symbol);
   }
 
   protected changeExecutionMode(event: Event): void {

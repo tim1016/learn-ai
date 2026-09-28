@@ -39,18 +39,24 @@ const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>
   bots: 'Bots',
   gallery: 'Gallery',
   configuration: 'Configuration',
-  deploy: 'Deploy strategy',
+  deploy: 'Deploy a bot',
 };
 
-/** The presented tab order (ADR 0064 Decision 1). Deploy sits last, after
- * Configuration: binding a new strategy to the account, not a fact about it. */
+/** The presented tab order (ADR 0064 Decision 1). Deploy is not in the strip
+ * (PRD #2560 D3): it is the header's "Deploy a bot" button, and keeps its
+ * routed `deploy` URL, its title and its explain-in-place behaviour. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['overview', 'bots', 'gallery', 'configuration', 'deploy'] as const
+  ['overview', 'bots', 'gallery', 'configuration'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
 /** The query parameter a link to a bot's page stamps with the tab it left.
  * Written by the Gallery tiles and the roster's links, read back here. */
 export const ORIGIN_TAB_QUERY_PARAM = 'from';
+
+/** Deploy again's query parameter (PRD #2560): `deploy?from=<sid>` opens
+ * Deploy pre-filled from that bot's sealed settings, never its money or
+ * consent. */
+export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
 
 /** One tab's operator-facing name. */
 export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
@@ -224,6 +230,21 @@ export function accountWorkspaceBotRoute(
     // lets a Gallery-opened bot keep Gallery highlighted at a `…/bots/…` URL.
     commands: [...workspaceRoute(account), 'bots', sid],
     queryParams: { [ORIGIN_TAB_QUERY_PARAM]: origin },
+  };
+}
+
+/**
+ * Deploy again for one bot: the account's Deploy page, pre-filled from it.
+ * The bot's page offers this for a stopped bot (PRD #2560); Deploy reads the
+ * query and asks the backend for that bot's sealed settings.
+ */
+export function accountWorkspaceDeployAgainRoute(
+  account: BoundAccountWorkspaceAddress,
+  sid: string,
+): AccountWorkspaceLink {
+  return {
+    commands: [...workspaceRoute(account), 'deploy'],
+    queryParams: { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
   };
 }
 

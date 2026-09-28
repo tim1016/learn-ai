@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accountWorkspaceBadgeRoute,
   accountWorkspaceBotRoute,
+  accountWorkspaceDeployAgainRoute,
   accountWorkspaceEntryRoute,
   accountWorkspaceLens,
   accountWorkspaceLocation,
@@ -174,6 +175,17 @@ describe('accountWorkspaceBotRoute', () => {
 
       expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab: origin, botSid: 'sid-1' });
     }
+  });
+});
+
+describe('accountWorkspaceDeployAgainRoute', () => {
+  it('opens the account’s Deploy page pre-filled from one bot, still on the Deploy page', () => {
+    const link = accountWorkspaceDeployAgainRoute({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }, 'spy-ema-20260925-1402');
+
+    expect(link.commands).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy']);
+    expect(link.queryParams).toEqual({ from: 'spy-ema-20260925-1402' });
+    const url = `${link.commands.join('/')}?from=${link.queryParams['from']}`;
+    expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab: 'deploy' });
   });
 });
 

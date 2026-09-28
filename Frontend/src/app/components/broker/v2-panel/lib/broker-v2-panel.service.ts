@@ -73,7 +73,14 @@ function isUnroutedNotFound(error: unknown): boolean {
   return 'detail' in body && body.detail === 'Not Found';
 }
 
+/** The settings one Deploy asks for — what a preview judges and consent binds
+ * to. The bot's name is never here: the backend authors it (#2551). */
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
+/** One Deploy command: the settings plus the opaque submission key that makes
+ * a retry return the same bot, and Deploy again's display-only lineage. */
+export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission'];
+/** Deploy again: one earlier bot's sealed settings, never its money or consent. */
+export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
@@ -146,7 +153,7 @@ export class BrokerV2PanelService {
     );
   }
 
-  deployBudgetBot(target: ResourceTarget, body: DeployBotBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
+  deployBudgetBot(target: ResourceTarget, body: DeploySubmissionBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
     return firstValueFrom(this.http.post<BudgetDeployReceipt>(
       operationUrl('bot_create', target), this.commandBody(target, 'bot_action', body),
     ));
@@ -166,8 +173,17 @@ export class BrokerV2PanelService {
     return this.polls.get<AccountMoneyView>(operationUrl('account_money_read', target));
   }
 
-  getDeployCommand(target: ResourceTarget, sid: string): Promise<BudgetDeployReceipt> {
-    return firstValueFrom(this.http.get<BudgetDeployReceipt>(operationUrl('bot_deploy_command_read', { ...target, sid })));
+  /** The recovery read: what one Deploy submission recorded, by its key. A 404
+   * means nothing was committed for it — nothing set aside, nothing started. */
+  getDeploySubmission(target: ResourceTarget, submissionKey: string): Promise<BudgetDeployReceipt> {
+    return firstValueFrom(this.http.get<BudgetDeployReceipt>(
+      operationUrl('bot_deploy_submission_read', { ...target, submissionKey }),
+    ));
+  }
+
+  /** Deploy again: `sid`'s sealed strategy, symbol, size, parameters and exit terms. */
+  getDeployPrefill(target: ResourceTarget, sid: string): Promise<BotDeployPrefill> {
+    return firstValueFrom(this.http.get<BotDeployPrefill>(operationUrl('bot_deploy_prefill_read', { ...target, sid })));
   }
 
   previewStartAdmission(

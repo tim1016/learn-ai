@@ -1,134 +1,90 @@
-// Deploy workflow, laid out for the right-side drawer it now exclusively hosts:
-// a scrolling form column, an always-visible admission column, and a pinned
-// launch footer.
+// Deploy (PRD #2560 D8): four numbered steps in one scrolling column, the
+// receipt replacing them after a launch.
 
 :host {
   display: block;
   min-width: 0;
-  height: 100%;
 }
 
 .alpaca-deploy {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
   color: var(--text-primary);
   background: var(--bg-surface);
 }
 
-.deploy-form {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-}
-
-// The form branch owns the only internal scroll containers, and the receipt
-// replaces it wholesale after a launch. The drawer body is `overflow: hidden`,
-// so without its own scroll owner a tall receipt clips its trailing
-// "Open bot control" link on a short viewport.
-app-deploy-launch-receipt {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.deploy-split {
+.deploy-steps {
   display: grid;
-  flex: 1;
-  min-height: 0;
-  grid-template-columns: minmax(0, 1fr) 20rem;
-}
-
-.deploy-split__form {
-  display: grid;
-  align-content: start;
-  gap: var(--space-4);
-  min-width: 0;
-  overflow-y: auto;
-  padding: var(--space-4);
-  border-right: 1px solid var(--border);
-}
-
-// ── Launch footer ──────────────────────────────────────────────────────────
-
-.deploy-footer {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3) var(--space-5);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-light);
-  background: var(--bg-elevated);
-}
-
-.deploy-footer__summary {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-5);
+  gap: var(--space-3);
   margin: 0;
+  padding: 0;
+  list-style: none;
+}
 
-  div { min-width: 0; }
+.deploy-symbol {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 24rem;
 
-  dt {
+  em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
+}
+
+.deploy-exit-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  legend {
+    margin-bottom: var(--space-2);
     color: var(--text-subtle);
-    font-size: var(--fs-xxs);
+    font-size: var(--fs-xs);
     font-weight: var(--fw-semi);
     letter-spacing: var(--ls-caps);
     text-transform: uppercase;
   }
 
-  dd {
-    min-width: 0;
-    margin: 0.1rem 0 0;
-    overflow: hidden;
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semi);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  label { display: grid; gap: var(--space-1); font-size: var(--fs-sm); }
+  input { width: 9rem; }
+  p { flex-basis: 100%; margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); }
 }
 
-.deploy-footer__command {
-  display: grid;
-  flex: 0 0 auto;
-  gap: var(--space-1);
-  justify-items: end;
-  max-width: 22rem;
+.deploy-again,
+.deploy-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
 
-  button {
-    min-height: 2.75rem;
-    padding: 0.7rem 1.1rem;
-    border: 1px solid var(--accent);
-    border-radius: var(--radius-md);
-    background: var(--accent);
-    color: var(--text-on-accent);
-    font-size: var(--fs-base);
-    font-weight: var(--fw-semi);
-    cursor: pointer;
-
-    &:hover:not(:disabled) { background: var(--accent-hover); }
-    &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
-
-    &:disabled {
-      border-color: var(--border-strong);
-      background: var(--bg-surface);
-      color: var(--text-muted);
-      cursor: not-allowed;
-    }
-  }
-
-  small {
-    color: var(--text-secondary);
-    font-size: var(--fs-xs);
-    line-height: 1.45;
-    text-align: right;
-  }
+  h2 { flex-basis: 100%; margin: 0; font-size: var(--fs-md); }
+  p { flex: 1 1 20rem; margin: 0; color: var(--text-secondary); }
 }
+
+.deploy-again button,
+.deploy-recovery button,
+.deploy-receipt-actions button {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover { background: var(--bg-surface); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+.deploy-receipt-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 // ── Non-happy states ───────────────────────────────────────────────────────
 
@@ -149,7 +105,7 @@ app-deploy-launch-receipt {
   border-radius: var(--radius-md);
   background: var(--bg-surface);
 
-  h3 { margin: 0; font-size: var(--fs-md); }
+  h2 { margin: 0; font-size: var(--fs-md); }
   p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
 
   button {
@@ -193,22 +149,6 @@ app-deploy-launch-receipt {
   .deploy-loading span { animation: none; }
 }
 
-// The drawer narrows on small viewports: the admission column stops being a
-// column and stacks under the form, but never collapses behind a toggle.
-@media (max-width: 900px) {
-  .deploy-split { grid-template-columns: 1fr; }
-
-  .deploy-split__form {
-    overflow-y: visible;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .deploy-form { overflow-y: auto; }
-  .deploy-footer__command { max-width: none; width: 100%; justify-items: stretch; }
-  .deploy-footer__command small { text-align: left; }
-}
-
 // Stale readiness stays visible, but never quietly: the banner sits above the
 // gates it qualifies so a deployment decision is never made on silent staleness.
 .deploy-stale {
@@ -217,7 +157,6 @@ app-deploy-launch-receipt {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin: var(--space-3) var(--space-4) 0;
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--warn);
   border-radius: var(--radius-md);
@@ -240,6 +179,3 @@ app-deploy-launch-receipt {
   }
 }
 
-.deploy-footer__observed {
-  color: var(--text-muted);
-}

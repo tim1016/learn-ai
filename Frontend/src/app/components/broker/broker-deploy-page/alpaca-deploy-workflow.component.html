@@ -1,158 +1,194 @@
 <div class="alpaca-deploy">
   @if (shownReceipt(); as deployReceipt) {
-    <app-deploy-launch-receipt [receipt]="deployReceipt" />
-    @if (deployReceipt.status === 'pending') {
-      <button type="button" (click)="recoveredCommand.reload()">Check deployment status</button>
-    }
-    <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
-  } @else if (recoverySid() && !submitting() && !hasFrozenCommand()) {
-    <section role="status" aria-label="Recover deployment result">
-      <h3>Checking the recorded deployment</h3>
-      <p>A refresh never starts a second bot. The recorded result will show whether money was committed and the bot launched.</p>
-      @if (recoveredCommand.error()) { <p role="alert">The deployment result could not be read. Check again before preparing a fresh deployment.</p> }
-      <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
+    <app-deploy-launch-receipt [receipt]="deployReceipt" [botLink]="receiptBotLink()" />
+    <div class="deploy-receipt-actions">
+      @if (deployReceipt.status === 'pending') {
+        <button type="button" (click)="recoveredCommand.reload()">Check deployment status</button>
+      }
+      <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
+    </div>
+  } @else if (recoveryKey() && !submitting() && !hasFrozenCommand()) {
+    <section class="deploy-recovery" role="status" aria-labelledby="deploy-recovery-title">
+      <h2 id="deploy-recovery-title">Checking the recorded deployment</h2>
+      @if (recoveryNotCommitted(); as notCommitted) {
+        <p>{{ notCommitted }}</p>
+      } @else {
+        <p>Checking never starts a second bot. The recorded result shows whether money was set aside and the bot started.</p>
+        @if (recoveredCommand.error()) {
+          <p role="alert">The deployment result could not be read. Check again before preparing a fresh deployment.</p>
+        }
+        <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
+      }
       <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
     </section>
   } @else if (currentView(); as view) {
     @if (stalenessNotice(); as notice) {
-      <section class="deploy-stale" role="alert" aria-label="Deployment readiness is stale">
+      <section class="deploy-stale" role="alert" aria-label="Deploy checks are stale">
         <strong>{{ notice }}</strong>
         <button type="button" (click)="reload()">Retry</button>
       </section>
     }
-      <form class="deploy-form" novalidate (submit)="$event.preventDefault(); submit()">
-        <div class="deploy-split">
-          <div class="deploy-split__form">
-            <app-deploy-binding-strip
-              [strategies]="view.strategies"
-              [instanceId]="ticket().instanceId"
-              [strategyKey]="ticket().strategyKey"
-              [instanceIdError]="instanceIdError()"
-              (instanceIdChange)="setInstanceId($event)"
-              (instanceIdBlur)="touchInstanceId()"
-              (strategyKeyChange)="setStrategyKey($event)"
-            />
+    @if (replaces(); as source) {
+      <section class="deploy-again" aria-label="Deploy again">
+        <p>
+          <strong>Prefilled from <code>{{ source }}</code>.</strong>
+          Strategy, symbol, size, settings and exit terms are copied from it. Choose fresh money and confirm.
+        </p>
+        @if (prefillStrategyMissing()) {
+          <p role="alert">Its strategy is not offered on this account now. Choose one in What.</p>
+        }
+        <button type="button" aria-label="Clear the prefilled settings" (click)="clearPrefill()">Clear</button>
+      </section>
+    } @else if (prefillError(); as failure) {
+      <section class="deploy-again" role="alert" aria-label="Deploy again">
+        <p><strong>{{ failure }}</strong></p>
+        <button type="button" (click)="clearPrefill()">Start from a fresh form</button>
+      </section>
+    }
 
-            @if (selectedStrategy(); as strategy) {
-              <app-deploy-paper-access
-                [target]="deployTarget(view.account_id)"
-                [accountId]="view.account_id"
-                [strategy]="strategy"
-                [modeLabel]="brokerModeLabel()"
-                (accessChanged)="paperAccessChanged()"
-              />
-
-              @if (brokerModeSelected()) {
-                <app-deploy-evidence-override
-                  [strategy]="strategy"
-                  [acknowledged]="ticket().overrideAcknowledged"
-                  [reason]="ticket().overrideReason"
-                  [reasonError]="overrideReasonError()"
-                  (acknowledgedChange)="setOverrideAcknowledged($event)"
-                  (reasonChange)="setOverrideReason($event)"
-                  (reasonBlur)="touchOverrideReason()"
-                />
-              }
-            }
-
-            <app-deploy-execution-section
-              [executionModes]="view.execution_modes"
-              [brokerMode]="brokerMode()"
-              [brokerModeUnavailableReason]="brokerModeUnavailableReason()"
-              [dryRunUnavailableReason]="dryRunUnavailableReason()"
-              [selectedMode]="ticket().executionMode"
-              [actionPlanExplanation]="view.action_plan_explanation"
-              [symbol]="ticket().symbol"
-              [symbolError]="symbolError()"
-              [sizingOptions]="view.sizing_options"
-              [sizingPreset]="ticket().sizingPreset"
-              [quantity]="ticket().quantity"
-              [quantityError]="quantityError()"
-              [carryoverAvailable]="view.carryover_available"
-              [carryoverLabel]="view.carryover_label"
-              [carryoverExplanation]="view.carryover_explanation"
-              [carryoverAllowed]="ticket().allowCarryover"
-              (executionModeChange)="setExecutionMode($event)"
-              (symbolChange)="setSymbol($event)"
-              (sizingPresetChange)="setSizingPreset($event)"
-              (quantityChange)="setQuantity($event)"
-              (quantityBlur)="touchQuantity()"
-              (carryoverAllowedChange)="setCarryover($event)"
-            />
-
-            <fieldset class="deploy-exit-terms">
-              <legend>Exit terms · fixed for this bot</legend>
-              <label>Exit allowance (bps)<input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /></label>
-              <label>Band multiple<input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /></label>
-              <label>Spread cap (bps)<input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /></label>
-              <p>{{ view.exit_steps_summary }}</p>
-            </fieldset>
-
-            <app-deploy-budget-review
-              [target]="budgetTarget()" [body]="budgetBody()" [disabled]="submitting()"
-              (reviewed)="budgetConsent.set($event)"
-            />
-
-            <app-deploy-parameters-section
-              [qualifiedConfiguration]="selectedStrategy()?.qualified_configuration ?? null"
-              (qualifiedConfigurationSelected)="useQualifiedConfiguration($event)"
-              (dryRunRequested)="setExecutionMode('dry_run')"
-              [paramsSchema]="paramsSchema()"
-              [values]="ticket().parameters"
-              (parameterChange)="setParameter($event)"
-              (invalidFieldsChange)="setInvalidParameterFields($event)"
-            />
-          </div>
-
-          <app-deploy-admission-column
-            [view]="view"
-            [summary]="readinessSummary()"
-            [submitError]="submitError()"
-            [admissionDecision]="admissionDecision()"
+    <ol class="deploy-steps">
+      <li>
+        <app-deploy-step
+          [number]="1" heading="What" [foldable]="true" [open]="whatOpen()" [summary]="whatSummary()"
+          [canFold]="whatComplete()" foldHint="Choose a strategy and a valid symbol first."
+          (edit)="editStep('what')" (done)="foldStep('what')"
+        >
+          <app-deploy-binding-strip
+            [strategies]="view.strategies"
+            [strategyKey]="ticket().strategyKey"
+            (strategyKeyChange)="setStrategyKey($event)"
           />
-        </div>
-
-        <footer class="deploy-footer">
-          <dl class="deploy-footer__summary">
-            <div><dt>Bot</dt><dd>{{ ticket().instanceId || 'Name required' }}</dd></div>
-            <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
-            <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ quantityLabel() }}</dd></div>
-            <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
-            <div><dt>Evidence</dt><dd>{{ evidenceSummaryLabel() }}</dd></div>
-          </dl>
-
-          <div class="deploy-footer__command">
-            <button
-              type="submit"
-              [disabled]="!canSubmit()"
-              [attr.aria-busy]="submitting()"
-              aria-describedby="deploy-submit-guidance"
-            >
-              {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
-            </button>
-            @if (submitError(); as refusal) {
-              <p role="alert">{{ refusal.message }} {{ refusal.explanation }} {{ refusal.nextAction }}</p>
-            }
-            @if (admissionDecision(); as decision) {
-              @if (!decision.allowed) { <p role="alert">{{ decision.explanation }} {{ decision.next_step }}</p> }
-            }
-            <small id="deploy-submit-guidance" aria-live="polite">{{ submitGuidance() }}</small>
-            <!-- Server-observed, never a client clock (temporal-rigor.md). -->
-            <small class="deploy-footer__observed" data-testid="deploy-footer-observed">
-              Readiness observed <app-timestamp-display [value]="view.evaluated_at_ms" mode="local" />
-            </small>
+          @if (selectedStrategy(); as strategy) {
+            <app-deploy-paper-access
+              [target]="deployTarget(view.account_id)"
+              [accountId]="view.account_id"
+              [strategy]="strategy"
+              [modeLabel]="brokerModeLabel()"
+              (accessChanged)="paperAccessChanged()"
+            />
+          }
+          <div class="deploy-symbol">
+            <app-symbol-picker
+              id="deploy-symbol"
+              label="Trading symbol"
+              [symbol]="ticket().symbol"
+              (symbolChange)="setSymbol($event)"
+            />
+            @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
           </div>
-        </footer>
-      </form>
+          <app-deploy-parameters-section
+            [qualifiedConfiguration]="selectedStrategy()?.qualified_configuration ?? null"
+            [paramsSchema]="paramsSchema()"
+            [values]="ticket().parameters"
+            [editable]="parametersEditable()"
+            (qualifiedConfigurationSelected)="useQualifiedConfiguration($event)"
+            (dryRunRequested)="setExecutionMode('dry_run')"
+            (parameterChange)="setParameter($event)"
+            (invalidFieldsChange)="setInvalidParameterFields($event)"
+          />
+        </app-deploy-step>
+      </li>
+
+      <li>
+        <app-deploy-step
+          [number]="2" heading="How" [foldable]="true" [open]="howOpen()" [summary]="howSummary()"
+          [canFold]="howComplete()" foldHint="Choose where it trades, a size and exit terms first."
+          (edit)="editStep('how')" (done)="foldStep('how')"
+        >
+          <app-deploy-execution-section
+            [executionModes]="view.execution_modes"
+            [brokerMode]="brokerMode()"
+            [brokerModeUnavailableReason]="brokerModeUnavailableReason()"
+            [dryRunUnavailableReason]="dryRunUnavailableReason()"
+            [selectedMode]="ticket().executionMode"
+            [sizingOptions]="view.sizing_options"
+            [sizingPreset]="ticket().sizingPreset"
+            [quantity]="ticket().quantity"
+            [quantityError]="quantityError()"
+            [carryoverAvailable]="view.carryover_available"
+            [carryoverLabel]="view.carryover_label"
+            [carryoverExplanation]="view.carryover_explanation"
+            [carryoverAllowed]="ticket().allowCarryover"
+            (executionModeChange)="setExecutionMode($event)"
+            (sizingPresetChange)="setSizingPreset($event)"
+            (quantityChange)="setQuantity($event)"
+            (quantityBlur)="touchQuantity()"
+            (carryoverAllowedChange)="setCarryover($event)"
+          />
+          <fieldset class="deploy-exit-terms">
+            <legend>Exit terms · fixed for this bot’s life</legend>
+            <label>Exit allowance (bps)<input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /></label>
+            <label>Band multiple<input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /></label>
+            <label>Spread cap (bps)<input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /></label>
+            <p>{{ view.exit_steps_summary }}</p>
+            @if (!view.default_exit_terms) {
+              <p>This account has no defaults for new bots, so these start empty.
+                <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
+            }
+          </fieldset>
+        </app-deploy-step>
+      </li>
+
+      <li>
+        <app-deploy-step [number]="3" heading="Money" [open]="true">
+          <app-deploy-money-step
+            [target]="budgetTarget()"
+            [body]="budgetBody()"
+            [disabled]="submitting()"
+            [(amount)]="amount"
+            (reviewed)="moneyReview.set($event)"
+          />
+        </app-deploy-step>
+      </li>
+
+      <li>
+        <app-deploy-step [number]="4" heading="Confirm" [open]="true">
+          @let review = currentMoneyReview()?.preview ?? null;
+          <app-deploy-confirm-step
+            [world]="ticket().executionMode"
+            [botNameNote]="review?.bot_name_note ?? null"
+            [strategyLabel]="selectedStrategy()?.label ?? null"
+            [trades]="tradesSummary()"
+            [accountNumber]="view.account_id"
+            [exits]="exitsSummary()"
+            [budgetUsd]="review?.budget_usd ?? null"
+            [lossLimit]="review?.risk_limits_summary ?? null"
+            [blockers]="blockers()"
+            [checks]="ticket().executionMode === 'dry_run' ? null : view.readiness_checks"
+            [checksObservedAtMs]="view.evaluated_at_ms"
+            [admissionDecision]="admissionDecision()"
+            [submitError]="submitError()"
+            [confirmationText]="review?.confirmation_text ?? null"
+            [(consent)]="liveConsent"
+            [canSubmit]="canSubmit()"
+            [submitting]="submitting()"
+            [guidance]="submitGuidance()"
+            (deploy)="submit()"
+          >
+            @if (overrideRequired() && selectedStrategy(); as strategy) {
+              <app-deploy-evidence-override
+                [strategy]="strategy"
+                [acknowledged]="ticket().overrideAcknowledged"
+                [reason]="ticket().overrideReason"
+                [reasonError]="overrideReasonError()"
+                (acknowledgedChange)="setOverrideAcknowledged($event)"
+                (reasonChange)="setOverrideReason($event)"
+                (reasonBlur)="touchOverrideReason()"
+              />
+            }
+          </app-deploy-confirm-step>
+        </app-deploy-step>
+      </li>
+    </ol>
   } @else if (deployView.isLoading()) {
-    <section class="deploy-loading" role="status" aria-label="Loading deployment readiness">
+    <section class="deploy-loading" role="status" aria-label="Loading Deploy">
       <span></span><span></span><span></span>
-      <strong>Assembling current deployment truth…</strong>
+      <strong>Reading this account’s Deploy options…</strong>
     </section>
   } @else if (deployView.error()) {
     <section class="deploy-unavailable" role="alert">
-      <h3>Current admission truth could not be loaded.</h3>
-      <p>No deployment action is available until the data plane can author a fresh contract.</p>
+      <h2>Deploy could not be loaded.</h2>
+      <p>This account’s current Deploy options could not be read, so nothing can be deployed yet.</p>
       <button type="button" (click)="reload()">Try again</button>
     </section>
   }

@@ -76,10 +76,11 @@ type WorkspaceAccountStatus =
  * than borrowing a sibling's fact. The sync verdict is not a header fact: an
  * out-of-sync account is an attention line on Home.
  *
- * Deploy is one of the five tabs, not an overlay: `AlpacaDeployTabComponent`
- * reads this same `AlpacaDeskAccountDataService` instance for its target
- * (FR-094), so a bind command can never target an account the header itself
- * is not showing.
+ * Deploy is the header's "Deploy a bot" button (PRD #2560 D3), not a tab and
+ * not an overlay: its routed `deploy` page, `AlpacaDeployTabComponent`, reads
+ * this same `AlpacaDeskAccountDataService` instance for its target (FR-094),
+ * so a bind command can never target an account the header itself is not
+ * showing.
  */
 @Component({
   selector: 'app-alpaca-account-workspace',
@@ -160,6 +161,11 @@ export class AlpacaAccountWorkspaceComponent {
       route: accountWorkspaceTabRoute(this.location(), tab.id),
     })),
   );
+
+  /** The header's "Deploy a bot" address, or `null` for a lane with no
+   * confirmed account — Deploy is the account's own action, so an accountless
+   * lane has nowhere to open it. */
+  protected readonly deployRoute = computed(() => accountWorkspaceTabRoute(this.location(), 'deploy'));
 
   /** Why a tab has no address here. Overview is the account's own page, so a
    * lane with no confirmed account has none to open — and substituting another

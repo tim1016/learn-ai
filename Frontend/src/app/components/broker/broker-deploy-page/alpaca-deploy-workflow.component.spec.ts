@@ -1,18 +1,20 @@
-import { ApplicationRef } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
-import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import axe from 'axe-core';
 import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   BrokerV2PanelService,
-  type DeployBotBody,
-  type DeployBotReceipt,
+  type AccountMoneyView,
+  type BotDeployPrefill,
   type BudgetDeployReceipt,
+  type DeployBotBody,
   type DeployBotView,
+  type DeploymentBudgetPreview,
+  type DeploySubmissionBody,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
@@ -26,12 +28,19 @@ import {
 } from './alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
+import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
+import {
+  fakePickerWorld,
+  pickSymbol,
+  symbolPicker,
+} from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 const DEPLOY_TARGET = resourceTarget('alpaca', 'clrk_spec', {
   accountId: 'PA9',
   bindingGeneration: 3,
   routingEpoch: 4,
 });
+const FENCE = { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch };
 
 const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   strategy_key: 'rsi_mean_reversion',
@@ -47,28 +56,15 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   override_explanation: null,
   blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion-signal.md' no longer matches its recorded hash.",
 };
+const BLOCKED_EXPLANATION = BLOCKED_STRATEGY.blocked_explanation ?? '';
 
-const BLOCKED_EXPLANATION = BLOCKED_STRATEGY.blocked_explanation;
-if (BLOCKED_EXPLANATION === null || BLOCKED_EXPLANATION === undefined) {
-  throw new Error('BLOCKED_STRATEGY fixture must carry a blocked_explanation');
-}
-
-// #1703: a validated strategy with no registered runtime — visible, but
-// admits neither execution mode (unlike BLOCKED_STRATEGY above, which stays
-// Dry-Run-admissible because its block is a stale proof, not a missing
-// runtime).
+// #1703: a validated strategy with no registered runtime admits neither mode.
 const NO_RUNTIME_STRATEGY: DeployBotView['strategies'][number] = {
+  ...BLOCKED_STRATEGY,
   strategy_key: 'spy_strategy_b',
   label: 'Strategy B',
   explanation: 'Validated RSI-range strategy with no registered runtime yet.',
-  validation_case_symbol: 'SPY',
-  validation_case_parameters: {},
-  golden_validation_scope: false,
-  evidence_status: 'blocked',
-  paper_access_state: 'enabled',
-  selectable: false,
   admissible_modes: [],
-  override_explanation: null,
   blocked_explanation: 'This strategy has no registered live-decision runtime yet.',
 };
 
@@ -79,18 +75,13 @@ const GOLDEN_TSLA_STRATEGY: DeployBotView['strategies'][number] = {
   golden_validation_scope: true,
 };
 
-const NO_RUNTIME_EXPLANATION = NO_RUNTIME_STRATEGY.blocked_explanation;
-if (NO_RUNTIME_EXPLANATION === null || NO_RUNTIME_EXPLANATION === undefined) {
-  throw new Error('NO_RUNTIME_STRATEGY fixture must carry a blocked_explanation');
-}
-
 const ADMISSION: RunAdmissionDecision = {
   operation: 'START',
   allowed: true,
   reason_code: 'START_ADMITTED',
   explanation: 'The process slot is absent, market data is ready, and the Clerk proves flat custody.',
   next_step: null,
-  strategy_instance_id: 'spy-test-01',
+  strategy_instance_id: 'spy-dv-20260929-0931',
   proposed_run_id: 'run-1',
   configuration_hash: 'a'.repeat(64),
   account_id: 'PA9',
@@ -99,74 +90,93 @@ const ADMISSION: RunAdmissionDecision = {
   evidence_refs: ['test-admission'],
 };
 
-const RECEIPT: DeployBotReceipt = {
-  outcome: 'success',
+const RECEIPT: BudgetDeployReceipt = {
   status: 'deployed',
-  receipt_id: 'alpaca-paper-deploy:PA9:spy-test-01:1700000000000',
+  outcome: 'success',
+  receipt_id: 'command-spy-dv-20260929-0931',
+  command_id: 'command-1',
   recorded_at_ms: 1_700_000_000_000,
+  first_deployed_at_ms: 1_700_000_000_000,
+  strategy_instance_id: 'spy-dv-20260929-0931',
+  run_id: 'run-1',
   account_id: 'PA9',
-  execution_mode: 'paper',
-  sizing: { preset: 'safe_canary', quantity: 1 },
-  carryover_policy: 'FORBID',
-  message: 'spy-test-01 is on duty in Alpaca paper.',
-  explanation: 'The deployment binding is durable and Clerk governed.',
-  next_action: 'Open the production bot control page.',
-  panel_path: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-test-01',
-  action_plan: {
-    on_enter: [{
-      leg_id: 'primary',
-      instrument: { kind: 'stock', underlying: 'SPY' },
-      position: 'long',
-      qty_ratio: 1,
-    }],
-    on_exit: [{ kind: 'close_leg', entry_leg_id: 'primary' }],
-  },
-  admission: ADMISSION,
-  bot: {
-    strategy_instance_id: 'spy-test-01',
-    broker: 'alpaca',
-    symbol: 'SPY',
-    mode: 'trade',
-    quantity: 1,
-    carryover_policy: 'FORBID',
-    running: true,
-    phase: 'ON_DUTY',
-    desired_state: 'RUNNING',
-    active_run_id: 'run-1',
-    duty_outcome: null,
-    binding_created_at_ms: 1_700_000_000_000,
-    last_transition_at_ms: 1_700_000_000_001,
-  },
+  world: 'real_paper',
+  committed_usd: '1000.00',
+  message: 'spy-dv-20260929-0931 is deployed',
+  explanation: '$1000.00 is set aside for it.',
+  next_action: 'Open the bot’s page to watch it trade.',
+  replaces_strategy_instance_id: null,
 };
 
-function mockService(
-  result: DeployBotReceipt | HttpErrorResponse = RECEIPT,
-  view: DeployBotView = DEPLOY_VIEW,
-) {
+const BOT_NAME_NOTE = 'Named at Deploy: spy-dv-YYYYMMDD-HHMM, from the symbol, strategy code and New York minute.';
+
+function worldOf(mode: DeployBotBody['execution_mode']): DeploymentBudgetPreview['world'] {
+  if (mode === 'dry_run') return 'synthetic';
+  if (mode === 'shadow') return 'shadow';
+  if (mode === 'live') return 'real_live';
+  return 'real_paper';
+}
+
+/** The account with a NEW slice for `amount`, as the backend draws it. */
+function moneyWithNew(amount: string): AccountMoneyView {
+  const now = fakeAccountMoney();
+  return fakeAccountMoney({
+    segments: [
+      ...(now.segments ?? []).filter((segment) => segment.kind !== 'free'),
+      { kind: 'new', label: 'new bot', amount_usd: amount, share_bps: 100 },
+      { kind: 'free', label: 'free to deploy', amount_usd: '97329.57', share_bps: 9732 },
+    ],
+  });
+}
+
+/** A budget preview exactly as the backend would author one for `body`. */
+function previewFor(view: DeployBotView, body: DeployBotBody): DeploymentBudgetPreview {
+  const world = worldOf(body.execution_mode);
+  const dryRun = world === 'synthetic';
+  const amount = body.budget?.amount_usd ?? null;
+  return {
+    state: 'ready',
+    detail: 'This is an entry-admission budget. Market fills and losses can exceed it.',
+    world,
+    custody_account_id: dryRun ? null : view.account_id,
+    risk_revision: dryRun ? 0 : 1,
+    minimum_budget_usd: '500.00',
+    unreserved_usd: dryRun ? null : '98329.57',
+    estimated_price_usd: '500.00',
+    shortcuts: [{
+      key: 'position_headroom', label: '1.2 × one position', amount_usd: '600.00',
+      explanation: '1.2 × the $500.00 estimated position, including modelled fees. Market fills can cost more.',
+    }],
+    bot_name_note: BOT_NAME_NOTE,
+    risk_limits_summary: dryRun
+      ? 'Private simulated starting cash. Real-account daily loss limits and holds do not apply.'
+      : 'Daily loss limit: the smaller of 2% of prior-close equity and $500.00. Existing exit terms stay fixed.',
+    money_after: dryRun ? null : amount === null ? fakeAccountMoney() : moneyWithNew(amount),
+    review_token: amount === null ? null : `review-${amount}`,
+    budget_usd: amount,
+    confirmation_text: amount !== null && world === 'real_live' ? `DEPLOY ${view.account_id} $${amount}` : null,
+  };
+}
+
+function mockService(view: DeployBotView = DEPLOY_VIEW, result: BudgetDeployReceipt | HttpErrorResponse = RECEIPT) {
   return {
     accountId: view.account_id,
     getDeployView: vi.fn().mockResolvedValue(view),
     previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION),
-    previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
-      state: 'ready', detail: 'Account money is ready.', world: body.execution_mode === 'dry_run' ? 'synthetic' : body.execution_mode === 'shadow' ? 'shadow' : body.execution_mode === 'live' ? 'real_live' : 'real_paper',
-      custody_account_id: view.account_id, risk_revision: 1, minimum_budget_usd: '500.00', unreserved_usd: '1000.00',
-      shortcuts: [], review_token: body.budget ? 'budget-reviewed' : null, confirmation_text: null,
+    previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => previewFor(view, body)),
+    getDeploySubmission: vi.fn().mockRejectedValue(new HttpErrorResponse({
+      status: 404,
+      error: { detail: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.' },
     })),
-    getDeployCommand: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+    getDeployPrefill: vi.fn<(target: unknown, sid: string) => Promise<BotDeployPrefill>>(),
     deployBudgetBot: result instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(result)
-      : vi.fn().mockResolvedValue({
-        status: 'deployed', outcome: 'success', receipt_id: result.receipt_id, recorded_at_ms: result.recorded_at_ms,
-        command_id: 'command-1', strategy_instance_id: result.bot.strategy_instance_id,
-        run_id: result.bot.active_run_id ?? 'run-1', account_id: result.account_id,
-        world: result.execution_mode === 'dry_run' ? 'synthetic' : result.execution_mode === 'shadow' ? 'shadow' : result.execution_mode === 'live' ? 'real_live' : 'real_paper',
-        committed_usd: '1000.00', message: result.message, explanation: result.explanation,
-        next_action: result.next_action, panel_path: result.panel_path,
-      } satisfies BudgetDeployReceipt),
+      : vi.fn().mockResolvedValue({ ...result, account_id: view.account_id }),
   };
 }
+type ServiceDouble = ReturnType<typeof mockService>;
 
-async function renderWorkflow(service = mockService()) {
+async function renderWorkflow(service: ServiceDouble = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
       ...fakePickerWorld().providers,
@@ -174,30 +184,561 @@ async function renderWorkflow(service = mockService()) {
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
     ],
-    componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
+    componentInputs: { fence: FENCE, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
   });
-  await screen.findByRole('heading', { name: 'Bot binding' });
+  await screen.findByRole('heading', { name: 'What' });
+  await rendered.fixture.whenStable();
   return rendered;
 }
 
-import {
-  fakePickerWorld,
-  pickSymbol,
-  symbolPicker,
-} from '../../../shared/symbol-picker/testing/fake-picker-world';
-
-async function reviewMoney(): Promise<void> {
-  await TestBed.inject(ApplicationRef).whenStable();
-  const amount = screen.queryByLabelText('Dollar budget (USD)') ?? screen.queryByLabelText('Simulated starting cash (USD)');
-  if (amount === null) return;
-  const review = screen.getByRole<HTMLButtonElement>('button', { name: 'Review budget' });
-  if (review.disabled) return;
-  fireEvent.input(amount, { target: { value: '1000.00' } });
-  fireEvent.click(review);
-  await screen.findByText(/Reviewed budget:/);
+async function renderWithQuery(service: ServiceDouble, query: Record<string, string>) {
+  const initial = convertToParamMap(query);
+  const queryParamMap = new BehaviorSubject(initial);
+  const rendered = await render(AlpacaDeployWorkflowComponent, {
+    providers: [
+      ...fakePickerWorld().providers,
+      provideFleetDirectory(),
+      provideRouter([]),
+      { provide: ActivatedRoute, useValue: { queryParamMap, snapshot: { queryParamMap: initial } } },
+      { provide: BrokerV2PanelService, useValue: service },
+    ],
+    componentInputs: { fence: FENCE, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
+  });
+  return { ...rendered, queryParamMap };
 }
 
-describe('AlpacaDeployWorkflowComponent', () => {
+/** Type a dollar amount into Money and wait for its preview to answer. */
+async function chooseMoney(amount = '1000.00'): Promise<void> {
+  fireEvent.input(screen.getByLabelText(/\(USD\)$/), { target: { value: amount } });
+  await screen.findByText(/would be set aside for this bot|of simulated starting cash for this bot/, {}, { timeout: 3000 });
+}
+
+function deployButton(): HTMLButtonElement {
+  return screen.getByRole<HTMLButtonElement>('button', { name: /^Deploy/ });
+}
+
+function submittedBody(service: ServiceDouble, call = 0): DeploySubmissionBody {
+  return service.deployBudgetBot.mock.calls[call][1] as DeploySubmissionBody;
+}
+
+async function openStep(name: 'What' | 'How'): Promise<void> {
+  const step = stepRegion(name);
+  const edit = within(step).queryByRole('button', { name: new RegExp(`^Edit step \\d, ${name}$`) });
+  if (edit !== null) fireEvent.click(edit);
+  await vi.waitFor(() => expect(within(stepRegion(name)).getByRole('button', { name: /^Done/ })).toBeTruthy());
+}
+
+function stepRegion(name: string): HTMLElement {
+  return screen.getByRole('region', { name });
+}
+
+describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
+  it('lays out What → How → Money → Confirm and folds complete steps to one line with Edit', async () => {
+    await renderWorkflow();
+
+    const steps = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+    expect(steps).toEqual(['What', 'How', 'Money', 'Confirm']);
+
+    const what = stepRegion('What');
+    expect(within(what).getByText('Deployment Validation on SPY · Allowed on this Paper account')).toBeTruthy();
+    expect(within(what).getByRole('button', { name: 'Edit step 1, What' }).getAttribute('aria-expanded')).toBe('false');
+    const how = stepRegion('How');
+    expect(within(how).getByText(
+      'Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life',
+    )).toBeTruthy();
+
+    // The readiness rail and its heading are gone (H8); the name is the backend's.
+    expect(screen.queryByText(/Live admission/i)).toBeNull();
+    expect(screen.queryByLabelText('Bot name')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open account recovery' })).toBeNull();
+  });
+
+  it('opens a folded step into focus on Edit and returns focus to Edit on Done', async () => {
+    const { fixture } = await renderWorkflow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit step 1, What' }));
+    await fixture.whenStable();
+
+    const done = within(stepRegion('What')).getByRole('button', { name: 'Done with step 1, What' });
+    expect(done.getAttribute('aria-expanded')).toBe('true');
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe(done.getAttribute('aria-controls')));
+    expect(screen.getByLabelText('Deployment strategy')).toBeTruthy();
+
+    fireEvent.click(done);
+    await fixture.whenStable();
+    await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit step 1, What' })));
+  });
+
+  it('keeps a step the owner is working in open until they press Done', async () => {
+    const { fixture } = await renderWorkflow(mockService(LIVE_DEPLOY_VIEW));
+    const how = stepRegion('How');
+    const done = within(how).getByRole<HTMLButtonElement>('button', { name: 'Done with step 2, How' });
+    expect(done.disabled).toBe(true);
+
+    fireEvent.click(within(how).getByRole('radio', { name: /Dry Run/ }));
+    await fixture.whenStable();
+
+    // Complete now, and still open: it never folds from under the keyboard.
+    expect(within(how).getByRole('radio', { name: /Dry Run/ })).toBeTruthy();
+    expect(done.disabled).toBe(false);
+    fireEvent.click(done);
+    await fixture.whenStable();
+    expect(within(stepRegion('How')).getByText(/^Dry Run · 1 share/)).toBeTruthy();
+  });
+
+  it('grows the NEW slice on the account bar only after the typed amount’s preview answers', async () => {
+    const service = mockService();
+    let answer!: (preview: DeploymentBudgetPreview) => void;
+    service.previewBudget.mockImplementation((_target, body: DeployBotBody) =>
+      body.budget
+        ? new Promise<DeploymentBudgetPreview>((resolve) => { answer = resolve; })
+        : Promise.resolve(previewFor(DEPLOY_VIEW, body)));
+    await renderWorkflow(service);
+    const money = stepRegion('Money');
+    await within(money).findByRole('list', { name: 'Where the money is now' });
+
+    fireEvent.input(within(money).getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+    await vi.waitFor(() => expect(service.previewBudget.mock.calls.some(([, body]) => body.budget)).toBe(true));
+    expect(within(money).queryByText('new bot')).toBeNull();
+
+    answer(previewFor(DEPLOY_VIEW, { ...service.previewBudget.mock.calls.at(-1)?.[1], budget: { amount_usd: '1000.00', risk_revision: 1 } }));
+    const after = await within(money).findByRole('list', { name: 'Account money after this Deploy' });
+    expect(within(after).getByText('new bot')).toBeTruthy();
+    expect(within(after).getByText('$1,000.00')).toBeTruthy();
+  });
+
+  it('asks for no typed phrase on Paper, and names the world and the amount on the button', async () => {
+    await renderWorkflow();
+
+    expect(deployButton().disabled).toBe(true);
+    await chooseMoney();
+
+    expect(screen.queryByLabelText(/type/i)).toBeNull();
+    expect(deployButton().textContent?.trim()).toBe('Deploy paper bot · set aside $1,000.00');
+    expect(deployButton().disabled).toBe(false);
+  });
+
+  it('gates Live on the exact typed phrase, and asks for it again when the amount changes', async () => {
+    const service = mockService(LIVE_DEPLOY_VIEW);
+    const { fixture } = await renderWorkflow(service);
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Live/ }));
+    await fixture.whenStable();
+    await chooseMoney('800.00');
+
+    const phrase = screen.getByLabelText(/To deploy with real money, type/);
+    expect(screen.getByText('DEPLOY 9LIVE0001 $800.00')).toBeTruthy();
+    expect(deployButton().disabled).toBe(true);
+    fireEvent.input(phrase, { target: { value: 'DEPLOY 9LIVE0001 $800.00' } });
+    await fixture.whenStable();
+    expect(deployButton().textContent?.trim()).toBe('Deploy live bot · set aside $800.00');
+    expect(deployButton().disabled).toBe(false);
+
+    await chooseMoney('900.00');
+    expect((screen.getByLabelText(/To deploy with real money, type/) as HTMLInputElement).value).toBe('');
+    expect(deployButton().disabled).toBe(true);
+
+    fireEvent.input(screen.getByLabelText(/To deploy with real money, type/), { target: { value: 'DEPLOY 9LIVE0001 $900.00' } });
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service).budget).toEqual({
+      amount_usd: '900.00', risk_revision: 1, review_token: 'review-900.00', live_confirmation: 'DEPLOY 9LIVE0001 $900.00',
+    });
+    expect(submittedBody(service).execution_mode).toBe('live');
+  });
+
+  it('never preselects Live: the owner chooses Dry Run or Live (H17)', async () => {
+    await renderWorkflow(mockService(LIVE_DEPLOY_VIEW));
+
+    const how = stepRegion('How');
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Live/ }).checked).toBe(false);
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Dry Run/ }).checked).toBe(false);
+    expect(deployButton().textContent?.trim()).toBe('Deploy bot');
+    expect(screen.getByText('Choose where this bot trades in How.')).toBeTruthy();
+  });
+
+  it('shows no “Can’t deploy yet” while every check passes, and keeps every check behind Details', async () => {
+    await renderWorkflow();
+
+    expect(screen.queryByText(/Can’t deploy yet/)).toBeNull();
+    const details = screen.getByText('Details: every check and the last Start check').closest('details');
+    expect(details).not.toBeNull();
+    expect(within(details as HTMLElement).getByText('Strategy validation')).toBeTruthy();
+  });
+
+  it('lists each failing check with its fix', async () => {
+    const blockedView: DeployBotView = {
+      ...DEPLOY_VIEW,
+      eligibility: { ...DEPLOY_VIEW.eligibility, eligible: false, next_action: 'Restore the market-data channel.' },
+      readiness_checks: DEPLOY_VIEW.readiness_checks.map((check) =>
+        check.gate_id === 'broker.channel'
+          ? { ...check, ready: false, headline: 'Market data is unhealthy.', recovery: 'Restore the market-data channel.' }
+          : check),
+    };
+    await renderWorkflow(mockService(blockedView));
+
+    const blockers = screen.getByRole('region', { name: 'Can’t deploy yet · 1 thing' });
+    expect(within(blockers).getByText('Broker channel.')).toBeTruthy();
+    expect(within(blockers).getByText('Fix: Restore the market-data channel.')).toBeTruthy();
+    expect(within(blockers).queryByText('Strategy validation.')).toBeNull();
+  });
+
+  it('judges Dry Run by its own verdict, never by the broker checks', async () => {
+    const view: DeployBotView = {
+      ...DEPLOY_VIEW,
+      eligibility: { ...DEPLOY_VIEW.eligibility, eligible: false },
+      readiness_checks: DEPLOY_VIEW.readiness_checks.map((check) => ({ ...check, ready: false })),
+    };
+    const { fixture } = await renderWorkflow(mockService(view));
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Dry Run/ }));
+    await fixture.whenStable();
+
+    expect(screen.queryByText(/Can’t deploy yet/)).toBeNull();
+    await chooseMoney();
+    expect(deployButton().textContent?.trim()).toBe('Deploy Dry Run bot · $1,000.00 of simulated cash');
+    expect(deployButton().disabled).toBe(false);
+  });
+
+  it('words Dry Run money as simulated cash and never shows the real account number (H18)', async () => {
+    const { fixture } = await renderWorkflow(mockService(LIVE_DEPLOY_VIEW));
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Dry Run/ }));
+    await fixture.whenStable();
+    await chooseMoney();
+
+    expect(screen.getByLabelText('Simulated starting cash (USD)')).toBeTruthy();
+    expect(screen.queryByText('Free to deploy')).toBeNull();
+    expect(screen.queryByText(/Unreserved cash/)).toBeNull();
+    expect(screen.queryByText(/9LIVE0001/)).toBeNull();
+    expect(screen.getByText(/Simulated cash in the bot’s own Dry Run account/)).toBeTruthy();
+  });
+
+  it('pre-fills exit terms from the account’s defaults, and points at Settings when it has none (H3)', async () => {
+    await renderWorkflow(mockService({ ...DEPLOY_VIEW, default_exit_terms: null }));
+
+    const how = stepRegion('How');
+    expect(within(how).getByRole('button', { name: 'Done with step 2, How' })).toBeTruthy();
+    expect(within(how).getByRole<HTMLInputElement>('spinbutton', { name: 'Exit allowance (bps)' }).value).toBe('');
+    expect(within(how).getByRole('link', { name: 'Set defaults for new bots in Settings' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/configuration');
+    expect(screen.getByText('Set this bot’s exit allowance, band multiple and spread cap in How.')).toBeTruthy();
+  });
+
+  it('reviews the name the backend will author, the trade, the account, the exits, the budget and the loss limit', async () => {
+    await renderWorkflow();
+    await chooseMoney();
+
+    const text = screen.getByLabelText('Deploy review').textContent ?? '';
+    expect(text).toContain(BOT_NAME_NOTE);
+    expect(text).toContain('Deployment Validation · SPY · 1 share');
+    expect(text).toContain('PA9 · PAPER · practice money');
+    expect(text).toContain('Exit allowance 20 bps');
+    expect(text).toContain('$1,000.00');
+    expect(text).toContain('Daily loss limit: the smaller of 2% of prior-close equity and $500.00.');
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
+  it('sends an opaque submission key and never a bot name, and names the key in the URL before sending', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    const router = fixture.debugElement.injector.get(Router);
+    await chooseMoney();
+
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+
+    const body = submittedBody(service);
+    expect(body).toEqual({
+      budget: { amount_usd: '1000.00', risk_revision: 1, review_token: 'review-1000.00', live_confirmation: null },
+      exit_terms: DEPLOY_VIEW.default_exit_terms,
+      strategy_key: 'deployment_validation',
+      symbol: 'SPY',
+      sizing: { preset: 'safe_canary', quantity: 1 },
+      execution_mode: 'paper',
+      carryover_policy: 'FORBID',
+      parameters: {},
+      submission_key: expect.stringMatching(/^[A-Za-z0-9_-]{8,64}$/),
+    });
+    expect(body).not.toHaveProperty('strategy_instance_id');
+    expect(router.url).toContain(`submission=${body.submission_key}`);
+    // The Start plan judges the settings alone.
+    expect(service.previewStartAdmission.mock.calls[0][1]).not.toHaveProperty('submission_key');
+  });
+
+  it('retries an uncertain Deploy under the same submission key and command', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('alert', { name: 'Outcome unknown' })).toBeTruthy();
+    expect(screen.getByText(/returns the same bot; it never starts a second one/)).toBeTruthy();
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    const [firstTarget, first] = service.deployBudgetBot.mock.calls[0];
+    const [secondTarget, second] = service.deployBudgetBot.mock.calls[1];
+    expect(second.submission_key).toBe(first.submission_key);
+    expect(secondTarget).toEqual(firstTarget);
+    expect(firstTarget).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
+  });
+
+  it('mints a new submission key when the settings change after a Deploy was sent', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney('1000.00');
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+
+    await chooseMoney('1200.00');
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    expect(submittedBody(service, 1).submission_key).not.toBe(submittedBody(service, 0).submission_key);
+    expect(service.deployBudgetBot.mock.calls[1][0].idempotencyKey)
+      .not.toBe(service.deployBudgetBot.mock.calls[0][0].idempotencyKey);
+  });
+
+  it('moves focus to the receipt, which names the bot, the money, the world and the bot’s page', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+
+    fireEvent.click(deployButton());
+    const receipt = await screen.findByRole('status', { name: RECEIPT.message });
+    await fixture.whenStable();
+
+    await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+    expect(within(receipt).getByText('spy-dv-20260929-0931')).toBeTruthy();
+    expect(within(receipt).getByText('$1,000.00')).toBeTruthy();
+    expect(within(receipt).getByText('PAPER · practice money')).toBeTruthy();
+    expect(within(receipt).getByRole('link', { name: 'Open spy-dv-20260929-0931' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-dv-20260929-0931?from=bots');
+    expect(within(receipt).queryByText(/returned unchanged/)).toBeNull();
+  });
+
+  it('moves focus to the refusal when the backend declines the Deploy', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue({
+      ...ADMISSION,
+      allowed: false,
+      reason_code: 'SIGNAL_PROGRAM_UNSEALED',
+      explanation: 'Golden Validation evidence for this strategy could not be read.',
+      next_step: 'Open Strategy Validation so the research store is brought up to date, then deploy again.',
+    });
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+
+    fireEvent.click(deployButton());
+    const refusal = await screen.findByRole('alert', { name: 'Start refused' });
+    await fixture.whenStable();
+
+    await vi.waitFor(() => expect(document.activeElement).toBe(refusal));
+    // H11: the real cause, verbatim — never "no v2 seal".
+    expect(within(refusal).getByText('Golden Validation evidence for this strategy could not be read.')).toBeTruthy();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('never words an unknown outcome in internal terms', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const alert = await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(alert.textContent).not.toMatch(/control boundary|data.plane|SQLite|lens/i);
+  });
+
+  it('reads a pending submission after a reload without sending another Deploy', async () => {
+    const service = mockService();
+    const pending: BudgetDeployReceipt = {
+      ...RECEIPT, status: 'pending', outcome: 'pending', command_id: 'original-command',
+      message: 'spy-dv-20260929-0931 is committed; its launch is not confirmed yet',
+    };
+    service.getDeploySubmission.mockResolvedValue(pending);
+    service.getDeployView.mockRejectedValue(new Error('Deploy view unavailable'));
+    await renderWithQuery(service, { submission: 'reloaded-submission-1' });
+
+    await screen.findByRole('heading', { name: pending.message });
+    expect(service.getDeploySubmission.mock.calls[0][1]).toBe('reloaded-submission-1');
+    expect(screen.getByText('Pending')).toBeTruthy();
+    service.getDeploySubmission.mockResolvedValue({ ...pending, status: 'deployed', outcome: 'success', message: RECEIPT.message });
+    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
+    await screen.findByRole('heading', { name: RECEIPT.message });
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('says nothing was committed when the recovery read finds no Deploy for the key', async () => {
+    const service = mockService();
+    await renderWithQuery(service, { submission: 'never-committed-1' });
+
+    expect(await screen.findByText('No Deploy was committed for this submission. Nothing was set aside and nothing started.'))
+      .toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Check deployment status' })).toBeNull();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
+  const PREFILL: BotDeployPrefill = {
+    source_strategy_instance_id: 'spy-ema-20260925-1402',
+    strategy_key: 'ema_crossover_signal',
+    symbol: 'QQQ',
+    sizing: { preset: 'custom', quantity: 3 },
+    parameters: { gap: 0.4 },
+    exit_terms: { exit_allowance_bps: 15, band_multiple: 3, spread_cap_bps: 40 },
+  };
+
+  it('pre-fills strategy, symbol, size, settings and exit terms, never money or consent, and names the replaced bot', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const { fixture } = await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await fixture.whenStable();
+
+    expect(service.getDeployPrefill.mock.calls[0][1]).toBe('spy-ema-20260925-1402');
+    expect(screen.getByRole('region', { name: 'Deploy again' }).textContent)
+      .toContain('Choose fresh money and confirm.');
+    await vi.waitFor(() => expect(symbolPicker(fixture).symbol()).toBe('QQQ'));
+    await openStep('What');
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value).toBe('ema_crossover_signal');
+    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.4');
+    expect(within(stepRegion('How')).getByText(/3 shares · Exit allowance 15 bps, band 3×, spread cap 40 bps/)).toBeTruthy();
+    expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('');
+
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = submittedBody(service);
+    expect(body.replaces_strategy_instance_id).toBe('spy-ema-20260925-1402');
+    expect(body).toMatchObject({ strategy_key: 'ema_crossover_signal', symbol: 'QQQ', sizing: { preset: 'custom', quantity: 3 },
+      parameters: { gap: 0.4 }, exit_terms: PREFILL.exit_terms });
+  });
+
+  it('names the replaced bot on the receipt', async () => {
+    const service = mockService(DEPLOY_VIEW, { ...RECEIPT, replaces_strategy_instance_id: 'spy-ema-20260925-1402' });
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const { fixture } = await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const receipt = await screen.findByRole('status', { name: RECEIPT.message });
+    expect(within(receipt).getByText('Replaces').nextElementSibling?.textContent).toBe('spy-ema-20260925-1402');
+  });
+
+  it('Clear drops the prefill: the earlier bot is no longer named and the form starts fresh', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const { fixture } = await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await fixture.whenStable();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the prefilled settings' }));
+    await fixture.whenStable();
+
+    expect(screen.queryByText(/Prefilled from/)).toBeNull();
+    await vi.waitFor(() => expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy());
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
+  });
+
+  it('says when the earlier bot’s settings cannot be read, and offers a fresh form', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockRejectedValue(new HttpErrorResponse({
+      status: 404, error: { detail: { message: 'No deployed bot spy-gone exists on this account.' } },
+    }));
+    await renderWithQuery(service, { from: 'spy-gone' });
+
+    const failure = await screen.findByRole('alert', { name: 'Deploy again' });
+    expect(within(failure).getByText('No deployed bot spy-gone exists on this account.')).toBeTruthy();
+    expect(within(failure).getByRole('button', { name: 'Start from a fresh form' })).toBeTruthy();
+  });
+});
+
+@Component({
+  selector: 'app-deploy-host',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AlpacaDeployWorkflowComponent],
+  template: `@if (shown()) { <app-alpaca-deploy-workflow [target]="target" accountId="PA9" [fence]="fence" /> }`,
+})
+class DeployHostComponent {
+  readonly shown = signal(true);
+  readonly target = withAccount(DEPLOY_TARGET, 'PA9');
+  readonly fence = FENCE;
+}
+
+describe('AlpacaDeployWorkflowComponent — the session draft (H9)', () => {
+  it('keeps the form across leaving Deploy and coming back, with money re-previewed and consent fresh', async () => {
+    const service = mockService();
+    const { fixture } = await render(DeployHostComponent, {
+      providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+    });
+    await screen.findByRole('heading', { name: 'What' });
+    await fixture.whenStable();
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Custom shares/ }));
+    await chooseMoney('750.00');
+
+    fixture.componentInstance.shown.set(false);
+    await fixture.whenStable();
+    expect(screen.queryByRole('heading', { name: 'What' })).toBeNull();
+    const previewsBefore = service.previewBudget.mock.calls.length;
+    fixture.componentInstance.shown.set(true);
+    await fixture.whenStable();
+    await screen.findByRole('heading', { name: 'What' });
+
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value).toBe('ema_crossover_signal');
+    expect(within(stepRegion('How')).getByRole<HTMLInputElement>('radio', { name: /Custom shares/ }).checked).toBe(true);
+    expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('750.00');
+    await screen.findByText(/would be set aside for this bot/, {}, { timeout: 3000 });
+    expect(service.previewBudget.mock.calls.length).toBeGreaterThan(previewsBefore);
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — accessibility', () => {
+  it('passes AXE with every step shown, a reviewed amount and a failing check', async () => {
+    const view: DeployBotView = {
+      ...DEPLOY_VIEW,
+      readiness_checks: DEPLOY_VIEW.readiness_checks.map((check) =>
+        check.gate_id === 'broker.channel' ? { ...check, ready: false, recovery: 'Restore the market-data channel.' } : check),
+    };
+    const { fixture } = await renderWorkflow(mockService(view));
+    await openStep('What');
+    await openStep('How');
+    await chooseMoney();
+    await fixture.whenStable();
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations).toEqual([]);
+  });
+
+  it('passes AXE on Live with the typed phrase showing', async () => {
+    const { fixture } = await renderWorkflow(mockService(LIVE_DEPLOY_VIEW));
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Live/ }));
+    await fixture.whenStable();
+    await chooseMoney('800.00');
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations).toEqual([]);
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — strategy, world and settings', () => {
   it('accepts lowercase routes and keeps the opening fence after a rebind before the first click', async () => {
     const service = mockService();
     const { fixture } = await renderWorkflow(service);
@@ -205,1132 +746,424 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fixture.componentRef.setInput('target', resourceTarget('alpaca', DEPLOY_TARGET.clerkId, {
       accountId: 'pa9', bindingGeneration: 999, routingEpoch: 1000,
     }));
-    fixture.detectChanges();
-    fireEvent.input(await screen.findByLabelText('Bot name'), { target: { value: 'case-and-fence' } });
     await fixture.whenStable();
-    await reviewMoney();
-    await fixture.componentInstance['submit']();
-    expect(service.deployBudgetBot).toHaveBeenCalledTimes(1);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
     const [target] = service.deployBudgetBot.mock.calls[0];
     expect(target.bindingGeneration).toBe(DEPLOY_TARGET.bindingGeneration);
     expect(target.routingEpoch).toBe(DEPLOY_TARGET.routingEpoch);
     expect(target.accountId).toBe('PA9');
   });
 
-  it('defaults to a concise trader view without duplicating strategy provenance', async () => {
-    await renderWorkflow();
-
-    expect(screen.getAllByText('Deployment Validation').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('✓ Accepted evidence')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Bot binding' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Trading setup' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'One share' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'Custom shares' })).toBeTruthy();
-    expect(screen.queryByText('Safe canary · 1 share')).toBeNull();
-    expect(screen.queryByText('Bounded custom shares')).toBeNull();
-    expect(screen.queryByText('Alpaca · broker deploy')).toBeNull();
-    expect(screen.queryByText('Strategy provenance')).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Every deployment gate' })).toBeNull();
-    expect(screen.queryByText('One long stock ENTER and one matching close-leg EXIT.')).toBeNull();
-    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
-    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
-    expect(screen.getByRole('button', {
-      name: 'About the trading symbol: One long stock ENTER and one matching close-leg EXIT.',
-    })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^About Live:/ })).toBeNull();
-  });
-
-  it('shows admission gates without a lens toggle, ready ones collapsed', async () => {
-    await renderWorkflow();
-
-    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
-
-    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
-    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
-
-    fireEvent.click(readyHeader);
-
-    expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
-  });
-
-  it('never writes a deployLens query param', async () => {
-    const { fixture } = await renderWorkflow();
-    const router = fixture.debugElement.injector.get(Router);
-
-    fireEvent.click(screen.getByRole('button', { name: /Strategy validation/ }));
-
-    expect(router.url).not.toContain('deployLens');
-  });
-
-  it('opens the failed admission gate and folds the blocker into the account banner', async () => {
-    const blockedView: DeployBotView = {
-      ...DEPLOY_VIEW,
-      eligibility: {
-        ...DEPLOY_VIEW.eligibility,
-        eligible: false,
-        headline: 'Deployment is blocked until Clerk channels are healthy.',
-        explanation: 'Market Data is unhealthy, Execution is healthy.',
-      },
-      readiness_checks: DEPLOY_VIEW.readiness_checks.map((check) =>
-        check.gate_id === 'broker.channel'
-          ? {
-              ...check,
-              ready: false,
-              recovery: 'Restore the market-data channel and refresh deployment readiness.',
-            }
-          : check,
-      ),
-      allowed_actions: [],
-    };
-    await renderWorkflow(mockService(RECEIPT, blockedView));
-
-    // The blocked verdict now headlines the always-visible admission column.
-    expect(screen.getByText('Blocked · 1 of 2 gates')).toBeTruthy();
-    expect(screen.getByText('Market Data is unhealthy, Execution is healthy.')).toBeTruthy();
-
-    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
-    const blockedHeader = screen.getByRole('button', { name: /Broker channel/ });
-    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
-    expect(blockedHeader.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('link', { name: 'Open account recovery' }).getAttribute('href'))
-      .toBe('/brokers/alpaca?lens=operator');
-  });
-
   it('changes the validated strategy and submits the selected strategy key', async () => {
     const service = mockService();
     await renderWorkflow(service);
+    await openStep('What');
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'ema-paper-01' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'ema_crossover_signal' },
-    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
 
-    expect(screen.getAllByText('EMA Crossover Signal').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText(EMA_STRATEGY.explanation)).toBeNull();
-    expect(screen.getByRole('button', {
-      name: `About EMA Crossover Signal: ${EMA_STRATEGY.explanation}`,
-    })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `About EMA Crossover Signal: ${EMA_STRATEGY.explanation}` })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
-
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-
+    await chooseMoney();
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).strategy_key)
-      .toBe('ema_crossover_signal');
+    expect(submittedBody(service).strategy_key).toBe('ema_crossover_signal');
   });
 
-  it('renders a strategy parameter seeded from its registered default and flags an edited value, then submits it', async () => {
+  it('renders a strategy setting seeded from its default, flags an edit, then submits it', async () => {
     const service = mockService();
     await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'ema-paper-params-01' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'ema_crossover_signal' },
-    });
-
-    const gapInput = screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement;
-    expect(gapInput.value).toBe('0.2');
-    expect(screen.queryByText('differs from default')).toBeNull();
-
-    fireEvent.change(gapInput, { target: { value: '5' } });
-
+    const gap = screen.getByRole<HTMLInputElement>('textbox', { name: 'Crossover gap' });
+    expect(gap.value).toBe('0.2');
+    fireEvent.change(gap, { target: { value: '5' } });
     expect(await screen.findByText('differs from default')).toBeTruthy();
 
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-
+    await chooseMoney();
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).parameters).toEqual({ gap: 5 });
+    expect(submittedBody(service).parameters).toEqual({ gap: 5 });
   });
 
-  it('seeds an accepted non-default Golden scope and submits its exact configuration', async () => {
-    const service = mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      strategies: [GOLDEN_TSLA_STRATEGY],
-    });
-    const view = await renderWorkflow(service);
+  it('seeds an accepted Golden scope, shows its settings without an editor in Paper, and submits them exactly', async () => {
+    const service = mockService({ ...DEPLOY_VIEW, strategies: [GOLDEN_TSLA_STRATEGY] });
+    const { fixture } = await renderWorkflow(service);
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'golden-tsla-01' },
-    });
+    expect(symbolPicker(fixture).symbol()).toBe('TSLA');
+    await openStep('What');
+    expect(screen.queryByRole('textbox', { name: 'Crossover gap' })).toBeNull();
+    expect(screen.getByLabelText('Settings in use').textContent).toContain('0.75');
 
-    // The Golden scope seeds the picker's symbol — read it from the picker,
-    // which is the symbol's only editing surface now.
-    expect(symbolPicker(view.fixture).symbol()).toBe('TSLA');
-    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
-
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-
+    await chooseMoney();
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(body.symbol).toBe('TSLA');
-    expect(body.parameters).toEqual({ gap: 0.75 });
+    expect(submittedBody(service)).toMatchObject({ symbol: 'TSLA', parameters: { gap: 0.75 } });
   });
 
-  it('does not offer broker deployment after an operator changes a Golden parameter', async () => {
-    await renderWorkflow(mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      strategies: [GOLDEN_TSLA_STRATEGY],
-    }));
+  it('opens the settings editor in Dry Run, and keeps other settings out of Paper', async () => {
+    const { fixture } = await renderWorkflow(mockService({ ...DEPLOY_VIEW, strategies: [GOLDEN_TSLA_STRATEGY] }));
+    await openStep('What');
+    fireEvent.click(screen.getByRole('button', { name: 'Try other settings in Dry Run' }));
+    await fixture.whenStable();
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'golden-tsla-edited' },
-    });
     fireEvent.change(screen.getByRole('textbox', { name: 'Crossover gap' }), { target: { value: '0.2' } });
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Paper/ }));
+    await fixture.whenStable();
 
-    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
-    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Broker deployment is limited to the selected Golden Validation symbol and parameters.'))
-      .toBeTruthy();
+    expect(deployButton().disabled).toBe(true);
+    expect(screen.getByText(/Paper trades only this strategy’s qualified symbol and settings/)).toBeTruthy();
   });
 
-  it('blocks deployment while a strategy parameter is showing unparseable text', async () => {
+  it('blocks deployment while a strategy setting shows unparseable text', async () => {
     const service = mockService();
     await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
+    await chooseMoney();
+    expect(deployButton().disabled).toBe(false);
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'ema-paper-params-02' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'ema_crossover_signal' },
-    });
-
-    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
-    await reviewMoney();
-    expect(deployButton.disabled).toBe(false);
-
-    const gapInput = screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement;
-    fireEvent.change(gapInput, { target: { value: 'not-a-number' } });
-
-    expect(deployButton.disabled).toBe(true);
-    await reviewMoney();
-    fireEvent.click(deployButton);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Crossover gap' }), { target: { value: 'not-a-number' } });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(true));
+    fireEvent.click(deployButton());
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
 
-    fireEvent.change(gapInput, { target: { value: '0.4' } });
-    await reviewMoney();
-    expect(deployButton.disabled).toBe(false);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Crossover gap' }), { target: { value: '0.4' } });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
   });
 
   it('requires the durable override to deploy an evidence-only strategy to Paper, then sends it', async () => {
-    // Operator decision 2026-08-24 (restoring what #1702 re-pointed at
-    // Live): an evidence-only Paper deploy is blocked until the operator
-    // acknowledges the risk and records a substantive reason; the override
-    // then rides the deploy request.
     const service = mockService();
     await renderWorkflow(service);
-
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'sma-paper-01' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'sma_crossover' },
-    });
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'sma_crossover' } });
+    await chooseMoney();
 
     expect(screen.getByRole('heading', { name: 'Dangerous human override' })).toBeTruthy();
-    expect(screen.getAllByText('Evidence only').length).toBeGreaterThanOrEqual(1);
-    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
-    expect(deployButton.disabled).toBe(true);
-
-    fireEvent.click(
-      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
-    );
-    expect(deployButton.disabled).toBe(true);
-
+    expect(deployButton().disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'));
+    expect(deployButton().disabled).toBe(true);
     fireEvent.input(screen.getByLabelText('Operator reason'), {
       target: { value: 'Paper ceremony run; evidence-only risk accepted.' },
     });
-    await reviewMoney();
-    expect(deployButton.disabled).toBe(false);
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
 
-    await reviewMoney();
-    fireEvent.click(deployButton);
-
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(body.strategy_key).toBe('sma_crossover');
-    expect(body.evidence_override).toEqual({
+    expect(submittedBody(service).evidence_override).toEqual({
       acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
       reason: 'Paper ceremony run; evidence-only risk accepted.',
     });
   });
 
-  it('names the invalid bot name instead of asking for already-complete trading inputs', async () => {
-    const service = mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      eligibility: {
-        ...DEPLOY_VIEW.eligibility,
-        next_action: 'Choose the symbol and sizing, then deploy the bot.',
-      },
-    });
+  it('still requires the durable override for an evidence-only Shadow deploy', async () => {
+    const service = mockService(SHADOW_DEPLOY_VIEW);
     await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'sma_crossover' } });
+    await chooseMoney();
+    expect(deployButton().disabled).toBe(true);
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'RSI MEAN reversion' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'sma_crossover' },
-    });
-
-    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' });
-    expect(deployButton.hasAttribute('disabled')).toBe(true);
-    expect(deployButton.getAttribute('aria-describedby')).toBe('deploy-submit-guidance');
-    expect(screen.getByText('Fix the bot name before deployment.')).toBeTruthy();
-    expect(screen.queryByText('Choose the symbol and sizing, then deploy the bot.')).toBeNull();
-
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'rsi-mean-reversion' },
-    });
-    // sma_crossover is evidence-only, so the durable override is the one
-    // remaining gate after the name is fixed (operator decision 2026-08-24).
-    fireEvent.click(
-      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
-    );
+    fireEvent.click(screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'));
     fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'Ceremony run; evidence-only risk accepted.' },
+      target: { value: 'Shadow ceremony run; evidence-only risk accepted.' },
     });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
 
-    await reviewMoney();
-    expect(deployButton.hasAttribute('disabled')).toBe(false);
-    expect(screen.getByText('Ready to deploy this bot.')).toBeTruthy();
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service).execution_mode).toBe('shadow');
+    expect(submittedBody(service).evidence_override?.reason).toBe('Shadow ceremony run; evidence-only risk accepted.');
   });
 
-  it('initializes the validated strategy from the strategy-key deep link', async () => {
-    const queryParamMap = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
-    await render(AlpacaDeployWorkflowComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: ActivatedRoute,
-          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
-        },
-        { provide: BrokerV2PanelService, useValue: mockService() },
-      ],
-      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
-    });
-    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
-
-    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
-      .toBe('ema_crossover_signal');
-    expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
-      .toBe('/strategy-validation?strategy=ema_crossover_signal');
-  });
-
-  it('honors a changed strategy-key query parameter while the deploy route is reused', async () => {
-    const initialQuery = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
-    const queryParamMap = new BehaviorSubject(initialQuery);
-    await render(AlpacaDeployWorkflowComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: ActivatedRoute,
-          useValue: { queryParamMap, snapshot: { queryParamMap: initialQuery } },
-        },
-        { provide: BrokerV2PanelService, useValue: mockService() },
-      ],
-      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
-    });
-    await screen.findByRole('heading', { name: 'Bot binding' });
-
-    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
-      .toBe('ema_crossover_signal');
-
-    queryParamMap.next(convertToParamMap({ strategy_key: 'sma_crossover' }));
-
-    await vi.waitFor(() => {
-      expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
-        .toBe('sma_crossover');
-    });
-    expect(screen.getByRole('button', {
-      name: `About ${SMA_OVERRIDE_STRATEGY.label}: ${SMA_OVERRIDE_STRATEGY.explanation}`,
-    })).toBeTruthy();
-  });
-
-  it('clears admission and evidence-only state when a reused route selects another strategy', async () => {
-    const initialQuery = convertToParamMap({ strategy_key: 'sma_crossover' });
-    const queryParamMap = new BehaviorSubject(initialQuery);
-    const deniedAdmission = {
-      ...ADMISSION,
-      allowed: false,
-      explanation: 'This admission result belongs only to SMA.',
-    };
+  it('initializes the strategy from the strategy-key deep link', async () => {
     const service = mockService();
-    service.previewStartAdmission.mockResolvedValue(deniedAdmission);
     await render(AlpacaDeployWorkflowComponent, {
       providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
         provideRouter([]),
         {
           provide: ActivatedRoute,
-          useValue: { queryParamMap, snapshot: { queryParamMap: initialQuery } },
+          useValue: { queryParamMap: of(convertToParamMap({ strategy_key: 'ema_crossover_signal' })),
+            snapshot: { queryParamMap: convertToParamMap({ strategy_key: 'ema_crossover_signal' }) } },
         },
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: FENCE, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
-    await screen.findByRole('heading', { name: 'Dangerous human override' });
 
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'route-reset-01' } });
+    expect(await screen.findByText(/^EMA Crossover Signal on SPY/)).toBeTruthy();
+  });
+
+  it('honors a changed strategy deep link on a reused route and clears the prior admission and override', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue({ ...ADMISSION, allowed: false, explanation: 'This result belongs only to SMA.' });
+    const { queryParamMap, fixture } = await renderWithQuery(service, { strategy_key: 'sma_crossover' });
+    await screen.findByRole('heading', { name: 'Dangerous human override' });
     fireEvent.click(screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'));
-    fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'This override belongs only to the SMA deployment.' },
-    });
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-    await screen.findByText('Start blocked');
+    fireEvent.input(screen.getByLabelText('Operator reason'), { target: { value: 'This override belongs only to SMA.' } });
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Start refused' });
 
     queryParamMap.next(convertToParamMap({ strategy_key: 'ema_crossover_signal' }));
+    await fixture.whenStable();
 
-    await vi.waitFor(() => {
-      expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
-        .toBe('ema_crossover_signal');
-    });
-    expect(screen.queryByText('Start blocked')).toBeNull();
+    await screen.findByText(/^EMA Crossover Signal on SPY/);
+    expect(screen.queryByRole('alert', { name: 'Start refused' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
 
     queryParamMap.next(convertToParamMap({ strategy_key: 'sma_crossover' }));
-
     await screen.findByRole('heading', { name: 'Dangerous human override' });
-    expect((screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.') as HTMLInputElement)
-      .checked).toBe(false);
-    expect((screen.getByLabelText('Operator reason') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByLabelText<HTMLInputElement>('I accept the evidence-only deployment risk for this strategy.').checked)
+      .toBe(false);
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Operator reason').value).toBe('');
   });
 
-  it('renders a blocked strategy selectable for Dry Run while Paper stays disabled with the backend reason', async () => {
-    // #1702: a blocked row is Dry-Run-admissible even though its proof no
-    // longer verifies for Paper — the dropdown no longer disables it, and
-    // the backend-authored reason surfaces on the Paper option instead.
-    const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
-    const service = mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, BLOCKED_STRATEGY],
-    });
-    await render(AlpacaDeployWorkflowComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: ActivatedRoute,
-          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
-        },
-        { provide: BrokerV2PanelService, useValue: service },
-      ],
-      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
-    });
-    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
-    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
+  it('offers a blocked strategy for Dry Run while Paper stays disabled with the backend reason', async () => {
+    const service = mockService({ ...DEPLOY_VIEW, strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, BLOCKED_STRATEGY] });
+    const { fixture } = await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'rsi_mean_reversion' } });
+    await fixture.whenStable();
 
-    const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
-    expect(select.value).toBe('rsi_mean_reversion');
-    const blockedOption = screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ });
-    expect(blockedOption.disabled).toBe(false);
-    expect(blockedOption.textContent).toContain('blocked');
-    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ }).disabled).toBe(false);
     expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+    await openStep('How');
+    const how = stepRegion('How');
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Paper/ }).disabled).toBe(true);
+    expect(within(how).getByRole('button', { name: `About Paper: ${BLOCKED_EXPLANATION}` })).toBeTruthy();
 
-    const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
-    expect(paperRadio.disabled).toBe(true);
-    expect(screen.getByRole('button', {
-      name: `About Paper: ${BLOCKED_EXPLANATION}`,
-    })).toBeTruthy();
-
-    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Deploy paper bot',
-      description: BLOCKED_EXPLANATION,
-    });
-    expect(deployButton.disabled).toBe(true);
-    const launchFooter = deployButton.closest<HTMLElement>('.deploy-footer');
-    if (launchFooter === null) throw new Error('deploy-footer container not found');
-    expect(within(launchFooter).getByText('Blocked')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('radio', { name: /Dry Run/i }));
-
-    await reviewMoney();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy dry run bot' }).disabled).toBe(false);
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
-
+    fireEvent.click(within(how).getByRole('radio', { name: /Dry Run/ }));
+    await chooseMoney();
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).execution_mode).toBe('dry_run');
+    expect(submittedBody(service).execution_mode).toBe('dry_run');
+    expect(submittedBody(service).carryover_policy).toBe('FORBID');
   });
 
-  it('shows the blocked reason for a single blocked strategy without a strategy selector', async () => {
-    const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
-    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
-    await render(AlpacaDeployWorkflowComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: ActivatedRoute,
-          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
-        },
-        { provide: BrokerV2PanelService, useValue: service },
-      ],
-      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
-    });
-    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
-    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
+  it('lets the owner inspect a no-runtime strategy while disabling both worlds', async () => {
+    const service = mockService({ ...DEPLOY_VIEW, strategies: [VALIDATION_STRATEGY, NO_RUNTIME_STRATEGY] });
+    const { fixture } = await renderWorkflow(service);
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'spy_strategy_b' } });
+    await fixture.whenStable();
+    await openStep('How');
 
-    expect(screen.queryByLabelText('Deployment strategy')).toBeNull();
-    expect(screen.getAllByText(BLOCKED_STRATEGY.label).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
-
-    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Deploy paper bot',
-      description: BLOCKED_EXPLANATION,
-    });
-    expect(deployButton.disabled).toBe(true);
+    const how = stepRegion('How');
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Paper/ }).disabled).toBe(true);
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Dry Run/ }).disabled).toBe(true);
+    expect(deployButton().disabled).toBe(true);
+    expect(screen.getAllByText(NO_RUNTIME_STRATEGY.blocked_explanation ?? '').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('lets the operator inspect a no-runtime strategy while disabling both execution modes', async () => {
-    // #1703: unlike a stale-proof blocked row (BLOCKED_STRATEGY, still
-    // Dry-Run-admissible), a no-runtime row admits neither mode. The row
-    // remains selectable in the catalog so its backend-authored reason is
-    // inspectable; only the execution modes are disabled.
-    const service = mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, NO_RUNTIME_STRATEGY],
-    });
-    await renderWorkflow(service);
+  it('auto-selects the first selectable strategy, skipping a blocked one', async () => {
+    await renderWorkflow(mockService({ ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY] }));
 
-    const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
-    const noRuntimeOption = screen.getByRole<HTMLOptionElement>('option', { name: /Strategy B/ });
-    expect(select.value).toBe('deployment_validation');
-    expect(noRuntimeOption.disabled).toBe(false);
-
-    fireEvent.change(select, {
-      target: { value: 'spy_strategy_b' },
-    });
-    await userEvent.type(screen.getByLabelText('Bot name'), 'strategy-b-01');
-
-    expect(select.value).toBe('spy_strategy_b');
-    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(NO_RUNTIME_EXPLANATION).length).toBeGreaterThanOrEqual(1);
-
-    const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
-    const dryRunRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Dry Run/i });
-    expect(paperRadio.disabled).toBe(true);
-    expect(dryRunRadio.disabled).toBe(true);
-
-    fireEvent.click(dryRunRadio);
-
-    // Clicking a disabled-for-this-strategy mode is a no-op: the ticket
-    // stays on the default 'paper' mode, so the button label is unchanged.
-    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Deploy paper bot',
-      description: NO_RUNTIME_EXPLANATION,
-    });
-    expect(deployButton.disabled).toBe(true);
+    expect(screen.getByText(/^EMA Crossover Signal on SPY/)).toBeTruthy();
   });
 
-  it('auto-selects the first selectable strategy, skipping a blocked one, when no deep link is given', async () => {
-    const service = mockService(RECEIPT, {
-      ...DEPLOY_VIEW,
-      strategies: [BLOCKED_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
-    });
-    await renderWorkflow(service);
+  it('keeps an owner-picked symbol when the strategy changes', async () => {
+    const { fixture } = await renderWorkflow();
+    await openStep('What');
 
-    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
-      .toBe('ema_crossover_signal');
-    expect(screen.getByText('✓ Accepted evidence')).toBeTruthy();
-  });
-
-  it('preserves a trader-edited symbol when the validated strategy changes', async () => {
-    const view = await renderWorkflow();
-
-    const picker = pickSymbol(view.fixture, 'QQQ');
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'ema_crossover_signal' },
-    });
+    const picker = pickSymbol(fixture, 'QQQ');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
 
     expect(picker.symbol()).toBe('QQQ');
   });
 
-  it('submits only the closed paper canary command and renders its durable receipt', async () => {
-    const service = mockService();
+  it('preselects Shadow on a shadow account and never calls it paper', async () => {
+    const service = mockService(SHADOW_DEPLOY_VIEW);
     await renderWorkflow(service);
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'spy-test-01' },
-    });
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-    await screen.findByText(RECEIPT.receipt_id);
-
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(service.previewStartAdmission).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), body);
-    expect(body).toEqual({
-      budget: { amount_usd: '1000.00', risk_revision: 1, review_token: 'budget-reviewed', live_confirmation: null },
-      exit_terms: DEPLOY_VIEW.default_exit_terms,
-      strategy_instance_id: 'spy-test-01',
-      strategy_key: 'deployment_validation',
-      symbol: 'SPY',
-      sizing: { preset: 'safe_canary', quantity: 1 },
-      execution_mode: 'paper',
-      carryover_policy: 'FORBID',
-      parameters: {},
-    });
-    expect(body).not.toHaveProperty('mode');
-    expect(screen.getByText(RECEIPT.receipt_id)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href'))
-      .toBe(RECEIPT.panel_path);
-    expect(screen.queryByRole('tab')).toBeNull();
-  });
-
-  it('on a shadow view the Shadow mode is offered, selected by default, and submitted', async () => {
-    // ADR 0059 D2: a live account's broker-facing mode is Shadow, not Paper.
-    // The form has no paper broker to offer, so the default the ticket opens
-    // on — and the noun on the submit button — follow the view's own modes.
-    const service = mockService(RECEIPT, SHADOW_DEPLOY_VIEW);
-    await renderWorkflow(service);
-
-    expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
-    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
-    const shadowRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Shadow/ });
-    expect(shadowRadio.checked).toBe(true);
-    expect(screen.getByRole('button', { name: 'Deploy shadow bot' })).toBeTruthy();
-    // The whole point of the slice: no surface on a real-money account's
-    // deploy form may call its custody world "paper". The fixture carries the
-    // backend's own shadow-worded eligibility copy so this can bite.
+    await openStep('How');
+    const how = stepRegion('How');
+    expect(within(how).queryByRole('radio', { name: /Paper/ })).toBeNull();
+    expect(within(how).getByRole<HTMLInputElement>('radio', { name: /Shadow/ }).checked).toBe(true);
+    await chooseMoney();
+    expect(deployButton().textContent?.trim()).toBe('Deploy shadow bot · set aside $1,000.00');
     expect(document.body.textContent).not.toMatch(/paper/i);
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'spy-shadow-01' },
-    });
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy shadow bot' }));
-
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).execution_mode)
-      .toBe('shadow');
+    expect(submittedBody(service).execution_mode).toBe('shadow');
   });
 
-  it('on a live view the Live mode is offered, selected by default, and submitted', async () => {
-    const service = mockService(RECEIPT, LIVE_DEPLOY_VIEW);
-    await renderWorkflow(service);
+  it('offers only this account’s broker world, and a blocked strategy makes its card carry the reason', async () => {
+    await renderWorkflow(mockService({ ...LIVE_DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] }));
 
-    expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
-    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
-    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
-    expect(live.checked).toBe(true);
-    expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/paper/i);
-    expect(document.body.textContent).not.toMatch(/shadow|armed|arming/i);
-    expect(screen.getByRole('button', {
-      name: 'About Live: Orders submit real-money trades through the live Clerk after typed deployment consent. '
-        + 'Every new entry must fit its budget and the effective account risk limits.',
-    })).toBeTruthy();
-
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'spy-live-01' },
-    });
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy live bot' }));
-
-    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(body.execution_mode).toBe('live');
-  });
-
-  it('shows only this account’s broker mode and its blocked strategy reason', async () => {
-    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
-    await renderWorkflow(service);
-
-    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
-    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
-    expect(screen.queryByText('Planned')).toBeNull();
-    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
-    const paperCard = paper.closest<HTMLElement>('.mode-option');
-    if (paperCard === null) throw new Error('Paper mode-option container not found');
-    expect(within(paperCard).getByText('Unavailable')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: `About Paper: ${BLOCKED_EXPLANATION}`,
-    })).toBeTruthy();
-  });
-
-  it('on the live view a blocked strategy makes the Live card carry the blocked reason', async () => {
-    const service = mockService(RECEIPT, { ...LIVE_DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
-    await renderWorkflow(service);
-
-    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    const how = stepRegion('How');
+    expect(within(how).queryByRole('radio', { name: /Paper/ })).toBeNull();
+    const live = within(how).getByRole<HTMLInputElement>('radio', { name: /Live/ });
     expect(live.disabled).toBe(true);
-    const liveCard = live.closest<HTMLElement>('.mode-option');
-    if (liveCard === null) throw new Error('Live mode-option container not found');
-    expect(within(liveCard).getByText('Unavailable')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: `About Live: ${BLOCKED_EXPLANATION}`,
-    })).toBeTruthy();
-  });
-
-  it('leaves an available card that is not this world\'s broker card governed by availability alone', async () => {
-    // The section is *told* which card is this world's rather than reading
-    // `availability` as an identity. Nothing enforces "exactly one available
-    // broker card": if a second one is ever emitted, it must not inherit this
-    // world's blocked reason — which would disable a radio the backend has
-    // said nothing about.
-    const service = mockService(RECEIPT, {
-      ...LIVE_DEPLOY_VIEW,
-      strategies: [BLOCKED_STRATEGY],
-      execution_modes: [
-        ...LIVE_DEPLOY_VIEW.execution_modes,
-        {
-          mode: 'paper',
-          label: 'Paper',
-          availability: 'available',
-          explanation: 'Available through the Alpaca Clerk.',
-        },
-      ],
-    });
-    await renderWorkflow(service);
-
-    // This world's card carries the blocked reason, as before.
-    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Live/ }).disabled).toBe(true);
-
-    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
-    const paperCard = paper.closest<HTMLElement>('.mode-option');
-    if (paperCard === null) throw new Error('Paper mode-option container not found');
-    expect(paper.disabled).toBe(false);
-    expect(within(paperCard).getByText('Available')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'About Paper: Available through the Alpaca Clerk.',
-    })).toBeTruthy();
-  });
-
-  it('still requires the durable override for an evidence-only Shadow deploy', async () => {
-    // Shadow holds the same custody as Paper, so the backend's broker-deploy
-    // gate (`_require_broker_deploy_request`) demands the identical override.
-    // A form that dropped it on a shadow account would 409 on submit.
-    const service = mockService(RECEIPT, SHADOW_DEPLOY_VIEW);
-    await renderWorkflow(service);
-
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'sma-shadow-01' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'sma_crossover' },
-    });
-
-    const deployButton = screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy shadow bot' });
-    expect(deployButton.disabled).toBe(true);
-
-    fireEvent.click(
-      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
-    );
-    fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'Shadow ceremony run; evidence-only risk accepted.' },
-    });
-    await reviewMoney();
-    expect(deployButton.disabled).toBe(false);
-
-    await reviewMoney();
-    fireEvent.click(deployButton);
-
-    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(body.execution_mode).toBe('shadow');
-    expect(body.evidence_override).toEqual({
-      acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
-      reason: 'Shadow ceremony run; evidence-only risk accepted.',
-    });
-  });
-
-  it('submits a first-class Dry Run mode that cannot opt into carryover', async () => {
-    const service = mockService({
-      ...RECEIPT,
-      execution_mode: 'dry_run',
-      message: 'spy-dry-01 is on duty in Dry Run.',
-      bot: { ...RECEIPT.bot, strategy_instance_id: 'spy-dry-01', mode: 'dry_run' },
-    });
-    await renderWorkflow(service);
-
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'spy-dry-01' },
-    });
-    fireEvent.click(screen.getByRole('radio', { name: /Dry Run Available/i }));
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
-
-    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
-    expect(body.execution_mode).toBe('dry_run');
-    expect(body.carryover_policy).toBe('FORBID');
-    expect(screen.getByText('Dry Run')).toBeTruthy();
-  });
-
-  it('renders a backend-authored Start refusal without dispatching deployment', async () => {
-    const denied = {
-      ...ADMISSION,
-      allowed: false,
-      reason_code: 'MARKET_DATA_STALE',
-      explanation: 'The required market-data feed is not proven ready for this run.',
-      next_step: 'Restore fresh market data before Start.',
-    } satisfies RunAdmissionDecision;
-    const service = mockService();
-    service.previewStartAdmission.mockResolvedValue(denied);
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
-
-    await reviewMoney();
-    await component['submit']();
-    fixture.detectChanges();
-
-    expect(screen.getByText('Start blocked')).toBeTruthy();
-    expect(screen.getByText(denied.explanation)).toBeTruthy();
-    expect(screen.getByText('Runner safety')).toBeTruthy();
-    expect(screen.getByText('Market data')).toBeTruthy();
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-  });
-
-  it('removes an obsolete Start decision when the deployment ticket changes', async () => {
-    const denied = { ...ADMISSION, allowed: false } satisfies RunAdmissionDecision;
-    const service = mockService();
-    service.previewStartAdmission.mockResolvedValue(denied);
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
-    await reviewMoney();
-    await component['submit']();
-    fixture.detectChanges();
-
-    pickSymbol(fixture, 'QQQ');
-
-    expect(screen.queryByText('Start blocked')).toBeNull();
-  });
-
-  it('discards a preview response when the deployment ticket changes in flight', async () => {
-    let resolvePreview!: (decision: RunAdmissionDecision) => void;
-    const service = mockService();
-    service.previewStartAdmission.mockReturnValue(new Promise((resolve) => {
-      resolvePreview = resolve;
-    }));
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-race' }));
-
-    await reviewMoney();
-    const submission = component['submit']();
-    await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
-    pickSymbol(fixture, 'QQQ');
-    resolvePreview(ADMISSION);
-    await submission;
-    fixture.detectChanges();
-
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-    expect(screen.queryByText('Start allowed')).toBeNull();
+    expect(within(how).getByRole('button', { name: `About Live: ${BLOCKED_EXPLANATION}` })).toBeTruthy();
   });
 
   it('submits bounded custom whole-share sizing', async () => {
     const service = mockService();
     const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Custom shares/ }));
+    await fixture.whenStable();
+    fireEvent.input(screen.getByRole('spinbutton', { name: 'Whole shares per entry' }), { target: { value: '7' } });
+    await chooseMoney();
 
-    component['ticket'].update((ticket) => ({
-      ...ticket,
-      instanceId: 'spy-test-02',
-      sizingPreset: 'custom',
-      quantity: 7,
-    }));
-    await reviewMoney();
-    await component['submit']();
-
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).sizing)
-      .toEqual({ preset: 'custom', quantity: 7 });
-  });
-
-  it('exposes available Clerk-proven carryover to the trader and submits the opt-in', async () => {
-    const carryoverView: DeployBotView = {
-      ...DEPLOY_VIEW,
-      carryover_available: true,
-      carryover_explanation: 'Keep exactly attributed exposure only after a durable Clerk checkpoint.',
-    };
-    const service = mockService(RECEIPT, carryoverView);
-    await renderWorkflow(service);
-
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: /Allow Clerk-proven exposure carryover on STOP/i,
-    }));
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'spy-carryover' },
-    });
-    await reviewMoney();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+    fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
-
-    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).carryover_policy)
-      .toBe('ALLOW');
+    expect(submittedBody(service).sizing).toEqual({ preset: 'custom', quantity: 7 });
   });
 
-  it('renders only the backend-authored readiness time', async () => {
-    await renderWorkflow();
+  it('submits the carryover opt-in when the account offers it', async () => {
+    const service = mockService({ ...DEPLOY_VIEW, carryover_available: true });
+    await renderWorkflow(service);
+    await openStep('How');
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow Clerk-proven exposure carryover on STOP/i }));
+    await chooseMoney();
 
-    expect(screen.queryByText('now')).toBeNull();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service).carryover_policy).toBe('ALLOW');
   });
 
-  /**
-   * `deployView` is parameterized by `accountId` alone. A ticket edit clears the
-   * prior admission decision but never re-evaluates these account gates, so the
-   * admission timestamp must not be presented as a per-edit recheck.
-   */
-  it('does not claim admission is re-checked on every edit', async () => {
-    const view = await renderWorkflow();
+  it('applies the qualified settings together and re-previews the kept amount for them', async () => {
+    const view: DeployBotView = { ...DEPLOY_VIEW, strategies: [{ ...EMA_STRATEGY,
+      validation_case_parameters: { gap: 5 },
+      qualified_configuration: { symbol: 'AAPL', parameters: { gap: 0.75 }, explanation: 'This exact tuple has retained qualified evidence.' },
+    }] };
+    const service = mockService(view);
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+    await openStep('What');
 
-    pickSymbol(view.fixture, 'QQQ');
-
-    expect(screen.queryByText(/on every edit/)).toBeNull();
-    expect(screen.getByText(/Account evaluated/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    await vi.waitFor(() => expect(symbolPicker(fixture).symbol()).toBe('AAPL'));
+    await vi.waitFor(() => expect(service.previewBudget.mock.calls.at(-1)?.[1])
+      .toMatchObject({ symbol: 'AAPL', parameters: { gap: 0.75 }, budget: { amount_usd: '1000.00' } }));
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
+});
 
-  it('normalizes text fields before Signal Form validation and submission gating', async () => {
-    const { fixture } = await renderWorkflow();
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-
-    fireEvent.input(screen.getByPlaceholderText('alpaca-spy-01'), {
-      target: { value: ' spy-validation-01 ' },
+describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', () => {
+  it('renders a backend-authored Start refusal without dispatching deployment', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue({
+      ...ADMISSION, allowed: false, reason_code: 'MARKET_DATA_STALE',
+      explanation: 'The required market-data feed is not proven ready for this run.',
+      next_step: 'Restore fresh market data before Start.',
     });
-    pickSymbol(fixture, ' brk.b ');
-    component['ticketForm'].instanceId().markAsTouched();
-    component['ticketForm'].symbol().markAsTouched();
-    fixture.detectChanges();
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
 
-    expect(component['ticket']().instanceId).toBe('spy-validation-01');
-    expect(component['ticket']().symbol).toBe('BRK.B');
-    expect(component['ticketForm']().valid()).toBe(true);
-    await reviewMoney();
-    expect(screen.getByRole('button', { name: 'Deploy paper bot' }).hasAttribute('disabled'))
-      .toBe(false);
+    const refusal = await screen.findByRole('alert', { name: 'Start refused' });
+    expect(within(refusal).getByText('The required market-data feed is not proven ready for this run.')).toBeTruthy();
+    expect(within(refusal).getByText('Next: Restore fresh market data before Start.')).toBeTruthy();
+    expect(screen.getByText('Runner safety')).toBeTruthy();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
-  it('distinguishes a stale-state conflict from an unknown outcome', async () => {
+  it('removes an obsolete Start decision when the settings change', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue({ ...ADMISSION, allowed: false });
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Start refused' });
+    await openStep('What');
+
+    pickSymbol(fixture, 'QQQ');
+
+    expect(screen.queryByRole('alert', { name: 'Start refused' })).toBeNull();
+  });
+
+  it('discards a Start answer when the settings change while it is in flight', async () => {
+    let resolvePreview!: (decision: RunAdmissionDecision) => void;
+    const service = mockService();
+    service.previewStartAdmission.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+    await openStep('What');
+
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
+    pickSymbol(fixture, 'QQQ');
+    resolvePreview(ADMISSION);
+    await fixture.whenStable();
+
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a changed-account conflict from an unknown outcome', async () => {
     const refusedAdmission = {
-      ...ADMISSION,
-      allowed: false,
-      reason_code: 'CUSTODY_HOLD_ACTIVE',
-      explanation: 'The Clerk entered a hold after the preview.',
-      next_step: 'Resolve the Clerk hold before Start.',
+      ...ADMISSION, allowed: false, reason_code: 'CUSTODY_HOLD_ACTIVE',
+      explanation: 'The account entered a hold after the preview.', next_step: 'Clear the hold before Start.',
     } satisfies RunAdmissionDecision;
     const error = new HttpErrorResponse({
       status: 409,
-      error: {
-        detail: {
-          outcome: 'conflict',
-          receipt_id: 'deploy-conflict-1',
-          recorded_at_ms: 1_700_000_000_002,
-          message: 'Deployment readiness changed.',
-          why: 'The Clerk entered a hold after the page loaded.',
-          next_action: 'Reload readiness and resolve the hold.',
-          admission: refusedAdmission,
-        },
-      },
+      error: { detail: {
+        outcome: 'conflict', receipt_id: 'deploy-conflict-1', recorded_at_ms: 1_700_000_000_002,
+        message: 'Deployment readiness changed.', why: 'The account entered a hold after the page loaded.',
+        next_action: 'Reload and clear the hold.', admission: refusedAdmission,
+      } },
     });
-    const { fixture } = await renderWorkflow(mockService(error));
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-conflict' }));
+    await renderWorkflow(mockService(DEPLOY_VIEW, error));
+    await chooseMoney();
+    fireEvent.click(deployButton());
 
-    await reviewMoney();
-    await component['submit']();
-    fixture.detectChanges();
-
-    expect(screen.getByText('State changed before launch')).toBeTruthy();
-    expect(screen.getByText('The Clerk entered a hold after the page loaded.')).toBeTruthy();
-    expect(screen.getByText('deploy-conflict-1')).toBeTruthy();
-    expect(screen.getByText('Start blocked')).toBeTruthy();
-    expect(screen.getByText(refusedAdmission.explanation)).toBeTruthy();
-  });
-
-  it('reuses its frozen command target after an uncertain deploy outcome', async () => {
-    const service = mockService();
-    service.deployBudgetBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'retry-stable-command' }));
-
-    await reviewMoney();
-    await component['submit']();
-    await reviewMoney();
-    await component['submit']();
-
-    expect(service.previewStartAdmission).toHaveBeenCalledTimes(2);
-    expect(service.deployBudgetBot).toHaveBeenCalledTimes(2);
-    const [firstTarget] = service.deployBudgetBot.mock.calls[0];
-    const [secondTarget] = service.deployBudgetBot.mock.calls[1];
-    expect(firstTarget).toEqual(secondTarget);
-    expect(firstTarget).toMatchObject({
-      clerkId: 'clrk_spec',
-      accountId: 'PA9',
-      bindingGeneration: 3,
-      routingEpoch: 4,
-    });
-    expect(firstTarget.idempotencyKey).toBeTruthy();
-  });
-
-  it('abandons a failed deploy key when the deployment ticket changes', async () => {
-    const service = mockService();
-    service.deployBudgetBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'first-deploy-ticket' }));
-    await reviewMoney();
-    await component['submit']();
-
-    await component['newDeployment']();
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'second-deploy-ticket' }));
-    await reviewMoney();
-    await component['submit']();
-
-    const [firstTarget] = service.deployBudgetBot.mock.calls[0];
-    const [secondTarget] = service.deployBudgetBot.mock.calls[1];
-    expect(firstTarget.idempotencyKey).not.toBe(secondTarget.idempotencyKey);
+    const refusal = await screen.findByRole('alert', { name: 'The account changed before Deploy' });
+    expect(within(refusal).getByText('The account entered a hold after the page loaded.')).toBeTruthy();
+    expect(within(refusal).getByText('deploy-conflict-1')).toBeTruthy();
+    expect(within(refusal).getByText(refusedAdmission.explanation)).toBeTruthy();
   });
 
   it('blocks resubmission, not just the banner, when the account rebinds under a frozen preview', async () => {
-    // The deploy drawer's own target is frozen on open and cannot drift
-    // while visible; only the account can move under an already-previewed
-    // command. Leaving the preview `allowed: false` keeps frozenCommand set
-    // (only a successful deploy nulls it), so a following drift is on a
-    // command that is actually still pending.
-    const denied = { ...ADMISSION, allowed: false } satisfies RunAdmissionDecision;
     const service = mockService();
-    service.previewStartAdmission.mockResolvedValue(denied);
+    service.previewStartAdmission.mockResolvedValue({ ...ADMISSION, allowed: false });
     const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'drift-01' }));
-
-    await reviewMoney();
-    await component['submit']();
-    fixture.detectChanges();
-    expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('alert').textContent).toContain(denied.explanation);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Start refused' });
 
     fixture.componentRef.setInput('accountId', 'PA10');
     await fixture.whenStable();
-    fixture.detectChanges();
 
-    expect(await screen.findAllByText(/The account changed. Nothing was sent/i)).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled)
-      .toBe(true);
-
-    // The operator, reading the retry as a resume, clicks Deploy again. A
-    // banner alone would leave the button live and a second `submit()` would
-    // mint a fresh idempotency key against the rebound account — the defect
-    // a message-only test cannot catch, since it only proves the *first*,
-    // already-denied submission didn't fire.
-    await reviewMoney();
-    await component['submit']();
-    fixture.detectChanges();
-
+    expect((await screen.findAllByText(/The account changed. Nothing was sent/i)).length).toBeGreaterThan(0);
+    expect(deployButton().disabled).toBe(true);
+    await fixture.componentInstance['submit']();
     expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
-    // The conflict survives the second attempt instead of being silently
-    // cleared by submit()'s own `this.submitError.set(null)`.
-    expect(screen.getAllByText(/The account changed. Nothing was sent/i)).toBeTruthy();
   });
 
-  it('refuses to submit when the drawer opened against a cold directory, and dispatches nothing', async () => {
-    // A cold or failed fleet directory yields a null generation. The drawer
-    // wrapper freezes `target` once, on open, for this component's whole
-    // lifetime — so an unenforceable fence here is a static fact of how the
-    // drawer opened, not something that could later "warm up" in place
-    // (#2068, decision 15).
-    const coldTarget = resourceTarget('alpaca', 'clrk_spec', {
-      accountId: 'PA9',
-      bindingGeneration: null,
-      routingEpoch: null,
-    });
+  it('refuses to submit when the page opened against a cold directory, and dispatches nothing', async () => {
     const service = mockService();
     const { fixture } = await render(AlpacaDeployWorkflowComponent, {
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { fence: { bindingGeneration: null, routingEpoch: null }, target: coldTarget, accountId: 'PA9' },
+      componentInputs: {
+        fence: { bindingGeneration: null, routingEpoch: null },
+        target: resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: null, routingEpoch: null }),
+        accountId: 'PA9',
+      },
     });
-    await screen.findByRole('heading', { name: 'Bot binding' });
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    await screen.findByRole('heading', { name: 'What' });
+    await chooseMoney();
 
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'cold-open-01' },
-    });
-
-    // Calls the real submit() guard directly rather than clicking the
-    // button: the dispatch assertion below must be provable independently of
-    // whether the button's [disabled] binding happens to read correctly, so
-    // it cannot be masked by a DOM-level click no-op on a disabled control.
-    await reviewMoney();
-    await component['submit']();
+    await fixture.componentInstance['submit']();
 
     expect(service.previewStartAdmission).not.toHaveBeenCalled();
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
     expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
-    expect(component['readinessSummary']()?.label).toBe('Blocked');
+    expect(deployButton().disabled).toBe(true);
   });
-  it('reads a pending command after refresh without submitting another deployment', async () => {
-    const service = mockService();
-    const command: BudgetDeployReceipt = {
-      status: 'pending', outcome: 'pending', receipt_id: 'budget-pending', recorded_at_ms: 1700000000000,
-      command_id: 'original-command', strategy_instance_id: 'pending-bot', run_id: 'run-pending', account_id: 'PA9',
-      world: 'real_paper', committed_usd: '1000.00', message: 'Budget committed; launch pending.',
-      explanation: 'The recorded launch has not completed.', next_action: 'Check the recorded result.', panel_path: '/bot/pending-bot',
-    };
-    service.getDeployCommand.mockResolvedValue(command);
-    service.getDeployView.mockRejectedValue(new Error('Readiness unavailable'));
-    await render(AlpacaDeployWorkflowComponent, { providers: [
-      ...fakePickerWorld().providers, provideFleetDirectory(), provideRouter([]),
-      { provide: BrokerV2PanelService, useValue: service },
-      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({ deployment: 'pending-bot' }) }, queryParamMap: of(convertToParamMap({ deployment: 'pending-bot' })) } },
-    ], inputs: { target: DEPLOY_TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } } });
-    await screen.findByRole('heading', { name: 'Budget committed; launch pending.' });
-    expect(screen.getByText('Pending')).toBeTruthy();
-    expect(screen.getByText('$1,000.00')).toBeTruthy();
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-    service.getDeployCommand.mockResolvedValue({ ...command, status: 'deployed', outcome: 'success', message: 'The bot is running.' });
-    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
-    await screen.findByRole('heading', { name: 'The bot is running.' });
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-  });
-
-  it('requires a reviewed budget even when the older readiness checks are satisfied', async () => {
-    const service = mockService();
-    const { fixture } = await renderWorkflow(service);
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'needs-consent' } });
-    await fixture.whenStable();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(true);
-    await fixture.componentInstance['submit']();
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-    await reviewMoney();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
-  });
-
-  it('applies the explicit qualified tuple atomically and requires a fresh budget review', async () => {
-    const view: DeployBotView = { ...DEPLOY_VIEW, strategies: [{ ...EMA_STRATEGY,
-      golden_validation_scope: false, validation_case_symbol: 'SPY', validation_case_parameters: { gap: 5 },
-      qualified_configuration: { symbol: 'AAPL', parameters: { gap: 0.75 }, explanation: 'This exact tuple has retained qualified evidence.' },
-    }] };
-    const service = mockService(RECEIPT, view);
-    const { fixture } = await renderWorkflow(service);
-    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'qualified-budget' } });
-    await reviewMoney();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
-    await vi.waitFor(() => expect(symbolPicker(fixture).symbol()).toBe('AAPL'));
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(true);
-    expect(screen.queryByText(/Reviewed budget:/)).toBeNull();
-    await reviewMoney();
-    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'AAPL', parameters: { gap: 0.75 }, budget: { amount_usd: '1000.00' } });
-    await vi.waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
-    expect(screen.getByText(/Reviewed budget:/)).toBeTruthy();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
-    expect(service.deployBudgetBot).not.toHaveBeenCalled();
-  });
-
 });
