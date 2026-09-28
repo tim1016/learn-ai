@@ -7,6 +7,7 @@ import pytest
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerEvidenceUnavailable,
     BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
@@ -24,6 +25,7 @@ from app.broker.contract.errors import (
         (BrokerRequestInvalid, 400),
         (BrokerOrderRejected, 409),
         (BrokerUnavailable, 503),
+        (BrokerEvidenceUnavailable, 503),
     ],
 )
 def test_http_status_mapping(error_cls: type[BrokerError], expected_status: int) -> None:

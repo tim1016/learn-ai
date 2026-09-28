@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
+from app.broker.contract.models import BrokerActivity
 
 if TYPE_CHECKING:
     from app.broker.alpaca.config import AlpacaSettings
@@ -192,8 +193,13 @@ class AccountObservation:
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float | Decimal
     last_equity_usd: float | None
-    unrealized_pl_usd: float
-    position_count: int
+    position_count: int | None
+    equity_usd: float | None = None
+    unrealized_pl_usd: float = 0.0  # simulation diagnostic; never the loss authority
+    risk_cash_flows: tuple[BrokerActivity, ...] = ()
+    risk_cash_flow_evidence_complete: bool = False
+    risk_cash_flow_window_start_ms: int | None = None
+    risk_equity_window_start_ms: int | None = None
     risk_revision: int | None = None
     # Effective fill watermark before requesting broker unrealized P&L. A
     # subsequent execution can close a lot already included in that mark.

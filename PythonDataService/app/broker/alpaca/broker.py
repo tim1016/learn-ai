@@ -17,11 +17,16 @@ process-wide settings lazily on first use, exactly as it always has.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+from itertools import pairwise
+
 from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -35,8 +40,115 @@ from app.broker.contract.models import (
     PortfolioHistoryRange,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
+from app.utils.session_anchors import et_date_at_ms
 
 _ACTIVITY_MAX_PAGES = 3
+_CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
+
+
+def _transfer_activity_may_overlap_window(
+    activity: BrokerActivity,
+    *,
+    after_ms: int,
+) -> bool:
+    """Keep every transfer row that could fall after a prior-close boundary.
+
+    Alpaca transfer rows can carry only a calendar ``date``. The adapter
+    anchors those at ET midnight, so a row on the boundary date is ambiguous:
+    it might have occurred after the close. Preserve it so the day-P&L layer
+    can fail closed instead of silently treating it as outside the window.
+    """
+    if activity.occurred_at_ms is None:
+        return True
+    return activity.occurred_at_ms >= after_ms or (
+        activity.category == "non_trade_activity"
+        and et_date_at_ms(activity.occurred_at_ms) == et_date_at_ms(after_ms)
+    )
+
+
+def _transfer_page_crossed_window(
+    activities: list[BrokerActivity],
+    *,
+    after_ms: int,
+) -> bool:
+    """Whether a newest-first page proves all later pages predate the window."""
+    if not activities:
+        return False
+    oldest = activities[-1]
+    return oldest.occurred_at_ms is not None and (
+        et_date_at_ms(oldest.occurred_at_ms) < et_date_at_ms(after_ms)
+    )
+
+
+def _same_activity_evidence(left: BrokerActivity, right: BrokerActivity) -> bool:
+    """Compare broker-authored content, excluding only local ingestion time."""
+    return left.model_dump(exclude={"observed_at_ms"}) == right.model_dump(
+        exclude={"observed_at_ms"}
+    )
+
+
+def _validate_transfer_payload(payload: object) -> None:
+    """Require identity and finality before a transfer can affect day P&L."""
+    if not isinstance(payload, Mapping):
+        raise TypeError("Alpaca transfer activity row must be an object")
+    activity_id = payload.get("id")
+    if not isinstance(activity_id, str) or not activity_id.strip():
+        raise BrokerEvidenceUnavailable(
+            "Alpaca transfer activity evidence had no valid activity id.",
+            broker=BROKER_ID,
+            detail="A transfer row cannot be identified without a nonempty broker id.",
+        )
+    if payload.get("status") != "executed":
+        raise BrokerEvidenceUnavailable(
+            "An Alpaca transfer activity was not executed.",
+            broker=BROKER_ID,
+            detail=(
+                "Only definitively executed transfers can adjust account day P&L; "
+                "pending or statusless rows are unavailable evidence."
+            ),
+        )
+    raw_amount = payload.get("net_amount")
+    try:
+        numeric_amount = float(raw_amount)
+    except (TypeError, ValueError):
+        numeric_amount = math.nan
+    if isinstance(raw_amount, bool) or not math.isfinite(numeric_amount):
+        raise BrokerEvidenceUnavailable(
+            "An Alpaca transfer activity had no valid net amount.",
+            broker=BROKER_ID,
+            detail=(
+                "Transfer net_amount must be a finite non-boolean number before "
+                "it can adjust account day P&L."
+            ),
+        )
+
+
+def _transfer_page_oldest_ms(
+    activities: list[BrokerActivity],
+    *,
+    previous_page_oldest_ms: int | None,
+) -> int | None:
+    """Validate newest-first ordering and return the page's oldest instant.
+
+    An undated row already makes day P&L unknown. It also prevents the date
+    boundary from proving pagination complete, so callers continue until a
+    short page instead of trusting an order that cannot be checked.
+    """
+    occurred_at_ms = [activity.occurred_at_ms for activity in activities]
+    if not occurred_at_ms or any(value is None for value in occurred_at_ms):
+        return None
+    dated = [value for value in occurred_at_ms if value is not None]
+    if any(newer < older for newer, older in pairwise(dated)) or (
+        previous_page_oldest_ms is not None
+        and dated[0] > previous_page_oldest_ms
+    ):
+        raise BrokerEvidenceUnavailable(
+            "Alpaca transfer activity history was not newest-first.",
+            broker=BROKER_ID,
+            detail="Transfer pagination cannot prove the prior-close boundary.",
+        )
+    return dated[-1]
+
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
@@ -159,13 +271,122 @@ class AlpacaBroker:
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]:
+        activity_filter = (
+            {} if activity_type is None else {"activity_type": activity_type}
+        )
         if after_ms is None:
-            payloads = await self._client.list_activities(limit=limit)
+            payloads = await self._client.list_activities(limit=limit, **activity_filter)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
-        evidence = await self._activity_evidence(page_size=limit)
-        return list({row.activity_id: row for row in evidence.activities if row.occurred_at_ms is not None and row.occurred_at_ms >= after_ms}.values())
+        if activity_type == _CASH_TRANSFER_ACTIVITY_FILTER:
+            # The loss gate may call this history complete only after reaching
+            # the prior-close boundary. Unlike generic activity recovery, a
+            # fixed page cap would silently turn omitted transfers into P&L.
+            activities: list[BrokerActivity] = []
+            seen_activities: dict[str, BrokerActivity] = {}
+            issued_page_tokens: set[str | None] = set()
+            previous_page_oldest_ms: int | None = None
+            boundary_crossed_on_previous_page = False
+            page_token: str | None = None
+            while True:
+                issued_page_tokens.add(page_token)
+                payloads = await self._client.list_activities(
+                    limit=limit,
+                    page_token=page_token,
+                    **activity_filter,
+                )
+                try:
+                    for payload in payloads:
+                        _validate_transfer_payload(payload)
+                    mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
+                except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                    raise BrokerEvidenceUnavailable(
+                        "Alpaca transfer activity evidence was malformed.",
+                        broker=BROKER_ID,
+                        detail="A transfer row could not be mapped to the broker contract.",
+                    ) from exc
+                page_oldest_ms = _transfer_page_oldest_ms(
+                    mapped,
+                    previous_page_oldest_ms=previous_page_oldest_ms,
+                )
+                for activity in mapped:
+                    previous = seen_activities.get(activity.activity_id)
+                    if previous is not None:
+                        if not _same_activity_evidence(previous, activity):
+                            raise BrokerEvidenceUnavailable(
+                                "Alpaca transfer activity history contains a conflicting duplicate.",
+                                broker=BROKER_ID,
+                                detail=(
+                                    "One activity id carried different economic evidence "
+                                    "across pages."
+                                ),
+                            )
+                        continue
+                    seen_activities[activity.activity_id] = activity
+                    if _transfer_activity_may_overlap_window(
+                        activity,
+                        after_ms=after_ms,
+                    ):
+                        activities.append(activity)
+                if len(payloads) < limit:
+                    break
+                if boundary_crossed_on_previous_page and page_oldest_ms is not None:
+                    break
+                boundary_crossed_on_previous_page = (
+                    page_oldest_ms is not None
+                    and _transfer_page_crossed_window(
+                        mapped,
+                        after_ms=after_ms,
+                    )
+                )
+                previous_page_oldest_ms = page_oldest_ms
+                next_page_token = payloads[-1].get("id")
+                if (
+                    not isinstance(next_page_token, str)
+                    or not next_page_token
+                    or next_page_token in issued_page_tokens
+                ):
+                    raise BrokerEvidenceUnavailable(
+                        "Alpaca transfer activity history was incomplete.",
+                        broker=BROKER_ID,
+                        detail="Pagination ended before the prior-close boundary.",
+                    )
+                page_token = next_page_token
+            return activities
+
+        # Recovery is explicitly bounded. Alpaca's page cursor is not the
+        # canonical occurred-at cursor, so follow at most this small fixed
+        # number of newest-first pages and filter mapped contract records here.
+        activities: list[BrokerActivity] = []
+        seen_activity_ids: set[str] = set()
+        page_token: str | None = None
+        for _ in range(_ACTIVITY_MAX_PAGES):
+            payloads = await self._client.list_activities(
+                limit=limit,
+                page_token=page_token,
+                **activity_filter,
+            )
+            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads):
+                if (
+                    activity.activity_id not in seen_activity_ids
+                    and activity.occurred_at_ms is not None
+                    and activity.occurred_at_ms >= after_ms
+                ):
+                    seen_activity_ids.add(activity.activity_id)
+                    activities.append(activity)
+            if len(payloads) < limit:
+                break
+            next_page_token = payloads[-1].get("id")
+            if (
+                not isinstance(next_page_token, str)
+                or not next_page_token
+                or next_page_token == page_token
+            ):
+                break
+            page_token = next_page_token
+        return activities
 
     async def read_activity_evidence(self) -> BrokerActivityEvidence:
         """Read raw dated evidence with the provider's explicit page completion.

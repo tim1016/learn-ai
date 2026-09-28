@@ -104,6 +104,7 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     current = projection.observe(reference_cash=1200, observed_at_ms=clock(), now_ms=clock())
     assert current.cash_available_usd == Decimal("1120")
     assert current.last_equity_usd == 1000  # reference deposit never resets risk
+    assert current.equity_usd == pytest.approx(1050, abs=1e-9, rel=0)
     assert current.unrealized_pl_usd == pytest.approx(30, abs=1e-9, rel=0)
     assert current.fills_seen_before_ms == clock() + 1
     assert repo.reserved_cash_decimal(seen_before_ms=current.fills_seen_before_ms) == 0
@@ -117,6 +118,10 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     # SEC ceil(120*.0000206)=.01; TAF ceil(1*.000195)=.01; CAT ceil(3*.000003)=.01.
     assert tomorrow.cash_available_usd == Decimal("1419.97")
     assert tomorrow.last_equity_usd == pytest.approx(1049.97, abs=1e-9, rel=0)
+    assert tomorrow.equity_usd == pytest.approx(1050.97, abs=1e-9, rel=0)
+    from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
+
+    assert observed_day_pnl(observation=tomorrow, now_ms=clock()).total_usd == pytest.approx(1, abs=1e-9, rel=0)
 
 
 async def test_real_unrealized_is_never_shadow_profit_or_loss(shadow: ShadowContext, tmp_path: Path) -> None:

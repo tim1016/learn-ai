@@ -172,6 +172,16 @@ async def test_list_activities_passes_page_token_to_low_level_endpoint() -> None
     )
 
 
+async def test_list_activities_can_request_the_cash_transaction_group() -> None:
+    fake = _FakeAlpaca()
+    await _client(fake).list_activities(limit=100, activity_type="TRANS")
+
+    assert fake.activities_call == (
+        "/account/activities/TRANS",
+        {"page_size": 100, "direction": "desc"},
+    )
+
+
 async def test_get_clock_returns_raw() -> None:
     assert await _client(_FakeAlpaca()).get_clock() == {"is_open": True}
 
@@ -842,4 +852,3 @@ async def test_reads_are_not_retried_by_the_sdk_on_504(tmp_path: Path) -> None:
         await client.get_account()
 
     assert len(responses.calls) == 1
-

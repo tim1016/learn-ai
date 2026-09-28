@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_author
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
@@ -49,6 +50,9 @@ def _gate(cash: float = 1000) -> LiveEnvelopeGate:
     gate.publish(AccountObservation(
         observed_at_ms=NOON, broker_cash_usd=cash, cash_available_usd=cash,
         last_equity_usd=cash, unrealized_pl_usd=0, position_count=0, risk_revision=1,
+        equity_usd=cash, risk_cash_flow_evidence_complete=True,
+        risk_cash_flow_window_start_ms=day_pnl_window_start_ms(NOON),
+        risk_equity_window_start_ms=day_pnl_window_start_ms(NOON),
     ))
     return gate
 

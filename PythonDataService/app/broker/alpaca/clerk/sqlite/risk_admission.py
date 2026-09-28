@@ -20,8 +20,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_at, risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl, risk_evidence_ready, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
@@ -73,13 +72,11 @@ def current_risk_readiness(
         values = policy if policy is not None else (envelope.in_force if envelope.values is not None else None)
         if values is None and not synthetic:
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Apply account risk limits in Configuration before deploying.")
-        reader = SqliteEconomicProjectionReader.from_repository(repo)
-        try:
-            pnl = day_pnl_at(reader, repo, observation=observation, now_ms=now_ms)
-        finally:
-            reader.close()
-        if not pnl.known or not math.isfinite(observation.last_equity_usd):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Current account loss evidence is incomplete. Refresh fees and reconcile executions before deploying.")
+        if observation.equity_usd is None:
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Current account equity is unavailable. Refresh account evidence.")
+        pnl = observed_day_pnl(observation=observation, now_ms=now_ms)
+        if not pnl.known or not math.isfinite(observation.last_equity_usd) or not risk_evidence_ready(repo, now_ms=now_ms):
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail="Current account evidence is incomplete. Refresh transfers and fees and reconcile executions before deploying.")
         # Dry Run retains its explicit daily-loss-policy exemption while money,
         # fees, execution evidence and ordinary custody holds still apply.
         if not synthetic:

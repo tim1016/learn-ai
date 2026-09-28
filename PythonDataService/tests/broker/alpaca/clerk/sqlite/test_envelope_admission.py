@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LiveEnvelopeGate,
     LiveEnvelopeValues,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
@@ -48,9 +49,12 @@ def _gate(
             observed_at_ms=observed_at_ms,
             broker_cash_usd=cash,
             cash_available_usd=cash,
+            equity_usd=cash,
             last_equity_usd=cash,
-            unrealized_pl_usd=0.0,
             position_count=0,
+            risk_cash_flow_evidence_complete=True,
+            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
+            risk_equity_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
         )
     )
     return gate

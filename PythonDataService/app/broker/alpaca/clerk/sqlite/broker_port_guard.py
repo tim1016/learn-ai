@@ -80,9 +80,17 @@ class GuardedBrokerReadPort:
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]:
         self._assert_unfenced("list_activities")
-        return await self._inner.list_activities(after_ms=after_ms, limit=limit)
+        activity_filter = (
+            {} if activity_type is None else {"activity_type": activity_type}
+        )
+        return await self._inner.list_activities(
+            after_ms=after_ms,
+            limit=limit,
+            **activity_filter,
+        )
 
     async def read_activity_evidence(self) -> BrokerActivityEvidence:
         self._assert_unfenced("read_activity_evidence")

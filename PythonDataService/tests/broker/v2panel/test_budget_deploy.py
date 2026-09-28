@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, appen
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
@@ -59,7 +60,10 @@ def authority(tmp_path, monkeypatch):
     commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
     append_risk_policy(repo, policy=policy, expected_revision=0)
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
-    observation = AccountObservation(observed_at_ms=NOON, broker_cash_usd=1000, cash_available_usd=1000, last_equity_usd=1000, unrealized_pl_usd=0, position_count=0, risk_revision=1)
+    observation = AccountObservation(observed_at_ms=NOON, broker_cash_usd=1000, cash_available_usd=1000,
+        last_equity_usd=1000, unrealized_pl_usd=0, position_count=0, risk_revision=1, equity_usd=1000,
+        risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=day_pnl_window_start_ms(NOON),
+        risk_equity_window_start_ms=day_pnl_window_start_ms(NOON))
     snapshot = SimpleNamespace(observation=observation, policy=policy, hold=None)
     runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=SimpleNamespace(risk_snapshot=lambda: snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
@@ -155,7 +159,7 @@ def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: t
 
 def test_budget_read_rejudges_risk_without_creating_a_hold(authority: tuple) -> None:
     repo, runtime, gate = _committed_view(authority)
-    gate.publish(replace(gate.latest_observation(), unrealized_pl_usd=-101))
+    gate.publish(replace(gate.latest_observation(), equity_usd=899))
     before = repo.custody_transitions()
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "loss limit is breached" in view.detail

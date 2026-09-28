@@ -29,8 +29,8 @@ def _observation(observed_at_ms: int, *, cash: float = 100_000.0) -> AccountObse
         observed_at_ms=observed_at_ms,
         broker_cash_usd=cash,
         cash_available_usd=cash,
+        equity_usd=cash,
         last_equity_usd=100_000.0,
-        unrealized_pl_usd=0.0,
         position_count=0,
     )
 

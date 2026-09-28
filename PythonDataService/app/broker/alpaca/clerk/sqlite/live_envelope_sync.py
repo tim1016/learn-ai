@@ -39,8 +39,14 @@ from app.broker.alpaca.clerk.live_envelope import (
 from app.broker.alpaca.clerk.money import MoneyInputError, normalize_money
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
-from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at, risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+from app.broker.alpaca.clerk.sqlite.day_pnl import (
+    CASH_TRANSFER_ACTIVITY_FILTER,
+    DayPnl,
+    day_pnl_window_start_ms,
+    observed_day_pnl,
+    risk_evidence_ready,
+    risk_fill_sequence,
+)
 from app.broker.alpaca.clerk.sqlite.facts import LossHoldClearBasis
 from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation, _custody_flat, observe_account_quiet
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -50,7 +56,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
-from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError
+from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError, BrokerEvidenceUnavailable
+from app.broker.contract.models import BrokerActivity
 from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
@@ -95,16 +102,18 @@ class EnvelopeReading:
     seal_readable: bool = True
     policy_revision: int | None = None
     daily_loss_exempt: bool = False
+    fee_evidence_complete: bool = True
 
     @property
     def breached(self) -> bool | None:
         if self.day_pnl is None or not self.day_pnl.known or not math.isfinite(self.day_pnl.total_usd):
             return None
         if self.daily_loss_exempt:
-            return False
+            return False if self.fee_evidence_complete else None
         if self.loss_limit_usd is None:
             return None
-        return loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
+        breached = loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
+        return True if breached else False if self.fee_evidence_complete else None
 
 
 @dataclass(frozen=True)
@@ -137,7 +146,7 @@ def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
 
 
 def _non_finite_risk_fields(
-    *, cash: float, last_equity: float | None, unrealized_pl: float
+    *, cash: float, last_equity: float | None, equity: float | None
 ) -> tuple[str, ...]:
     """Which risk inputs the broker reported as NaN or infinity.
 
@@ -152,9 +161,35 @@ def _non_finite_risk_fields(
         for name, value in (
             ("cash", cash),
             ("last_equity", last_equity),
-            ("unrealized_pl", unrealized_pl),
+            ("equity", equity),
         )
         if value is not None and not math.isfinite(value)
+    )
+
+
+def _cash_flow_snapshots_match(
+    before: list[BrokerActivity],
+    after: list[BrokerActivity],
+) -> bool:
+    """Whether two reads describe the same economic transfer evidence.
+
+    ``observed_at_ms`` is the local ingestion clock and can differ between
+    otherwise identical broker rows, so it is deliberately excluded.
+    """
+    if len(before) != len(after):
+        return False
+
+    def by_id(activities: list[BrokerActivity]) -> dict[str, dict[str, Any]]:
+        return {
+            activity.activity_id: activity.model_dump(exclude={"observed_at_ms"})
+            for activity in activities
+        }
+
+    before_by_id = by_id(before)
+    return (
+        len(before_by_id) == len(before)
+        and len(by_id(after)) == len(after)
+        and before_by_id == by_id(after)
     )
 
 
@@ -164,10 +199,9 @@ def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     return {
         "sealed_envelope_readable": reading.seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
-        "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
-        "unfoldable_orders_today": None if day_pnl is None else day_pnl.unfoldable_orders_today,
-        "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
-        "fee_fidelity": None if day_pnl is None else day_pnl.fee_fidelity,
+        "cash_flows_known": None if day_pnl is None else day_pnl.cash_flows_known,
+        "fee_evidence_complete": reading.fee_evidence_complete,
+        "cash_flow_count": None if day_pnl is None else day_pnl.cash_flow_count,
     }
 
 
@@ -177,6 +211,11 @@ def _observed_detail(reading: EnvelopeReading) -> dict[str, Any]:
     return {
         "cash_available_usd": reading.observation.cash_available_usd,
         "day_pnl_usd": None if day_pnl is None else day_pnl.total_usd,
+        "current_equity_usd": None if day_pnl is None else day_pnl.current_equity_usd,
+        "prior_close_equity_usd": (
+            None if day_pnl is None else day_pnl.prior_close_equity_usd
+        ),
+        "net_cash_flow_usd": None if day_pnl is None else day_pnl.net_cash_flow_usd,
         "loss_limit_usd": reading.loss_limit_usd,
         "position_count": reading.observation.position_count,
     }
@@ -226,7 +265,6 @@ class LiveEnvelopeSync:
                 account_id=repo.account_id,
             )
         )
-        self._reader = SqliteEconomicProjectionReader.from_repository(repo)
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
         self._account_mode_disagreed = False
@@ -299,19 +337,24 @@ class LiveEnvelopeSync:
             except BrokerError:
                 self.discard_observation()
                 raise
-        account, positions = await asyncio.gather(
-            self._read.get_account(), self._read.list_positions()
-        )
+        current_start = day_pnl_window_start_ms(observed_at_ms)
+        hold = self.risk_snapshot().hold
+        start = min(current_start, self._held_period_start(hold)) if hold is not None else current_start
+        try:
+            before = await self._read.list_activities(after_ms=start, limit=100, activity_type=CASH_TRANSFER_ACTIVITY_FILTER)
+            account = await self._read.get_account()
+            after = await self._read.list_activities(after_ms=start, limit=100, activity_type=CASH_TRANSFER_ACTIVITY_FILTER)
+        except BrokerEvidenceUnavailable:
+            self.discard_observation()
+            raise
+        stable = day_pnl_window_start_ms(account.observed_at_ms) == current_start and _cash_flow_snapshots_match(before, after)
         self._observed_account_id = account.account_id
-        unrealized_pl_usd = float(sum(position.unrealized_pl for position in positions))
         return AccountObservation(
-            observed_at_ms=observed_at_ms,
-            broker_cash_usd=account.cash,
-            cash_available_usd=account.cash,
-            last_equity_usd=account.last_equity,
-            unrealized_pl_usd=unrealized_pl_usd,
-            position_count=len(positions),
-            risk_fill_sequence=fill_sequence,
+            observed_at_ms=observed_at_ms, broker_cash_usd=account.cash,
+            cash_available_usd=account.cash, equity_usd=account.equity,
+            last_equity_usd=account.last_equity, position_count=None,
+            risk_fill_sequence=fill_sequence, risk_cash_flows=tuple(after),
+            risk_cash_flow_evidence_complete=stable, risk_cash_flow_window_start_ms=start, risk_equity_window_start_ms=current_start,
         )
 
     def _evaluate_observation(self, observation: AccountObservation, *, now_ms: int) -> EnvelopeReading:
@@ -328,17 +371,16 @@ class LiveEnvelopeSync:
         unjudgeable = self._account_mode_disagreed or self._noted_non_finite(_non_finite_risk_fields(
             cash=observation.broker_cash_usd,
             last_equity=observation.last_equity_usd,
-            unrealized_pl=observation.unrealized_pl_usd,
-        )) or not readable or (self._simulation is not None and (
+            equity=observation.equity_usd,
+        )) or observation.equity_usd is None or observation.last_equity_usd is None or not readable or (self._simulation is not None and (
             observation.simulation_session_start_ms != et_day_window_ms(now_ms)[0]
             or (observation.simulation_marks_valid_until_ms is not None and now_ms > observation.simulation_marks_valid_until_ms)
         ))
         values = policy if policy is not None else (self.envelope.in_force if readable and self.envelope.values is not None else None)
         reading = EnvelopeReading(
             observation=observation, seal_readable=readable, policy_revision=revision, daily_loss_exempt=synthetic,
-            day_pnl=None if unjudgeable else day_pnl_at(
-                self._reader, self._repo, observation=observation, now_ms=now_ms,
-            ),
+            fee_evidence_complete=risk_evidence_ready(self._repo, now_ms=now_ms),
+            day_pnl=None if unjudgeable else observed_day_pnl(observation=observation, now_ms=now_ms),
             loss_limit_usd=None if unjudgeable or synthetic or observation.last_equity_usd is None else loss_limit_usd(
                 values, last_equity_usd=observation.last_equity_usd,
             ),
@@ -346,7 +388,7 @@ class LiveEnvelopeSync:
         if reading.day_pnl is not None and observation.risk_fill_sequence != risk_fill_sequence(self._repo):
             # The position answer may precede a lot closure already included
             # in realized P&L. Never combine those incompatible snapshots.
-            reading = replace(reading, day_pnl=replace(reading.day_pnl, execution_coverage="incomplete"))
+            reading = replace(reading, day_pnl=replace(reading.day_pnl, cash_flows_known=False))
         if reading.breached is False:
             self.envelope.publish(observation)
         else:
@@ -402,10 +444,15 @@ class LiveEnvelopeSync:
             evidence_refs=[f"day-pnl:{cause.day_start_ms}"], cause_facts=cause.to_mapping(),
         )
 
+    def _held_period_start(self, cause: LossHoldCause) -> int:
+        # Historical real holds recorded ET midnight with a prior-close
+        # baseline. Read the full baseline horizon without rewriting cause.
+        return cause.day_start_ms if self._simulation is not None else day_pnl_window_start_ms(cause.observed_at_ms)
+
     async def observe_loss_clearance(self) -> tuple[EnvelopeReading, AccountQuietObservation | None]:
         reading = await self.observe()
         snapshot = self.risk_snapshot()
-        needs_reset = snapshot.hold is not None and reading.day_pnl is not None and reading.day_pnl.day_start_ms > snapshot.hold.day_start_ms
+        needs_reset = snapshot.hold is not None and reading.day_pnl is not None and reading.day_pnl.day_start_ms > self._held_period_start(snapshot.hold)
         quiet = await observe_account_quiet(self._repo, self._read) if needs_reset else None
         return reading, quiet
 
@@ -437,13 +484,12 @@ class LiveEnvelopeSync:
                 cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
             except (ValueError, TypeError, KeyError):
                 return "unknown", "The original loss-hold evidence is incomplete. The hold stands."
-            retained = day_pnl_at(
-                self._reader, self._repo, observation=reading.observation,
-                now_ms=self._repo.clock(), retained_start_ms=cause.day_start_ms,
-            )
+            retained = observed_day_pnl(observation=reading.observation,
+                now_ms=self._repo.clock(), retained_start_ms=self._held_period_start(cause),
+                retained_equity_usd=cause.last_equity_usd)
             if not retained.known or not math.isfinite(retained.total_usd):
                 return "unknown", "The original loss period cannot be judged. The hold stands."
-            session_reset = current_reading.day_pnl.day_start_ms > cause.day_start_ms
+            session_reset = current_reading.day_pnl.day_start_ms > self._held_period_start(cause)
             judged_pnl = retained.total_usd
             if session_reset:
                 if quiet is None or not 0 <= self._repo.clock() - quiet.observed_at_ms <= self.envelope.observation_max_age_ms:
@@ -557,6 +603,8 @@ class LiveEnvelopeSync:
             # The common observation boundary already withdrew every copy
             # of the invalid evidence under the same fence as policy Apply.
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
+        except BrokerEvidenceUnavailable as exc:
+            return self._acted("unknown", {"why": str(exc)})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.
@@ -667,7 +715,6 @@ class LiveEnvelopeSync:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        self._reader.close()
 
 
 __all__ = ["EnvelopeReading", "EnvelopeSyncAction", "InstanceSeals", "LiveEnvelopeSync"]

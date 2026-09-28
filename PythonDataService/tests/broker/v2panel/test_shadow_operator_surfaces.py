@@ -713,6 +713,9 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
         app, runtime, broker = shadow_app_and_broker
         broker.unrealized = -5_000.0
         assert runtime.envelope_sync is not None
+        # The composed repository uses the live clock. Keep the broker's local
+        # ingestion stamp in that same ET loss window, as the real adapter does.
+        broker.now_ms = runtime.sqlite_repository.clock()
         assert await runtime.envelope_sync.tick() == "hold_raised"
 
         async with httpx.AsyncClient(

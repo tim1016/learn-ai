@@ -125,7 +125,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             risk_revision = snapshot.policy.revision
             with money_context():
                 percent = normalize_money(snapshot.policy.loss_fraction) * 100
-                risk_summary = f"Daily loss limit: the smaller of {percent:f}% of session-start equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
+                risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
         with money_context():
             shortcuts = [DeploymentBudgetShortcut(
                 key="position_headroom", label="1.2 × one position",

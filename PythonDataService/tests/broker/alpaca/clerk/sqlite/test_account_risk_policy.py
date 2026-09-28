@@ -201,13 +201,16 @@ async def test_explicit_new_session_clear_releases_realized_loss_only_after_obli
     for identity, side, price in (("buy-loss", "BUY", 100), ("sell-loss", "SELL", 80)):
         _append_day_pnl_slice(day_pnl_repo, accepted, execution_id=identity, side=side,
             quantity=10, price=price, occurred_at_ms=NOON, fee=0, fee_fidelity="reported")
-    sync = LiveEnvelopeSync(repo=day_pnl_repo, read=FlatRead(), envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
+    read = FlatRead(equity=99_800)
+    sync = LiveEnvelopeSync(repo=day_pnl_repo, read=read, envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
     try:
         await sync.observe()
         sync.apply_risk_policy(_policy(), expected_revision=0)
         original_hold = _hold(day_pnl_repo)
         assert original_hold is not None
         day_pnl_clock.advance(86_400_000)
+        read.last_equity = 99_800
+        read.account_observed_at_ms = day_pnl_clock()
         day_pnl_repo.revive_execution_lease()
         complete_fee_evidence(day_pnl_repo)
         reading, quiet = await sync.observe_loss_clearance()

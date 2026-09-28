@@ -98,7 +98,7 @@ function sameClerkRevisionRef(
  *
  * Profile Apply records an intent and never restarts a worker. The separate
  * Live graduation ceremony may request one controlled restart only after its
- * custody activation receipt is durable; it never deploys or arms a strategy.
+ * custody activation receipt is durable; it never deploys a strategy.
  */
 @Component({
   selector: 'app-alpaca-configuration-page',

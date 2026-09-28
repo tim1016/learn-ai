@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
@@ -104,9 +105,12 @@ def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
             observed_at_ms=T0,
             broker_cash_usd=cash,
             cash_available_usd=cash,
+            equity_usd=cash,
             last_equity_usd=cash,
-            unrealized_pl_usd=0.0,
             position_count=0,
+            risk_cash_flow_evidence_complete=True,
+            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0),
+            risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
         )
     )
     return gate

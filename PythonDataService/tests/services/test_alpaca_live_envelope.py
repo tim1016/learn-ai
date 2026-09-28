@@ -36,7 +36,7 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
-from tests.broker.alpaca.clerk.sqlite.conftest import TODAY_OPEN, _observe_foreign_order, complete_fee_evidence
+from tests.broker.alpaca.clerk.sqlite.conftest import complete_fee_evidence
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _Broker
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import (
     NOW_MS,
@@ -195,10 +195,10 @@ async def test_the_clear_refuses_an_unknown_fact(
     runtime, broker = loss_runtime
     broker.unrealized = -5_000.0
     # Raise the hold first with the fact still known, then make it unknown:
-    # an external order observed today (before NOW_MS, same ET day) makes the
-    # day's P&L unknowable, which withdraws the envelope's judgement entirely.
+    # without the broker's prior-close equity there is no day baseline, so the
+    # envelope withdraws its judgement entirely.
     assert await runtime.envelope_sync.tick() == "hold_raised"
-    _observe_foreign_order(runtime.sqlite_repository, observed_at_ms=TODAY_OPEN)
+    broker.last_equity_known = False
     refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
     assert refused.outcome == "refused" and refused.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
     # R5: unknown is not a number. The detail says the day cannot be judged,
