@@ -62,6 +62,18 @@ is archived while the code it names still runs.
 - **Deploy again** — open the ordinary Deploy journey from a stopped deployment.
   The old deployment keeps its evidence and custody; opening the form grants no
   trading permission.
+- **Bot budget** — the dollar commitment permitting entry admission for one
+  deployment. It is not a maximum loss or guaranteed execution debit.
+  _Avoid_: allocation, capital sleeve, spending account
+- **Free budget** — a deployment’s economic balance after its attributed fees,
+  position cost and pending entry claims. Only its positive free amount remains
+  reserved while the deployment runs.
+- **Released cash** — money no longer reserved by a stopped deployment.
+  Outstanding orders, unobserved debits and unsettled fees remain separate claims.
+- **Deployment consent** — the trader’s approval of one exact account, world,
+  configuration, dollar budget, exit terms and current risk policy.
+- **Budget authority cutover** — the account’s irreversible switch from historical
+  arming grants to fresh budgeted Deploys after earlier runners are stopped.
 - **Stop** — terminally end a deployment's new strategy decisions. Its existing
   orders and exposure still require Clerk recovery or guarded Flatten.
 - **Pause / Continue / Resume** — retired broker controls, retained only as
@@ -482,64 +494,24 @@ so they survive a broker change.
   and broker-observed mode that a live authority requires before it can exist.
   A disagreement is a refusal, never a guess. _Avoid_: live flag, live toggle,
   live switch
-- **Shadow gate** — the per-instance requirement that a bounded number of
-  shadow sessions complete and reconcile against the instance's paper twin
-  before the instance may arm. A session counts only when the day's sweep was
-  clean from at or before the instance's decision session opened until after it
-  closed, one run spanned that whole session, and the twin comparison found no
-  divergence in a decision. _Avoid_: warm-up, trial period, soak
-- **Paper twin** — the sealed instance on the paper account that shares a
-  shadow instance's configured signal, action plan, size and carryover
-  policy and runs over the same sessions. Its identity is the configured
-  signal, never the instance id or the account. _Avoid_: control run,
-  baseline bot, mirror bot
-- **Shadow receipt** — the durable, sealed per-instance proof that the shadow
-  gate passed, naming the sessions and the reconciliation.
-- **Arming** — the supervised ceremony that permits real-money submission for
-  one sealed instance under one envelope. It is bound to the seal and the
-  envelope it named and lapses after the operator-configured number of
-  sessions. An instance is in exactly one of four states: `unarmed` (no
-  record), `armed`, `lapsed` (its sessions are spent), or `disarmed` (an
-  operator revoked it, or its seal or its envelope changed). Operator intent
-  (PAUSE / STOP) is orthogonal to it. _Avoid_: enabling live, going
-  live, turning on live
-- **Arming lapse** — the expiry of an arming after the operator-configured
-  number of *calendar NYSE trading sessions*, counted inclusively from the ET
-  date it was armed, the arming session included. A weekend and a market
-  holiday spend nothing; a half day that traded spends one. It is a "come back
-  and look" fence rather than a failure: renewing is the same ceremony run
-  again. _Avoid_: expiry, timeout, TTL (the confirmation window is the TTL;
-  this is not)
+- **Historical Shadow gate / Paper twin / Shadow receipt** — retired rehearsal
+  prerequisites retained only as audit vocabulary. They grant no deployment or
+  real-order permission.
+- **Historical arming / Arming lapse** — retired per-instance grants and their
+  session expiry, retained as evidence. Fresh Live consent belongs to Deploy.
 - **Graduation** — the live cutover: the supervised ceremony that writes a
   real-money account's activation record, after which the account boots its
   live authority instead of its shadow authority. It requires a flat,
   order-free account; a shadow rehearsal is a mode the operator may choose,
   not a requirement. _Avoid_: going live, flipping to live, promotion
-- **Arming gate** — the live authority's per-instance check at ENTER, between
-  the holds and the risk envelope, that the instance is armed right now. Its
-  evidence is a snapshot of the arming ledger and the sealed bindings the
-  sync refreshes every tick. _Avoid_: arming check, arming lock
-- **Live verdict transition halt** — what happens when an instance stops being
-  armed while it runs: its ENTERs refuse under its arming code, the event is
-  logged once, and the verdict names it. No desired state is written; its EXITs
-  keep running. _Avoid_: kill switch, auto-pause, emergency stop
 - **Live evidence namespace** — `live-evidence:<strategy_instance_id>`, the
   retained-bar ledger of one instance on the live authority; the same shape as
   `paper:` and `shadow-evidence:`, read under the same rule it is written under.
-- **Risk envelope** — the account-scoped pair of bounds every live ENTER is
-  admitted against: the cash bound and the daily loss limit. Its values are
-  operator environment settings, required when live and sealed at arming; a
-  difference between the two is a refusal. EXIT is never subject to it;
-  no symbol, session, or per-order size is restricted by it. _Avoid_: risk limits, guardrails (ADR
-  0021's word for a different thing), safety rails
-- **Cash bound** — the envelope rule that a new ENTER's notional plus every
-  working ENTER's unfilled notional may not exceed broker-observed cash. It
-  reads cash, not buying power, so it is the same on a cash account and a
-  margin account. The notional is priced at the decision price — an estimate
-  for a regular-session market entry, whose fill can be above it, and a true
-  bound for an extended-hours limit at its limit price; a recorded fill
-  reserves its actual cost (fill price × quantity plus reported fees) until
-  the next broker read supersedes it. _Avoid_: no margin, 1× leverage, cash-only
+- **Risk envelope** — the account cash and effective loss bounds governing new
+  entries. Existing reducing exits and immutable exit terms remain separate.
+- **Cash bound** — the rule that a new entry must fit its deployment’s free
+  budget and the account’s unclaimed cash, including pending orders, unsettled
+  fees and actual fills not yet trusted in the cash observation.
 - **Envelope refusal** — the per-order refusal of one ENTER that would breach
   the cash bound. No other state changes.
 - **Loss hold** — the account-wide state entered when day P&L breaches the
@@ -550,8 +522,9 @@ so they survive a broker change.
   current account limits. _Avoid_: kill switch, freeze, halt, circuit breaker
 - **Effective account risk policy** — the loss limits explicitly applied to the
   account. Draft edits have no effect; existing bot exit terms remain fixed.
-- **Day P&L** — Clerk-projected realized session P&L plus broker-observed
-  unrealized P&L, minus the canonical dated observed or estimated fees. It is
+- **Day P&L** — realized session P&L plus the selected world’s marked unrealized
+  P&L, minus its canonical dated fees. Simulation marks and fees stay within their
+  own world; real holdings are never simulated profit or loss. It is
   unknown, never zero, when execution coverage, fee population, fee evidence,
   previous-close equity or marks are incomplete. A retained loss period uses
   the same projection without discarding prior-session charges.

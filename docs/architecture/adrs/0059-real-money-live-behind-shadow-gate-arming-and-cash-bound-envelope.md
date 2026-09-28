@@ -1,5 +1,9 @@
 # ADR 0059 — Real-money Alpaca Live is reachable only through a shadow gate, a per-instance arming ceremony, and a cash-bound risk envelope
 
+**Amended 2026-09-27 (PRD #2540):** The budget-authority amendment below
+supersedes the separate arming, grant expiry and Shadow-receipt prerequisites.
+Their descriptions remain historical; current Live consent is part of Deploy.
+
 **Status:** Accepted 2026-09-07
 **Provenance:** Proposed, read and amended the same day; the owner's answers are recorded under "Resolved before Accepted", which under [ADR 0039](0039-adr-status-is-decision-standing.md) is the read-through that promotes; code lands from this point in the slice order under Consequences. Scope memo `live-account-attachment-scope-2026-09-07.md` (which this ADR resolves; pruned to git history 2026-09-12), and the 2026-09-07 grilling session in which the repo owner chose real-money submission over read-only observation, a mandatory shadow gate, a cash-only envelope, no-new-entries-on-loss, and then — on reading the draft — extended hours and every symbol in scope, no per-order cap, and every envelope value sourced from the environment file. External facts verified on 2026-09-07 against Alpaca's credential-management, Intraday Margin Rule, regulatory-fee, order and extended-hours documentation and the SEC's FY2026 §31 rate advisory.
 **Decision drivers:** The owner wants sealed programs to trade a real-money Alpaca account. The repo forbids this at thirteen deliberate sites (census in the memo §2) and in doctrine — ADR 0042 ("Future real-money Live remains unreachable"), PRD #1723 FR-035, ADR 0021 §6 guardrail 2. None of that is drift; it is the correct posture for a research tool with no live risk envelope. Reaching live therefore needs a decision that says *what replaces the refusal*, not a toggle that removes it. Five facts learned during the session shaped the shape: FINRA retired the Pattern Day Trader rule on 2026-06-04 in favour of an Intraday Margin Rule that measures continuous exposure rather than counting trades; Alpaca API keys carry per-scope access controls and MFA gates only dashboard sign-in; every sealed program in the registry is long-only; every program order was a market DAY order, which Alpaca queues for the next trading day when submitted after the regular close without extended-hours eligibility; and the decision clock is regular-hours-only today (`feed_continuity_policy` refuses `use_rth=False` as `all_session_not_supported`).
@@ -237,3 +241,34 @@ proof. Existing run/order history requires the visible guarded budget upgrade;
 activation cannot convert historical grants into commitments. Configuration
 status and activation remain routable while execution is unavailable, with the
 account pin checked inside the lane. The activation CLI remains recovery-only.
+
+
+## 2026-09-27 amendment: one budgeted Deploy authority (#2545 / #2547)
+
+The existing Clerk owns one whole-cent dollar commitment per fresh deployment,
+recorded atomically with its command and run intent. Canonical effective fills,
+FIFO and fee attribution project its balance and all account cash claims. No
+independent armed flag, balance store or promotion check at ENTER is introduced.
+Paper and Live share these checks; Live also requires typed confirmation of the
+exact reviewed account, world, configuration, dollars, ExitTerms and risk revision.
+Price and cash are checked again without changing the consented amount. Regular
+session market execution can exceed the estimate: this is entry admission, not a
+guaranteed maximum debit or loss, and actual broker evidence is always retained.
+
+Configuration exposes **Stop bots and use budgets**. Under the existing lane
+mutation and custody fences, it stops old runners, reconciles existing custody,
+then records **Budget authority cutover** exactly once. The durable authorization
+version is the sole before/after boundary. Old grants grant nothing after that
+point, including after restart or mirror reconstruction; schema compatibility
+refuses an older writer. Working orders, exposure and fee claims survive the
+switch. No budget or consent is inferred from a historical grant. A new private
+Dry Run or empty Shadow authority may establish budget authority as part of its
+explicit creation; an authority with older runs follows the visible migration.
+
+Live authority selection, authenticated control, account mode agreement and the
+existing graduation fence remain prerequisites. Graduation creates neither a
+budget nor a trade. It stops Shadow execution before selecting Live, while each
+world's money, risk holds and retained evidence stay in its own custody pool.
+A missing budget or unreadable money fact refuses new exposure and preserves
+normal reducing recovery. There is no fallback to the historical arming ledger.
+Historical grants and six-field profile hashes remain readable and unchanged.

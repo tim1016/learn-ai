@@ -173,3 +173,16 @@ sealed exit terms until the Clerk proves their resolution. Guarded Flatten and
 same-order recovery remain available after Stop or terminal failure. Historical
 carryover checkpoints are evidence, never permission for a new run to adopt
 custody. This changes no exit allowance, market-data provider or recovery fence.
+
+
+## 2026-09-27 amendment: budget release follows custody (#2540 / #2545)
+
+Live consent moves into the ordinary Deploy review of exact account/world,
+configuration, dollars, immutable ExitTerms and current risk revision. This
+supersedes this ADR's separate arming placement. Stop and terminal failure end
+new decisions and release only uncommitted free cash; pending orders, actual
+unobserved debits and unsettled fees retain their original custody attribution.
+The original commitment and launch/stop evidence replay through the Clerk's
+existing command journal. They do not form a second balance or FIFO ledger.
+A repeated command returns its recorded outcome and cannot relaunch a stopped
+run. Guarded Flatten, reducing order recovery and existing exit seals survive.

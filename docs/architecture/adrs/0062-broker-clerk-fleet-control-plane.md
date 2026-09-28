@@ -1,5 +1,14 @@
 # ADR 0062 — A broker-neutral fleet control plane addresses isolated broker clerk agents
 
+**Current authorization amendment (2026-09-27, PRD #2540):** References below
+to per-instance arming describe the earlier delivery. Each Alpaca clerk now
+owns its budget authority cutover, dollar commitments and effective account risk
+policy. The coordinator only routes the reviewed Configuration/Deploy actions;
+it stores no budget, consent, cash or risk authority. Paper, Live, Shadow and
+private Dry Run claims remain separately scoped to their custody identities.
+The IBKR market-data / Alpaca account-and-order boundary below is unchanged.
+
+
 **Status:** Accepted 2026-09-12
 **Provenance:** The multi-broker clerk PRD [`docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`](../../prds/2026-09-12-multi-broker-clerk-control-plane.md), selected by the two-contestant plan tournament recorded in [`docs/audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json`](../../audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json) (Sol plan B winning 89–69 over the GLM plan A, reviewed with no material blockers). The owner resolved the delivery-shaping decisions on 2026-09-12: the first slice is the foundation spine (this ADR plus `app/broker/fleet/` with fake-provider conformance); the fleet runs as Docker Compose named volumes on one private host network; the first real configuration is Alpaca Paper plus Alpaca Live with the provider extension boundary left open for Tradier, Webull and later brokers; and browser-driven enrollment is deferred for the reasons recorded in Decision 8, not banned forever.
 **Decision drivers:** The Alpaca runtime is intentionally single-clerk — one process-global `ActiveClerkRuntime`, one effective broker configuration, one `ALPACA_CLERK_DIR`, and the `installation_worker()` lock enforces one worker process per installation. Concurrent Paper and Live operation therefore requires separate installations with no shared control plane, no shared routing contract, and no stable clerk identity a browser can address. Separate Clerk volumes alone do not prevent two volumes being configured with credentials for the same external account; only a fleet-level, broker-qualified assignment fence does. And a generic trading clerk would erase provider safety boundaries — Alpaca's account verification, custody, leases, arming and recovery semantics are Alpaca's, and a future Tradier or Webull clerk must own its own rather than inherit Alpaca behaviour by registering a string.

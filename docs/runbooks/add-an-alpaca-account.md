@@ -32,10 +32,10 @@ close the brokerage account or erase its trading records.
 |---|---|---|---|
 | Paper | `paper` / `default` | `real_paper` | Alpaca paper orders only |
 | Live Shadow | `live` / `live` | `shadow` | None; fills are simulated |
-| Real-money Live | `live` / `live` | `real_live` | Only after separate cutover and arming |
+| Real-money Live | `live` / `live` | `real_live` | Only after graduation and a confirmed budgeted Live Deploy |
 
-**Live Shadow does not require real-money custody activation or arming.** If you
-want Shadow, stop at `authority: shadow`. Real-money graduation is a separate
+**Activate Shadow** on Configuration creates only simulated custody. If you
+want Shadow, remain at `authority: shadow`. Real-money graduation is a separate
 procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md).
 
 ## 1. Check the current accounts
@@ -66,8 +66,8 @@ procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behin
 want to deploy. Paper must say `real_paper`; Live Shadow must say `shadow`.
 `last_apply_refusal` can describe an earlier rejected change while the existing
 account remains ready. Review it before assuming a newly selected profile took
-effect. A per-bot Resume decision can still refuse an old or incompatible seal;
-symbol-scoped deploy readiness does not certify every existing bot. The command
+effect. A fresh Deploy can still refuse an incompatible configuration or
+insufficient budget; account readiness does not authorize a deployment. The command
 refuses if Paper is not serving `real_paper`, or Live is not serving `shadow` or
 `real_live`, even when you override `--container`. For Shadow, verify the printed
 authority is specifically `shadow` before proceeding.
@@ -422,20 +422,30 @@ previously refused, reissue it after fixing the stated cause. Never treat
 3. If access is Off, use **Review & enable Paper** or **Review & enable Shadow**.
    Review the exact strategy, account, and evidence, then confirm. This records
    permission only; it does not launch anything. Repeat per strategy/account.
-4. Choose **Paper** on the Paper lane or **Shadow** on the Live Shadow lane.
-   Enter a unique bot name, symbol, and intended sizing. Wait until every
-   admission gate is ready. Click **Deploy paper bot** or **Deploy shadow bot**
-   when you intend to start the run.
-5. Confirm the new bot appears in its account's roster and reports its runner
-   state and data feed. For an existing stopped bot, select it and use **Resume**
-   only after its own admission diagnosis is clear.
+4. Choose **Paper** on a Paper lane, **Shadow** before Live graduation, or
+   **Live** afterward. Use the instrument picker and review the exact strategy
+   parameters. An uncovered configuration offers **Use qualified configuration**
+   or **Try in Dry Run**; these choices remain explicit.
+5. For an existing authority still using old grants, open Configuration and
+   review **Stop bots and use budgets**. Apply account risk limits there. This
+   stops old runners while retaining positions, working orders and recovery.
+6. In Deploy, enter exact dollars or select a server-priced shortcut. Review the
+   account/world, sizing estimate, immutable exit terms, risk limits and cash
+   freshness. Live also requires the displayed typed account/dollar confirmation.
+   Submit Deploy only when the review is ready; recover its recorded status if
+   the response is lost rather than creating a replacement command.
+7. Inspect the bot's commitment, free budget, fee evidence and outstanding claims.
+   **Stop** ends its decisions but does not prove flatness. Resolve remaining
+   exposure through guarded **Flatten** or existing order recovery. **Deploy
+   again** opens a fresh review and identity; Pause, Resume and re-arm are retired.
 
 Permissions live in the lane volume at `canary_admission/events.json`, alongside
 custody state. Recreating a container preserves them. Do not place the ledger
 in the container's disposable `/app/artifacts/canary_admission` directory.
 An account permission uses the actual account number; the internal
 `shadow:<account-number>` custody namespace resolves the same account permission.
-A Shadow-only legacy grant does not authorize real custody. Arming is separate.
+A Shadow-only access grant does not authorize real custody. Live also requires
+its own fresh budget and consent; historical arming grants are not permission.
 
 To inspect permissions without launching anything:
 
@@ -606,7 +616,7 @@ archive or a stopped container has closed it.
 | Feed disconnected | Gateway logged out, wrong host/port/mode, or duplicate client ID | Restore Gateway and matching settings; unique IDs per lane. Wait for reconnect. |
 | Market liveness unknown/stale | No fresh, usable symbol evidence yet | Keep Gateway connected and inspect the reported preparation/recovery reason. Subscriptions are server-owned; opening a panel is not a remedy. IBKR must deliver live data; frozen/delayed data or missing entitlement does not count. A symbol halt needs a genuine resume report. |
 | Accepted strategy, access Off | Validation and account permission are separate | Section 5's reviewed enable flow. |
-| Account ready, old bot Resume blocked | That bot's seal, custody, build, or permission has its own refusal | Read its admission diagnosis. Do not bypass it with account-level readiness. |
+| Account ready, fresh Deploy blocked | Configuration, custody, cash, evidence or account access is unready | Follow the named UI remedy or waiting condition; account readiness grants no deployment permission. |
 | Stale cutover plan/evidence | The review window expired | Fresh plan capture → new plan → review → apply within two minutes. |
 | SQLite WAL/SHM refusal | Offline database has uncheckpointed sidecars | Stop the writer; use the verified checkpoint command, never manual removal. |
 | Permissions disappear after recreate | Ledger stored outside persistent lane volume or wrong volume mounted | Confirm the volume and ledger path; re-enable through reviewed proof, never a source-code allowlist. |

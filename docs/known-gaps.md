@@ -255,10 +255,6 @@ idempotency lookup ordered after the presentation check) is
 informational-only in the handoff and is deliberately **not** tracked here as
 a defect.
 
-- **F2 — `pause`/`continue` are dead vocabulary under SQLite custody
-  (medium).** Guards and performers exist but can never fire:
-  `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
-  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
 - **F16 — `retire`'s eligibility guard is narrower than the class it exists
   to clear. RESOLVED 2026-08-30 (#1795).** *Reframed 2026-08-26; widened
   2026-08-30.* The guard required a dead *strategy key* while the zombie's
