@@ -1,0 +1,92 @@
+<div class="money-step">
+  @if (body() === null) {
+    <p class="money-step__note">Finish What and How first: the budget depends on both.</p>
+  }
+
+  @if (factsFailure(); as failure) {
+    <p class="money-step__refusal" role="alert">{{ failure }}</p>
+  } @else if (facts.isLoading() && factsView() === null) {
+    <p role="status">Reading this account’s money…</p>
+  }
+
+  @if (factsView(); as view) {
+    @if (view.state === 'ready') {
+      @if (bar(); as money) {
+        @if (money.state === 'ready') {
+          <app-money-bar
+            [segments]="money.segments ?? []"
+            size="detail"
+            [caption]="barShowsNew() ? 'Account money after this Deploy' : 'Where the money is now'"
+          />
+        } @else {
+          <p class="money-step__note">{{ money.detail }}</p>
+        }
+      }
+      <dl class="money-step__facts">
+        @if (!dryRun()) {
+          <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | authoredUsd }}</dd></div>
+        }
+        <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
+        @if (view.estimated_price_usd) {
+          <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
+        }
+      </dl>
+      @if (view.observed_at_ms) {
+        <p class="money-step__observed">Money observed <app-timestamp-display [value]="view.observed_at_ms" mode="local" /></p>
+      }
+      <div class="money-step__shortcuts" role="group" aria-label="Budget shortcuts">
+        @for (shortcut of view.shortcuts; track shortcut.key) {
+          <button
+            type="button"
+            [disabled]="disabled()"
+            [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
+            (click)="choose(shortcut.amount_usd)"
+          >{{ shortcut.label }} · {{ shortcut.amount_usd | authoredUsd }}</button>
+          <small [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
+        }
+      </div>
+    } @else if (view.state === 'awaiting_price') {
+      <p role="status">{{ view.detail }}</p>
+    } @else {
+      <p class="money-step__refusal" role="alert">{{ view.detail }}</p>
+    }
+  }
+
+  <div class="money-step__amount">
+    <label for="deploy-money-amount">{{ dryRun() ? 'Simulated starting cash (USD)' : 'Dollar budget (USD)' }}</label>
+    <input
+      id="deploy-money-amount"
+      type="text"
+      inputmode="decimal"
+      autocomplete="off"
+      aria-describedby="deploy-money-outcome"
+      [formField]="fields"
+    />
+  </div>
+  <div id="deploy-money-outcome" class="money-step__outcome">
+    @if (fields().touched() && fields().invalid()) {
+      <p class="money-step__refusal" role="alert">{{ fields().errors()[0]?.message }}</p>
+    } @else if (amountView(); as review) {
+      @if (review.state === 'ready' && review.review_token) {
+        <p role="status">
+          @if (dryRun()) {
+            <strong>{{ review.budget_usd | authoredUsd }}</strong> of simulated starting cash for this bot.
+          } @else {
+            <strong>{{ review.budget_usd | authoredUsd }}</strong> would be set aside for this bot. Nothing is set aside until you Deploy.
+          }
+        </p>
+      } @else {
+        <p class="money-step__refusal" role="alert">{{ review.detail }}</p>
+      }
+    } @else if (amountFailure(); as failure) {
+      <p class="money-step__refusal" role="alert">{{ failure }}</p>
+    } @else if (amountPending()) {
+      <p role="status">Previewing this amount…</p>
+    }
+  </div>
+
+  <div class="money-step__actions">
+    <button type="button" [disabled]="body() === null || disabled() || facts.isLoading()" (click)="refresh()">Refresh money</button>
+  </div>
+  <p class="money-step__note">The bot opens positions only while they fit this budget. Fills, fees and losses can go past it, and the size chosen in How stays as it is.</p>
+</div>

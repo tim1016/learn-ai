@@ -1,0 +1,47 @@
+:host { display: block; min-width: 0; }
+
+.money-step {
+  display: grid;
+  gap: var(--space-3);
+
+  p, dl { margin: 0; }
+}
+
+.money-step__facts {
+  display: grid;
+  gap: var(--space-2);
+
+  div { display: flex; justify-content: space-between; gap: var(--space-3); }
+  dt { color: var(--text-secondary); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+}
+
+.money-step__observed,
+.money-step__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.money-step__shortcuts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--space-2);
+
+  small { color: var(--text-secondary); }
+}
+
+.money-step__amount {
+  display: grid;
+  gap: var(--space-1);
+
+  input { width: min(100%, 20rem); font-variant-numeric: tabular-nums; }
+}
+
+.money-step__refusal { color: var(--bear); }
+
+.money-step__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+@media (max-width: 600px) {
+  .money-step__shortcuts { grid-template-columns: 1fr; }
+}

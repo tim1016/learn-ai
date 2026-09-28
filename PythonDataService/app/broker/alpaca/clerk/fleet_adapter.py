@@ -430,7 +430,10 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
         _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
         _op("account_money_read", "GET", "/accounts/{account_id}/money", capability=Capability.BOT_PANEL_READ, account=True),
-        _op("bot_deploy_command_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-command", capability=Capability.BOT_PANEL_READ, account=True),
+        # A Deploy's recovery read is keyed by its submission: until the
+        # backend answers, the browser does not know the bot's name (#2551).
+        _op("bot_deploy_submission_read", "GET", "/accounts/{account_id}/deploy-submissions/{submission_key}", capability=Capability.BOT_PANEL_READ, account=True),
+        _op("bot_deploy_prefill_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-prefill", capability=Capability.DEPLOY, account=True),
         _op(
             "bot_cohort_flatten_read",
             "GET",

@@ -64,7 +64,7 @@ function panelServiceMock() {
 }
 
 describe('DeployPaperAccessComponent', () => {
-  it('prepares a review and requires a separate explicit confirmation', async () => {
+  it('asks once, as one line, and records the permission only on a separate explicit confirmation', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
       inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
@@ -72,9 +72,9 @@ describe('DeployPaperAccessComponent', () => {
       provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    expect(screen.getByRole('heading', { name: 'Paper access' })).toBeTruthy();
-    expect(screen.getByText('Off')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    const line = screen.getByRole('group', { name: 'Paper permission' });
+    expect(within(line).getByText('A one-time permission for this strategy; it never spends money.')).toBeTruthy();
+    fireEvent.click(within(line).getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -83,17 +83,16 @@ describe('DeployPaperAccessComponent', () => {
       'ema_crossover_signal',
       'Enable Paper access from the Alpaca Deploy page.',
     );
-    const review = screen.getByRole('region', { name: 'Review Paper access' });
-    expect(within(review).getByRole('heading', { name: 'Confirm Paper access' })).toBeTruthy();
-    expect(within(review).getByText(/does not deploy a bot or place an order/i)).toBeTruthy();
-    expect(within(review).getByText('paper-account-1')).toBeTruthy();
-    expect(within(review).getByText(formatTimestampDisplay(PLAN.expires_at_ms, {
-      mode: 'local',
-      granularity: 'time',
-    }))).toBeTruthy();
+    expect(within(line).getByText(/on this Paper account\?/)).toBeTruthy();
+    expect(within(line).getByText(/never spends money, deploys a bot or places an order/i)).toBeTruthy();
+    // D9: the audit sits behind Details, and no review-expiry timer shows.
+    expect(within(line).getByText('Details').closest('details')).not.toBeNull();
+    expect(within(line).getByText('paper-account-1')).toBeTruthy();
+    expect(screen.queryByText(/expires/i)).toBeNull();
+    expect(screen.queryByText(formatTimestampDisplay(PLAN.expires_at_ms, { mode: 'local', granularity: 'time' }))).toBeNull();
     expect(service.confirmPaperAccess).not.toHaveBeenCalled();
 
-    fireEvent.click(within(review).getByRole('button', { name: 'Enable Paper access' }));
+    fireEvent.click(within(line).getByRole('button', { name: 'Yes, allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -106,8 +105,18 @@ describe('DeployPaperAccessComponent', () => {
     const confirmedTarget = service.confirmPaperAccess.mock.calls[0][0];
     expect(preparedTarget.idempotencyKey).toEqual(expect.any(String));
     expect(confirmedTarget).toBe(preparedTarget);
-    expect(screen.getByText('Paper access enabled')).toBeTruthy();
-    expect(screen.getByText(/deploying a bot remains a separate action/i)).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Allowed on this Paper account');
+  });
+
+  it('reads as one allowed line once the strategy already has the permission', async () => {
+    await render(DeployPaperAccessComponent, {
+      inputs: { target: TARGET, accountId: 'paper-account-1',
+        strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'enabled' }, modeLabel: 'Paper' as const },
+      providers: [{ provide: BrokerV2PanelService, useValue: panelServiceMock() }],
+    });
+
+    expect(screen.getByRole('status').textContent).toContain('Allowed on this Paper account');
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('does not render approval controls for strategies outside the sealed-program gate', async () => {
@@ -121,7 +130,7 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    expect(screen.queryByRole('heading', { name: 'Paper access' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Paper permission' })).toBeNull();
     expect(service.preparePaperAccess).not.toHaveBeenCalled();
   });
 
@@ -132,17 +141,17 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(screen.getByRole('region', { name: 'Review Paper access' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Yes, allow on Paper' })).toBeTruthy();
 
     fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
       accountId: 'paper-account-1', bindingGeneration: 3, routingEpoch: 7,
     }));
     fixture.detectChanges();
 
-    expect(screen.queryByRole('region', { name: 'Review Paper access' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Yes, allow on Paper' })).toBeNull();
     expect(service.confirmPaperAccess).not.toHaveBeenCalled();
   });
 
@@ -153,7 +162,7 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
     fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_spec', {
@@ -161,7 +170,7 @@ describe('DeployPaperAccessComponent', () => {
     }));
     fixture.detectChanges();
 
-    expect(screen.queryByRole('region', { name: 'Review Paper access' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Yes, allow on Paper' })).toBeNull();
     expect(service.confirmPaperAccess).not.toHaveBeenCalled();
   });
 
@@ -176,7 +185,7 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    expect(screen.queryByRole('heading', { name: 'Paper access' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Paper permission' })).toBeNull();
     expect(service.preparePaperAccess).not.toHaveBeenCalled();
   });
 
@@ -194,11 +203,11 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const review = screen.getByRole('region', { name: 'Review Paper access' });
+    const review = screen.getByRole('group', { name: 'Paper permission' });
     expect(within(review).getByText('Qualified source')).toBeTruthy();
     expect(within(review).getByText('f'.repeat(40))).toBeTruthy();
     expect(within(review).getByText(/uncommitted edits included/i)).toBeTruthy();
@@ -211,11 +220,11 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const review = screen.getByRole('region', { name: 'Review Paper access' });
+    const review = screen.getByRole('group', { name: 'Paper permission' });
     expect(within(review).queryByText('Qualified source')).toBeNull();
   });
 
@@ -238,14 +247,14 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
     const alert = screen.getByRole('alert');
     expect(within(alert).getByText('Paper access could not be changed.')).toBeTruthy();
     expect(within(alert).getByText(/validation proof is no longer current/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try review again' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('retries a failed confirm with the exact reviewed target and durable key', async () => {
@@ -258,14 +267,14 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('button', { name: 'Enable Paper access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, allow on Paper' }));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(screen.getByRole('button', { name: 'Try enable again' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try allowing again' })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Try enable again' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try allowing again' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -288,20 +297,17 @@ describe('DeployPaperAccessComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
-    expect(screen.getByRole('heading', { name: 'Shadow access' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Shadow' }));
+    expect(screen.getByRole('group', { name: 'Shadow permission' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Shadow' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const review = screen.getByRole('region', { name: 'Review Shadow access' });
-    expect(within(review).getByRole('heading', { name: 'Confirm Shadow access' })).toBeTruthy();
-    expect(within(review).getByRole('button', { name: 'Enable Shadow access' })).toBeTruthy();
-
-    fireEvent.click(within(review).getByRole('button', { name: 'Enable Shadow access' }));
+    expect(screen.getByText(/on this Shadow account\?/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, allow on Shadow' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByText('Shadow access enabled')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Allowed on this Shadow account');
     // The one word that must not survive onto a real-money account's form.
     expect(document.body.textContent).not.toMatch(/paper/i);
   });
@@ -323,7 +329,7 @@ describe('DeployPaperAccessComponent', () => {
       providers: [provideFleetDirectory(), { provide: BrokerV2PanelService, useValue: service }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
 
     expect(service.preparePaperAccess).not.toHaveBeenCalled();
     expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();

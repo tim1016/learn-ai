@@ -77,6 +77,18 @@ describe('DeployParametersSectionComponent', () => {
     expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set());
   });
 
+  it('shows the settings in use without an editor when the world trades only qualified settings', async () => {
+    await render(DeployParametersSectionComponent, {
+      inputs: { paramsSchema: SCHEMA, values: { short_window: 25 }, editable: false },
+      on: { parameterChange: vi.fn(), invalidFieldsChange: vi.fn() },
+    });
+
+    expect(screen.queryByRole('textbox', { name: 'Short window' })).toBeNull();
+    const inUse = screen.getByLabelText('Settings in use');
+    expect(inUse.textContent).toContain('Short window');
+    expect(inUse.textContent).toContain('25');
+  });
+
   it('never reaches the host with an empty invalid set once fixed', async () => {
     const invalidFieldsChange = vi.fn();
     await render(DeployParametersSectionComponent, {
@@ -112,7 +124,7 @@ describe('qualified configuration action', () => {
     expect(selected).not.toHaveBeenCalled();
     expect(parameters).not.toHaveBeenCalled();
     expect((screen.getByRole('textbox', { name: 'Short window' }) as HTMLInputElement).value).toBe('25');
-    fireEvent.click(screen.getByRole('button', { name: 'Try in Dry Run' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try other settings in Dry Run' }));
     expect(dryRun).toHaveBeenCalledOnce();
     expect(selected).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));

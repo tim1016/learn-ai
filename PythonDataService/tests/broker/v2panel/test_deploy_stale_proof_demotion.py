@@ -25,7 +25,7 @@ from app.services.strategy_validation_manifest import (
     strategy_registry_seeds,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.broker.v2panel.conftest import _BODY, _accepted_deploy_entry, _FakeDeployRegistry
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, _accepted_deploy_entry, _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import ACCT
 
 
@@ -224,8 +224,10 @@ def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
     assert row.blocked_explanation is not None
     # Both sentences render on a live account's deploy form as well as a
     # paper one, so neither names the Paper mode (slice 7 last mile).
-    assert "Review and enable broker access" in row.blocked_explanation
-    assert strategy_gate_recovery((row,)) == "Review and enable broker access for a strategy below."
+    # The grant is Deploy's first step, What, which sits above every place
+    # these sentences render (PRD #2560 D9): never "below".
+    assert row.blocked_explanation.endswith("Allow it in What.")
+    assert strategy_gate_recovery((row,)) == "Allow broker trading for a strategy in What."
 
 
 def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -351,7 +353,7 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
-            json={**_BODY, "strategy_key": "deployment_validation"},
+            json={**_SETTINGS, "strategy_key": "deployment_validation"},
         )
 
     assert response.status_code == 409
@@ -367,12 +369,15 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
         "next_action",
         "admission",
         "reason_code",
+        "submission_settled",
     }
     assert detail["outcome"] == "conflict"
     assert detail["receipt_id"] is None
     assert detail["recorded_at_ms"] > 0
     assert "not currently selectable" in detail["message"]
     assert detail["admission"] is None
+    # A preview sends no submission, so it settles none.
+    assert detail["submission_settled"] is False
 
 
 @pytest.mark.asyncio

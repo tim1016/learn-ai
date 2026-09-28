@@ -7,7 +7,7 @@ import {
   output,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { accountWorkspaceTabRoute } from '../../../../fleet/account-workspace';
+import { accountWorkspaceDeployAgainRoute } from '../../../../fleet/account-workspace';
 
 import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import {
@@ -84,13 +84,12 @@ export class BotBannerComponent {
     this.dryRun() ? null : verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
   );
 
-  protected readonly deployAgainRoute = computed(() => accountWorkspaceTabRoute({
+  /** Deploy again for this bot, under the routed account. */
+  protected readonly deployAgain = computed(() => accountWorkspaceDeployAgainRoute({
     broker: this.panel().broker,
     clerkId: this.clerkId(),
     accountId: this.routeAccountId(),
-  }, 'deploy'));
-
-  protected readonly deployAgainQuery = computed(() => ({ from: this.panel().strategy_instance_id }));
+  }, this.panel().strategy_instance_id));
 
   protected readonly primaryAction = computed(() => primaryAction(this.panel()));
   protected readonly primaryActionTone = computed(() => actionTone(this.primaryAction()));

@@ -183,6 +183,7 @@ async def test_private_budget_seed_refreshes_preview_then_survives_runtime_relea
     from app.schemas.deployment_budget import DeployBudgetConsent
     from app.services.bot_binding_authority import SyntheticBindingAuthority
     from app.services.broker_v2_panel import bot_custody, budget_deploy
+    from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
     from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
     from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 
@@ -216,7 +217,9 @@ async def test_private_budget_seed_refreshes_preview_then_survives_runtime_relea
             binding_for_control=lambda broker, identity: authority.binding,
             synthetic_runtime_for_projection=lambda _: authority.runtime_for_projection(),
         ))
-        receipt = await budget_deploy.command_receipt("PARENT", sid)
+        receipt = await budget_deploy.command_receipt("PARENT", DeploySubmission(
+            submission_key="submission-0001", strategy_instance_id=sid, claimed_at_ms=0, request_fingerprint="f",
+        ))
         assert receipt.status == "deployed" and receipt.committed_usd == "700.00"
         async with authority.runtime_for_projection() as recovered:
             assert tuple(recovered.sqlite_repository.custody_transitions()) == before

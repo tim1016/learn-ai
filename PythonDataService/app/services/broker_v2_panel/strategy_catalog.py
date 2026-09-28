@@ -60,10 +60,11 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
 )
 # Worded for every broker world, not just Paper: since ADR 0059 slice 7 this
 # sentence renders on a live account's own deploy form, where "Paper trading"
-# names the wrong thing entirely. The grant it points at is the same one.
+# names the wrong thing entirely. The grant it points at is the same one: the
+# "Allow on {world}" line in Deploy's first step, What (PRD #2560 D9).
 CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION = (
     "Broker trading is not enabled for this strategy on this account yet. "
-    "Review and enable broker access below."
+    "Allow it in What."
 )
 _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "A human marked this strategy validated, but its behavioral evidence is "

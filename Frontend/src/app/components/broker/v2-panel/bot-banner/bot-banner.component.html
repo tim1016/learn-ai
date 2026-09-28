@@ -47,8 +47,9 @@
           (triggered)="actionRequested.emit($event)"
         />
       }
-      @if (!panel().health.running && deployAgainRoute(); as route) {
-        <a class="bot-banner__deploy-again" [routerLink]="route" [queryParams]="deployAgainQuery()">Deploy again</a>
+      @if (!panel().health.running) {
+        @let again = deployAgain();
+        <a class="bot-banner__deploy-again" [routerLink]="again.commands" [queryParams]="again.queryParams">Deploy again</a>
       }
       @if (manualOrderNavigation() !== null || moreActions().length > 0) {
         <app-bot-banner-overflow label="More actions for this bot">

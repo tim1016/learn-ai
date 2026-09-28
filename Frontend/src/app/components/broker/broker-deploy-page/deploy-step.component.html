@@ -1,0 +1,40 @@
+<section class="deploy-step" [class.deploy-step--folded]="!open()" [attr.aria-labelledby]="headingId">
+  <header class="deploy-step__head">
+    <span class="deploy-step__number" aria-hidden="true">{{ number() }}</span>
+    <h2 class="deploy-step__title" [id]="headingId">{{ heading() }}</h2>
+    @if (!open() && summary()) {
+      <p class="deploy-step__summary">{{ summary() }}</p>
+    }
+    @if (foldable()) {
+      @if (open()) {
+        <button
+          #toggle
+          type="button"
+          class="deploy-step__toggle"
+          aria-expanded="true"
+          [attr.aria-controls]="bodyId"
+          [attr.aria-describedby]="canFold() ? null : hintId"
+          [attr.aria-label]="'Done with step ' + number() + ', ' + heading()"
+          [disabled]="!canFold()"
+          (click)="fold()"
+        >Done</button>
+      } @else {
+        <button
+          #toggle
+          type="button"
+          class="deploy-step__toggle"
+          aria-expanded="false"
+          [attr.aria-controls]="bodyId"
+          [attr.aria-label]="'Edit step ' + number() + ', ' + heading()"
+          (click)="expand()"
+        >Edit</button>
+      }
+    }
+  </header>
+  @if (foldable() && open() && !canFold() && foldHint()) {
+    <p class="deploy-step__hint" [id]="hintId">{{ foldHint() }}</p>
+  }
+  <div #body class="deploy-step__body" tabindex="-1" [id]="bodyId" [hidden]="!open()">
+    <ng-content />
+  </div>
+</section>

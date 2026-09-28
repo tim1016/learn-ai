@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
@@ -127,12 +128,22 @@ class AlpacaPaperEvidenceOverride(BaseModel):
         return reason
 
 
+#: An opaque key the browser mints when the Deploy form opens (#2551): 8-64
+#: letters, digits, ``-`` or ``_``. The ledger stores it as a directory name,
+#: so the wire rule is also its path-safety rule.
+SUBMISSION_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
+
+
 class AlpacaPaperDeployRequest(BaseModel):
-    """Closed account-scoped command for the production Alpaca deploy page."""
+    """What one Deploy asks for: the settings a preview judges and consent binds to.
+
+    The bot's name is not here. The backend authors it when the Deploy is
+    committed (#2551), so a client that still sends ``strategy_instance_id``
+    is refused with 422 rather than having its name silently ignored.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
     # #1703: was the closed `AlpacaPaperStrategyKey` enum. Any registry-
     # defined, catalog-visible key is now accepted at the wire boundary —
     # see `_validated_catalog_strategy_key` for exactly what "defined" means.
@@ -151,19 +162,14 @@ class AlpacaPaperDeployRequest(BaseModel):
     # own `symbol` field above is authoritative and is injected separately.
     parameters: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("strategy_instance_id")
+    @model_validator(mode="before")
     @classmethod
-    def _validate_strategy_instance_id(cls, value: str) -> str:
-        # Path safety first (shared, <=128), then the tighter broker-ownership
-        # cap: every order this bot ever submits carries
-        # ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars) under the
-        # ``order_ref`` cap, so a name that cannot fit must be refused HERE —
-        # at first order it is an OrderRefTooLongError crash instead
-        # (ceremony-spy-strategy-c-0824, 2026-08-24). Read models keep the
-        # loose validator: existing long-named bots must stay readable.
-        from app.engine.live.order_identity import validate_broker_owned_instance_id
-
-        return validate_broker_owned_instance_id(_validated_strategy_instance_id(value))
+    def _name_is_not_the_clients(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "strategy_instance_id" in data:
+            raise ValueError(
+                "strategy_instance_id is assigned by the server when the Deploy is committed; remove it from the request"
+            )
+        return data
 
     @field_validator("strategy_key")
     @classmethod
@@ -180,6 +186,55 @@ class AlpacaPaperDeployRequest(BaseModel):
         if self.execution_mode == "dry_run" and self.carryover_policy == "ALLOW":
             raise ValueError("dry_run requires carryover_policy=FORBID")
         return self
+
+    def fingerprint(self, **bound_to: str) -> str:
+        """The one hash of these settings, bound to what the caller names.
+
+        Hashes the settings alone: only this model's own fields -- never a
+        subclass's submission key or display lineage -- and never the budget's
+        review token or typed phrase, which prove the final click rather than
+        describe the bot. ``bound_to`` names what else the hash commits to
+        (the account; for consent, also the world).
+        """
+        payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields))
+        if payload["budget"] is not None:
+            payload["budget"].pop("review_token", None)
+            payload["budget"].pop("live_confirmation", None)
+        return canonical_sha256({**bound_to, "request": payload})
+
+
+class AlpacaDeploySubmission(AlpacaPaperDeployRequest):
+    """One Deploy command: the settings plus the opaque key that makes it retry-safe.
+
+    ``submission_key`` is minted by the browser when the form opens. The same
+    key returns the same bot; a new key with identical settings is a second
+    bot. ``replaces_strategy_instance_id`` is Deploy again's display-only
+    lineage: it names the bot this one follows and grants it nothing.
+    """
+
+    submission_key: str = Field(pattern=SUBMISSION_KEY_PATTERN)
+    replaces_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("replaces_strategy_instance_id")
+    @classmethod
+    def _validate_replaced_bot(cls, value: str | None) -> str | None:
+        # Path-safe only: a replaced bot may carry any legacy id.
+        return None if value is None else _validated_strategy_instance_id(value)
+
+
+class BotDeployPrefill(BaseModel):
+    """Deploy again: the sealed settings of one earlier bot, never its money or consent."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_strategy_instance_id: str
+    strategy_key: str
+    symbol: str
+    sizing: AlpacaPaperSizingSelection
+    parameters: dict[str, JsonValue]
+    # ``None`` when the source bot's terms were never recorded in full: the
+    # form then starts from this account's defaults.
+    exit_terms: ExitTermsInput | None = None
 
 
 class AlpacaPaperDeployEligibility(BaseModel):

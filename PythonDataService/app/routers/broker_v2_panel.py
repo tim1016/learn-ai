@@ -24,7 +24,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Literal, NoReturn
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -32,10 +32,13 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
 from app.schemas.broker_bots import (
+    SUBMISSION_KEY_PATTERN,
+    AlpacaDeploySubmission,
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
     BotControlAuthorityFacts,
+    BotDeployPrefill,
 )
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
@@ -68,6 +71,7 @@ from app.schemas.deployment_budget import (
     BudgetDeployCommandReceipt,
     DeploymentBudgetPreview,
     DeploymentBudgetView,
+    DeploySubmissionUncommitted,
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
@@ -165,6 +169,10 @@ def _raise_alpaca_deploy_error(error: panel_errors.PanelDataError) -> NoReturn:
             "reason_code": (
                 error.reason_code if isinstance(error, panel_errors.PanelRunnerError) else None
             ),
+            # Only a Deploy refusal the backend proves started nothing under
+            # its submission key frees the client to use a new key; every
+            # other answer keeps it for the recovery read.
+            "submission_settled": error.submission_settled,
         },
     ) from error
 
@@ -417,29 +425,56 @@ async def read_deployment_budget_scoped(broker: str, account_id: str, sid: str) 
         _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
 
 
-@router.get("/{broker}/accounts/{account_id}/bots/{sid}/deploy-command", response_model=BudgetDeployCommandReceipt)
-async def read_deployment_command_scoped(broker: str, account_id: str, sid: str) -> BudgetDeployCommandReceipt:
+@router.get(
+    "/{broker}/accounts/{account_id}/deploy-submissions/{submission_key}",
+    response_model=BudgetDeployCommandReceipt | DeploySubmissionUncommitted,
+    summary="Recover what one Deploy submission recorded, by its key",
+)
+async def read_deploy_submission_scoped(
+    broker: str,
+    account_id: str,
+    submission_key: str = Path(pattern=SUBMISSION_KEY_PATTERN),
+) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted:
+    """Committed: its receipt. Claimed but not committed: the claimed name,
+    ``in_flight`` or ``not_committed``. Never claimed: 404."""
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
     try:
-        receipt = await budget_deploy.command_receipt(account_id, sid)
-        if receipt is None:
-            raise HTTPException(status_code=404, detail="No budget-backed Deploy command exists for this deployment.")
-        return receipt
-    except BudgetUnavailable as error:
-        _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
+        status = await panel_deploy.deploy_submission_status(account_id, submission_key)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Deploy was committed for this submission. Nothing was set aside and nothing started.",
+        )
+    return status
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/deploy-prefill",
+    response_model=BotDeployPrefill,
+    summary="Deploy again: one earlier bot's sealed settings, never its money or consent",
+)
+async def read_deploy_prefill_scoped(broker: str, account_id: str, sid: str) -> BotDeployPrefill:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Deploy again is available on Alpaca accounts.")
+    try:
+        return await panel_deploy.deploy_prefill(broker, account_id, sid)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
 
 
 @router.post(
     "/{broker}/accounts/{account_id}/bots",
     response_model=AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt,
     status_code=201,
-    summary="Deploy one Clerk-governed Alpaca paper bot (§5)",
+    summary="Deploy one Clerk-governed Alpaca bot, named by the backend (§5, #2551)",
 )
 async def deploy_bot_scoped(
     broker: str,
     account_id: str,
-    request: AlpacaPaperDeployRequest,
+    request: AlpacaDeploySubmission,
 ) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
     try:
         return await panel_deploy.deploy_alpaca_paper_bot(broker, account_id, request)

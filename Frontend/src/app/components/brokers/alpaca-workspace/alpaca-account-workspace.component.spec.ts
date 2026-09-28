@@ -8,7 +8,7 @@ import {
   withRouterConfig,
   type Routes,
 } from '@angular/router';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { MessageService } from 'primeng/api';
 import { describe, expect, it, vi } from 'vitest';
@@ -73,7 +73,7 @@ class BotStubComponent {}
 
 @Component({
   selector: 'app-deploy-stub',
-  template: '<main aria-label="Deploy strategy">Deploy strategy tab</main>',
+  template: '<main aria-label="Deploy a bot">Deploy a bot tab</main>',
 })
 class DeployStubComponent {}
 
@@ -219,14 +219,14 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     [WORKSPACE_URL, 'Home'],
     [`${WORKSPACE_URL}?view=wall`, 'Home'],
     [`${WORKSPACE_URL}/activity`, 'Activity'],
-    [`${WORKSPACE_URL}/deploy`, 'Deploy strategy'],
+    [`${WORKSPACE_URL}/deploy`, 'Deploy a bot'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
     await renderWorkspace({ url });
 
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
     // Overview, Bots and Gallery are one Home tab (PRD #2560).
-    for (const label of ['Home', 'Activity', 'Settings', 'Deploy strategy']) {
+    for (const label of ['Home', 'Activity', 'Settings', 'Deploy a bot']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     for (const retired of ['Overview', 'Bots', 'Gallery']) {
@@ -303,14 +303,17 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       });
 
       await screen.findByRole('heading', { name: 'Unbound' });
-      expect(screen.queryByRole('link', { name: 'Deploy strategy' })).toBeNull();
-      expect(screen.getByText('Deploy strategy').getAttribute('aria-disabled')).toBe('true');
+      // Deploy a bot is the account's own action: an accountless lane shows
+      // no button at all, and Activity — the account's history — is inert.
+      expect(screen.queryByRole('link', { name: 'Deploy a bot' })).toBeNull();
+      expect(screen.queryByText('Deploy a bot')).toBeNull();
+      expect(screen.getByText('Activity').getAttribute('aria-disabled')).toBe('true');
       expect(screen.getByRole('link', { name: 'Home' }).getAttribute('href')).toBe(`${LANE_URL}/home`);
       expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
     });
 
     it('has no detectable accessibility violations with no account to offer', async () => {
-      // The bound render above never emits the inert Deploy tab, so this is
+      // The bound render above never emits the inert Activity tab, so this is
       // the only pass that grades it — and the unoffered tab is exactly the
       // markup an operator is most likely to meet with a screen reader.
       await renderWorkspace({ url: `${LANE_URL}/settings`, directory: unboundDirectory() });
@@ -448,12 +451,22 @@ describe('AlpacaAccountWorkspaceComponent', () => {
   it('points Deploy at the workspace’s own lane and account from every other tab', async () => {
     // Blocked-reason messaging (no lane, no declared capability, no confirmed
     // account) is `AlpacaDeployTabComponent`'s own concern now — this shell
-    // only has to get the tab's address right, from wherever it is clicked.
+    // only has to get the button's address right, from wherever it is clicked.
     await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1` });
 
-    expect(screen.getByRole('link', { name: 'Deploy strategy' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Deploy a bot' }).getAttribute('href')).toBe(
       `${WORKSPACE_URL}/deploy`,
     );
+  });
+
+  it('offers Deploy as a header button, never as a tab in the strip (PRD #2560 D3)', async () => {
+    await renderWorkspace({ url: `${WORKSPACE_URL}/deploy` });
+
+    const strip = await screen.findByRole('navigation', { name: 'Account sections' });
+    expect(within(strip).queryByRole('link', { name: /Deploy/ })).toBeNull();
+    const deploy = screen.getByRole('link', { name: 'Deploy a bot' });
+    expect(deploy.closest('header')).not.toBeNull();
+    expect(deploy.getAttribute('aria-current')).toBe('page');
   });
 
   it('lands on the chosen account’s Deploy tab under a deploy intent', async () => {
@@ -468,7 +481,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     fireEvent.click(await screen.findByRole('link', { name: /Paper/ }));
 
     await vi.waitFor(() => expect(router.url).toBe(`${WORKSPACE_URL}/deploy`));
-    expect(await screen.findByText('Deploy strategy tab')).toBeTruthy();
+    expect(await screen.findByText('Deploy a bot tab')).toBeTruthy();
   });
 
   describe("a bot's own page", () => {

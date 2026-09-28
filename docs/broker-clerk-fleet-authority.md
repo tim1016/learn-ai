@@ -415,7 +415,7 @@ symbol and exact parameter values. The registry qualifies its
 
 Paper, Shadow and Live require a covered tuple before a deployment can commit
 money. Deploy shows that tuple and offers **Use qualified configuration** or
-**Try in Dry Run**. It never silently changes the configuration or self-certifies
+**Try other settings in Dry Run**. It never silently changes the configuration or self-certifies
 a new corpus point. Dry Run retains its explicit exploratory exemption; its
 frozen evidence keeps the coverage result and cannot claim qualification.
 

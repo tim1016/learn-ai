@@ -93,7 +93,10 @@ export class DeployParametersSectionComponent {
   }
 
   readonly paramsSchema = input.required<DeployStrategyParamsSchema>();
-  readonly values = input.required<Record<string, unknown>>();
+  readonly values = input.required<Readonly<Record<string, unknown>>>();
+  /** Whether other values may be typed. A Golden-scoped strategy trades only
+   * its qualified settings in a broker world; Dry Run opens the editor. */
+  readonly editable = input(true);
 
   readonly parameterChange = output<{ field: string; value: string | number }>();
   /** Emits the current set of fields whose displayed text does not parse to

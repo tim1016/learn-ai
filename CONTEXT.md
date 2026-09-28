@@ -1795,8 +1795,8 @@ view.
   _Avoid_: evidence modal, receipt viewer.
 - **Historical Deploy drawer** — the retired slide-over that hosted the deploy
   workflow over the account workspace. ADR 0064's 2026-09-17 amendment made
-  Deploy a routed tab of its own; #2564 makes it the account header's
-  "Deploy a bot" button, at the same URL.
+  Deploy a routed tab of its own; PRD #2560 (#2564) made it the account
+  header's "Deploy a bot" button, at the same URL.
 - **Asset identity** — the canonical rendering of one tradeable instrument:
   its symbol with the recognisable mark that goes with it. One renderer owns
   symbol presentation; feature surfaces do not re-derive logos or fallbacks.

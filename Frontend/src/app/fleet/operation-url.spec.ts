@@ -87,6 +87,7 @@ describe('operationUrl', () => {
       externalOrderId: 'ext-1',
       commandId: 'cmd-1',
       programKey: 'program-1',
+      submissionKey: 'submission-1',
     };
     for (const operationId of Object.keys(catalog.operations) as OperationId[]) {
       expect(() => operationUrl(operationId, fullTarget)).not.toThrow();

@@ -40,7 +40,7 @@ describe('BrokerV2PanelService run evidence', () => {
 
   it('routes a read-only budget preview and preserves the consent string in the command envelope', async () => {
     const body = {
-      strategy_instance_id: 'sid-001', strategy_key: 'deployment_validation' as const, symbol: 'SPY', execution_mode: 'paper' as const,
+      strategy_key: 'deployment_validation' as const, symbol: 'SPY', execution_mode: 'paper' as const,
       sizing: { preset: 'safe_canary' as const, quantity: 1 }, carryover_policy: 'FORBID' as const,
       exit_terms: { exit_allowance_bps: 10, band_multiple: 2, spread_cap_bps: 10 },
       budget: { amount_usd: '1234.56', risk_revision: 7, review_token: 'review-proof' },
@@ -50,9 +50,11 @@ describe('BrokerV2PanelService run evidence', () => {
     expect(read.request.body).toEqual(body);
     read.flush({ state: 'ready', review_token: 'review-proof' });
     await preview;
-    const command = service.deployBudgetBot(target('PA9'), body);
+    const command = service.deployBudgetBot(target('PA9'), { ...body, submission_key: 'submission-key-1' });
     const write = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots');
     expect(write.request.body.budget).toEqual(body.budget);
+    expect(write.request.body.submission_key).toBe('submission-key-1');
+    expect(write.request.body.strategy_instance_id).toBeUndefined();
     expect(write.request.body.command_context.idempotency_key).toBe('command-key-1');
     write.flush({ status: 'pending', committed_usd: '1234.56' });
     await expect(command).resolves.toMatchObject({ status: 'pending', committed_usd: '1234.56' });
@@ -64,11 +66,19 @@ describe('BrokerV2PanelService run evidence', () => {
     expect(money.request.method).toBe('GET');
     money.flush({ state: 'unavailable', free_usd: null });
     await expect(budget).resolves.toMatchObject({ free_usd: null });
-    const command = service.getDeployCommand(target('PA9'), 'sid/1');
-    const status = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/deploy-command');
+    const command = service.getDeploySubmission(target('PA9'), 'key_1-abc');
+    const status = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/deploy-submissions/key_1-abc');
     expect(status.request.method).toBe('GET');
     status.flush({ status: 'pending' });
     await expect(command).resolves.toMatchObject({ status: 'pending' });
+  });
+
+  it('reads Deploy again settings for one earlier bot through its escaped identity', async () => {
+    const prefill = service.getDeployPrefill(target('PA9'), 'sid/1');
+    const read = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/deploy-prefill');
+    expect(read.request.method).toBe('GET');
+    read.flush({ source_strategy_instance_id: 'sid/1', strategy_key: 'ema', symbol: 'SPY', sizing: {}, parameters: {} });
+    await expect(prefill).resolves.toMatchObject({ source_strategy_instance_id: 'sid/1' });
   });
 
   it('loads the current run from the clerk-scoped run endpoint', async () => {
