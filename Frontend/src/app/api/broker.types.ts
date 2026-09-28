@@ -878,74 +878,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Arming Status */
-        get: operations["arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Apply */
-        post: operations["arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/disarm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Disarm */
-        post: operations["arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Plan */
-        post: operations["arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
         parameters: {
             query?: never;
@@ -2503,86 +2435,6 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions/quiesce (bot_action).
          */
         post: operations["fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Live Arming Status
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/arming (custody_read).
-         */
-        get: operations["fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Apply
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/apply (custody_command).
-         */
-        post: operations["fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/disarm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Disarm
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/disarm (custody_command).
-         */
-        post: operations["fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Plan
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/plan (custody_command).
-         */
-        post: operations["fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4387,7 +4239,7 @@ export interface paths {
          * @description The server-derived live verdict (ADR 0059 D8).
          *
          *     Never contacts the broker: settings, the clerk selection outcome, and a
-         *     read of the durable shadow evidence are the only inputs.
+         *     read of current account risk and budget authority are the only inputs.
          */
         get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
         put?: never;
@@ -8451,8 +8303,8 @@ export interface components {
         };
         /** AlpacaLiveVerdict */
         AlpacaLiveVerdict: {
-            /** Armed Instance Count */
-            armed_instance_count: number;
+            /** Budget Authority Version */
+            budget_authority_version: number;
             /**
              * Clerk Authority
              * @enum {string}
@@ -8465,23 +8317,18 @@ export interface components {
              * @enum {string}
              */
             configured_mode: "paper" | "live" | "unconfigured";
+            /**
+             * Deployment Readiness
+             * @enum {string}
+             */
+            deployment_readiness: "not_applicable" | "upgrade_required" | "risk_not_observed" | "loss_hold" | "ready";
             /** Detail */
             detail: string;
-            /**
-             * Envelope Agreement
-             * @enum {string}
-             */
-            envelope_agreement: "not_applicable" | "unsealed" | "agreed" | "disagreed";
-            /**
-             * Envelope State
-             * @enum {string}
-             */
-            envelope_state: "not_applicable" | "configured_unsealed" | "sealed";
             /**
              * Final Verdict
              * @enum {string}
              */
-            final_verdict: "paper" | "live-unarmed" | "live-armed" | "unknown";
+            final_verdict: "paper" | "live" | "shadow" | "unknown";
             /** Headline */
             headline: string;
             /**
@@ -8501,11 +8348,6 @@ export interface components {
              * Format: int64
              */
             observed_at_ms: number;
-            /**
-             * Shadow State
-             * @enum {string}
-             */
-            shadow_state: "not_applicable" | "none" | "in_progress" | "complete";
         };
         /**
          * AlpacaPaperDeployEligibility
@@ -8917,54 +8759,6 @@ export interface components {
              * @description Details of worst violations
              */
             worst_slices?: Record<string, never>[];
-        };
-        /** ArmingApplyRequest */
-        ArmingApplyRequest: {
-            /** Confirmation Token */
-            confirmation_token: string;
-            /** Plan Id */
-            plan_id: string;
-        };
-        /** ArmingPlanView */
-        ArmingPlanView: {
-            /** Account Id */
-            account_id: string;
-            /** Changes */
-            changes: string[];
-            /** Confirmation Token */
-            confirmation_token: string;
-            /** Created At Ms */
-            created_at_ms: number;
-            envelope: components["schemas"]["LiveEnvelopePayload"];
-            exit_terms: components["schemas"]["ExitTerms"];
-            /** Expires At Ms */
-            expires_at_ms: number;
-            /** Plan Id */
-            plan_id: string;
-            /** Shadow Receipt Sha256 */
-            shadow_receipt_sha256: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /** ArmingStatusView */
-        ArmingStatusView: {
-            /** Account Id */
-            account_id: string;
-            /** Armed Instance Count */
-            armed_instance_count: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Reason Code */
-            reason_code: string | null;
-            /** Sessions Remaining */
-            sessions_remaining: number;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "unarmed" | "armed" | "disarmed" | "lapsed";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * ArtifactDetail
@@ -10657,7 +10451,10 @@ export interface components {
             panel_path: string;
             /** Receipt Id */
             receipt_id: string;
-            /** Recorded At Ms */
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
             recorded_at_ms: number;
             /** Run Id */
             run_id: string;
@@ -15159,23 +14956,6 @@ export interface components {
             rule?: "fixed_bar_count_countdown" | "level_true";
         };
         /**
-         * ExitTerms
-         * @description Immutable stored terms; an upgraded registration may retain an unset allowance.
-         */
-        ExitTerms: {
-            /** Band Multiple */
-            band_multiple: number;
-            /** Exit Allowance Bps */
-            exit_allowance_bps: number | null;
-            /**
-             * Provenance
-             * @enum {string}
-             */
-            provenance: "deployed" | "backfilled";
-            /** Spread Cap Bps */
-            spread_cap_bps: number;
-        };
-        /**
          * ExitTermsInput
          * @description Explicit complete terms required for a new deployment.
          */
@@ -18753,31 +18533,16 @@ export interface components {
         };
         /**
          * LiveEnvelopePayload
-         * @description The six values, named exactly as ``LiveEnvelopeValues`` names them.
+         * @description The four current account bounds; retired session counts are rejected.
          *
-         *     The mapping to the dataclass is an identity, so no rename layer can drift
-         *     (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
-         *     field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
-         *     every path into storage, which is where the rule actually lives.
-         *
-         *     ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
-         *     mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
-         *     before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
-         *     by-name ``int`` check downstream would never see the boolean it exists to
-         *     refuse — a real-money session count silently minted from ``true``. Strict
-         *     ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
-         *     accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
-         *     ``float`` annotation does with ``5000``.
+         *     Historical revisions retain their full hash-bearing representation in storage.
+         *     The configuration API projects only the fields a trader can currently edit.
          */
         LiveEnvelopePayload: {
-            /** Arming Max Sessions */
-            arming_max_sessions: number;
             /** Loss Fraction */
             loss_fraction: number;
             /** Loss Usd */
             loss_usd: number;
-            /** Shadow Sessions */
-            shadow_sessions: number;
             /** Xh Entry Bps */
             xh_entry_bps: number;
             /** Xh Exit Bps */
@@ -29839,146 +29604,6 @@ export interface operations {
             };
         };
     };
-    arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ArmingApplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingPlanView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get: {
         parameters: {
             query?: never;
@@ -33355,162 +32980,6 @@ export interface operations {
         };
     };
     fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post: {
         parameters: {
             query?: never;
             header?: {
