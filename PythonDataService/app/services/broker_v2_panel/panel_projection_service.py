@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.money import display_cents, dollars, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
     ActionId,
@@ -721,6 +722,23 @@ def select_primary_action(
     return next((action_id for action_id in _RUNNING_STOP_ACTION_IDS if action_id in action_ids), None)
 
 
+def open_pnl_fields(open_pnl: float | None) -> dict[str, object]:
+    """A bot's open P&L with the words the owner reads it in (PRD #2560 D12).
+
+    The one writer of ``BotPanelView.open_pnl_usd`` and
+    ``open_pnl_direction``: half-even display cents through the canonical
+    money helpers, and the direction those cents point, so a loss that rounds
+    to "0.00" reads flat rather than red. ``None`` for all three when the
+    figure is unknown (no current price).
+    """
+    if open_pnl is None:
+        return {"open_pnl": None, "open_pnl_usd": None, "open_pnl_direction": None}
+    with money_context():
+        cents = display_cents(normalize_money(open_pnl))
+    direction = "gain" if cents > 0 else "loss" if cents < 0 else "flat"
+    return {"open_pnl": open_pnl, "open_pnl_usd": dollars(cents), "open_pnl_direction": direction}
+
+
 def build_panel(
     status: BotStatusView,
     clerk_status: ClerkStatus,
@@ -905,5 +923,5 @@ def build_panel(
         recent_fills=fill_views,
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
-        open_pnl=open_pnl,
+        **open_pnl_fields(open_pnl),
     )

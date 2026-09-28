@@ -187,6 +187,8 @@ const PANEL: BotPanelView = {
   fills_today: 0,
   realized_pnl_today: 0.0,
   open_pnl: null,
+  open_pnl_usd: null,
+  open_pnl_direction: null,
 };
 
 const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
@@ -2226,7 +2228,10 @@ describe('BotPanelShellComponent', () => {
     }
 
     it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
-      await renderPage({ ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop' });
+      await renderPage({
+        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop',
+        open_pnl: -3.254, open_pnl_usd: '-3.25', open_pnl_direction: 'loss',
+      });
       await screen.findByText('Holding its position');
 
       expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
@@ -2239,6 +2244,9 @@ describe('BotPanelShellComponent', () => {
         'Waiting in entry orders $0.00',
         'Free to trade $235.28',
       ]);
+      // The panel's own authored dollars, never a browser-formatted number.
+      expect(screen.getByText(/Open gain or loss on shares:/).textContent?.replace(/\s+/g, ' ').trim())
+        .toBe('Open gain or loss on shares: -$3.25, counted when sold.');
       expect(screen.queryByRole('heading', { name: /No bot is managing/ })).toBeNull();
       expect(screen.queryByRole('link', { name: 'Deploy again' })).toBeNull();
     });

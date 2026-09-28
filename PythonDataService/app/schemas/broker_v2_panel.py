@@ -561,6 +561,10 @@ class MarketPulseView(BaseModel):
     observed_at_ms: int
 
 
+# Which way a bot's open P&L points at its displayed cents: colour only.
+OpenPnlDirection = Literal["gain", "loss", "flat"]
+
+
 class BotPanelView(BaseModel):
     """The full 5s-poll panel projection for one bot (§7).
 
@@ -640,6 +644,20 @@ class BotPanelView(BaseModel):
     fills_today: int | None
     realized_pnl_today: float | None
     open_pnl: float | None
+    # ``open_pnl`` as the owner reads it: Python-authored whole-cent dollars
+    # (PRD #2560 D12), and its direction at those cents -- colour only, the
+    # sign is in the string. Both ``None`` exactly when ``open_pnl`` is.
+    # Authored by ``panel_projection_service.open_pnl_fields``.
+    open_pnl_usd: str | None
+    open_pnl_direction: OpenPnlDirection | None
+
+    @model_validator(mode="after")
+    def _open_pnl_is_authored_with_its_figure(self) -> BotPanelView:
+        """Fail closed on a figure without its words, or words without a figure."""
+        known = {self.open_pnl is None, self.open_pnl_usd is None, self.open_pnl_direction is None}
+        if len(known) != 1:
+            raise ValueError("open_pnl, open_pnl_usd and open_pnl_direction must all be known or all be None")
+        return self
 
     @model_validator(mode="after")
     def _primary_action_is_presented(self) -> BotPanelView:

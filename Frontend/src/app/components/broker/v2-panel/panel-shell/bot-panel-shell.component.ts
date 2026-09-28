@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -159,7 +158,6 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    CurrencyPipe,
     ExtendedFlattenTicketComponent,
     FlattenFillsComponent,
     PanelActionReceiptComponent,

@@ -83,6 +83,7 @@ from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAgg
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
+    open_pnl_fields,
     program_build_view_from_run_evidence,
     select_primary_action,
 )
@@ -1047,6 +1048,66 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
             "observed_at_ms": _NOW - 300,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("open_pnl", "expected_usd", "expected_direction"),
+    [
+        (-3.254, "-3.25", "loss"),
+        # Half-even display cents: 12.405 shows as 12.40, never re-rounded in the browser.
+        (12.405, "12.40", "gain"),
+        # A loss smaller than half a cent shows as 0.00, and reads flat, not red.
+        (-0.004, "0.00", "flat"),
+        (0.0, "0.00", "flat"),
+    ],
+)
+def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
+    open_pnl: float, expected_usd: str, expected_direction: str,
+) -> None:
+    projection = _rail_projection(orders=())
+    economics = EconomicSnapshot(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 3_600_000,
+        session_close_ms=_NOW + 3_600_000,
+        recent_fills=(),
+        fills_today=0,
+        exposure={"SPY": 1.0},
+        realized_pnl_today=0.0,
+        open_pnl=open_pnl,
+        marks_complete=True,
+        mark_observed_at_ms={"SPY": _NOW},
+        fee_fidelity="reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW,
+    )
+
+    adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
+
+    assert (adapted.open_pnl, adapted.open_pnl_usd, adapted.open_pnl_direction) == (
+        open_pnl, expected_usd, expected_direction,
+    )
+    wire = adapted.model_dump(mode="json")
+    assert (wire["open_pnl_usd"], wire["open_pnl_direction"]) == (expected_usd, expected_direction)
+
+
+def test_open_pnl_without_a_price_has_no_words_either() -> None:
+    base = _panel(_status(running=True), _clerk_status(), [])
+
+    assert (base.open_pnl, base.open_pnl_usd, base.open_pnl_direction) == (None, None, None)
+    assert adapt_sqlite_panel(base, _rail_projection(orders=())).open_pnl_usd is None
+
+
+def test_open_pnl_words_cannot_drift_from_the_figure() -> None:
+    payload = _panel(_status(running=True), _clerk_status(), []).model_dump()
+    payload.update(open_pnl=4.5)
+
+    with pytest.raises(ValidationError, match="open_pnl_usd"):
+        BotPanelView.model_validate(payload)
+    payload.update(open_pnl_fields(4.5))
+    assert BotPanelView.model_validate(payload).open_pnl_usd == "4.50"
 
 
 def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:

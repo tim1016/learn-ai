@@ -4785,6 +4785,33 @@
             ],
             "title": "Open Pnl"
           },
+          "open_pnl_direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gain",
+                  "loss",
+                  "flat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Direction"
+          },
+          "open_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Usd"
+          },
           "primary_action": {
             "anyOf": [
               {
@@ -4953,7 +4980,9 @@
           "recent_fills",
           "fills_today",
           "realized_pnl_today",
-          "open_pnl"
+          "open_pnl",
+          "open_pnl_usd",
+          "open_pnl_direction"
         ],
         "title": "BotPanelView",
         "type": "object"

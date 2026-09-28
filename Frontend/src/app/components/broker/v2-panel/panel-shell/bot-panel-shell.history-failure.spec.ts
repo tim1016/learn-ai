@@ -180,6 +180,8 @@ const PANEL: BotPanelView = {
   fills_today: 0,
   realized_pnl_today: 0.0,
   open_pnl: null,
+  open_pnl_usd: null,
+  open_pnl_direction: null,
 };
 
 const LIVE_CHART = {

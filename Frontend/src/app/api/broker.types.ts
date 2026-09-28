@@ -10028,6 +10028,10 @@ export interface components {
             mode: "log_only" | "dry_run" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
+            /** Open Pnl Direction */
+            open_pnl_direction: ("gain" | "loss" | "flat") | null;
+            /** Open Pnl Usd */
+            open_pnl_usd: string | null;
             /** Primary Action */
             primary_action: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];

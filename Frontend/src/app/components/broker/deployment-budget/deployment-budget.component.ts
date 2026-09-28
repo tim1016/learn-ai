@@ -4,6 +4,11 @@ import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
+import type { BotPanelView } from '../v2-panel/lib/broker-v2-panel.types';
+
+/** The panel's open gain or loss on shares: Python's dollars and the way they
+ * point, so the card neither formats nor compares a number (PRD #2560 D12). */
+export type BotOpenPnl = Pick<BotPanelView, 'open_pnl_usd' | 'open_pnl_direction'>;
 
 let nextHeadingId = 0;
 
@@ -29,13 +34,9 @@ export class DeploymentBudgetComponent {
   readonly strategyInstanceId = input.required<string>();
   readonly revision = input(0);
   readonly holdsShares = input(false);
-  /** The bot panel's open gain or loss on shares; null when there is no current price. */
-  readonly openPnl = input<number | null>(null);
-  /**
-   * The same figure as the panel formats it: a money surface hands no value
-   * to a pipe that formats numbers (PRD #2560 D12).
-   */
-  readonly openPnlText = input<string | null>(null);
+  /** The bot's open gain or loss on shares, as Python wrote it — pass the
+   * panel itself. Its dollars are `null` when there is no current price. */
+  readonly openPnl = input<BotOpenPnl | null>(null);
 
   protected readonly headingId = `deployment-budget-heading-${nextHeadingId++}`;
   private readonly service = inject(BrokerV2PanelService);

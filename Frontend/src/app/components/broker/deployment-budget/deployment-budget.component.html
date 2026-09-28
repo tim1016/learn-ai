@@ -25,12 +25,13 @@
       }
       @if (holdsShares()) {
         @let pnl = openPnl();
-        @if (pnl === null) {
-          <p class="deployment-budget__fine">Open gain or loss on shares: no current price.</p>
-        } @else {
+        @if (pnl?.open_pnl_usd; as amount) {
           <p class="deployment-budget__fine">
-            Open gain or loss on shares: <span class="num" [class.positive]="pnl > 0" [class.negative]="pnl < 0">{{ openPnlText() }}</span>, counted when sold.
+            Open gain or loss on shares:
+            <span class="num" [class.positive]="pnl?.open_pnl_direction === 'gain'" [class.negative]="pnl?.open_pnl_direction === 'loss'">{{ amount | authoredUsd }}</span>, counted when sold.
           </p>
+        } @else {
+          <p class="deployment-budget__fine">Open gain or loss on shares: no current price.</p>
         }
       }
       @let observedAt = report.observed_at_ms ?? null;

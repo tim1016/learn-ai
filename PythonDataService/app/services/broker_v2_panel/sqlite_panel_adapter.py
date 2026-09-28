@@ -58,7 +58,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
-from app.services.broker_v2_panel.panel_projection_service import select_primary_action
+from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
 _WORKING_BROKER_STATES = frozenset(
@@ -186,7 +186,7 @@ def adapt_sqlite_panel(
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
             ),
-            "open_pnl": None if economics is None else economics.open_pnl,
+            **open_pnl_fields(None if economics is None else economics.open_pnl),
         }
     )
 

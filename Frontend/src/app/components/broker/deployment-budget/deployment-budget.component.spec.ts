@@ -5,7 +5,7 @@ import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { BrokerV2PanelService, type DeploymentBudgetView, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
-import { DeploymentBudgetComponent } from './deployment-budget.component';
+import { type BotOpenPnl, DeploymentBudgetComponent } from './deployment-budget.component';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
 
@@ -101,9 +101,13 @@ const LEGACY: DeploymentBudgetView = {
 
 interface CardInputs {
   readonly holdsShares?: boolean;
-  readonly openPnl?: number | null;
-  /** The same figure as the page shell formats it. */
-  readonly openPnlText?: string | null;
+  /** The panel's authored open gain or loss, as the page shell passes it. */
+  readonly openPnl?: BotOpenPnl | null;
+}
+
+/** The panel's open P&L as Python authors it. */
+function openPnl(usd: string | null, direction: BotOpenPnl['open_pnl_direction'] = null): BotOpenPnl {
+  return { open_pnl_usd: usd, open_pnl_direction: direction };
 }
 
 /** Rendered where the bot page puts it — inside a landmark — with the page shell's bindings. */
@@ -111,12 +115,12 @@ async function renderCard(getBudget: ReturnType<typeof vi.fn>, inputs: CardInput
   const revision = signal(1);
   const result = await render(
     `<main aria-label="Bot"><app-deployment-budget [target]="target" strategyInstanceId="spy-ema-a" [revision]="revision()"
-      [holdsShares]="holdsShares" [openPnl]="openPnl" [openPnlText]="openPnlText" /></main>`,
+      [holdsShares]="holdsShares" [openPnl]="openPnl" /></main>`,
     {
       imports: [DeploymentBudgetComponent],
       componentProperties: {
         target: TARGET, revision,
-        holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null, openPnlText: inputs.openPnlText ?? null,
+        holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }],
     },
@@ -234,7 +238,7 @@ describe("This bot's money", () => {
   });
 
   it.each([['unavailable', UNAVAILABLE], ['legacy', LEGACY]])('shows only the headline and detail when the money is %s', async (_state, view) => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: 4.5, openPnlText: '$4.50' });
+    const { container } = await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('4.50', 'gain') });
 
     await screen.findByText(view.headline);
     expect(screen.getByText(view.detail)).toBeTruthy();
@@ -245,21 +249,36 @@ describe("This bot's money", () => {
     expect(screen.queryByText(/Budget (and|or) account risk/)).toBeNull();
   });
 
-  it('notes the open gain or loss on shares apart from the bar while it holds shares', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: -3.25, openPnlText: '-$3.25' });
+  it('notes the open gain or loss on shares apart from the bar, in Python’s own dollars', async () => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl('-3.25', 'loss') });
 
     const note = await screen.findByText(/Open gain or loss on shares:/);
     expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe('Open gain or loss on shares: -$3.25, counted when sold.');
+    expect(note.querySelector('.num.negative')?.textContent).toBe('-$3.25');
+  });
+
+  it.each([
+    ['gain', '12.40', '$12.40', 'positive'],
+    ['loss', '-0.01', '-$0.01', 'negative'],
+    ['flat', '0.00', '$0.00', null],
+  ] as const)('colours the open gain or loss by Python’s direction (%s), never by reading the number', async (direction, usd, shown, tone) => {
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl(usd, direction) });
+
+    const note = await screen.findByText(/Open gain or loss on shares:/);
+    const amount = note.querySelector<HTMLElement>('.num');
+    expect(amount?.textContent).toBe(shown);
+    expect([amount?.classList.contains('positive'), amount?.classList.contains('negative')])
+      .toEqual([tone === 'positive', tone === 'negative']);
   });
 
   it('says there is no current price when the open gain or loss is unknown', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: null });
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl(null) });
 
     expect(await screen.findByText('Open gain or loss on shares: no current price.')).toBeTruthy();
   });
 
   it('has no open gain or loss note when it holds no shares', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: 7, openPnlText: '$7.00' });
+    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: openPnl('7.00', 'gain') });
 
     await screen.findByText('Holding its position');
     expect(screen.queryByText(/Open gain or loss/)).toBeNull();
@@ -296,7 +315,7 @@ describe("This bot's money", () => {
   });
 
   it.each([['running', RUNNING], ['stopped', STOPPED]])('has no detectable accessibility violations when %s', async (_name, view) => {
-    await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: 12.5, openPnlText: '$12.50' });
+    await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('12.50', 'gain') });
     await screen.findByText(view.headline);
 
     await expectAxeClean();
