@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
@@ -17,10 +17,31 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
-from app.schemas.deployment_budget import DeploymentBudgetInput
+from app.schemas.deployment_budget import (
+    BudgetDeployCommandReceipt,
+    DeploymentBudgetInput,
+    DeploymentBudgetPreview,
+    DeploymentBudgetView,
+)
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.broker_v2_panel import budget_deploy
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+
+
+@pytest.mark.parametrize(("model", "field", "payload"), [
+    (DeploymentBudgetPreview, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", custody_account_id="PAPER")),
+    (DeploymentBudgetView, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
+    (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
+        status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
+        run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
+        explanation="Pending", next_action="Refresh", panel_path="/panel",
+    )),
+])
+def test_budget_receipts_reject_out_of_domain_timestamps(model: type[BaseModel], field: str, payload: dict) -> None:
+    assert getattr(model(**payload, **{field: MAX_TIMESTAMP_MS}), field) == MAX_TIMESTAMP_MS
+    with pytest.raises(ValidationError, match=field):
+        model(**payload, **{field: MAX_TIMESTAMP_MS + 1})
 
 
 def _request(**updates) -> AlpacaPaperDeployRequest:

@@ -16,13 +16,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
+from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
@@ -49,11 +50,11 @@ class SimulationEvidenceUnavailable(BrokerUnavailable):
 class SimulationBaseline(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    session_start_ms: int = Field(ge=0)
+    session_start_ms: EpochMs
     initial_capital_usd: Decimal
     equity_usd: Decimal
-    observed_at_ms: int = Field(ge=0)
-    mark_cutoff_ms: int = Field(ge=0)
+    observed_at_ms: EpochMs
+    mark_cutoff_ms: EpochMs
     mark_refs: tuple[str, ...] = ()
 
     @field_validator("initial_capital_usd", "equity_usd")

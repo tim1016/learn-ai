@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents
 from app.schemas.account_authority import AuthorityKind
 
@@ -51,7 +52,7 @@ class DeploymentBudgetPreview(BaseModel):
     detail: str
     world: AuthorityKind
     custody_account_id: str
-    observed_at_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: EpochMs | None = None
     minimum_budget_usd: str | None = None
     unreserved_usd: str | None = None
     estimated_price_usd: str | None = None
@@ -80,7 +81,7 @@ class DeploymentBudgetView(BaseModel):
     released_usd: str | None = None
     shortfall_usd: str | None = None
     entry_eligible: bool = False
-    observed_at_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: EpochMs | None = None
 
 
 class BudgetDeployCommandReceipt(BaseModel):
@@ -90,7 +91,7 @@ class BudgetDeployCommandReceipt(BaseModel):
     status: Literal["pending", "deployed", "failed"]
     outcome: Literal["pending", "success", "failure"]
     receipt_id: str
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: EpochMs
     command_id: str
     strategy_instance_id: str
     run_id: str

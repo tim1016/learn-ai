@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
@@ -19,17 +20,30 @@ from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
-from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
+from app.broker.alpaca.clerk.sqlite.simulated_account import (
+    SimulatedAccountProjection,
+    SimulationBaseline,
+    SimulationEvidenceUnavailable,
+)
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.marketdata.feed import MarketDataBar
 from app.services.source_bar_ledger import SourceBarLedger
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID, NOON, _append_day_pnl_slice, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _hold
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
 
 type ShadowContext = tuple[ClerkSqliteRepository, SimulatedAccountProjection, _TestClock]
+
+
+@pytest.mark.parametrize("field", ["session_start_ms", "observed_at_ms", "mark_cutoff_ms"])
+def test_simulation_baseline_rejects_out_of_domain_timestamps(field: str) -> None:
+    values = dict(session_start_ms=NOON, observed_at_ms=NOON, mark_cutoff_ms=NOON,
+                  initial_capital_usd="1000", equity_usd="1000")
+    with pytest.raises(ValidationError, match=field):
+        SimulationBaseline(**{**values, field: MAX_TIMESTAMP_MS + 1})
 
 
 @pytest.fixture
