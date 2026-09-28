@@ -212,6 +212,7 @@ async def select_shadow_clerk_runtime(
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        fee_sync=composed.fee_sync,
         envelope_sync=composed.envelope_sync,
         evidence_sink=NullTradeUpdateEvidenceSink(),
         _sqlite_repository=composed.repository,

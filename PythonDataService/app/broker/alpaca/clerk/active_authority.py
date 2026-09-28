@@ -300,6 +300,7 @@ async def select_active_clerk_runtime(
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
         envelope_sync=composed.envelope_sync,
+        fee_sync=composed.fee_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=composed.repository,
             intake=composed.facade.intake,

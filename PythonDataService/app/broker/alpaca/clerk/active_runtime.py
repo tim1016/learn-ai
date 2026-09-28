@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
+from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -110,6 +111,7 @@ def _ordered_taps(
     envelope_sync: BackgroundSweep | None,
     hold_sync: BackgroundSweep | None,
     sweep: BackgroundSweep | None,
+    fee_sync: BackgroundSweep | None = None,
 ) -> tuple[BackgroundSweep, ...]:
     """The background taps an authority owns, in start order, absent ones dropped.
 
@@ -120,7 +122,7 @@ def _ordered_taps(
     startup cleanup in :func:`compose_repository_runtime` -- read it from
     here rather than each keeping their own branch order true.
     """
-    return tuple(tap for tap in (envelope_sync, hold_sync, sweep) if tap is not None)
+    return tuple(tap for tap in (fee_sync, envelope_sync, hold_sync, sweep) if tap is not None)
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,7 @@ class ActiveClerkRuntime:
     sweep: BackgroundSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
+    fee_sync: FeeEvidenceSync | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -162,7 +165,7 @@ class ActiveClerkRuntime:
 
     def _taps(self) -> tuple[BackgroundSweep, ...]:
         return _ordered_taps(
-            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep
+            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep, fee_sync=self.fee_sync
         )
 
     def start_background_taps(self) -> None:
@@ -179,7 +182,7 @@ class ActiveClerkRuntime:
         makes "did anything start the taps?" one question main.py answers in
         one place.
         """
-        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None):
+        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None, fee_sync=self.fee_sync):
             tap.start()
 
     async def close(self) -> None:
@@ -190,6 +193,7 @@ class ActiveClerkRuntime:
         # nothing, exactly as ``_sqlite_repository`` below.
         for tap in self._taps():
             await tap.stop()
+        self.fee_sync = None
         self.envelope_sync = None
         self.hold_sync = None
         self.sweep = None
@@ -251,6 +255,7 @@ class _ComposedAuthority:
     sweep: ReconciliationSweep
     hold_sync: StreamHealthHoldSync
     envelope_sync: LiveEnvelopeSync | None
+    fee_sync: FeeEvidenceSync | None
 
 
 async def compose_repository_runtime(
@@ -298,6 +303,7 @@ async def compose_repository_runtime(
     sweep: ReconciliationSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
+    fee_sync: FeeEvidenceSync | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -403,6 +409,8 @@ async def compose_repository_runtime(
                 instance_seals=instance_seals,
             )
         )
+        if not repository.account_id.startswith(("sim:", "shadow:")):
+            fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read)
         if envelope_sync is not None:
             await asyncio.to_thread(envelope_sync.refresh_arming)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
@@ -416,13 +424,14 @@ async def compose_repository_runtime(
             sweep=sweep,
             hold_sync=hold_sync,
             envelope_sync=envelope_sync,
+            fee_sync=fee_sync,
         )
     except Exception:
         # Whatever was built before the failure, stopped in the same declared
         # order the runtime's own ``close()`` uses -- a tap left running here
         # would outlive the repository closed on the next line.
         for tap in _ordered_taps(
-            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep
+            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync
         ):
             await tap.stop()
         if repository is not None:

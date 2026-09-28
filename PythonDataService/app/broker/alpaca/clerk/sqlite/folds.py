@@ -1520,7 +1520,14 @@ def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, 
     )
 
 
+def _fold_fee_evidence(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import fold_fee_evidence
+
+    fold_fee_evidence(conn, payload)
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
+DEFAULT_FOLD_REGISTRY.register("FEE_EVIDENCE_OBSERVED", _fold_fee_evidence)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_RETIRED", _fold_strategy_instance_retired)
 DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)

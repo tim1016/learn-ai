@@ -151,6 +151,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Entry terminal state confirmed",
         "The Account Clerk confirmed the entry order reached a terminal state.",
     ),
+    "FEE_EVIDENCE_OBSERVED": (
+        "Account fee evidence refreshed",
+        "Broker activity evidence was retained for deployment fee attribution.",
+    ),
     "RECONCILIATION_ATTEMPTED": (
         "Reconciliation completed",
         "The Account Clerk compared durable custody with a broker observation.",
