@@ -43,16 +43,7 @@ export class DeploymentBudgetComponent {
   protected readonly statement = computed(() => this.view()?.statement ?? []);
   /** D6: one slice, the bot's whole balance, taken as Python wrote it. */
   protected readonly slice = computed<readonly MoneySegment[] | null>(() => {
-    const parts = this.view()?.parts ?? null;
-    const balance = this.statement().find((line) => line.total);
-    if (parts === null || balance === undefined) return null;
-    return [{
-      kind: this.running() ? 'bot' : 'stopped',
-      label: 'Balance',
-      amount_usd: balance.amount_usd,
-      share_bps: 10000,
-      parts,
-      strategy_instance_id: this.strategyInstanceId(),
-    }];
+    const segment = this.view()?.segment ?? null;
+    return segment === null ? null : [segment];
   });
 }

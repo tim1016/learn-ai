@@ -22,8 +22,10 @@ from app.broker.alpaca.clerk.account_money import (
     BarParts,
     BarSegment,
     MoneyConservationError,
-    bot_parts,
+    bot_segment,
     money_bar,
+    released_cents,
+    stopped_holding,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime, get_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
@@ -400,7 +402,9 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     """The bot's money, in the order the owner reads it (PRD #2560 D6).
 
     The caller holds the money context. A running bot shows where its balance
-    is; a stopped one shows what was released and what is still held.
+    is; a stopped one shows what was released and what is still held, in the
+    cents its slice on the account's bar carries, so they add up to its
+    balance -- or name what it spent beyond it.
     """
     results = (
         BudgetStatementLine(label="Budget set aside at deploy", amount_usd=dollars(own.committed_cents)),
@@ -409,12 +413,18 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
         BudgetStatementLine(label="Balance", amount_usd=display_dollars(own.balance), total=True),
     )
     if not own.active:
-        return (
+        released = released_cents(stopped_holding(own))
+        in_shares, in_orders = display_cents(own.position_cost), display_cents(own.pending_orders)
+        stopped = [
             *results,
-            BudgetStatementLine(label="Released at stop", amount_usd=_released_usd(own)),
-            BudgetStatementLine(label="Still in shares, at cost", amount_usd=display_dollars(own.position_cost)),
-            BudgetStatementLine(label="Waiting on orders, fills or fees", amount_usd=display_dollars(own.outstanding_cash)),
-        )
+            BudgetStatementLine(label="Released at stop", amount_usd=dollars(released)),
+            BudgetStatementLine(label="Still in shares, at cost", amount_usd=dollars(in_shares)),
+            BudgetStatementLine(label="Still in entry orders", amount_usd=dollars(in_orders)),
+        ]
+        over = released + in_shares + in_orders - display_cents(own.balance)
+        if over > 0:
+            stopped.append(BudgetStatementLine(label="Over its budget by", amount_usd=dollars(over)))
+        return tuple(stopped)
     lines = [
         *results,
         BudgetStatementLine(label="In shares, at cost", amount_usd=display_dollars(own.position_cost)),
@@ -430,17 +440,13 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     return tuple(lines)
 
 
-def _released_usd(own: DeploymentBudget) -> str:
-    return dollars(max(0, cents_spendable(own.free))) if not own.active else "0.00"
-
-
 def _stopped_copy(own: DeploymentBudget) -> tuple[str, str]:
     if own.position_cost > 0:
         return ("Stopped · still holds shares",
                 "Its free budget was released when it stopped. The money in its shares comes back when they are sold.")
-    if own.outstanding_cash > 0:
-        return ("Stopped · waiting on orders or fees",
-                "Its free budget was released when it stopped. The rest comes back when its orders and fees settle.")
+    if own.pending_orders > 0:
+        return ("Stopped · waiting on entry orders",
+                "Its free budget was released when it stopped. The rest comes back when its entry orders finish.")
     return ("Stopped · fully released", "Everything it held has been released.")
 
 
@@ -461,23 +467,20 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
         sync = runtime.envelope_sync
         risk = None if sync is None else current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
         read = _budget_cash(runtime, repo, risk)
-        projected = repo.account_budget(cash=read.cash, seen_before_ms=read.fills_seen_before_ms,
-                                        modelled_fees_seen_before_ms=read.modelled_fees_seen_before_ms)
-        own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
-        entry = _next_entry(runtime, repo, projected, sid, risk) if own.active else None
+        # The account's own money read, so this bot's slice is the one Home draws.
+        money = repo.account_money(cash=read.cash, seen_before_ms=read.fills_seen_before_ms,
+                                   modelled_fees_seen_before_ms=read.modelled_fees_seen_before_ms)
+        own = next(item for item in money.budget.deployments if item.strategy_instance_id == sid)
+        entry = _next_entry(runtime, repo, money.budget, sid, risk) if own.active else None
         headline, detail = (entry.headline, entry.detail) if entry is not None else _stopped_copy(own)
+        segment = bot_segment(money, sid)
         with money_context():
             return DeploymentBudgetView(
                 state="ready", headline=headline, detail=detail,
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
-                realized_gross_usd=display_dollars(own.realized_gross), fees_usd=display_dollars(own.fees),
-                position_cost_usd=display_dollars(own.position_cost), pending_orders_usd=display_dollars(own.pending_orders),
-                outstanding_cash_usd=display_dollars(own.outstanding_cash),
-                free_usd=dollars(own.spendable_cents), released_usd=_released_usd(own),
-                shortfall_usd=dollars(cents_required(max(Decimal(0), -own.free))),
                 entry_eligible=entry is not None and entry.eligible,
                 observed_at_ms=read.observed_at_ms,
-                parts=_parts_view(bot_parts(own)),
+                segment=None if segment is None else _segment_view(segment),
                 statement=_statement(own, entry),
                 note="The budget limits new entries. Market fills and losses can go past it." if own.active else None,
             )

@@ -41,7 +41,6 @@ class DeploymentBudget:
     balance: Decimal
     free: Decimal
     cash_claim: Decimal
-    outstanding_cash: Decimal = ZERO
 
     @property
     def spendable_cents(self) -> int:
@@ -65,7 +64,6 @@ class AccountBudget:
 def deployment_budget(
     *, strategy_instance_id: str, committed_cents: int, active: bool,
     realized_gross: object, fees: Decimal, position_cost: Decimal, pending_orders: Decimal,
-    outstanding_cash: Decimal = ZERO,
 ) -> DeploymentBudget:
     """Project the immutable commitment over canonical custody facts."""
     with money_context():
@@ -77,7 +75,6 @@ def deployment_budget(
             active=active, realized_gross=gross, fees=fees,
             position_cost=position_cost, pending_orders=pending_orders,
             balance=balance, free=free, cash_claim=max(ZERO, free) if active else ZERO,
-            outstanding_cash=outstanding_cash,
         )
 
 

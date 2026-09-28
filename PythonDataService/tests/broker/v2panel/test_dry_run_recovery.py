@@ -239,18 +239,21 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     assert panel.exposure == {}
     assert [(fill.side, fill.quantity, fill.price) for fill in panel.recent_fills][:1] == [("sell", 1.0, 600.0)]
     money = await budget_deploy.budget_view(ACCT, SID)
-    # Everything but the sale's modelled fees is released at once ...
-    assert (money.state, money.headline) == ("ready", "Stopped · waiting on orders or fees")
-    assert _statement(money)[-3:] == [
+    # Flat with nothing claimed, the bot is finished: its whole balance, net of
+    # the sale's fees, is released at once and it has no slice left (review A1).
+    assert (money.state, money.headline) == ("ready", "Stopped · fully released")
+    assert _statement(money)[-4:] == [
+        ("Balance", "999.96"),
         ("Released at stop", "999.96"),
         ("Still in shares, at cost", "0.00"),
-        ("Waiting on orders, fills or fees", "0.04"),
+        ("Still in entry orders", "0.00"),
     ]
-    # ... and those settle after the session, releasing the rest.
+    assert money.segment is None
+    # The sale's fees settling after the session changes nothing the bot holds.
     crashed_dry_run.clock.value = NEXT_SESSION_NOON
     money = await budget_deploy.budget_view(ACCT, SID)
     assert (money.state, money.headline) == ("ready", "Stopped · fully released")
-    assert _statement(money)[-1] == ("Waiting on orders, fills or fees", "0.00")
+    assert _statement(money)[-3] == ("Released at stop", "999.96")
     assert crashed_dry_run.alpaca.calls == []
 
 

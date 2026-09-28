@@ -14285,7 +14285,7 @@
       },
       "DeploymentBudgetView": {
         "additionalProperties": false,
-        "description": "All dollars are authored by Python, including display rounding.\n\n``headline`` and ``detail`` say where this bot's money stands in the\nowner's words -- holding a position is a normal state, never worded as a\nfault (hurdle H25). ``statement`` is the bot's money as the owner reads\nit, in order: a running bot's budget, results, balance and where the\nbalance is; a stopped bot's balance and what was released and what is\nstill held. It is empty unless ``state`` is ``ready``.",
+        "description": "All dollars are authored by Python, including display rounding.\n\n``headline`` and ``detail`` say where this bot's money stands in the\nowner's words -- holding a position is a normal state, never worded as a\nfault (hurdle H25). ``statement`` is the bot's money as the owner reads\nit, in order: a running bot's budget, results, balance and where the\nbalance is; a stopped bot's balance and what was released and what is\nstill held, which add up to that balance. It is empty unless ``state``\nis ``ready``.\n``segment`` is this bot's slice exactly as the account's money bar draws\nit (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of\nits own; ``None`` when the bot is finished and holds no money any more.",
         "properties": {
           "committed_usd": {
             "anyOf": [
@@ -14306,28 +14306,6 @@
             "default": false,
             "title": "Entry Eligible",
             "type": "boolean"
-          },
-          "fees_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fees Usd"
-          },
-          "free_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Free Usd"
           },
           "headline": {
             "title": "Headline",
@@ -14358,81 +14336,15 @@
             ],
             "title": "Observed At Ms"
           },
-          "outstanding_cash_usd": {
+          "segment": {
             "anyOf": [
               {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outstanding Cash Usd"
-          },
-          "parts": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MoneyParts"
+                "$ref": "#/components/schemas/MoneySegment"
               },
               {
                 "type": "null"
               }
             ]
-          },
-          "pending_orders_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pending Orders Usd"
-          },
-          "position_cost_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Position Cost Usd"
-          },
-          "realized_gross_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Realized Gross Usd"
-          },
-          "released_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Released Usd"
-          },
-          "shortfall_usd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Shortfall Usd"
           },
           "state": {
             "enum": [

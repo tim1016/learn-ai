@@ -214,7 +214,7 @@ def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: t
     _publish_book(("SPY", 200))
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "200.01 USD" in view.detail
-    assert view.free_usd == "200.00"
+    assert ("Free to trade", "200.00", False) in _statement(view)
     _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
@@ -614,7 +614,7 @@ async def test_shadow_draws_its_bar_from_its_own_shadow_pool(tmp_path, monkeypat
     assert _segments(view) == [("free", "free to deploy", "2500.00", 10_000)]
 
 
-async def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bot_budget_read_carries_the_same_slice_home_draws(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, runtime, _ = _committed_view(authority)
     segment = (await budget_deploy.account_money_view(repo.account_id)).segments[0]
     calls: list[int] = []
@@ -624,7 +624,8 @@ async def test_bot_budget_read_carries_the_same_shaded_parts_as_its_segment(auth
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.state == "ready" and view.parts == segment.parts
+    # Review A2/B1: the bot page draws Home's own slice, only widened to fill its bar.
+    assert view.state == "ready" and view.segment == segment.model_copy(update={"share_bps": 10_000})
     # Review A5: one readiness judgement per read, even without admission.
     assert len(calls) == 1
 
@@ -797,6 +798,43 @@ def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(
         ("Balance", "200.00", True),
         ("Released at stop", "100.00", False),
         ("Still in shares, at cost", "100.00", False),
-        ("Waiting on orders, fills or fees", "0.00", False),
+        ("Still in entry orders", "0.00", False),
     ]
     assert view.note is None
+    assert view.segment is not None and (view.segment.kind, view.segment.amount_usd, view.segment.released_usd) == (
+        "stopped", "100.00", "100.00",
+    )
+
+
+def _cents(amount_usd: str) -> int:
+    return int(Decimal(amount_usd) * 100)
+
+
+def test_a_stopped_bots_lines_add_up_to_its_balance_when_a_fee_is_fractional(authority: tuple) -> None:
+    """Review A1: rounded on their own, the stopped lines missed Balance by a
+    cent whenever a fee was fractional, and named fee cash the account owes as
+    the bot's money "waiting"."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="held-fill", quantity=1, price=100.005, source_event_at_ms=NOON, fee=0.0049)
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="view", lifecycle_run_id="view-run", clock=repo.clock)
+    repo.clock.advance(10_000)
+    runtime.envelope_sync.reading = replace(gate.latest_observation(), observed_at_ms=repo.clock(), cash_available_usd=899.9901)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    lines = dict((label, amount) for label, amount, _ in _statement(view))
+    assert (lines["Balance"], lines["Released at stop"], lines["Still in shares, at cost"], lines["Still in entry orders"]) == (
+        "200.00", "100.00", "100.00", "0.00",
+    )
+    held = ("Released at stop", "Still in shares, at cost", "Still in entry orders")
+    assert sum(_cents(lines[label]) for label in held) == _cents(lines["Balance"])
+    assert "Over its budget by" not in lines
+    assert view.segment is not None and view.segment.released_usd == lines["Released at stop"]

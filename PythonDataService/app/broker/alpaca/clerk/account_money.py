@@ -33,6 +33,13 @@ of its part cents and ``total_cents`` the segment cents less the shortfall, so
 the drawn dollars always add up. Widths are basis points by the canonical
 largest-remainder rule (``money.apportion_units``).
 
+A stopped bot's released money is the remainder of its balance, never rounded
+on its own: released = display(position cost + still claimed + released) -
+display(position cost) - display(still claimed), floored at 0 and 0 when it
+released nothing. Released, in shares and still claimed then add up to its
+balance's display cents exactly, on every surface that shows them
+(``bot_segment`` gives the bot page the very slice the account's bar draws).
+
 Reference: https://github.com/tim1016/learn-ai/issues/2560 ("One account-money
   read (D12)"); money semantics are PRD #2540's, unchanged.
 Canonical implementation: this file composes ``budgets.AccountBudget``;
@@ -90,6 +97,12 @@ class StoppedHolding:
     released: Decimal
 
 
+def stopped_holding(item: DeploymentBudget) -> StoppedHolding:
+    """A stopped deployment's money: its positive free budget was released at stop."""
+    with money_context():
+        return StoppedHolding(item.strategy_instance_id, item.position_cost, item.pending_orders, max(ZERO, item.free))
+
+
 @dataclass(frozen=True)
 class AccountMoney:
     """Exact money map over one ``AccountBudget``.
@@ -131,10 +144,7 @@ def account_money(
 ) -> AccountMoney:
     """Partition one budget projection into disjoint places for its money."""
     with money_context():
-        stopped = [
-            StoppedHolding(item.strategy_instance_id, item.position_cost, item.pending_orders, max(ZERO, item.free))
-            for item in budget.deployments if not item.active
-        ] + [
+        stopped = [stopped_holding(item) for item in budget.deployments if not item.active] + [
             StoppedHolding(item.strategy_instance_id, item.position_cost, item.pending_orders, ZERO)
             for item in holdings if item.strategy_instance_id is not None
         ]
@@ -264,14 +274,45 @@ def _bot_segment(item: DeploymentBudget, palette: Mapping[str, int]) -> BarSegme
     )
 
 
+def released_cents(item: StoppedHolding) -> int:
+    """What a stopped bot released, as the remainder of its balance's display cents.
+
+    Rounded on its own, released money could leave the stopped bot's figures a
+    cent off its balance whenever a fee is fractional; as the remainder, the
+    released, in-shares and still-claimed cents add up to it exactly.
+    """
+    if item.released == ZERO:
+        return 0
+    with money_context():
+        balance = display_cents(item.position_cost + item.still_claimed + item.released)
+    return max(0, balance - display_cents(item.position_cost) - display_cents(item.still_claimed))
+
+
 def _stopped_segment(item: StoppedHolding, palette: Mapping[str, int]) -> BarSegment:
     in_shares = display_cents(item.position_cost)
     still_claimed = display_cents(item.still_claimed)
     return BarSegment(
         kind="stopped", strategy_instance_id=item.strategy_instance_id, cents=in_shares + still_claimed, bps=0,
-        released_cents=cents_spendable(item.released), still_claimed_cents=still_claimed,
+        released_cents=released_cents(item), still_claimed_cents=still_claimed,
         palette_index=_palette_index(palette, item.strategy_instance_id),
     )
+
+
+def bot_segment(money: AccountMoney, strategy_instance_id: str) -> BarSegment | None:
+    """One bot's slice exactly as the account's bar draws it, filling a bar of its own.
+
+    ``None`` when the bot holds no money any more: a stopped bot that is flat
+    with nothing still claimed is finished, and draws on no bar.
+    """
+    running = next((item for item in money.running if item.strategy_instance_id == strategy_instance_id), None)
+    stopped = next((item for item in money.stopped if item.strategy_instance_id == strategy_instance_id), None)
+    if running is not None:
+        segment = _bot_segment(running, money.palette)
+    elif stopped is not None:
+        segment = _stopped_segment(stopped, money.palette)
+    else:
+        return None
+    return replace(segment, bps=share_bps({"slice": segment.cents}, empty=None)["slice"])
 
 
 def _palette_index(palette: Mapping[str, int], strategy_instance_id: str) -> int:

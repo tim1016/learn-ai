@@ -14117,7 +14117,11 @@ export interface components {
          *     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
          *     it, in order: a running bot's budget, results, balance and where the
          *     balance is; a stopped bot's balance and what was released and what is
-         *     still held. It is empty unless ``state`` is ``ready``.
+         *     still held, which add up to that balance. It is empty unless ``state``
+         *     is ``ready``.
+         *     ``segment`` is this bot's slice exactly as the account's money bar draws
+         *     it (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of
+         *     its own; ``None`` when the bot is finished and holds no money any more.
          */
         DeploymentBudgetView: {
             /** Committed Usd */
@@ -14129,29 +14133,13 @@ export interface components {
              * @default false
              */
             entry_eligible?: boolean;
-            /** Fees Usd */
-            fees_usd?: string | null;
-            /** Free Usd */
-            free_usd?: string | null;
             /** Headline */
             headline: string;
             /** Note */
             note?: string | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
-            /** Outstanding Cash Usd */
-            outstanding_cash_usd?: string | null;
-            parts?: components["schemas"]["MoneyParts"] | null;
-            /** Pending Orders Usd */
-            pending_orders_usd?: string | null;
-            /** Position Cost Usd */
-            position_cost_usd?: string | null;
-            /** Realized Gross Usd */
-            realized_gross_usd?: string | null;
-            /** Released Usd */
-            released_usd?: string | null;
-            /** Shortfall Usd */
-            shortfall_usd?: string | null;
+            segment?: components["schemas"]["MoneySegment"] | null;
             /**
              * State
              * @enum {string}
