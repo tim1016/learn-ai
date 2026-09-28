@@ -17,6 +17,7 @@ import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-w
 import { AlpacaSettingsPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-settings-page.component';
 import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk/alpaca-account-list-page.component';
 import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
+import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
 import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
@@ -226,7 +227,7 @@ describe('routes', () => {
       // is one of the five tabs (ADR 0064 Decision 1 extended), routed
       // inline rather than opened as an overlay.
       expect(account?.children?.map((child) => child.path)).toEqual([
-        'bots/:sid', 'bots', 'gallery', 'deploy', '',
+        'bots/:sid', 'bots', 'gallery', 'activity', 'deploy', '',
       ]);
     });
 
@@ -276,6 +277,7 @@ describe('routes', () => {
       ['', AlpacaDeskComponent, 'the account overview'],
       ['bots', BotsListPageComponent, 'the bots roster'],
       ['gallery', BotGalleryPageComponent, 'the gallery'],
+      ['activity', AlpacaActivityPageComponent, 'the account activity'],
     ])(
       'keeps the %s tab on its own operational component — never a redirect to Settings',
       async (path, expectedComponent, _surfaceLabel) => {
@@ -296,6 +298,7 @@ describe('routes', () => {
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'the Overview tab'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'the Bots tab'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'the Gallery tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', 'the Activity tab'],
     ])('carries clerk and account identity into %s', async (url) => {
       // Asserted through the app's own router configuration, not a local one:
       // a non-empty child only inherits its parent's params under
@@ -364,6 +367,7 @@ describe('routes', () => {
     it.each([
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'bots/:sid'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'bots'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', 'activity'],
     ])('resolves %s to the %s child', async (url, path) => {
       // The two siblings differ by one segment, so this pins that both still
       // resolve — the Bots tab and one bot's page, in the app's own table.

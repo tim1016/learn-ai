@@ -147,6 +147,13 @@ def test_unknown_population_and_zero_weights_remain_account_unattributed() -> No
     assert not result.known and result.unattributed == D("0.05")
 
 
+def test_incomplete_activity_coverage_names_no_missing_control() -> None:
+    """#2566 deferred to #2565: no control performs "Refresh account evidence"."""
+    result = _attribute([_fill("a")], [FeeCharge("c", D("0.05"), 100)], activities_complete=False)
+    assert "The broker activity read does not cover this fee day." in result.unresolved
+    assert not any("Refresh" in reason for reason in result.unresolved)
+
+
 def test_unattributed_charge_claims_only_until_cash_observation() -> None:
     """A posted but unattributable fee counts once against availability.
 

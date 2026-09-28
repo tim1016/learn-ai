@@ -35,6 +35,7 @@ def test_from_alpaca_position_maps_long(load_alpaca_fixture: AlpacaFixtureLoader
     assert position.unrealized_pl == float(long_position["unrealized_pl"])
     assert position.unrealized_plpc == float(long_position["unrealized_plpc"])
     assert position.observed_at_ms == _OBSERVED
+    assert position.prior_close_price == float(long_position["lastday_price"])
 
 
 def test_from_alpaca_position_maps_short_with_signed_quantity(
@@ -54,10 +55,12 @@ def test_missing_optional_fields_become_none(load_alpaca_fixture: AlpacaFixtureL
     payload = dict(load_alpaca_fixture("positions", "positions.json")[0])
     payload.pop("current_price")
     payload.pop("unrealized_plpc")
+    payload.pop("lastday_price")
     payload["asset_id"] = None
 
     position = from_alpaca_position(payload, observed_at_ms=_OBSERVED)
 
     assert position.current_price is None
+    assert position.prior_close_price is None
     assert position.unrealized_plpc is None
     assert position.asset_id is None

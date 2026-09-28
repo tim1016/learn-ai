@@ -1,0 +1,204 @@
+// One stylesheet for the Activity tab's page and its sections (statement,
+// records): each component takes the rules it renders, so the cards read as
+// one surface without a per-component copy of the same card treatment. Every
+// section heading is an h2, like the shared cards beside them.
+@use '../../../../styles/eyebrow-heading' as *;
+
+:host {
+  display: block;
+}
+
+/* Like Overview, Activity carries the shell's page inset itself: the
+   workspace is full-bleed, so `app-page-body` no longer supplies it. */
+.activity {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--page-pad-y) var(--page-pad-x);
+}
+
+.activity__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.activity__header h2 {
+  margin: 0;
+  @include eyebrow-heading;
+}
+
+.activity__periods {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+
+.activity__period {
+  min-width: 3.4rem;
+  padding: 0.45rem 0.65rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.activity__period:hover,
+.activity__period--active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.activity__period:focus-visible,
+.activity-button:focus-visible,
+.activity-records summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.activity__sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.activity__sync strong {
+  color: var(--text-primary);
+}
+
+.activity-card,
+.activity-records {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.activity-card h2,
+.activity-records__title {
+  margin: 0;
+  @include eyebrow-heading;
+}
+
+.activity-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.activity-card__scope,
+.activity-card__note,
+.activity-card__state {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.activity-card__state {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+.activity-card__state p {
+  margin: 0;
+}
+
+.activity-statement {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.activity-statement > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.activity-statement dt {
+  color: var(--text-secondary);
+}
+
+.activity-statement dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-statement__total {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-light);
+  font-weight: var(--fw-semi);
+}
+
+.activity__moves,
+.activity__partial {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.activity__count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.activity__count:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.activity-button {
+  justify-self: start;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.activity-records summary {
+  display: grid;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+
+.activity-records summary span {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.activity-records__body {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 560px) {
+  .activity__header {
+    align-items: start;
+    flex-direction: column;
+  }
+}

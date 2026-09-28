@@ -33,6 +33,7 @@ describe('accountWorkspaceLocation', () => {
     [WORKSPACE, 'overview'],
     [`${WORKSPACE}/bots`, 'bots'],
     [`${WORKSPACE}/gallery`, 'gallery'],
+    [`${WORKSPACE}/activity`, 'activity'],
   ] as const)('resolves the account-scoped %s to the %s tab', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab });
   });
@@ -107,6 +108,7 @@ describe('accountWorkspaceTabRoute', () => {
     ['overview' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9']],
     ['bots' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots']],
     ['gallery' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'gallery']],
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],
     // Settings is lane-scoped wherever it is opened from (FR-092).
     ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
   ])('builds the %s tab route for a bound account', (tab, expected) => {
@@ -127,8 +129,13 @@ describe('accountWorkspaceTabRoute', () => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, 'overview')).toBeNull();
   });
 
+  it("has no Activity to offer a lane with no account", () => {
+    // Activity is the account's own history; a lane without one has none.
+    expect(accountWorkspaceTabRoute(LANE_ONLY, 'activity')).toBeNull();
+  });
+
   it('round-trips every routed tab back through the resolver', () => {
-    for (const tab of ['overview', 'bots', 'gallery'] as const) {
+    for (const tab of ['overview', 'bots', 'gallery', 'activity'] as const) {
       const url = accountWorkspaceTabRoute(LOCATION, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab });
     }

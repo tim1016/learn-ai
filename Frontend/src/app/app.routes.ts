@@ -437,6 +437,16 @@ export const routes: Routes = [
               ).then((m) => m.BotGalleryPageComponent),
           },
           {
+            // Activity — the account's history and records (PRD #2560):
+            // Today / 30D / 60D money, fees per bot, orders and cash moves,
+            // the sync check, and order records and recovery.
+            path: 'activity',
+            loadComponent: () =>
+              import(
+                './components/brokers/alpaca-desk/activity/alpaca-activity-page.component'
+              ).then((m) => m.AlpacaActivityPageComponent),
+          },
+          {
             // Deploy — binds a validated strategy to this account, inline in
             // the tab strip rather than as an overlay drawer.
             path: 'deploy',

@@ -63,6 +63,9 @@ class BotsStubComponent {}
 @Component({ selector: 'app-gallery-stub', template: '<main aria-label="Gallery">Gallery tab</main>' })
 class GalleryStubComponent {}
 
+@Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
+class ActivityStubComponent {}
+
 @Component({
   selector: 'app-settings-stub',
   template: '<main aria-label="Settings">Settings tab</main>',
@@ -101,6 +104,7 @@ const WORKSPACE_ROUTES: Routes = [
           { path: 'bots/:sid', component: BotStubComponent },
           { path: 'bots', component: BotsStubComponent },
           { path: 'gallery', component: GalleryStubComponent },
+          { path: 'activity', component: ActivityStubComponent },
           { path: 'deploy', component: DeployStubComponent },
           { path: '', component: OverviewStubComponent },
         ],
@@ -225,13 +229,14 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     [WORKSPACE_URL, 'Overview'],
     [`${WORKSPACE_URL}/bots`, 'Bots'],
     [`${WORKSPACE_URL}/gallery`, 'Gallery'],
+    [`${WORKSPACE_URL}/activity`, 'Activity'],
     [`${WORKSPACE_URL}/deploy`, 'Deploy strategy'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
     await renderWorkspace({ url });
 
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
-    for (const label of ['Overview', 'Bots', 'Gallery', 'Settings', 'Deploy strategy']) {
+    for (const label of ['Overview', 'Bots', 'Gallery', 'Activity', 'Settings', 'Deploy strategy']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     expect(screen.getByRole('link', { name: tab }).getAttribute('aria-current')).toBe('page');

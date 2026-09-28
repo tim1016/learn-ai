@@ -27,7 +27,8 @@ interface ActivityTableRow {
   readonly nativeOrderId: string | null | undefined;
 }
 
-/** Compact, client-filtered presentation of broker-authored account activity. */
+/** Compact, client-filtered presentation of broker-authored account activity —
+ * the orders and cash moves of whatever period its host read. */
 @Component({
   selector: 'app-alpaca-trader-activity-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -77,7 +78,7 @@ export class AlpacaTraderActivityTableComponent {
     'nativeOrderId',
   ];
   protected readonly tablePassThrough = {
-    table: { 'aria-label': "Today's account activity" },
+    table: { 'aria-label': 'Orders and cash moves' },
   };
 
   protected inputValue(event: Event): string {

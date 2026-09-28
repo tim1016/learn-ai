@@ -1,7 +1,7 @@
 /** The account workspace's URL vocabulary (ADR 0064 Decision 1).
  *
  * One broker account is one place: an account header over Overview, Bots,
- * Gallery, Settings and Deploy tabs. Which account that is, which tab is open,
+ * Gallery, Activity, Settings and Deploy tabs. Which account that is, which tab is open,
  * and — on a bot's own page — which tab it was opened from, is carried by the
  * URL alone (nothing remembers a last-used account, FR-091), so deciding all
  * three is a pure function of the URL and lives here rather than in a service
@@ -20,8 +20,14 @@
 
 import { LENS_QUERY_PARAM } from '../shared/lens/lens';
 
-/** The workspace's five tabs, in the order they are presented. */
-export type AccountWorkspaceTab = 'overview' | 'bots' | 'gallery' | 'settings' | 'deploy';
+/** The workspace's tabs, in the order they are presented. */
+export type AccountWorkspaceTab =
+  | 'overview'
+  | 'bots'
+  | 'gallery'
+  | 'activity'
+  | 'settings'
+  | 'deploy';
 
 /** The tabs a bot's page can be opened from, and therefore belongs to. */
 export type AccountWorkspaceOriginTab = Extract<AccountWorkspaceTab, 'bots' | 'gallery'>;
@@ -38,14 +44,16 @@ const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>
   overview: 'Overview',
   bots: 'Bots',
   gallery: 'Gallery',
+  activity: 'Activity',
   settings: 'Settings',
   deploy: 'Deploy strategy',
 };
 
-/** The presented tab order (ADR 0064 Decision 1). Deploy sits last, after
- * Settings: binding a new strategy to the account, not a fact about it. */
+/** The presented tab order (ADR 0064 Decision 1). Activity — the account's
+ * history and records (PRD #2560) — sits before Settings. Deploy sits
+ * last: binding a new strategy to the account, not a fact about it. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['overview', 'bots', 'gallery', 'settings', 'deploy'] as const
+  ['overview', 'bots', 'gallery', 'activity', 'settings', 'deploy'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
 /** The query parameter a link to a bot's page stamps with the tab it left.
@@ -108,7 +116,7 @@ export interface AccountWorkspaceLink {
  * are unchanged by the workspace.
  */
 const ACCOUNT_WORKSPACE_URL =
-  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(bots|gallery|deploy)(?:\/([^/]+))?)?$/;
+  /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/accounts\/([^/]+)(?:\/(bots|gallery|activity|deploy)(?:\/([^/]+))?)?$/;
 
 /**
  * The lane-scoped workspace URLs: Settings, which stays clerk-scoped
@@ -175,10 +183,10 @@ export function accountWorkspaceLens(url: string): string | null {
  * Settings is always lane-scoped — it is the one tab a lane can serve
  * before it has a confirmed account, which is what makes it the way out of an
  * unbound lane. Bots and Gallery have a lane-scoped address too: the tab that
- * explains why it cannot open. Overview and Deploy are the account's own page
- * and its own action — both need a confirmed account to target — so neither
- * has a lane-scoped address, and both are the tabs an accountless workspace
- * cannot offer.
+ * explains why it cannot open. Overview, Activity and Deploy are the account's
+ * own pages and its own action — each needs a confirmed account to target — so
+ * none has a lane-scoped address, and they are the tabs an accountless
+ * workspace cannot offer.
  */
 export function accountWorkspaceTabRoute(
   address: AccountWorkspaceAddress,
@@ -187,7 +195,7 @@ export function accountWorkspaceTabRoute(
   if (tab === 'settings') return settingsRoute(address);
   if (tab === 'bots' || tab === 'gallery') return accountWorkspaceOriginTabRoute(address, tab);
   if (address.accountId === null) return null;
-  return tab === 'overview' ? workspaceRoute(address) : [...workspaceRoute(address), 'deploy'];
+  return tab === 'overview' ? workspaceRoute(address) : [...workspaceRoute(address), tab];
 }
 
 /**
@@ -356,6 +364,7 @@ function lensQuery(lens: string | null): Readonly<Record<string, string>> {
 function tabOfSegment(segment: string | undefined): AccountWorkspaceTab {
   if (segment === 'bots') return 'bots';
   if (segment === 'gallery') return 'gallery';
+  if (segment === 'activity') return 'activity';
   if (segment === 'settings') return 'settings';
   if (segment === 'deploy') return 'deploy';
   return 'overview';
