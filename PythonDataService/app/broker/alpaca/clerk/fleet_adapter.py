@@ -479,9 +479,11 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: stop,
         # flatten-and-stop and the SQLite recovery stop/cancel/flatten/
         # reconcile), split from bot_panel_action because that one operation
-        # also resumes and continues bots: a route layer that cannot read the
-        # body cannot tell them apart, so the quiesce half gets its own
-        # operation and a draining lane routes it (#2351). Its request schema
+        # also carries actions a draining lane must refuse -- a deployment
+        # would start decisions again, and resolve_execution_coverage can lift
+        # a hold: a route layer that cannot read the body cannot tell them
+        # apart, so the quiesce half gets its own operation and a draining
+        # lane routes it (#2351). Its request schema
         # admits only those ids. The custody recovery-execute operations stay
         # refused while draining: they accept every recovery id, including
         # resolve_execution_coverage, which can lift a hold.

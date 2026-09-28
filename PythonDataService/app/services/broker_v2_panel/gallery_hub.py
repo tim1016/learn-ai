@@ -592,7 +592,6 @@ class GalleryHub:
                     self._project_bot(
                         row,
                         session_change_pcts=session_change_pcts,
-
                         feeds=feeds,
                     )
                     for row in shown
@@ -662,7 +661,6 @@ class GalleryHub:
                     self._project_bot(
                         row,
                         session_change_pcts=session_change_pcts,
-
                         feeds=feeds,
                         model=GalleryBotDelta,
                     )
