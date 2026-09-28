@@ -65,7 +65,9 @@ def authority(tmp_path, monkeypatch):
         risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=day_pnl_window_start_ms(NOON),
         risk_equity_window_start_ms=day_pnl_window_start_ms(NOON))
     snapshot = SimpleNamespace(observation=observation, policy=policy, hold=None)
-    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=SimpleNamespace(risk_snapshot=lambda: snapshot))
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(observation)
+    runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=SimpleNamespace(envelope=gate, risk_snapshot=lambda: snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
     monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: None)
     monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **kwargs: SimpleNamespace(ask=100.001, observed_at_ms=NOON)))
@@ -93,6 +95,7 @@ def test_confirmation_binds_amount_effective_parameters_and_risk(authority) -> N
     with pytest.raises(BudgetUnavailable):
         budget_deploy.resolve_consent("BUDGET-PAPER", changed, resolved_parameters={"period": 5})
     authority[2].policy = replace(authority[2].policy, revision=2)
+    append_risk_policy(authority[0], policy=authority[2].policy, expected_revision=1)
     assert budget_deploy.preview_budget("BUDGET-PAPER", reviewed, resolved_parameters={}).state == "unavailable"
 
 
@@ -182,3 +185,23 @@ def test_budget_read_requires_a_fresh_price_and_observes_existing_holds(authorit
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "loss hold stands" in view.detail
     assert repo.custody_transitions() == before
+
+
+def test_budget_preview_refuses_post_observation_fill_without_mutating_risk(authority: tuple) -> None:
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, _, gate = _committed_view(authority)
+    assert budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={}).state == "ready"
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="later-fill",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="after-observation", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+    before = repo.custody_transitions()
+    observation = gate.latest_observation()
+    preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
+    assert preview.state == "unavailable" and "Executions changed" in preview.detail
+    assert preview.review_token is None
+    assert repo.custody_transitions() == before
+    assert gate.latest_observation() == observation

@@ -5,7 +5,7 @@ import asyncio
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict
-from app.broker.alpaca.clerk.sqlite.live_envelope_sync import AccountRiskSnapshot
+from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.contract.errors import BrokerError
 from app.broker_configuration.errors import BrokerConfigurationError, RevisionConflict
 from app.broker_configuration.service import BrokerConfigurationService
@@ -23,31 +23,32 @@ def _require_runtime(runtime: ActiveClerkRuntime | None) -> ActiveClerkRuntime:
 
 def read_account_risk_state(
     service: BrokerConfigurationService, runtime: ActiveClerkRuntime | None,
-    snapshot: AccountRiskSnapshot | None = None,
 ) -> AccountRiskStateResponse:
     runtime = _require_runtime(runtime)
     repo, sync = runtime.sqlite_repository, runtime.envelope_sync
-    snapshot = snapshot if snapshot is not None else sync.risk_snapshot()
-    policy, cause = snapshot.policy, snapshot.hold
     selection = service.selection()
-    limits = policy if policy is not None else snapshot.legacy_values
-    state = "held" if cause is not None else ("ready" if snapshot.observation is not None else "unknown")
-    detail = {
-        "held": "A standing loss hold still blocks new entries. Applying looser limits does not clear it.",
-        "ready": "These limits apply to new entries immediately. Existing bot exit terms stay fixed.",
-        "unknown": "Current loss evidence or limits are unavailable. New entries remain blocked until they can be judged.",
-    }[state]
-    return AccountRiskStateResponse(
-        account_id=repo.account_id, risk_revision=0 if policy is None else policy.revision,
-        selection_generation=selection.selection_generation,
-        loss_fraction=None if limits is None else limits.loss_fraction,
-        loss_usd=None if limits is None else limits.loss_usd,
-        applied_at_ms=None if policy is None else policy.applied_at_ms,
-        entry_state=state, detail=detail,
-        hold_loss_limit_usd=None if cause is None else cause.loss_limit_usd,
-        hold_session_start_ms=None if cause is None else cause.day_start_ms,
-        hold_policy_revision=None if cause is None else cause.policy_revision,
-    )
+    with repo._write_lock:
+        snapshot = sync.risk_snapshot()
+        readiness = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+        policy, cause = snapshot.policy, snapshot.hold
+        limits = policy if policy is not None else snapshot.legacy_values
+        state = "held" if cause is not None else ("ready" if readiness.allowed else "unknown")
+        detail = {
+            "held": "A standing loss hold still blocks new entries. Applying looser limits does not clear it.",
+            "ready": "These limits apply to new entries immediately. Existing bot exit terms stay fixed.",
+            "unknown": readiness.detail,
+        }[state]
+        return AccountRiskStateResponse(
+            account_id=repo.account_id, risk_revision=0 if policy is None else policy.revision,
+            selection_generation=selection.selection_generation,
+            loss_fraction=None if limits is None else limits.loss_fraction,
+            loss_usd=None if limits is None else limits.loss_usd,
+            applied_at_ms=None if policy is None else policy.applied_at_ms,
+            entry_state=state, detail=detail,
+            hold_loss_limit_usd=None if cause is None else cause.loss_limit_usd,
+            hold_session_start_ms=None if cause is None else cause.day_start_ms,
+            hold_policy_revision=None if cause is None else cause.policy_revision,
+        )
 
 
 async def apply_account_risk_limits(
@@ -79,10 +80,10 @@ async def apply_account_risk_limits(
                 actor=service.owner().owner_id, applied_at_ms=repo.clock(),
             )
             try:
-                snapshot = sync.apply_risk_policy(policy, expected_revision=request.expected_risk_revision)
+                sync.apply_risk_policy(policy, expected_revision=request.expected_risk_revision)
             except RiskRevisionConflict as exc:
                 raise RevisionConflict(str(exc), next_step="Reload and review the limits again.") from exc
-            return read_account_risk_state(service, runtime, snapshot)
+            return read_account_risk_state(service, runtime)
 
     return await asyncio.to_thread(commit)
 

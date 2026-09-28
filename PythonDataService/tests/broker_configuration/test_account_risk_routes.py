@@ -96,3 +96,27 @@ async def test_failed_observation_reports_effective_but_unknown(risk_client: Ris
     assert result.status_code == 200, result.text
     assert result.json()["risk_revision"] == 1
     assert result.json()["entry_state"] == "unknown"
+
+
+async def test_risk_read_rejudges_new_fee_evidence_without_writing_a_hold(risk_client: RiskClient) -> None:
+    from tests.broker.alpaca.clerk.sqlite.test_fee_evidence import _activity
+
+    client, read, _ = risk_client
+    read.unrealized = 0
+    state = (await client.get(f"{routes.PREFIX}/risk-limits")).json()
+    applied = await client.post(f"{routes.PREFIX}/risk-limits/apply", json={
+        "expected_risk_revision": 0, "expected_selection_generation": state["selection_generation"],
+        "loss_fraction": .1, "loss_usd": 100,
+    })
+    assert applied.json()["entry_state"] == "ready"
+    runtime = routes.get_active_clerk_runtime()
+    repo, gate = runtime.sqlite_repository, runtime.envelope_sync.envelope
+    incomplete = _activity("new-unknown-fee", "FEE", NOON, -.05).model_copy(update={"occurred_at_ms": None})
+    complete_fee_evidence(repo, (incomplete,))
+    before, observation = repo.custody_transitions(), gate.latest_observation()
+    response = await client.get(f"{routes.PREFIX}/risk-limits")
+    assert response.status_code == 200
+    assert response.json()["entry_state"] == "unknown"
+    assert "loss evidence is incomplete" in response.json()["detail"]
+    assert repo.custody_transitions() == before
+    assert gate.latest_observation() == observation

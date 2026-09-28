@@ -108,24 +108,26 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             risk_revision = 0
             risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         else:
-            if repo.budget_authority_version() < 2:
-                raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
-            sync = runtime.envelope_sync
-            if sync is None:
-                raise BudgetUnavailable("Wait for account cash and risk observations in Configuration.")
-            snapshot = sync.risk_snapshot()
-            observation = snapshot.observation
-            if observation is None or snapshot.policy is None:
-                raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
-            if snapshot.hold is not None:
-                raise BudgetUnavailable("A standing account loss hold blocks Deploy. Review and clear it in Configuration when the evidence permits.")
-            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
-            available = projection.unreserved_cents
-            observed_at = observation.observed_at_ms
-            risk_revision = snapshot.policy.revision
-            with money_context():
-                percent = normalize_money(snapshot.policy.loss_fraction) * 100
-                risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
+            with repo._write_lock:
+                if repo.budget_authority_version() < 2:
+                    raise BudgetUnavailable("Switch this account to budgets in Configuration before reviewing a deployment.")
+                sync = runtime.envelope_sync
+                if sync is None:
+                    raise BudgetUnavailable("Wait for account cash and risk observations in Configuration.")
+                risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+                if not risk.allowed:
+                    raise BudgetUnavailable(risk.detail)
+                snapshot = sync.risk_snapshot()
+                observation = risk.observation
+                if observation is None or snapshot.policy is None:
+                    raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
+                projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
+                available = projection.unreserved_cents
+                observed_at = observation.observed_at_ms
+                risk_revision = snapshot.policy.revision
+                with money_context():
+                    percent = normalize_money(snapshot.policy.loss_fraction) * 100
+                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(snapshot.policy.loss_usd))}. Existing exit terms stay fixed."
         with money_context():
             shortcuts = [DeploymentBudgetShortcut(
                 key="position_headroom", label="1.2 × one position",
