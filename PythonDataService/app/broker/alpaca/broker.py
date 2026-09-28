@@ -388,21 +388,39 @@ class AlpacaBroker:
             page_token = next_page_token
         return activities
 
-    async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence:
+    async def read_activity_evidence(
+        self, *, page_token: str | None = None, after_ms: int | None = None,
+    ) -> BrokerActivityEvidence:
         """Read raw dated evidence with the provider's explicit page completion.
 
         Alpaca Trading API documents page_size 1..100. A bounded unfinished
         walk is useful evidence, but never proof that an empty young account
         or an old fee date has no further rows; its ``next_page_token``
         resumes the newest-first walk from exactly where it stopped.
-        """
-        return await self._activity_evidence(page_size=100, page_token=page_token)
 
-    async def _activity_evidence(self, *, page_size: int, page_token: str | None) -> BrokerActivityEvidence:
+        ``after_ms`` reads one window instead of the whole history: it keeps
+        the rows at or after that instant (and any undated row, which cannot
+        be placed outside it), and the walk is complete as soon as a
+        newest-first page reaches a dated row older than the window.
+        """
+        return await self._activity_evidence(page_size=100, page_token=page_token, after_ms=after_ms)
+
+    async def _activity_evidence(
+        self, *, page_size: int, page_token: str | None, after_ms: int | None = None,
+    ) -> BrokerActivityEvidence:
         activities: list[BrokerActivity] = []
         for _ in range(_ACTIVITY_MAX_PAGES):
             payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
-            activities.extend(adapter.from_alpaca_activity(payload) for payload in payloads)
+            page = [adapter.from_alpaca_activity(payload) for payload in payloads]
+            if after_ms is None:
+                activities.extend(page)
+            else:
+                activities.extend(
+                    activity for activity in page
+                    if activity.occurred_at_ms is None or activity.occurred_at_ms >= after_ms
+                )
+                if any(activity.occurred_at_ms is not None and activity.occurred_at_ms < after_ms for activity in page):
+                    return BrokerActivityEvidence(activities=activities, history_complete=True)
             if len(payloads) < page_size:
                 return BrokerActivityEvidence(activities=activities, history_complete=True)
             next_token = payloads[-1].get("id")

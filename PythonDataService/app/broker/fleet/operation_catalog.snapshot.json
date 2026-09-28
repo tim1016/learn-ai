@@ -17,6 +17,11 @@
       "path_template": "/activities",
       "requires_account": false
     },
+    "activity_period_read": {
+      "method": "GET",
+      "path_template": "/activities/period",
+      "requires_account": false
+    },
     "attention_read": {
       "method": "GET",
       "path_template": "/attention",
@@ -490,6 +495,11 @@
     "shadow_activate": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/live-graduation/shadow-activation",
+      "requires_account": false
+    },
+    "today_statement_read": {
+      "method": "GET",
+      "path_template": "/today-statement",
       "requires_account": false
     }
   }

@@ -468,6 +468,25 @@ async def test_guard_refuses_to_answer_a_continuation_with_the_newest_rows() -> 
         await guarded.read_activity_evidence(page_token="older")
 
 
+async def test_guard_passes_a_windowed_evidence_read_through_unchanged() -> None:
+    from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.contract.models import BrokerActivityEvidence
+
+    class Paged:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str | None, int | None]] = []
+
+        async def read_activity_evidence(self, *, page_token: str | None = None, after_ms: int | None = None):
+            self.calls.append((page_token, after_ms))
+            return BrokerActivityEvidence(activities=[], history_complete=True)
+
+    inner = Paged()
+    guarded = guard_broker_read_port(inner, intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+    await guarded.read_activity_evidence(page_token="older", after_ms=NOON)
+    assert inner.calls == [("older", NOON)]
+
+
 def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:
     record_fee_evidence(day_pnl_repo, [], checked_at_ms=NOON + 1, history_complete=True)
     result = day_pnl_repo.fee_attribution(now_ms=NOON)

@@ -1,33 +1,46 @@
 <section class="activity-card" aria-labelledby="activity-today-heading">
-  <h3 id="activity-today-heading">Today</h3>
+  <header class="activity-card__header">
+    <h2 id="activity-today-heading">Today · bots and this app's orders</h2>
+    @if (statement()?.since_ms; as since) {
+      <span class="activity-card__scope">since the last close, <app-timestamp-display [value]="since" mode="et" /></span>
+    }
+  </header>
+  <p class="activity-card__note">Orders placed outside this app are not included, so this is not the whole account's day.</p>
   @if (loading()) {
-    <p class="activity-card__state" role="status">Reading today's money…</p>
+    <p class="activity-card__state" role="status">Reading today's figures…</p>
   } @else if (failed() || statement() === null) {
     <div class="activity-card__state" role="alert">
-      <p>Today's money is unavailable right now.</p>
+      <p>Today's figures could not be read.</p>
       <button type="button" class="activity-button" (click)="retry.emit()">Retry</button>
     </div>
   } @else if (statement(); as today) {
-    <dl class="activity-statement">
-      <div>
-        <dt>Realized gains and losses</dt>
-        <dd>{{ today.realized_usd === null ? 'Unavailable' : (today.realized_usd | currency: 'USD') }}</dd>
+    @if (hasFigures()) {
+      <dl class="activity-statement">
+        <div>
+          <dt>Realized gains and losses</dt>
+          <dd>{{ today.realized_usd === null ? 'Unavailable' : (today.realized_usd | currency: 'USD') }}</dd>
+        </div>
+        <div>
+          <dt>Fees billed today</dt>
+          <dd>{{ today.fees_usd === null ? 'Unavailable' : (today.fees_usd | currency: 'USD') }}</dd>
+        </div>
+        <div>
+          <dt>Change in open gains</dt>
+          <dd>{{ today.open_change_usd === null ? 'Unavailable' : (today.open_change_usd | currency: 'USD') }}</dd>
+        </div>
+        <div class="activity-statement__total">
+          <dt>Net today</dt>
+          <dd>{{ today.net_usd === null ? 'Unavailable' : (today.net_usd | currency: 'USD') }}</dd>
+        </div>
+      </dl>
+      @if (today.detail) {
+        <p class="activity-card__note">{{ today.detail }}</p>
+      }
+    } @else {
+      <div class="activity-card__state" role="alert">
+        <p>{{ today.detail ?? "Today's figures could not be read." }}</p>
+        <button type="button" class="activity-button" (click)="retry.emit()">Retry</button>
       </div>
-      <div>
-        <dt>Fees</dt>
-        <dd>{{ today.fees_usd === null ? 'Unavailable' : (today.fees_usd | currency: 'USD') }}</dd>
-      </div>
-      <div>
-        <dt>Open gain or loss on shares held now</dt>
-        <dd>{{ today.open_usd === null ? 'Unavailable' : (today.open_usd | currency: 'USD') }}</dd>
-      </div>
-      <div class="activity-statement__total">
-        <dt>Net today</dt>
-        <dd>{{ today.net_usd === null ? 'Unavailable' : (today.net_usd | currency: 'USD') }}</dd>
-      </div>
-    </dl>
-    @if (today.detail) {
-      <p class="activity-card__note">{{ today.detail }}</p>
     }
   }
 </section>

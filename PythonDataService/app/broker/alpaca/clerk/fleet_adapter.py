@@ -119,6 +119,22 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.ACCOUNT_READ,
             agent_path="/api/brokers/alpaca/fees/attribution",
         ),
+        # The Activity page's two reads beside its fees (PRD #2560): a
+        # period's orders and cash moves, and Today's money statement.
+        _op(
+            "activity_period_read",
+            "GET",
+            "/activities/period",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/activities/period",
+        ),
+        _op(
+            "today_statement_read",
+            "GET",
+            "/today-statement",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/today-statement",
+        ),
         _op(
             "portfolio_history_read",
             "GET",

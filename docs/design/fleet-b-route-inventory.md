@@ -122,6 +122,8 @@ compatibility routes until Delivery E.
 | Operation id | Method | Public | Agent path today | Capability | Idempotency |
 |---|---|---|---|---|---|
 | `activities_read` | GET | `/activities` | `/api/brokers/alpaca/activities` | `account_read` | read |
+| `activity_period_read` | GET | `/activities/period` | `…/activities/period` | `account_read` | read |
+| `today_statement_read` | GET | `/today-statement` | `…/today-statement` | `account_read` | read |
 | `portfolio_history_read` | GET | `/portfolio-history` | `…/portfolio-history` | `account_read` | read |
 | `portfolio_history_proof_read` | GET | `/portfolio-history-proof` | `…/portfolio-history-proof` | `account_read` | read |
 | `clerk_status_read` | GET | `/clerk/status` | `…/clerk/status` | `custody_read` | read |

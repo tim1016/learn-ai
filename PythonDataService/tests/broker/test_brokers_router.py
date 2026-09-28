@@ -18,6 +18,7 @@ from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerRateL
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerActivityEvidence,
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
@@ -85,6 +86,7 @@ class _FakePort:
         portfolio_history: BrokerPortfolioHistory | None = None,
         clock: BrokerClockEvidence | None = None,
         error: BrokerError | None = None,
+        evidence: BrokerActivityEvidence | None = None,
     ) -> None:
         self._account = account
         self._positions = positions if positions is not None else []
@@ -94,6 +96,8 @@ class _FakePort:
         self._portfolio_history = portfolio_history
         self._clock = clock
         self._error = error
+        self._evidence = evidence
+        self.evidence_calls: list[dict[str, str | int | None]] = []
         self.account_calls = 0
         self.position_calls = 0
         self.portfolio_history_calls = 0
@@ -145,6 +149,13 @@ class _FakePort:
             raise self._error
         self.activities_call = {"after_ms": after_ms, "limit": limit}
         return self._activities
+
+    async def read_activity_evidence(
+        self, *, page_token: str | None = None, after_ms: int | None = None,
+    ) -> BrokerActivityEvidence:
+        self.evidence_calls.append({"page_token": page_token, "after_ms": after_ms})
+        assert self._evidence is not None
+        return self._evidence
 
     async def list_assets(
         self,
@@ -468,37 +479,62 @@ async def test_activities_current_session_uses_canonical_calendar_window(
     assert port.activities_call == {"after_ms": 1_786_540_200_000, "limit": 5}
 
 
+async def test_activities_rejects_mixed_explicit_and_session_windows() -> None:
+    get_broker_registry().register(_FakePort())
+
+    response = await _get(
+        "/api/brokers/alpaca/activities?current_session=true&after_ms=1"
+    )
+
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     ("period", "opens_on"),
     [("today", date(2026, 9, 8)), ("30d", date(2026, 7, 28)), ("60d", date(2026, 6, 12))],
 )
-async def test_activities_period_opens_at_the_same_anchor_as_its_fees(
+async def test_activity_period_reads_one_window_at_its_fee_anchor_and_says_it_stopped_short(
     monkeypatch: pytest.MonkeyPatch, period: str, opens_on: date,
 ) -> None:
+    """Regression (#2565 review): a period's oldest rows were dropped with no marker."""
     from app.services.session_authority import et_minute_of_day_ms
     from app.utils.session_anchors import et_midnight_ms
 
-    port = _FakePort(activities=[_activity(activity_id="act-period")])
-    get_broker_registry().register(port)
-    monkeypatch.setattr(
-        "app.routers.brokers.now_ms_utc",
-        lambda: et_minute_of_day_ms(date(2026, 9, 8), 12 * 60),
+    now = et_minute_of_day_ms(date(2026, 9, 8), 12 * 60)
+    port = _FakePort(
+        evidence=BrokerActivityEvidence(
+            activities=[_activity(activity_id="act-newest")], history_complete=False, next_page_token="tok-older",
+        ),
     )
+    get_broker_registry().register(port)
+    monkeypatch.setattr("app.services.account_activity.now_ms_utc", lambda: now)
 
-    response = await _get(f"/api/brokers/alpaca/activities?period={period}&limit=5")
+    response = await _get(f"/api/brokers/alpaca/activities/period?period={period}")
 
     assert response.status_code == 200
-    assert port.activities_call == {"after_ms": et_midnight_ms(opens_on), "limit": 5}
+    body = response.json()
+    assert (body["period"], body["period_start_ms"], body["observed_at_ms"]) == (period, et_midnight_ms(opens_on), now)
+    assert body["evidence"]["history_complete"] is False
+    assert body["evidence"]["next_page_token"] == "tok-older"
+    assert [row["activity_id"] for row in body["evidence"]["activities"]] == ["act-newest"]
+    assert port.evidence_calls == [{"page_token": None, "after_ms": et_midnight_ms(opens_on)}]
 
 
-@pytest.mark.parametrize(
-    "query",
-    ["current_session=true&after_ms=1", "period=today&after_ms=1", "period=30d&current_session=true"],
-)
-async def test_activities_rejects_mixed_explicit_and_session_windows(query: str) -> None:
+async def test_activity_period_continues_an_unfinished_read() -> None:
+    port = _FakePort(evidence=BrokerActivityEvidence(activities=[], history_complete=True))
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/activities/period?period=30d&page_token=tok-older")
+
+    assert response.status_code == 200
+    assert response.json()["evidence"]["history_complete"] is True
+    assert [call["page_token"] for call in port.evidence_calls] == ["tok-older"]
+
+
+async def test_activity_period_requires_a_known_period() -> None:
     get_broker_registry().register(_FakePort())
 
-    response = await _get(f"/api/brokers/alpaca/activities?{query}")
+    response = await _get("/api/brokers/alpaca/activities/period?period=7d")
 
     assert response.status_code == 422
 

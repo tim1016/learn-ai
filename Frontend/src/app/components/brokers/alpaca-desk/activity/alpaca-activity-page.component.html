@@ -30,10 +30,10 @@
 
   @if (selected().curve === null) {
     <app-alpaca-activity-statement
-      [statement]="feeView()?.statement ?? null"
-      [loading]="fees.isLoading()"
-      [failed]="feesFailed()"
-      (retry)="fees.reload()"
+      [statement]="todayView()"
+      [loading]="today.isLoading()"
+      [failed]="todayFailed()"
+      (retry)="today.reload()"
     />
   } @else {
     <app-alpaca-portfolio-history-chart
@@ -44,15 +44,35 @@
     <app-alpaca-portfolio-reconciliation-proof [proof]="proofView()" [unavailable]="proofFailed()" />
   }
 
-  <app-alpaca-activity-fees
-    [period]="period()"
-    [view]="feeView()"
-    [loading]="fees.isLoading()"
-    [failed]="feesFailed()"
-    (retry)="fees.reload()"
-  />
+  <app-fee-attribution [target]="target()" [period]="period()" [headingLevel]="2" />
 
-  <app-alpaca-trader-activity-table [activities]="activityRows()" [unavailable]="activitiesFailed()" />
+  <div class="activity__moves">
+    <app-alpaca-trader-activity-table [activities]="activityRows()" [unavailable]="activitiesFailed()" />
+    @if (activityRows(); as rows) {
+      @if (activitiesComplete()) {
+        <p #activityCount class="activity__count" tabindex="-1">
+          {{ rows.length }} {{ rows.length === 1 ? 'order or cash move' : 'orders and cash moves' }} in this period.
+        </p>
+      } @else {
+        <div class="activity__partial">
+          <p #activityCount class="activity__count" tabindex="-1" role="status">
+            Showing the newest {{ rows.length }} orders and cash moves. This period has older ones that are not
+            loaded yet.
+          </p>
+          @if (olderToken()) {
+            <button type="button" class="activity-button" [disabled]="loadingOlder()" (click)="loadOlder()">
+              {{ loadingOlder() ? 'Loading older…' : 'Load older' }}
+            </button>
+          } @else {
+            <p class="activity__count">Alpaca stopped listing before the start of this period, so the older ones can't be shown here.</p>
+          }
+          @if (olderFailed()) {
+            <p class="activity__count" role="alert">Older orders and cash moves could not be read. Try again.</p>
+          }
+        </div>
+      }
+    }
+  </div>
 
   @if (target(); as account) {
     @if (accountId(); as id) {
@@ -61,9 +81,9 @@
         [fence]="fence()"
         [accountId]="id"
         [window]="recordsWindow()"
-        [windowReading]="fees.isLoading()"
+        [windowReading]="activities.isLoading()"
         [timelineQuery]="timelineQuery()"
-        (retry)="fees.reload()"
+        (retry)="activities.reload()"
       />
     }
   }

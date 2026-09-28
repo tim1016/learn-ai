@@ -23,12 +23,11 @@ export type AccountPnlDivergence = components['schemas']['AccountPnlDivergenceRe
 export type AccountPnlReconciliation = components['schemas']['AccountPnlReconciliationResponse'];
 export type PortfolioHistoryProof = components['schemas']['PortfolioHistoryProofResponse'];
 
-// An account's Activity period (PRD #2560): its fees per owner and its money
-// statement, every amount and the period's opening instant server-authored.
-export type ActivityPeriod = NonNullable<components['schemas']['DeploymentFeeAttribution']['period']>;
-export type PeriodFees = components['schemas']['DeploymentFeeAttribution'];
-export type PeriodFeeRow = components['schemas']['DeploymentFeeRow'];
-export type ActivityPeriodStatement = components['schemas']['ActivityPeriodStatement'];
+// An account's Activity page (PRD #2560): a period's orders and cash moves and
+// Today's statement, every amount and instant server-authored.
+export type ActivityPeriodRead = components['schemas']['ActivityPeriodRead'];
+export type ActivityPeriod = ActivityPeriodRead['period'];
+export type TodayStatement = components['schemas']['TodayStatement'];
 
 // SQLite manual-ticket instructions reuse the broker-neutral leg vocabulary.
 export type BrokerOrderLeg = components['schemas']['BrokerOrderLeg'];

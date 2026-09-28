@@ -15,6 +15,7 @@ import { PolledReadScheduler } from './polled-read-scheduler';
 
 import type {
   ActivityPeriod,
+  ActivityPeriodRead,
   AlpacaLiveVerdict,
   BrokerAccountSnapshot,
   BrokerActivity,
@@ -31,13 +32,13 @@ import type {
   ManualOrderPreviewRequest,
   ManualOrderSubmitRequest,
   ManualOrderTicket,
-  PeriodFees,
   PortfolioHistoryRange,
   SqliteClerkProjection,
   SqliteRecoveryAction,
   SqliteRecoveryActionCheck,
   SqliteRecoveryResult,
   SqliteTimelinePage,
+  TodayStatement,
 } from '../api/alpaca.types';
 import type { components } from '../api/broker.types';
 import type {
@@ -179,23 +180,13 @@ export class BrokersService {
 
   /**
    * Account-wide Alpaca activity, bounded by the data plane. `afterMs` is an
-   * int64 UTC cursor owned by the caller's selected activity window; `period`
-   * asks the data plane to open the window at an Activity period's own
-   * calendar anchor instead.
+   * int64 UTC cursor owned by the caller's selected activity window.
    */
   listActivities(
     target: ResourceTarget,
-    options: {
-      afterMs?: number;
-      currentSession?: boolean;
-      period?: ActivityPeriod;
-      limit?: number;
-    } = {},
+    options: { afterMs?: number; currentSession?: boolean; limit?: number } = {},
   ): Promise<BrokerActivity[]> {
     let params = new HttpParams();
-    if (options.period != null) {
-      params = params.set('period', options.period);
-    }
     if (options.afterMs != null) {
       params = params.set('after_ms', options.afterMs);
     }
@@ -210,19 +201,49 @@ export class BrokersService {
     );
   }
 
-  getFeeAttribution(target: ResourceTarget, strategyInstanceId: string | null = null): Promise<components['schemas']['DeploymentFeeAttribution']> {
-    return firstValueFrom(this.http.get<components['schemas']['DeploymentFeeAttribution']>(
-      operationUrl('fee_attribution_read', target),
-      { params: strategyInstanceId === null ? {} : { strategy_instance_id: strategyInstanceId } },
-    ));
+  /**
+   * One Activity period's orders and cash moves, newest first, as far as one
+   * bounded read reached. The data plane opens the window at the period's own
+   * calendar anchor; `pageToken` continues a read that stopped short.
+   */
+  getActivityPeriod(
+    target: ResourceTarget,
+    period: ActivityPeriod,
+    pageToken: string | null = null,
+  ): Promise<ActivityPeriodRead> {
+    let params = new HttpParams().set('period', period);
+    if (pageToken !== null) {
+      params = params.set('page_token', pageToken);
+    }
+    return firstValueFrom(
+      this.http.get<ActivityPeriodRead>(operationUrl('activity_period_read', target), { params }),
+    );
   }
 
-  /** One Activity period's account fees with that period's money statement;
-   * every amount in it is authored by the data plane. */
-  getPeriodFees(target: ResourceTarget, period: ActivityPeriod): Promise<PeriodFees> {
-    return firstValueFrom(this.http.get<PeriodFees>(
+  /** Today's statement since the last close; every amount is authored by the data plane. */
+  getTodayStatement(target: ResourceTarget): Promise<TodayStatement> {
+    return firstValueFrom(this.http.get<TodayStatement>(operationUrl('today_statement_read', target)));
+  }
+
+  /**
+   * Custody fee ownership: a deployment's lifetime, the account's lifetime,
+   * or — with `period` — the account's fees for one Activity period.
+   */
+  getFeeAttribution(
+    target: ResourceTarget,
+    strategyInstanceId: string | null = null,
+    period: ActivityPeriod | null = null,
+  ): Promise<components['schemas']['DeploymentFeeAttribution']> {
+    let params = new HttpParams();
+    if (strategyInstanceId !== null) {
+      params = params.set('strategy_instance_id', strategyInstanceId);
+    }
+    if (period !== null) {
+      params = params.set('period', period);
+    }
+    return firstValueFrom(this.http.get<components['schemas']['DeploymentFeeAttribution']>(
       operationUrl('fee_attribution_read', target),
-      { params: { period } },
+      { params },
     ));
   }
 

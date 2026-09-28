@@ -1910,14 +1910,32 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Activities
-         * @description Broker-reported account activity, newest first.
-         *
-         *     ``period`` reads one account Activity period, opened by the same
-         *     calendar anchor as that period's fees.
-         */
+        /** List Activities */
         get: operations["list_activities_api_brokers__broker__activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/activities/period": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Activity Period
+         * @description One Activity period's orders and cash moves, newest first, in bounded reads.
+         *
+         *     The window opens at the period's own calendar anchor, the same one its
+         *     fees use. A read that stops short says so and hands back the token that
+         *     reads the next older stretch.
+         */
+        get: operations["get_activity_period_api_brokers__broker__activities_period_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3351,6 +3369,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/activities/period": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Activity Period Read
+         * @description Fleet-routed GET /activities/period (account_read).
+         */
+        get: operations["fleet_activity_period_read_api_brokers__broker__clerks__clerk_id__activities_period_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/attention": {
         parameters: {
             query?: never;
@@ -4051,6 +4089,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/today-statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Today Statement Read
+         * @description Fleet-routed GET /today-statement (account_read).
+         */
+        get: operations["fleet_today_statement_read_api_brokers__broker__clerks__clerk_id__today_statement_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clock": {
         parameters: {
             query?: never;
@@ -4079,8 +4137,7 @@ export interface paths {
          * Get Deployment Fee Attribution
          * @description Canonical fee evidence, including stopped deployment ownership.
          *
-         *     Lifetime by default; ``period`` reads one account Activity period's fees
-         *     and its money statement.
+         *     Lifetime by default; ``period`` reads one account Activity period's fees.
          */
         get: operations["get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get"];
         put?: never;
@@ -4362,6 +4419,26 @@ export interface paths {
         };
         /** List Positions */
         get: operations["list_positions_api_brokers__broker__positions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/today-statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Today Statement
+         * @description Today's realized gains, fees and change in open gains since the last close.
+         */
+        get: operations["get_today_statement_api_brokers__broker__today_statement_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8139,30 +8216,31 @@ export interface components {
             on_exit?: components["schemas"]["CloseLegExit"][];
         };
         /**
-         * ActivityPeriodStatement
-         * @description One Activity period's money statement, every amount authored here.
+         * ActivityPeriodRead
+         * @description One Activity period's orders and cash moves, newest first.
          *
-         *     Covers the orders the bots and this app placed. ``net_usd`` is exactly
-         *     ``realized_usd - fees_usd + open_usd`` in cents. An amount the backend
-         *     cannot know is ``None`` with ``detail`` saying why -- never zero -- and
-         *     ``state`` is ``ready`` only when all four are known.
+         *     ``evidence`` is one bounded broker read of the window that opens at
+         *     ``period_start_ms``. When ``evidence.history_complete`` is false the
+         *     period holds older rows this read did not reach; ``next_page_token``
+         *     reads the next older stretch, and the page must say the list is partial.
          */
-        ActivityPeriodStatement: {
-            /** Detail */
-            detail: string | null;
-            /** Fees Usd */
-            fees_usd: string | null;
-            /** Net Usd */
-            net_usd: string | null;
-            /** Open Usd */
-            open_usd: string | null;
-            /** Realized Usd */
-            realized_usd: string | null;
+        ActivityPeriodRead: {
+            evidence: components["schemas"]["BrokerActivityEvidence"];
             /**
-             * State
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /**
+             * Period
              * @enum {string}
              */
-            state: "ready" | "unavailable";
+            period: "today" | "30d" | "60d";
+            /**
+             * Period Start Ms
+             * Format: int64
+             */
+            period_start_ms: number;
         };
         /**
          * AdjustmentNotCoveredDetail
@@ -10166,6 +10244,25 @@ export interface components {
             symbol: string | null;
         };
         /**
+         * BrokerActivityEvidence
+         * @description A bounded activity read with explicit provider pagination exhaustion.
+         *
+         *     ``history_complete`` is true only when a provider returned a short final
+         *     page -- or, for a read bounded to a window, when the newest-first walk
+         *     reached a row older than the window. A consumer must not infer it from the
+         *     filtered activity list's length. ``next_page_token`` continues an
+         *     unfinished newest-first walk exactly where this read stopped; it is absent
+         *     when complete or the provider gave none.
+         */
+        BrokerActivityEvidence: {
+            /** Activities */
+            activities: components["schemas"]["BrokerActivity"][];
+            /** History Complete */
+            history_complete: boolean;
+            /** Next Page Token */
+            next_page_token?: string | null;
+        };
+        /**
          * BrokerAsset
          * @description A tradable (or listed) instrument descriptor.
          */
@@ -10408,6 +10505,10 @@ export interface components {
         /**
          * BrokerPosition
          * @description A single open position (symbol, quantity, entry, value, unrealized PnL).
+         *
+         *     ``prior_close_price`` is the broker's price for the instrument at the
+         *     previous regular-session close -- the same close the account's
+         *     previous-close equity describes -- or ``None`` when the broker gives none.
          */
         BrokerPosition: {
             /** Asset Class */
@@ -10426,6 +10527,8 @@ export interface components {
             market_value: number;
             /** Observed At Ms */
             observed_at_ms: number;
+            /** Prior Close Price */
+            prior_close_price?: number | null;
             /** Quantity */
             quantity: number;
             /** Side */
@@ -13934,8 +14037,8 @@ export interface components {
          * @description Custody fee ownership, over a deployment's lifetime or one Activity period.
          *
          *     ``period`` and ``period_start_ms`` echo the account read's Activity
-         *     period (the ET midnight it opens at); ``statement`` is that period's
-         *     money statement. All three are ``None`` on a lifetime read.
+         *     period (the ET midnight of its first fee day); both are ``None`` on a
+         *     lifetime read.
          */
         DeploymentFeeAttribution: {
             /** Account Id */
@@ -13961,7 +14064,6 @@ export interface components {
             period_start_ms?: number | null;
             /** Rows */
             rows: components["schemas"]["DeploymentFeeRow"][];
-            statement?: components["schemas"]["ActivityPeriodStatement"] | null;
         };
         /**
          * DeploymentFeeRow
@@ -26649,6 +26751,44 @@ export interface components {
             /** Win Rate */
             win_rate: number;
         };
+        /**
+         * TodayStatement
+         * @description Today's money for the bots and this app's orders, since the last close.
+         *
+         *     ``since_ms`` is the prior regular-session close the figures run from --
+         *     the same close the account's previous-close equity describes. Realized
+         *     gains and the change in open gains span ``(since_ms, observed_at_ms]``;
+         *     fees are those billed on today's ET date. ``net_usd`` is exactly
+         *     ``realized_usd - fees_usd + open_change_usd`` in cents. Orders placed
+         *     outside the bots are not included, so this is never the account's day
+         *     P&L. An amount that cannot be known is ``None`` with ``detail`` saying
+         *     why -- never zero -- and ``state`` is ``ready`` only when all four are
+         *     known.
+         */
+        TodayStatement: {
+            /** Detail */
+            detail: string | null;
+            /** Fees Usd */
+            fees_usd: string | null;
+            /** Net Usd */
+            net_usd: string | null;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /** Open Change Usd */
+            open_change_usd: string | null;
+            /** Realized Usd */
+            realized_usd: string | null;
+            /** Since Ms */
+            since_ms: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable";
+        };
         /** ToleranceResponse */
         ToleranceResponse: {
             /** Atol */
@@ -31982,7 +32122,6 @@ export interface operations {
                 limit?: number;
                 after_ms?: number | null;
                 current_session?: boolean;
-                period?: ("today" | "30d" | "60d") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -32001,6 +32140,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerActivity"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_activity_period_api_brokers__broker__activities_period_get: {
+        parameters: {
+            query: {
+                period: "today" | "30d" | "60d";
+                page_token?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityPeriodRead"];
                 };
             };
             /** @description Validation Error */
@@ -34790,6 +34965,40 @@ export interface operations {
             };
         };
     };
+    fleet_activity_period_read_api_brokers__broker__clerks__clerk_id__activities_period_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_attention_read_api_brokers__broker__clerks__clerk_id__attention_get: {
         parameters: {
             query?: never;
@@ -36188,6 +36397,40 @@ export interface operations {
             };
         };
     };
+    fleet_today_statement_read_api_brokers__broker__clerks__clerk_id__today_statement_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_clock_evidence_api_brokers__broker__clock_get: {
         parameters: {
             query?: never;
@@ -36695,6 +36938,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerPosition"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_today_statement_api_brokers__broker__today_statement_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TodayStatement"];
                 };
             };
             /** @description Validation Error */

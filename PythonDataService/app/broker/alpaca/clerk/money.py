@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from decimal import (
     ROUND_CEILING,
     ROUND_FLOOR,
+    ROUND_HALF_EVEN,
     Context,
     Decimal,
     DivisionByZero,
@@ -87,6 +88,13 @@ def cents_spendable(amount: Decimal) -> int:
     """Round derived available cash downward only at the actionable boundary."""
     with money_context():
         return int((amount * 100).to_integral_value(rounding=ROUND_FLOOR))
+
+
+def display_cents(amount: Decimal) -> int:
+    """Half-even whole cents for a figure that is shown, never admitted."""
+    with money_context() as context:
+        context.traps[Inexact] = False
+        return int((amount * 100).to_integral_value(rounding=ROUND_HALF_EVEN))
 
 
 def consent_cents(value: object) -> int:

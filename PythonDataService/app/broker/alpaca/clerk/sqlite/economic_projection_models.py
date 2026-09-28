@@ -8,11 +8,12 @@ typed economic facts without importing the reader implementation.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import BrokerPosition, OrderSide
 
 ExecutionOrigin = Literal["strategy", "manual", "external", "unknown"]
 ExecutionState = Literal["effective", "superseded"]
@@ -59,6 +60,35 @@ class MarketMark:
             or self.observed_at_ms < 0
         ):
             raise ValueError("mark observed_at_ms must be non-negative")
+
+
+def current_position_marks(positions: Iterable[BrokerPosition]) -> dict[str, MarketMark]:
+    """Each held symbol's broker-reported current price, keyed upper-case.
+
+    A position without a price is left out, so FIFO valuation reports that
+    symbol unmarked instead of valuing it at a guess.
+    """
+    return {
+        position.symbol.upper(): MarketMark(price=position.current_price, observed_at_ms=position.observed_at_ms)
+        for position in positions
+        if position.current_price is not None
+    }
+
+
+def prior_close_position_marks(
+    positions: Iterable[BrokerPosition], *, closed_at_ms: int,
+) -> dict[str, MarketMark]:
+    """Each held symbol's broker-reported price at the prior regular-session close.
+
+    ``closed_at_ms`` is that close, the instant the price describes. Only a
+    symbol held now has a broker position to carry it; any other symbol is
+    left out and so reported unmarked.
+    """
+    return {
+        position.symbol.upper(): MarketMark(price=position.prior_close_price, observed_at_ms=closed_at_ms)
+        for position in positions
+        if position.prior_close_price is not None
+    }
 
 
 @dataclass(frozen=True)
@@ -206,4 +236,6 @@ __all__ = [
     "FillWindowProjection",
     "MarketMark",
     "SessionEconomicProjection",
+    "current_position_marks",
+    "prior_close_position_marks",
 ]

@@ -93,9 +93,13 @@ class BrokerActivityEvidencePort(Protocol):
     the bounded ``list_activities`` read, which never claims completeness.
     ``page_token`` resumes a previous read's ``next_page_token`` so a busy
     account's history is walked in bounded steps instead of never.
+    ``after_ms`` bounds the walk to one window: rows older than it are left
+    out, and reaching one completes the read.
     """
 
-    async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence: ...
+    async def read_activity_evidence(
+        self, *, page_token: str | None = None, after_ms: int | None = None,
+    ) -> BrokerActivityEvidence: ...
 
 
 @runtime_checkable

@@ -78,31 +78,12 @@ class DeploymentFeeRow(BaseModel):
     total_usd: str
 
 
-class ActivityPeriodStatement(BaseModel):
-    """One Activity period's money statement, every amount authored here.
-
-    Covers the orders the bots and this app placed. ``net_usd`` is exactly
-    ``realized_usd - fees_usd + open_usd`` in cents. An amount the backend
-    cannot know is ``None`` with ``detail`` saying why -- never zero -- and
-    ``state`` is ``ready`` only when all four are known.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    state: Literal["ready", "unavailable"]
-    detail: str | None
-    realized_usd: str | None
-    fees_usd: str | None
-    open_usd: str | None
-    net_usd: str | None
-
-
 class DeploymentFeeAttribution(BaseModel):
     """Custody fee ownership, over a deployment's lifetime or one Activity period.
 
     ``period`` and ``period_start_ms`` echo the account read's Activity
-    period (the ET midnight it opens at); ``statement`` is that period's
-    money statement. All three are ``None`` on a lifetime read.
+    period (the ET midnight of its first fee day); both are ``None`` on a
+    lifetime read.
     """
 
     account_id: str | None
@@ -115,4 +96,3 @@ class DeploymentFeeAttribution(BaseModel):
     messages: list[str]
     period: ActivityPeriod | None = None
     period_start_ms: EpochMs | None = None
-    statement: ActivityPeriodStatement | None = None
