@@ -63,6 +63,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedBarBindingError,
     SynthesizedOrderLedger,
     SynthesizedOrderRecord,
+    recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
     filter_synthesized_orders,
@@ -92,7 +93,6 @@ from app.engine.live.order_identity import (
 )
 from app.services.session_authority import (
     declared_session_bounds,
-    order_session_state_at_ms,
     scheduled_extended_session_bounds,
 )
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -234,27 +234,19 @@ class ShadowOrderBook:
         self._require_own_evidence(client_order_id, retained_bar)
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         """Bind a recovery EXIT to the latest bar its own instance retained.
 
         Strategy decisions always bind their exact deciding bar before submit.
         Recovery EXITs have no strategy decision bar, so their distinct durable
         decision identity explicitly selects the newest retained observation
         from the order namespace that owns the exposure. ``False`` keeps the
-        recovery effect uncertain when no such evidence exists.
+        recovery effect uncertain when no such evidence exists. A bar prices
+        either side alike, so ``side`` is not consulted.
         """
         account_id = self._evidence_namespace_for(client_order_id)
         retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
-        now_ms = self._clock()
-        if retained_bar is None or retained_bar.end_ms > now_ms:
-            return False
-        now_session = order_session_state_at_ms(now_ms=now_ms, extended_window=self._window)
-        bar_session = order_session_state_at_ms(now_ms=retained_bar.start_ms, extended_window=self._window)
-        if (
-            now_session.phase == "CLOSED"
-            or now_session.phase != bar_session.phase
-            or et_date_at_ms(now_ms) != et_date_at_ms(retained_bar.start_ms)
-        ):
+        if not recovery_bar_in_send_session(retained_bar, now_ms=self._clock(), extended_window=self._window):
             return False
         self.bind_evaluated_bar(client_order_id, retained_bar)
         return True
@@ -570,8 +562,8 @@ class NoSubmitAlpacaTradePort:
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
         self._book.bind_evaluated_bar(client_order_id, retained_bar)
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
-        return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol)
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
+        return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol, side=side)
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         return self._book.submit(leg, client_order_id=client_order_id)

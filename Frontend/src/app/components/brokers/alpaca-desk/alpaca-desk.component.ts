@@ -142,7 +142,7 @@ export class AlpacaDeskComponent {
       return 'Checking the active order authority before opening this ticket.';
     }
     if (this.manualOrderCapability.error() !== undefined) {
-      return 'The SQLite order authority is unavailable. No ticket was opened.';
+      return 'The order authority is unavailable. No ticket was opened.';
     }
     return null;
   });

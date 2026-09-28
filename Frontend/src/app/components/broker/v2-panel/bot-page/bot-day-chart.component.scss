@@ -1,0 +1,10 @@
+// The tape sits in a grid row beside the money card, which has no height of
+// its own to lend it, so the chart holds a floor.
+:host { display: block; min-width: 0; height: 100%; min-height: 30rem; }
+
+.bot-day-chart {
+  min-width: 0;
+  height: 100%;
+
+  app-dual-pane-chart { height: 100%; }
+}

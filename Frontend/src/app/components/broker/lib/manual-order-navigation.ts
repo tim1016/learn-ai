@@ -29,21 +29,31 @@ export interface ManualOrderTicketNavigation {
   readonly queryParams: Params;
 }
 
-export function buildManualOrderTicketNavigation(
-  broker: string,
-  clerkId: string,
-  accountId: string,
-  symbol: string,
-): ManualOrderTicketNavigation {
+/**
+ * The link from a bot's page to the account's manual-order ticket.
+ *
+ * The path is the account as this workspace routes it (`routeAccountId`), so
+ * the link lands in the same workspace every other route uses (hurdle H20:
+ * the broker's upper-case spelling opened a second address for one account).
+ * The ticket query keeps the broker's own account id, which is what the desk
+ * checks the connected account against before opening the ticket.
+ */
+export function buildManualOrderTicketNavigation(link: {
+  readonly broker: string;
+  readonly clerkId: string;
+  readonly routeAccountId: string;
+  readonly accountId: string;
+  readonly symbol: string;
+}): ManualOrderTicketNavigation {
   const queryParams = {
     [MANUAL_ORDER_QUERY.intent]: 'new',
-    [MANUAL_ORDER_QUERY.accountId]: accountId,
-    [MANUAL_ORDER_QUERY.symbol]: symbol,
+    [MANUAL_ORDER_QUERY.accountId]: link.accountId,
+    [MANUAL_ORDER_QUERY.symbol]: link.symbol,
     [MANUAL_ORDER_QUERY.ticketId]: crypto.randomUUID(),
     [MANUAL_ORDER_QUERY.legId]: crypto.randomUUID(),
   } satisfies ManualOrderTicketQuery;
   return {
-    commands: ['/brokers', broker, 'clerks', clerkId, 'accounts', accountId],
+    commands: ['/brokers', link.broker, 'clerks', link.clerkId, 'accounts', link.routeAccountId],
     queryParams,
   };
 }

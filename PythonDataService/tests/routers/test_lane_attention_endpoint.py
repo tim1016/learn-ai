@@ -307,7 +307,7 @@ async def test_dead_run_notice_reaches_account_desk_and_bell_without_selling(
             desk = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT}/snapshot")
         assert bell.status_code == 200
         [notice] = bell.json()["items"]
-        assert notice["headline"] == "Position could not be verified; check the broker"
+        assert notice["headline"] == "Position could not be verified"
         assert notice["strategy_instance_id"] == "dead-bot"
         assert desk.status_code == 200
         assert desk.json()["exposure_notices"][0]["label"] == notice["headline"]

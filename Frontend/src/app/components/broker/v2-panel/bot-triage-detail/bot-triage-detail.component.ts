@@ -26,7 +26,7 @@ import { NextAttemptComponent } from '../../shared/next-attempt/next-attempt.com
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
 import { MissionVerdictStatusComponent } from '../bot-detail-banner/mission-verdict-status.component';
-import { actionTone, primaryActionForLens } from '../bot-detail-banner/lifecycle-action';
+import { actionTone, primaryAction as backendPrimaryAction } from '../bot-detail-banner/lifecycle-action';
 import { TriageActivityComponent } from './triage-activity.component';
 import { TriageEvidenceComponent } from './triage-evidence.component';
 import { TriageTapeComponent } from './triage-tape.component';
@@ -321,13 +321,13 @@ export class BotTriageDetailComponent {
   // ── Actions ────────────────────────────────────────────────────────────────
 
   /**
-   * WHICH action leads is backend-owned (`primary_action_by_lens`, issue
-   * #1665) — the same selection the Trader banner on the per-bot route uses,
+   * WHICH action leads is backend-owned (`primary_action`, issue
+   * #1665) — the same selection the bot page's header uses,
    * so the two screens never disagree about a bot's headline command.
    */
   protected readonly primaryAction = computed<PanelAction | null>(() => {
     const view = this.view();
-    return view === null ? null : primaryActionForLens(view, 'trader');
+    return view === null ? null : backendPrimaryAction(view);
   });
 
   /**

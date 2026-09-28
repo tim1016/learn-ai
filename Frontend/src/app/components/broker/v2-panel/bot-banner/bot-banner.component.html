@@ -10,14 +10,12 @@
         [title]="panel().mission_verdict.explanation"
         [bare]="true"
       />
+      @if (worldChip(); as chip) {
+        <app-alpaca-lane-mode-chip [chip]="chip" />
+      } @else {
+        <span class="bot-banner__dry-run">DRY RUN · simulated cash</span>
+      }
     </div>
-
-    <app-bot-banner-run-timing
-      [runState]="runState()"
-      [health]="panel().health"
-      [operator]="operator()"
-      (retryRequested)="retryRequested.emit()"
-    />
 
     <span class="bot-banner__updated">
       Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" granularity="time" />
@@ -26,27 +24,21 @@
   </div>
 
   <div class="bot-banner__status-row">
-    <div class="bot-banner__status">
-      <div class="bot-banner__identity">
-        <h2 class="bot-banner__name">
-          {{ panel().strategy_label }}
-          <app-asset-identity class="bot-banner__symbol" [symbol]="panel().symbol" size="sm" />
-        </h2>
-        <code class="bot-banner__instance">{{ panel().strategy_instance_id }}</code>
-      </div>
-      @if (operator()) {
-        <app-panel-instrument-quote
-          class="bot-banner__quote"
-          [symbol]="panel().symbol"
-          [tickerQuote]="tickerQuote()"
-        />
-      }
+    <div class="bot-banner__identity">
+      <h2 class="bot-banner__name">{{ panel().strategy_instance_id }}</h2>
+      <p class="bot-banner__meta">
+        <span>{{ panel().strategy_label }}</span>
+        <span aria-hidden="true">·</span>
+        <app-asset-identity class="bot-banner__symbol" [symbol]="panel().symbol" size="sm" />
+      </p>
+      <app-bot-banner-run-timing
+        [runState]="runState()"
+        [health]="panel().health"
+        (retryRequested)="retryRequested.emit()"
+      />
     </div>
 
     <div class="bot-banner__actions">
-      @if (!panel().health.running) {
-        <a class="bot-banner__deploy-again" [routerLink]="deployAgainRoute()">Deploy again</a>
-      }
       @if (primaryAction(); as action) {
         <app-panel-action-button
           [action]="action"
@@ -55,35 +47,26 @@
           (triggered)="actionRequested.emit($event)"
         />
       }
-
-      @if (operator()) {
-        @if (promotedFlattenAction(); as flatten) {
-          <app-panel-action-button
-            [action]="flatten"
-            [pending]="actionPending()"
-            [tone]="promotedFlattenTone()"
-            (triggered)="actionRequested.emit($event)"
-          />
-        }
-        @if (overflowActions().length > 0) {
-          <app-bot-banner-overflow label="More operator actions">
-            @for (action of overflowActions(); track action.action_id) {
-              <app-panel-action-button
-                [action]="action"
-                [pending]="actionPending()"
-                tone="neutral"
-                (triggered)="actionRequested.emit($event)"
-              />
-            }
-          </app-bot-banner-overflow>
-        }
-      } @else {
-        <app-bot-banner-overflow label="More trader actions">
-          <a
-            class="bot-banner__manual-order"
-            [routerLink]="manualOrderNavigation().commands"
-            [queryParams]="manualOrderNavigation().queryParams"
-          >Manual order</a>
+      @if (!panel().health.running && deployAgainRoute(); as route) {
+        <a class="bot-banner__deploy-again" [routerLink]="route" [queryParams]="deployAgainQuery()">Deploy again</a>
+      }
+      @if (manualOrderNavigation() !== null || moreActions().length > 0) {
+        <app-bot-banner-overflow label="More actions for this bot">
+          @if (manualOrderNavigation(); as manual) {
+            <a
+              class="bot-banner__manual-order"
+              [routerLink]="manual.commands"
+              [queryParams]="manual.queryParams"
+            >Manual order</a>
+          }
+          @for (action of moreActions(); track action.action_id) {
+            <app-panel-action-button
+              [action]="action"
+              [pending]="actionPending()"
+              tone="danger"
+              (triggered)="actionRequested.emit($event)"
+            />
+          }
         </app-bot-banner-overflow>
       }
     </div>

@@ -38,15 +38,8 @@ def _request(*, action_id: str, revision: int = 42, token: str = "token") -> Pan
     )
 
 
-async def test_fence_ignores_revision_drift_when_token_matches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_fence_ignores_revision_drift_when_token_matches() -> None:
     """Matching tokens carry the action past the fence despite revision drift."""
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
-        lambda _broker: object(),
-    )
-
     with pytest.raises(ActionNotAvailableError):
         # prepare_safe_flatten is refused AFTER the fence (view action on the
         # SQLite adapter), so reaching ActionNotAvailableError instead of
@@ -59,16 +52,12 @@ async def test_fence_ignores_revision_drift_when_token_matches(
             panel=SimpleNamespace(revision=99),
             action=SimpleNamespace(concurrency_token="token"),
             availability_error=None,
+            facade=object(),
         )
 
 
-async def test_fence_rejects_token_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fence_rejects_token_mismatch() -> None:
     """A genuinely re-presented action (new concurrency token) must still 409."""
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
-        lambda _broker: object(),
-    )
-
     with pytest.raises(StaleRevisionError) as exc:
         await execute_sqlite_panel_action(
             "alpaca",
@@ -78,6 +67,7 @@ async def test_fence_rejects_token_mismatch(monkeypatch: pytest.MonkeyPatch) -> 
             panel=SimpleNamespace(revision=42),
             action=SimpleNamespace(concurrency_token="fresh-token"),
             availability_error=None,
+            facade=object(),
         )
     assert exc.value.http_status == 409
 
@@ -86,12 +76,8 @@ async def test_context_read_failure_releases_the_same_key_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed pre-execution projection read leaves no in-flight command."""
-    facade = SimpleNamespace(repository=object())
+    facade = SimpleNamespace(repository=object(), authority_kind="sqlite")
     store = IdempotencyStore(wait_timeout_s=0)
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
-        lambda _broker: facade,
-    )
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",
         lambda _facade: (_ for _ in ()).throw(RuntimeError("projection read failed")),
@@ -106,6 +92,7 @@ async def test_context_read_failure_releases_the_same_key_for_retry(
             panel=SimpleNamespace(revision=42),
             action=SimpleNamespace(concurrency_token="token", label="Reconcile now"),
             availability_error=None,
+            facade=facade,
             store=store,
         )
 
@@ -129,12 +116,8 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
             return None
 
     attempts = 0
-    facade = SimpleNamespace(repository=object())
+    facade = SimpleNamespace(repository=object(), authority_kind="sqlite")
     store = IdempotencyStore(wait_timeout_s=0)
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
-        lambda _broker: facade,
-    )
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",
         lambda _facade: _Reader(),
@@ -172,6 +155,7 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
             panel=SimpleNamespace(revision=42),
             action=SimpleNamespace(concurrency_token="token", label="Stop decisions"),
             availability_error=None,
+            facade=facade,
             store=store,
         )
 
@@ -183,6 +167,7 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
         panel=SimpleNamespace(revision=43),
         action=SimpleNamespace(concurrency_token="token", label="Stop decisions"),
         availability_error=None,
+        facade=facade,
         store=store,
     )
 

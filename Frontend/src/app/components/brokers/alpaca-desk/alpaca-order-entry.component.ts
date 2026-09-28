@@ -110,10 +110,9 @@ export class AlpacaOrderEntryComponent {
       && this.legs().every((leg) => this.legValid(leg)),
   );
 
+  /** Submit availability is the backend's capability verdict, never a client override. */
   protected readonly manualSubmissionAvailable = computed(
-    () =>
-      this.manualCapability()?.available === true
-      || this.legs().every((leg) => leg.side === 'sell'),
+    () => this.manualCapability()?.available === true,
   );
   protected readonly activeManualLeg = computed(() =>
     this.manualTicket()?.legs.find((leg) => leg.order !== null && !['SUCCEEDED', 'FAILED', 'CANCELED'].includes(leg.state)) ?? null,

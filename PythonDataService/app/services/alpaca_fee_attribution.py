@@ -125,7 +125,6 @@ class FeeAttribution:
     @money_context()
     def unobserved_cash_claim(
         self, *, cash_seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None,
-        subject_id: str | None = None,
     ) -> Decimal:
         """Disjoint fee claim: fill-fees stay in the existing unseen-fill claim.
 
@@ -141,15 +140,14 @@ class FeeAttribution:
             (
                 max(ZERO, charge.amount)
                 for charge in self.unattributed_charges
-                if subject_id is None and charge.observed_at_ms >= cash_seen_before_ms
+                if charge.observed_at_ms >= cash_seen_before_ms
             ),
             ZERO,
         ) + sum(
             (
                 max(ZERO, share.amount)
                 for share in self.shares
-                if (subject_id is None or share.subject_id == subject_id)
-                and not share.included_in_fill
+                if not share.included_in_fill
                 and (share.state != "observed" or share.observed_at_ms >= cash_seen_before_ms)
                 and not (
                     share.state == "modelled_settled"

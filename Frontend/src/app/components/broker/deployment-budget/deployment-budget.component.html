@@ -1,17 +1,45 @@
-<section class="deployment-budget" aria-label="Deployment budget" aria-live="polite">
-  <h3>Deployment budget</h3>
-  @if (budget.isLoading()) { <p>Reading committed money…</p> }
-  @else if (budget.error()) { <p role="alert">Budget evidence is unavailable. Refresh before making another deployment.</p> }
-  @else if (view(); as report) {
+<section class="deployment-budget" [attr.aria-labelledby]="headingId">
+  <div class="deployment-budget__head">
+    <h3 [id]="headingId">This bot's money</h3>
+    <button type="button" aria-label="Refresh this bot's money" (click)="budget.reload()" [disabled]="budget.isLoading()">Refresh</button>
+  </div>
+  @if (budget.error()) {
+    <p role="alert">This bot's money could not be read.</p>
+  } @else if (view(); as report) {
+    <p><strong>{{ report.headline }}</strong></p>
     <p>{{ report.detail }}</p>
-    <p>{{ worldLabels[report.world] }} · {{ report.entry_eligible ? 'Budget and account risk ready' : 'Budget or account risk unavailable' }}</p>
-    <dl>
-      @for (row of amounts(); track row.label) {
-        <dt>{{ row.label }}</dt><dd>{{ (row.amount === null || row.amount === undefined) ? 'Unknown' : (row.amount | authoredUsd) }}</dd>
+    @if (report.state === 'ready') {
+      @if (report.segment; as segment) {
+        <app-money-bar size="detail" [segments]="[segment]" caption="This bot's slice" />
       }
-    </dl>
-    <p>Stopped does not mean flat or fully released. Use the position and order recovery controls to resolve remaining obligations.</p>
-    @if (report.observed_at_ms !== null) { <small>Observed <app-timestamp-display [value]="report.observed_at_ms" mode="local" /></small> }
+      <dl class="deployment-budget__statement">
+        @for (line of statement(); track line.label) {
+          <div class="deployment-budget__line" [class.deployment-budget__line--total]="line.total">
+            <dt>{{ line.label }}</dt>
+            <dd>{{ line.amount_usd | authoredUsd }}</dd>
+          </div>
+        }
+      </dl>
+      @if (report.note) {
+        <p class="deployment-budget__fine">{{ report.note }}</p>
+      }
+      @if (holdsShares()) {
+        @let pnl = openPnl();
+        @if (pnl?.open_pnl_usd; as amount) {
+          <p class="deployment-budget__fine">
+            Open gain or loss on shares:
+            <span class="num" [class.positive]="pnl?.open_pnl_direction === 'gain'" [class.negative]="pnl?.open_pnl_direction === 'loss'">{{ amount | authoredUsd }}</span>, counted when sold.
+          </p>
+        } @else {
+          <p class="deployment-budget__fine">Open gain or loss on shares: no current price.</p>
+        }
+      }
+      @let observedAt = report.observed_at_ms ?? null;
+      @if (observedAt !== null) {
+        <small>Observed <app-timestamp-display [value]="observedAt" mode="local" /></small>
+      }
+    }
+  } @else {
+    <p role="status">Reading this bot's money…</p>
   }
-  <button type="button" (click)="budget.reload()" [disabled]="budget.isLoading()">Refresh budget</button>
 </section>

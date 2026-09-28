@@ -46,6 +46,7 @@ from app.services.decision_clock import decision_timeframe_ms_for_binding
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import DECISION_LATE_REASON_CODE
 from app.services.source_bar_ledger import (
+    RECOVERY_QUOTE_PROVIDER,
     RetainedContinuityEvent,
     RetainedSourceBar,
     SourceBarLedger,
@@ -181,8 +182,11 @@ def to_market_bar(bar: RetainedSourceBar) -> MarketDataBar:
 
 
 def replay_provider_for(ledger: SourceBarLedger, symbol: str) -> str:
-    """Return the one provider whose retained stream is this run's evidence."""
-    providers = ledger.providers_for(symbol)
+    """Return the one provider whose retained stream is this run's evidence.
+
+    A recovery quote a stopped Dry Run sold at is no run's evidence.
+    """
+    providers = [provider for provider in ledger.providers_for(symbol) if provider != RECOVERY_QUOTE_PROVIDER]
     if len(providers) != 1:
         raise RunReplayUnavailableError(
             f"Retained evidence for {symbol!r} names {len(providers)} providers; replay requires exactly one.",

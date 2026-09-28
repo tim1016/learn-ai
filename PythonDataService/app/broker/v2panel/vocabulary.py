@@ -159,15 +159,6 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
 RetiredActionId = Literal["resume", "pause", "continue"]
 RecordedActionId = Literal[ActionId, RetiredActionId]
 
-# The closed set of action ids the Trader banner may ever reference as its
-# primary command (issue #1665, ADR 0027 audience-aware selection). Every
-# other action id — recovery capabilities, ``retire``,
-# ``flatten_stop``, ... — is Operator-only and must never reach
-# ``BotPanelView.primary_action_by_lens.trader``. Enforced by the
-# ``BotPanelView`` model validator; authored by
-# ``panel_projection_service.select_primary_action_by_lens``.
-TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"stop"})
-
 # The presented actions that only stop a bot, reduce its exposure or
 # reconcile (#2351) — the one closed set a draining lane still executes. They
 # travel on their own operation (``bot_panel_quiesce_action``, whose request

@@ -1,0 +1,48 @@
+<div class="records-block">
+  <h4>Working orders</h4>
+  @if (panel().working_orders.length === 0) {
+    <p class="records-block__empty">No working orders.</p>
+  } @else {
+    <ul class="working-orders" aria-label="Working orders">
+      @for (order of panel().working_orders; track order.order_ref) {
+        <li class="working-order">
+          <div class="working-order__heading">
+            <app-asset-identity [symbol]="order.symbol" size="sm" />
+            <span>{{ order.side | receiptLabel }}</span>
+            <span class="working-order__status">{{ order.status | receiptLabel }}</span>
+          </div>
+          <dl>
+            <div><dt>Quantity</dt><dd>{{ order.quantity ?? 'Not reported' }}</dd></div>
+            <div><dt>Filled</dt><dd>{{ order.filled_quantity ?? 'Not reported' }}</dd></div>
+          </dl>
+          <code>{{ order.order_ref }}</code>
+        </li>
+      }
+    </ul>
+  }
+</div>
+
+<div class="records-block">
+  <h4>Order path</h4>
+  <p class="records-block__hint">The selected order's recorded path. Choosing an audit-trail entry shows its path here.</p>
+  <app-transaction-rail
+    [rail]="panel().rail"
+    [profile]="profile()"
+    [broker]="broker()"
+    [clerkId]="clerkId()"
+    [accountId]="accountId()"
+    [sid]="sid()"
+  />
+</div>
+
+<div class="records-block">
+  <h4>Audit trail</h4>
+  @if (journalPage.error()) { <p role="alert">Could not load the audit trail.</p> }
+  @if (activated()) {
+    <app-journal-tail
+      [evidencePage]="journalPage.hasValue() ? journalPage.value() : null"
+      [loading]="journalPage.isLoading()"
+      (transactionSelected)="transactionSelected.emit($event)"
+    />
+  }
+</div>

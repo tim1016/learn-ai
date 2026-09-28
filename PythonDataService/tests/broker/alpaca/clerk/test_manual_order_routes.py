@@ -259,7 +259,10 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
         "available": False,
         "unavailable": {
             "code": "MANUAL_TRADING_NOT_QUALIFIED",
-            "message": "Manual SQLite trading remains disabled until paper qualification is complete.",
+            "message": (
+                "Manual orders are switched off for this account. Bots trade normally; manual "
+                "orders are switched on in the server's settings, not from this page."
+            ),
         },
         "supported_order_shape": "BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs",
     }

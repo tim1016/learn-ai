@@ -14,23 +14,25 @@ describe('InstrumentQuoteComponent', () => {
           price: 625.1,
           changePercent: 1.24,
         },
+        sourceLabel: 'IBKR · last bar',
       },
     });
 
     expect(container.querySelector('app-asset-identity.asset-identity--lg')?.textContent).toContain('SPY');
     expect(screen.getByTitle(/\(SPY\) — \$625\.10/i)).toBeTruthy();
     expect(screen.getByText('+1.24%')).toBeTruthy();
-    expect(screen.getByText('Polygon snapshot')).toBeTruthy();
+    expect(screen.getByText('IBKR · last bar')).toBeTruthy();
   });
 
   it('keeps the source label when the price is unavailable', async () => {
     const { container } = await render(InstrumentQuoteComponent, {
       inputs: {
         quote: { symbol: 'SPY', price: null, changePercent: null },
+        sourceLabel: 'IBKR · last bar',
       },
     });
 
     expect(container.querySelector('app-asset-identity.asset-identity--lg')?.textContent).toContain('SPY');
-    expect(screen.getByText('Polygon snapshot')).toBeTruthy();
+    expect(screen.getByText('IBKR · last bar')).toBeTruthy();
   });
 });

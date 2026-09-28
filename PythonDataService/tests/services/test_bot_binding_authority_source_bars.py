@@ -182,7 +182,7 @@ async def test_private_budget_seed_refreshes_preview_then_survives_runtime_relea
     from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
     from app.schemas.deployment_budget import DeployBudgetConsent
     from app.services.bot_binding_authority import SyntheticBindingAuthority
-    from app.services.broker_v2_panel import budget_deploy
+    from app.services.broker_v2_panel import bot_custody, budget_deploy
     from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
     from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 
@@ -212,7 +212,7 @@ async def test_private_budget_seed_refreshes_preview_then_survives_runtime_relea
         # is the initial cash source and the command remains a read.
         authority.binding = binding.model_copy(update={"budget_consent": None})
         monkeypatch.setattr(budget_deploy, "_primary", lambda account: object())
-        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: SimpleNamespace(
+        monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: SimpleNamespace(
             binding_for_control=lambda broker, identity: authority.binding,
             synthetic_runtime_for_projection=lambda _: authority.runtime_for_projection(),
         ))
