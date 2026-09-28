@@ -170,14 +170,34 @@ notional cap, no symbol allowlist, no session restriction.
     consistency guarantee relative to the REST account view
     ([Websocket streaming](https://docs.alpaca.markets/us/docs/websocket-streaming)).
 
-  So the grace stays. Five seconds is an order of magnitude over the
-  sub-second lag "real-time" implies and under one 15 s sync interval, so a
-  fill stays reserved at most one observation longer than it otherwise would
+  Measured 2026-09-28 (#2487) with
+  `scripts/measure_fill_to_cash_visibility.py`: for each fill event received
+  on `trade_updates`, the first account read (dated when its request was
+  issued, the `observed_at_ms` discipline) whose cash reflects the fill. On
+  the paper account's BTC/USD fills — 45 events in the committed run plus
+  three rehearsal runs, ~150 observations, one idle account — the cash **led**
+  the stream event by 35–425 ms (median 222 ms) in every resolvable case: a
+  read issued at the receipt instant already reflected the fill, and no fill
+  ever showed cash lagging its event. The worst post-receipt delay observed
+  anywhere was 401 ms, itself poll-cadence quantization (reads p95 438 ms),
+  not propagation. The committed fixture
+  (`tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json`, with
+  `attribution.md`) carries the full read series so every delay is
+  recomputable.
+
+  So the grace stays at 5 s. The measurement removes the fear it guarded
+  against on the measured path (cash arriving seconds after the event), but
+  it does not license shrinking: the sample is crypto-only, weekend, one
+  paper account, while the envelope gates equity ENTERs under market-hours
+  load Alpaca's docs still refuse to bound. Five seconds remains an order of
+  magnitude over everything observed, under one 15 s sync interval, so a fill
+  stays reserved at most one observation longer than it otherwise would
   (`tests/broker/alpaca/clerk/test_live_envelope.py` pins it below the
-  interval). Over-reserving refuses an ENTER that would have fit;
-  under-reserving admits a second ENTER against cash already spent. The value
-  is a judgement, not a measurement — revisit it with a measured
-  trade-update-to-account-cash lag.
+  interval and above the measured maximum plus a documented cushion).
+  Over-reserving refuses an ENTER that would have fit; under-reserving admits
+  a second ENTER against cash already spent. Re-measure any time — including
+  equity fills on a trading day — with the same script's `observe` mode,
+  which is read-only and places nothing.
 - **Under shadow a fill can count twice, never zero times.** Simulated custody
   subtracts `account_net_cash_spent_usd()`, read *after* the broker answered,
   so a fill recorded during the read (or inside the grace) is both subtracted

@@ -65,10 +65,18 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # over-reserving refuses an ENTER that would have fit, under-reserving admits a
 # second ENTER against cash already spent.
 #
-# Five seconds: an order of magnitude above the sub-second lag "real-time"
-# implies, and under one sync interval, so a fill stays reserved at most one
-# observation longer than it otherwise would. Pinned below the interval by
-# ``tests/broker/alpaca/clerk/test_live_envelope.py``.
+# Five seconds, confirmed by measurement (#2487): on the paper account's
+# BTC/USD fills (2026-09-28, 45 fill events plus three rehearsal runs, ~150
+# observations) the account cash never lagged a fill's trade update -- it
+# led the stream event by 35-425 ms, so a read issued at the receipt instant
+# already reflected the fill (fixture:
+# ``tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json``).
+# The margin is kept at 5 s rather than tightened because that sample is
+# crypto-only, weekend, one idle account: the equity engine the envelope
+# actually gates is unmeasured, Alpaca publishes no ordering promise, and the
+# cost of the margin is bounded by one 15 s observation of over-reservation.
+# Pinned below the interval -- and above the measured maximum plus its
+# documented cushion -- by ``tests/broker/alpaca/clerk/test_live_envelope.py``.
 FILL_VISIBILITY_GRACE_MS = 5_000
 _CASH_EPSILON_USD = 1e-9
 
