@@ -1758,26 +1758,31 @@ are counted in. The units differ deliberately and must not be summed together.
   reported. A fee that is unknown is rendered unknown; it is never rendered as
   zero.
 
-## Broker Desk lenses (resolved 2026-08-12; account lens retired 2026-09-28)
+## Broker Desk lenses (resolved 2026-08-12; retired 2026-09-28)
 
-**Lineage: live.**
+**Lineage: historical.**
 
-Since PRD #2560 (D2) an account's pages carry no lens: the account overview
-that held the account's lens pair is historical, merged into the account's
-**Home**. Only the **bot panel** keeps its lens pair, until #2563 makes it one
-view.
+Since PRD #2560 (D2) no page carries a lens. The account overview that held
+the account's lens pair is merged into the account's **Home**, the bot panel
+is one view (#2563), and the top bar's global Trader/Operator switch and the
+`?lens=` URL parameter are retired (#2567): an old link's `?lens=` is dropped
+on arrival. Every problem shows with its fix beside it, and audit depth folds
+into Details sections on the same page. The lens terms below are retained as
+vocabulary for older ADRs and receipts.
 
-- **Lens** — a manual, per-surface view mode that decides which of two purpose-
-  built views of the same account or bot is rendered. It is a presentation
-  choice, never an identity, a role, or an authorization decision.
-  _Avoid_: role, mode, persona, permission.
-- **Trader lens** — the outcomes view: *how am I doing?* Verified account facts,
-  activity, positions, and equity history.
-- **Operator lens** — the mechanism-and-repair view: *why is the system working
-  or not, and what fixes it?* The dominant posture headline with its fix
-  attached, plus forensic evidence.
-- **Audience** — the backend-authored field on an operator blocker that routes it
-  to the trader lens, the operator lens, or both. `both` is reserved for guidance
+- **Lens** (historical) — a manual, per-surface view mode that decided which
+  of two purpose-built views of the same account or bot was rendered. It was a
+  presentation choice, never an identity, a role, or an authorization decision.
+  _Avoid_: lens, Trader view, Operator view as current terms; role, mode,
+  persona, permission.
+- **Trader lens** (historical) — the outcomes view: *how am I doing?* Verified
+  account facts, activity, positions, and equity history.
+- **Operator lens** (historical) — the mechanism-and-repair view: *why is the
+  system working or not, and what fixes it?* The dominant posture headline with
+  its fix attached, plus forensic evidence.
+- **Audience** — the backend-authored field on an operator blocker that routed it
+  to the trader lens, the operator lens, or both; the field remains on the wire
+  though no page switches lenses. `both` is reserved for guidance
   that is genuinely identical in each lens; differing guidance is two blockers
   sharing one condition identity. Presentational routing only — never an
   authorization decision.
@@ -1806,7 +1811,7 @@ view.
 **Lineage: neutral.**
 
 The application chrome every route is rendered inside. Broker-independent except
-for the account badges it hosts.
+for the account pills it hosts.
 
 - **Botasur** — the product name for this platform, used in the wordmark,
   the window title, and any user-facing reference to the application itself.
@@ -1815,8 +1820,7 @@ for the account badges it hosts.
   architecture: ordered groups, each with ordered items, the first of which is
   the group's default. Every navigation surface projects from it; there is no
   second navigation structure. It names places, never individual accounts: an
-  account is reached through the **account list**, an **account badge** or the
-  **account switcher**.
+  account is reached through the **account list** or an **account pill**.
   _Avoid_: nav config, route list, sitemap.
 - **Menubar** — the top-bar navigation row projected from the app menu. Group
   labels open their items and never navigate themselves. It replaced the left
@@ -1829,12 +1833,20 @@ for the account badges it hosts.
   the workspace tab — or the bot's name on a bot's page — followed by the
   account name ("Activity · Paper"), so two windows on different accounts are
   told apart.
-- **Account badge** — one per account, in the top bar on every route: the
-  account's name and its server-authored Paper/Live mode, loud when the mode
-  cannot be determined. It is the account-mode trust anchor, and it also opens
-  that account's workspace. It never renders as nothing.
-  _Avoid_: contextual account cluster and breadcrumb trail (both retired from
-  the top bar), live pill as a user-facing name.
+- **Account pill** — one per account, in the top bar on every route: its
+  server-authored mode word (Live, Paper, Shadow), outlined in its **lane
+  colour**, with its name in the accessible name and tooltip. It is the
+  account-mode trust anchor and the lane switch (PRD #2560 D4): it opens that
+  account on the tab the owner is on, or Home from outside a workspace, and
+  marks the account the owner is in. An **attention dot** says something on
+  that account needs the owner, from the lane's own `attention_count`; an
+  unknown count shows a dot marked "?", never a zero. While the first mode read
+  is in flight it reads "Reading…"; a failed or unknown read is loud and says
+  to assume real money. It never renders as nothing. Called the account badge
+  until 2026-09-28.
+  _Avoid_: account badge, account switcher (the header dropdown it replaced),
+  contextual account cluster and breadcrumb trail (both retired from the top
+  bar), live pill as a user-facing name.
 - **Full-bleed route** — a route that declares it owns its own edges, so the
   shell adds no inner page padding. Declared by the route, never guessed by the
   page.
@@ -2131,14 +2143,34 @@ How an operator moves around one broker account's pages. The account, not the pa
 
 - **Account workspace** — the place an operator works in for one broker account: every page about that account sits under one account header, so moving between them never loses the account. The account is chosen once, on entry, rather than again for each page.
   _Avoid_: surface chooser, lane chooser, per-surface account picker.
-- **Account switcher** — the account header's control for moving to another account while staying on the same tab (a bot's page, which the other account does not have, lands on that account's Home). It is navigation only, never command authority: a command still carries the account it was prepared against.
-- **Account name** — the one name an account is shown by wherever it appears: its **account nickname**, or the lane's label until a nickname is set. A name is not guaranteed unique: when two accounts share one, each is shown with its lane's label beside it, and nothing refuses the duplicate. The account number is identity, not a name: it is shown only on the account's configuration page and in the confirmation of a consequential action. The Paper/Live mode is always shown beside the name, never folded into it.
+- **Historical account switcher** — the account header's dropdown for moving to another account on the same tab. PRD #2560 (D4) retired it: the top-bar **account pills** make the same move from every page (a bot's page, which the other account does not have, lands on that account's Home). Moving between accounts is navigation only, never command authority: a command still carries the account it was prepared against.
+- **Lane colour** — the one colour of an account's world (PRD #2560 D4): Live red, Paper cyan, Shadow violet. It frames the account workspace, washes its header, underlines the open tab, fills the **mode badge**, and colours the account's card and pill. The mode is always worded beside it, so colour never carries it alone. Dry Run is never a lane colour: it is dashed and says "DRY RUN".
+  _Avoid_: using a lane colour for status (running, holding, attention).
+- **Mode badge** — the account header's statement of the account's world, in its lane colour and one wording: "LIVE · real money", "PAPER · practice money", "SHADOW · simulated fills on your live account". It reads "Reading account mode…" before the first read, and a loud "Mode unknown — assume real money" when the read fails.
+- **Account name** — the one name an account is shown by wherever it appears: its **account nickname**, or the lane's label until a nickname is set. A name is not guaranteed unique: when two accounts share one, each is shown with its lane's label beside it, and nothing refuses the duplicate. The account number is identity, not a name: it is shown only on the account's Settings page and in the confirmation of a consequential action. The Paper/Live mode is always shown beside the name, never folded into it.
   _Avoid_: using the profile name or the lane label as the account's name once a nickname exists.
 - **Bot roster** — every bot on one account, on its **Home**: grouped running, stopped but still holding, Dry Run, and a folded Finished list, shown as the List or the **Wall**. Until PRD #2560 (2026-09-28) it was the workspace's Bots tab, listed beside the selected bot's detail; that tab is historical and its links open Home.
   _Avoid_: Bots roster, Bot rosters, Alpaca bots, bots list, fleet (the **fleet** is the set of lanes, not one account's bots).
 - **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under Home, and its way back returns to Home. (Before PRD #2560 it sat under the Bots or Gallery tab it was opened from.)
 - **Account list** — the broker's entry page and the only page that shows every account at once: each account by name, mode, readiness, equity and running-bot count, opening into that account's workspace. An account that is not ready still appears, says why, and opens with only its configuration usable. Lane mechanics (authority, binding generation, endpoint) are not shown here.
   _Avoid_: lane directory (the **fleet directory** is the underlying listing, not this page), surface chooser, account selection (that is the configuration act of choosing, staging and applying which account a lane serves — opening an account from this list selects nothing).
+
+## Account money map (resolved 2026-09-28)
+
+**Lineage: live.**
+
+Where one account's money is (PRD #2560). Python authors every figure and every slice; the browser draws them and adds nothing up.
+
+- **Home** — an account's first page: its attention lines, its **money bar**, and its bots grouped running, stopped but still holding, Dry Run and a folded **Finished** list, shown as the List or the **Wall**. It replaced the account overview, the Bots tab and the Gallery (PRD #2560 D1).
+  _Avoid_: Overview, Desk, dashboard.
+- **Money bar** — one bar showing where the account's money is: a slice per running bot, striped slices **held by stopped bot**, shares held outside any bot, **account charges**, money settling into cash, and **free to deploy**. Its total is cash plus shares at the price paid; a legend names every slice with its amount. Open gains on shares are a note beside it, never on it.
+  _Avoid_: allocation chart, budget chart.
+- **Free to deploy** — the money a new bot may be given: the account's cash less everything already claimed. It is the same figure Deploy lets the owner spend.
+  _Avoid_: available cash, buying power (Alpaca's margin figure, under Account details).
+- **Held by stopped bot** — money a stopped bot still holds (shares at cost, or an entry order still working), shown striped until it is flattened and released.
+- **Account charges** — fees the account has paid that are not yet matched to a bot; their own slice, so no dollar is hidden.
+- **Finished** — a stopped bot that is flat with nothing still claimed; it moves by itself into Home's folded Finished list, with its result and Deploy again. There is no manual archive.
+  _Avoid_: archived, retired (as a group).
 
 ## Market-data readiness (resolved 2026-09-22)
 

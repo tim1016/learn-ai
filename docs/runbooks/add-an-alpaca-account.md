@@ -15,7 +15,7 @@ outage, or restore the retired IBKR bot-control pages. This is the owner's
 | What you want | Follow |
 |---|---|
 | Open the roster or diagnose a disabled launch | [Check the current accounts](#1-check-the-current-accounts) |
-| Find account details, Trader/Operator views, or buy/sell history | [Navigation guide](#find-the-roster-account-details-and-transactions-in-the-menu) |
+| Find account details, what needs you, or buy/sell history | [Navigation guide](#find-the-roster-account-details-and-transactions-in-the-menu) |
 | Add/replace credentials for the account already assigned to a lane | [Account setup](#2-account-setup) |
 | Add an additional account alongside existing accounts | [Provision another lane](#3-provision-another-lane) |
 | Recover Paper after a developer reset or activate a fresh Paper account | [Offline Paper activation](#4-offline-paper-activation) |
@@ -97,6 +97,7 @@ its URL does not change.
 | Longer account history | That account's **Activity** tab, **30D** or **60D**, for the portfolio chart and its reconciliation |
 | Order-recovery evidence | That account's **Activity** tab → **Order records and recovery** |
 | Bots as live chart tiles | **Home → Wall** (the former Gallery tab) |
+| Another account, from any page | The **Live** or **Paper** pill in the top bar: it opens that account on the tab you are on. A dot on a pill means something on that account needs you; a dot marked **?** means that is not known yet |
 | Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Settings tab → Broker connection** |
 | Deploy a bot | **Deploy strategy** tab (the header's **Deploy a bot** button once #2564 lands) |
 
