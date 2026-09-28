@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -207,6 +208,41 @@ describe('Deploy step 3, Money', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh money' }));
     await vi.advanceTimersByTimeAsync(0);
     expect(previewBudget).toHaveBeenCalledTimes(bounded + 1);
+  });
+
+  it('says in plain words what the budget limits, and never in internal terms', async () => {
+    await setup();
+
+    const note = screen.getByText(/only while they fit this budget/);
+    expect(note.textContent).toBe(
+      'The bot opens positions only while they fit this budget. Fills, fees and losses can go past it, '
+        + 'and the size chosen in How stays as it is.',
+    );
+    expect(document.body.textContent).not.toMatch(/admission/i);
+  });
+
+  it('shows the server’s own sentence when the account’s money cannot be read', async () => {
+    const previewBudget = vi.fn().mockRejectedValue(new HttpErrorResponse({
+      status: 409, error: { detail: { message: 'The account’s holds changed; refresh the account first.' } },
+    }));
+    await render(DeployMoneyStepComponent, {
+      inputs: { target: TARGET, body: BODY },
+      providers: [{ provide: BrokerV2PanelService, useValue: { previewBudget } }],
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('The account’s holds changed; refresh the account first.');
+  });
+
+  it('shows the server’s own sentence when an amount cannot be previewed', async () => {
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) => {
+      if (!body.budget) return FACTS;
+      throw new HttpErrorResponse({ status: 409, error: { detail: { message: 'The risk revision changed while you typed.' } } });
+    });
+    await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '617.28' } });
+
+    expect(await screen.findByText('The risk revision changed while you typed.')).toBeTruthy();
   });
 
   it('asks for a well-formed dollar amount before previewing it', async () => {

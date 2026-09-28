@@ -1,12 +1,12 @@
 <div class="confirm-step">
   <dl class="confirm-step__review" aria-label="Deploy review">
-    <div><dt>Bot</dt><dd>{{ botNameNote() ?? 'Named by the backend at Deploy.' }}</dd></div>
+    <div><dt>Bot</dt><dd>{{ botNameNote() ?? 'Named when you deploy.' }}</dd></div>
     <div><dt>Trades</dt><dd>{{ strategyLabel() ?? 'Choose a strategy in What' }} · {{ trades() }}</dd></div>
     <div>
       <dt>Account</dt>
       <dd>
         @if (dryRun()) {
-          Simulated cash in the bot’s own Dry Run account · {{ worldWording() }}
+          The bot’s own account · {{ worldWording() }}
         } @else if (accountNumber(); as account) {
           {{ account }} · {{ worldWording() }}
         } @else {

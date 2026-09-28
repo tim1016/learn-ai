@@ -15,6 +15,7 @@ import {
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
 
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { extractServerMessage } from '../operation-error';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
@@ -107,6 +108,12 @@ export class DeployMoneyStepComponent {
     loader: ({ params }) => this.service.previewBudget(params.target, params.body),
   });
   protected readonly factsView = computed(() => (this.facts.hasValue() ? this.facts.value() : null));
+  protected readonly factsFailure = computed(() => {
+    const error = this.facts.error();
+    return error === undefined
+      ? null
+      : extractServerMessage(error, 'This account’s money could not be read. Use Refresh money to try again.');
+  });
 
   /** The amount once typing has paused. A shortcut settles at once. */
   private readonly settledAmount = signal('');
@@ -123,6 +130,13 @@ export class DeployMoneyStepComponent {
       };
     },
     loader: ({ params }) => this.service.previewBudget(params.target, params.body),
+  });
+
+  protected readonly amountFailure = computed(() => {
+    const error = this.amountPreview.error();
+    return error === undefined
+      ? null
+      : extractServerMessage(error, 'This amount could not be previewed. Use Refresh money to try again.');
   });
 
   /** The preview of exactly the amount on screen — never an earlier one. */

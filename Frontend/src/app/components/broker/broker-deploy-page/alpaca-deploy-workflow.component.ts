@@ -800,9 +800,10 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly budgetTarget = computed(() => this.deployTarget(this.accountId().trim()), {
     equal: (left, right) => canonicalJson(left) === canonicalJson(right),
   });
-  /** The settings the Money step previews. Compared by content, so an edit
-   * that changes nothing a preview judges (an override reason) does not
-   * re-preview the money. */
+  /** The settings the Money step previews. Compared by content, so a
+   * refresh that leaves every setting as it was does not re-preview the
+   * money. The evidence-only override's reason is one of those settings:
+   * the review token binds it. */
   protected readonly budgetBody = computed<DeployBotBody | null>(() => {
     const strategy = this.selectedStrategy();
     const mode = this.ticket().executionMode;

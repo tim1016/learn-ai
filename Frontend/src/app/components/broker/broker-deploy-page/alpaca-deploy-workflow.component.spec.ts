@@ -464,7 +464,8 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(screen.queryByText('Free to deploy')).toBeNull();
     expect(screen.queryByText(/Unreserved cash/)).toBeNull();
     expect(screen.queryByText(/9LIVE0001/)).toBeNull();
-    expect(screen.getByText(/Simulated cash in the bot’s own Dry Run account/)).toBeTruthy();
+    const account = within(screen.getByLabelText('Deploy review')).getByText('Account').nextElementSibling;
+    expect(account?.textContent?.trim()).toBe('The bot’s own account · DRY RUN · simulated cash');
   });
 
   it('pre-fills exit terms from the account’s defaults, and points at Settings when it has none (H3)', async () => {
@@ -480,6 +481,9 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
 
   it('reviews the name the backend will author, the trade, the account, the exits, the budget and the loss limit', async () => {
     await renderWorkflow();
+    // Before a preview the name is only promised, in the owner's words.
+    expect(within(screen.getByLabelText('Deploy review')).getByText('Bot').nextElementSibling?.textContent)
+      .toBe('Named when you deploy.');
     await chooseMoney();
 
     const text = screen.getByLabelText('Deploy review').textContent ?? '';
