@@ -23,10 +23,11 @@ import {
   type LaneAttentionItem,
   type LaneAttentionState,
 } from '../../../services/lane-attention.service';
-import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
+import type { ResourceTarget } from '../../../fleet/resource-target';
+import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeBotPanelView, fakeCatalogBot, fakePanelAction } from '../../../testing/bot-panel-fixtures';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
-import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.types';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaHomeComponent } from './alpaca-home.component';
@@ -116,10 +117,12 @@ async function renderHome(overrides: {
   url?: string;
   attention?: LaneAttentionState;
   runBotAction?: () => Promise<{ message: string }>;
+  getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
+  money?: AccountMoneyView;
 } = {}) {
   const panel = {
-    getCatalog: vi.fn(() => Promise.resolve(catalog())),
-    getAccountMoney: vi.fn(() => Promise.resolve(fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))),
+    getCatalog: vi.fn(overrides.getCatalog ?? (() => Promise.resolve(catalog()))),
+    getAccountMoney: vi.fn(() => Promise.resolve(overrides.money ?? fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))),
     getPanel: vi.fn(() => Promise.resolve(fakeBotPanelView({ actions: [fakePanelAction('stop')] }))),
     runBotAction: vi.fn(overrides.runBotAction ?? (() => Promise.resolve({ message: 'Stop requested for spy-ema-20260929-0931.' }))),
   };
@@ -160,7 +163,7 @@ async function renderHome(overrides: {
   const router = view.fixture.debugElement.injector.get(Router);
   await router.navigateByUrl(overrides.url ?? ACCOUNT_URL);
   await view.fixture.whenStable();
-  await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+  if (overrides.getCatalog === undefined) await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
   return { view, router, panel, wall };
 }
 
@@ -185,8 +188,81 @@ describe('AlpacaHomeComponent', () => {
       'account charges $0.01',
       'free to deploy $98,329.57',
     ]);
-    // Open P&L is a note beside the bar, never a slice of it.
-    expect(within(money).getByText(/Open gain or loss on shares: \$12\.40/)).toBeTruthy();
+    // Open P&L is the bar's note beside it, never a slice of it.
+    expect(within(money).getByText('Open P&L $12.40')).toBeTruthy();
+    // Deploy would admit a new bot here, so nothing refuses beside the bar.
+    expect(within(money).queryByRole('note')).toBeNull();
+  });
+
+  it('states the backend’s Deploy refusal beside the bar, so free to deploy never reads as spendable', async () => {
+    const refusal = 'No daily loss limit is set for this account, so new entries are refused. Set one in Settings.';
+    await renderHome({ money: fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, deploy_refusal: refusal }) });
+
+    const note = within(screen.getByRole('region', { name: 'Where the money is' })).getByRole('note');
+    expect(note.textContent).toContain('New bots can\'t be deployed on this money right now.');
+    expect(note.textContent).toContain(refusal);
+    expect(within(note).getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/settings`,
+    );
+  });
+
+  it('says why the bar cannot be drawn in the one money state’s words, never $0', async () => {
+    await renderHome({
+      money: { ...unavailableAccountMoney('Alpaca has not confirmed this account’s cash recently.'), account_id: TEST_ACCOUNT_ID },
+    });
+
+    const money = screen.getByRole('region', { name: 'Where the money is' });
+    expect(await within(money).findByText(/Alpaca has not confirmed this account’s cash recently\./)).toBeTruthy();
+    expect(within(money).queryByRole('list')).toBeNull();
+    expect(money.textContent).not.toContain('$0.00');
+  });
+
+  it('never shows one account’s bots under another after a switch (review B1)', async () => {
+    const { router } = await renderHome({
+      getCatalog: (target) =>
+        target.accountId === TEST_ACCOUNT_ID ? Promise.resolve(catalog()) : new Promise<never>(() => undefined),
+    });
+    await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+
+    // The other account's roster never answers: nothing of this one may stand
+    // in for it meanwhile. (Its pending read keeps the app from settling, so
+    // the spec waits on what the owner sees, not on stability.)
+    void router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+
+    expect(await screen.findByText("Reading this account's bots…")).toBeTruthy();
+    expect(screen.queryByText('spy-ema-20260929-0931', { selector: 'a' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop spy-ema-20260929-0931' })).toBeNull();
+    expect(screen.queryByText(/running ·/)).toBeNull();
+  });
+
+  it('never reads a failed first read as no bots (review B1)', async () => {
+    await renderHome({ getCatalog: () => Promise.reject(new Error('The roster could not be projected.')) });
+
+    expect(await screen.findByText(/The roster could not be projected\./)).toBeTruthy();
+    expect(screen.getByText('This account\'s bots are not shown until they can be read.')).toBeTruthy();
+    expect(screen.queryByText('No bots are running.', { exact: false })).toBeNull();
+    expect(screen.queryByText(/0 running/)).toBeNull();
+    expect(screen.queryByText('Finished', { selector: 'strong' })).toBeNull();
+  });
+
+  it('lists an account-level problem with its fix in Settings (review B5)', async () => {
+    await renderHome({
+      attention: {
+        unknown: false, errorReason: null,
+        items: [attentionItem({
+          condition_id: 'account:alpaca_account_trading_blocked', kind: 'account',
+          reason_code: 'alpaca_account_trading_blocked', severity: 'blocking', strategy_instance_id: null,
+          symbol: null, headline: 'Alpaca has blocked trading on this account',
+          action: { label: 'Open Settings', destination: 'settings' },
+        })],
+      },
+    });
+
+    const attention = screen.getByRole('list', { name: 'Needs attention' });
+    expect(within(attention).getByText('Alpaca has blocked trading on this account')).toBeTruthy();
+    expect(within(attention).getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/settings`,
+    );
   });
 
   it('never puts a Dry Run in the bar: it has its own group, in simulated cash', async () => {
@@ -317,8 +393,11 @@ describe('AlpacaHomeComponent', () => {
     expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
   });
 
-  it('has no detectable accessibility violations', async () => {
-    await renderHome();
+  it.each([
+    ['the List', ACCOUNT_URL],
+    ['the Wall', `${ACCOUNT_URL}?view=wall`],
+  ])('has no detectable accessibility violations on %s', async (_view, url) => {
+    await renderHome({ url });
 
     const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
 

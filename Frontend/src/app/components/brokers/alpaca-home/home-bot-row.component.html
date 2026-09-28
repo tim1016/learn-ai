@@ -1,7 +1,12 @@
 @let bot = entry().bot;
 @let slice = entry().slice;
 <div class="home-row__name">
-  <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  <span class="home-row__id">
+    @if (hue(); as hue) {
+      <span class="home-row__swatch" [style.background]="hue" aria-hidden="true"></span>
+    }
+    <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  </span>
   <span class="home-row__meta">{{ bot.strategy_label }} · {{ bot.symbol }}</span>
 </div>
 
@@ -23,8 +28,8 @@
     @if (slice.parts; as parts) {
       <span class="home-row__caption">
         balance {{ slice.amount_usd | currency: 'USD' }} · free {{ parts.free_usd | currency: 'USD' }}
-        @if (slice.shortfall_usd !== '0.00') {
-          · <strong>short {{ slice.shortfall_usd | currency: 'USD' }}</strong>
+        @if (slice.shortfall_usd; as shortfall) {
+          · <strong>short of next entry {{ shortfall | currency: 'USD' }}</strong>
         }
       </span>
     } @else {

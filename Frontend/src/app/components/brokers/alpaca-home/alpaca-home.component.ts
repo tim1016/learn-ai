@@ -11,6 +11,7 @@ import {
   input,
   resource,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
@@ -31,7 +32,7 @@ import {
   laneFenceVerdict,
 } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
-import { resourceTarget, withCommand, withEntity } from '../../../fleet/resource-target';
+import { resourceTarget, withCommand, withEntity, type ResourceTarget } from '../../../fleet/resource-target';
 import { LaneAttentionService } from '../../../services/lane-attention.service';
 import { CohortFlattenDrawerComponent } from '../../broker/v2-panel/cohort-flatten/cohort-flatten-drawer.component';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
@@ -54,6 +55,26 @@ const CATALOG_POLL_MS = 5_000;
 interface Outcome {
   readonly tone: 'success' | 'danger';
   readonly message: string;
+}
+
+/** One roster read, stamped with the account it was read for. */
+interface KeyedRoster {
+  readonly key: string;
+  readonly rows: readonly BotCatalogView[];
+}
+
+/** This account's bots as far as Home knows them: not read yet, a first read
+ * that failed, or the rows of the last read for THIS account. Counts and
+ * empty states are said only for `ready` — an unknown never reads as "no
+ * bots" (review B1). */
+type Roster =
+  | { readonly kind: 'unread' }
+  | { readonly kind: 'failed' }
+  | { readonly kind: 'ready'; readonly rows: readonly BotCatalogView[] };
+
+/** The account a read belongs to; a switch to another account is a new key. */
+function rosterKey(target: ResourceTarget): string {
+  return `${target.broker}::${target.clerkId}::${target.accountId ?? ''}`;
 }
 
 /**
@@ -130,28 +151,34 @@ export class AlpacaHomeComponent {
 
   protected readonly catalog = resource({
     params: () => this.target(),
-    loader: ({ params }) => this.panelService.getCatalog(params),
+    loader: async ({ params }): Promise<KeyedRoster> => ({
+      key: rosterKey(params),
+      rows: await this.panelService.getCatalog(params),
+    }),
   });
-  /** The last roster read, kept while a poll is in flight or has failed. */
-  private readonly lastCatalog = signal<readonly BotCatalogView[] | null>(null);
+  /** The last roster read, kept while a poll is in flight or has failed —
+   * but only ever shown for the account it was read for. */
+  private readonly lastCatalog = signal<KeyedRoster | null>(null);
+  private readonly key = computed(() => rosterKey(this.target()));
+  protected readonly roster = computed<Roster>(() => {
+    const last = this.lastCatalog();
+    if (last !== null && last.key === this.key()) return { kind: 'ready', rows: last.rows };
+    return this.catalog.error() === undefined ? { kind: 'unread' } : { kind: 'failed' };
+  });
 
-  protected readonly money = computed(() =>
-    this.accountData.money.hasValue() ? this.accountData.money.value() : null,
-  );
-  protected readonly moneyUnread = computed(() =>
-    this.accountData.money.error() !== undefined
-      ? 'Where the money is could not be read. It is read again in a few seconds.'
-      : 'Reading where the money is…',
-  );
+  /** Where the account's money is, in the one money state every money surface
+   * renders (`accountMoneyState`). */
+  protected readonly money = this.accountData.moneyState;
+  protected readonly settingsRoute = computed(() => accountWorkspaceTabRoute(this.account(), 'settings'));
 
   protected readonly bots = computed(() => {
+    const roster = this.roster();
     const money = this.money();
-    return homeBots(this.lastCatalog() ?? [], money?.state === 'ready' ? money.segments ?? [] : []);
+    return homeBots(
+      roster.kind === 'ready' ? roster.rows : [],
+      money.kind === 'ready' ? money.view.segments ?? [] : [],
+    );
   });
-  /** No roster read has answered yet (a failed first read says so instead). */
-  protected readonly firstRead = computed(
-    () => this.lastCatalog() === null && this.catalog.error() === undefined,
-  );
   /** Running bots, then stopped bots still holding money: the Bots list. */
   protected readonly botList = computed(() => [...this.bots().running, ...this.bots().holding]);
   protected readonly catalogFailure = computed(() => {
@@ -171,6 +198,12 @@ export class AlpacaHomeComponent {
   constructor() {
     effect(() => {
       if (this.catalog.hasValue()) this.lastCatalog.set(this.catalog.value());
+    });
+    // A Stop's outcome belongs to the account it was said on: a switch to
+    // another account clears it.
+    effect(() => {
+      this.key();
+      untracked(() => this.outcome.set(null));
     });
     // The Wall's candles and fills stream from the gallery feed only while the
     // Wall is shown; the List needs none.

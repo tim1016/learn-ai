@@ -10,7 +10,7 @@ import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import type { ChartBar, ChartFillMarker } from '../../broker/v2-panel/gallery/lib/gallery.types';
 import { HomeBotActionComponent } from './home-bot-action.component';
-import type { HomeBot } from './home-bots';
+import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 import { HomeSparklineComponent } from './home-sparkline.component';
 
 /** A tile's group, said in words: a status is never a border colour alone. */
@@ -50,10 +50,8 @@ export class HomeBotTileComponent {
     () => accountWorkspaceBotRoute(this.account(), this.entry().bot.strategy_instance_id).commands,
   );
   protected readonly groupWords = computed(() => GROUP_WORDS[this.entry().bot.group]);
-  protected readonly strip = computed(() => {
-    const slice = this.entry().slice;
-    return slice === null ? [] : [slice];
-  });
+  protected readonly strip = computed(() => homeBotStrip(this.entry()));
+  protected readonly hue = computed(() => homeBotHue(this.entry()));
   protected readonly pnl = computed(() => {
     const bot = this.entry().bot;
     return fmtSignedCurrency(bot.group === 'holding' ? bot.open_pnl : bot.day_pnl);

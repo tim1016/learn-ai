@@ -40,3 +40,13 @@
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 }
+
+/* Deploy's refusal beside the bar: said in words, with its own marker, so
+   it never rests on colour alone. */
+.home-money__refusal {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}

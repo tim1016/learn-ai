@@ -9,7 +9,7 @@ import {
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import { HomeBotActionComponent } from './home-bot-action.component';
-import type { HomeBot } from './home-bots';
+import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 
 /**
  * One bot on Home's List (PRD #2560 "Bots on Home").
@@ -43,10 +43,8 @@ export class HomeBotRowComponent {
   );
 
   /** The strip draws this bot's own slice and nothing else. */
-  protected readonly strip = computed(() => {
-    const slice = this.entry().slice;
-    return slice === null ? [] : [slice];
-  });
+  protected readonly strip = computed(() => homeBotStrip(this.entry()));
+  protected readonly hue = computed(() => homeBotHue(this.entry()));
 
   /** The P&L beside the row, and what it is: today's for a running bot (or a
    * Dry Run's, simulated), the shares' open P&L for a stopped one. */

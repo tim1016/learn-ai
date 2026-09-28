@@ -65,3 +65,20 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+.home-tile__id {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The bot's hue, the colour of its slice on every bar; its name beside it
+   says who it is. */
+.home-tile__swatch {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-right: var(--space-1);
+  border-radius: 2px;
+}

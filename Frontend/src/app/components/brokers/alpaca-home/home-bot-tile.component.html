@@ -1,7 +1,12 @@
 @let bot = entry().bot;
 @let slice = entry().slice;
 <header class="home-tile__head">
-  <a class="home-tile__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  <span class="home-tile__id">
+    @if (hue(); as hue) {
+      <span class="home-tile__swatch" [style.background]="hue" aria-hidden="true"></span>
+    }
+    <a class="home-tile__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
+  </span>
   <span class="home-tile__chip">{{ groupWords() }}</span>
 </header>
 <p class="home-tile__meta">{{ bot.symbol }} · {{ bot.strategy_label }} · {{ bot.world_label }}</p>

@@ -1,3 +1,4 @@
+import { botHues } from '../../broker/v2-panel/lib/bot-hue';
 import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.types';
 import type { MoneySegment } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 
@@ -45,4 +46,16 @@ export function homeBots(catalog: readonly BotCatalogView[], segments: readonly 
       (left, right) => (right.ended_at_ms ?? 0) - (left.ended_at_ms ?? 0),
     ),
   };
+}
+
+/** The one slice a bot's row or tile draws as its budget strip: its own. */
+export function homeBotStrip(entry: HomeBot): readonly MoneySegment[] {
+  return entry.slice === null ? [] : [entry.slice];
+}
+
+/** A running bot's hue — the colour of its slice on every bar (`botHues`,
+ * from its backend `palette_index`) — or `null` for a bot with no bot slice.
+ * Always drawn beside the bot's name, never as the only thing naming it. */
+export function homeBotHue(entry: HomeBot): string | null {
+  return botHues(homeBotStrip(entry))[0] ?? null;
 }
