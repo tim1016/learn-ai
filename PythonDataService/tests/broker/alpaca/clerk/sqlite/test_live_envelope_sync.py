@@ -190,6 +190,44 @@ async def test_budget_authority_mode_disagreement_remains_visible_through_failed
         repo.close()
 
 
+@pytest.mark.parametrize("via_tick", [False, True])
+async def test_risk_apply_cannot_republish_evidence_after_mode_disagreement(tmp_path, make_sync, via_tick: bool) -> None:
+    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+    from app.broker.contract.errors import BrokerAccountModeDisagreement
+    from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _policy
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _new_budget_repo
+
+    class Read(_Read):
+        disagree = False
+
+        async def get_account(self) -> BrokerAccountSnapshot:
+            if self.disagree:
+                raise BrokerAccountModeDisagreement("wrong account", broker="alpaca")
+            return await super().get_account()
+
+    repo = _new_budget_repo(tmp_path)
+    broker = Read()
+    sync = make_sync(repo, broker)
+    try:
+        assert await sync.tick() == "observed"
+        broker.disagree = True
+        if via_tick:
+            assert await sync.tick() == "mode_disagreed"
+        else:
+            with pytest.raises(BrokerAccountModeDisagreement):
+                await sync.observe()
+        sync.apply_risk_policy(_policy(2, 200), expected_revision=1)
+        assert sync.account_mode_disagreed
+        assert not current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock()).allowed
+        broker.disagree = False
+        await sync.observe()
+        assert not sync.account_mode_disagreed
+        assert current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock()).allowed
+    finally:
+        await sync.stop()
+        repo.close()
+
+
 async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],

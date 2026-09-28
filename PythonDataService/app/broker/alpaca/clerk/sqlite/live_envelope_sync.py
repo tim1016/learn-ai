@@ -240,9 +240,33 @@ class LiveEnvelopeSync:
         # selected custody world. ``None`` until the first read returns.
         self._observed_account_id: str | None = None
         self._last_reading: EnvelopeReading | None = None
+        self._observation_lock = asyncio.Lock()
 
     async def observe(self) -> EnvelopeReading:
-        """Read broker facts, then judge and publish under the custody fence.
+        """Serialize account reads and publish their verdict under the custody fence.
+
+        A failed mode check invalidates both published and cached evidence, so
+        an overlapping risk Apply cannot revive it. Only a later successful
+        matching read may restore permission. All callers share this boundary.
+        """
+        async with self._observation_lock:
+            try:
+                observation = await self._read_observation()
+            except BrokerAccountModeDisagreement as exc:
+                with self._repo._write_lock:
+                    self._account_mode_disagreed = True
+                    self.discard_observation()
+                    if self._arming_gate is not None:
+                        self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))
+                raise
+            with self._repo._write_lock:
+                self._account_mode_disagreed = False
+                if self._arming_gate is not None:
+                    self._arming_gate.release()
+                return self._evaluate_observation(observation, now_ms=self._repo.clock())
+
+    async def _read_observation(self) -> AccountObservation:
+        """Read broker facts without publishing new-exposure permission.
 
         The request-start timestamp conservatively bounds which fills the
         broker cash includes. A policy Apply during the network read is seen
@@ -267,9 +291,8 @@ class LiveEnvelopeSync:
                 returned_at_ms = self._repo.clock()
                 self._observed_account_id = account.account_id
                 with self._repo._write_lock:
-                    observation = self._simulation.observe(reference_cash=account.cash,
+                    return self._simulation.observe(reference_cash=account.cash,
                         observed_at_ms=observed_at_ms, now_ms=returned_at_ms)
-                    return self._evaluate_observation(observation, now_ms=returned_at_ms)
             except MoneyInputError as exc:
                 self.discard_observation()
                 raise SimulationEvidenceUnavailable(str(exc)) from exc
@@ -279,11 +302,9 @@ class LiveEnvelopeSync:
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
-        # The day-P&L window ends here, not at the stamp: a loss closed mid-read may be gone from positions.
-        returned_at_ms = self._repo.clock()
         self._observed_account_id = account.account_id
         unrealized_pl_usd = float(sum(position.unrealized_pl for position in positions))
-        observation = AccountObservation(
+        return AccountObservation(
             observed_at_ms=observed_at_ms,
             broker_cash_usd=account.cash,
             cash_available_usd=account.cash,
@@ -292,8 +313,6 @@ class LiveEnvelopeSync:
             position_count=len(positions),
             risk_fill_sequence=fill_sequence,
         )
-        with self._repo._write_lock:
-            return self._evaluate_observation(observation, now_ms=returned_at_ms)
 
     def _evaluate_observation(self, observation: AccountObservation, *, now_ms: int) -> EnvelopeReading:
         """Rejudge current facts under the writer fence, using one effective policy."""
@@ -306,7 +325,7 @@ class LiveEnvelopeSync:
         readable = synthetic or policy is not None or (
             self.envelope.values is not None and not self._seal_unreadable()
         )
-        unjudgeable = self._noted_non_finite(_non_finite_risk_fields(
+        unjudgeable = self._account_mode_disagreed or self._noted_non_finite(_non_finite_risk_fields(
             cash=observation.broker_cash_usd,
             last_equity=observation.last_equity_usd,
             unrealized_pl=observation.unrealized_pl_usd,
@@ -535,25 +554,13 @@ class LiveEnvelopeSync:
         try:
             reading = await self.observe()
         except BrokerAccountModeDisagreement as exc:
-            # Design R2: the account the read answered is not the one this
-            # authority was composed for. Withdraw the observation (no ENTER
-            # bounds against it) and hold the gate under the disagreement's
-            # own code. The hold is the gate's own sticky fault, so the
-            # arming refresh ``observe`` ran before the read may publish
-            # freely and the recovery below is not one tick late: this tick's
-            # read is what raises it and this tick's read is what releases it.
-            self._account_mode_disagreed = True
-            self.envelope.withdraw()
-            if self._arming_gate is not None:
-                self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))
+            # The common observation boundary already withdrew every copy
+            # of the invalid evidence under the same fence as policy Apply.
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.
             return self._acted("read_failed", {"why": str(exc)})
-        self._account_mode_disagreed = False
-        if self._arming_gate is not None:
-            self._arming_gate.release()
         with self._repo._write_lock:
             # An Apply can finish during the broker read. Rejudge inside the
             # same fence as ENTER before raising the durable cause.
