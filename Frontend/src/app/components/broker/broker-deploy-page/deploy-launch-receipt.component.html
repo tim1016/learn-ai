@@ -8,7 +8,7 @@
     <div><dt>Receipt</dt><dd><code>{{ receipt().receipt_id }}</code></dd></div>
     <div><dt>Recorded</dt><dd><app-timestamp-display [value]="receipt().recorded_at_ms" mode="local" /></dd></div>
     <div><dt>Launch status</dt><dd>{{ receipt().status | receiptLabel }}</dd></div>
-    <div><dt>Committed budget</dt><dd>{{ receipt().committed_usd | currency:'USD' }}</dd></div>
+    <div><dt>Committed budget</dt><dd>{{ receipt().committed_usd | authoredUsd }}</dd></div>
     <div><dt>Bot</dt><dd><code>{{ receipt().strategy_instance_id }}</code></dd></div>
     <div><dt>Run</dt><dd><code>{{ receipt().run_id }}</code></dd></div>
     <div><dt>World</dt><dd>{{ worldLabels[receipt().world] }}</dd></div>

@@ -8,7 +8,7 @@ const path = require("node:path");
 const { ESLint } = require("eslint");
 
 const frontendRoot = path.join(__dirname, "..");
-const MONEY_RULES = new Set(["no-restricted-syntax", "no-restricted-globals", "no-implicit-coercion"]);
+const MONEY_RULES = new Set(["no-restricted-syntax", "no-restricted-globals", "no-implicit-coercion", "learn-ai/no-money-alias-arithmetic"]);
 
 // Layer 1: anywhere in the app, arithmetic or coercion on a money value.
 const ANYWHERE = "src/app/components/example/plain.component";
@@ -49,22 +49,32 @@ const REFUSED_ANYWHERE = [
 const REFUSED_ON_MONEY_SURFACES = [
   ["ts", "const f = view.free_to_deploy_usd; export const a = +f;"],
   ["ts", "const { free_to_deploy_usd: f } = view; export const a = Number(f);"],
+  ["ts", "const width = segment.share_bps; export const percent = width / 100;"],
+  ["ts", "const amount = parts.free_usd; export const doubled = amount * 2;"],
+  ["ts", "const { share_bps: width } = segment; export const total = width + 1;"],
   ["ts", "export const a = parseInt(amount, 10);"],
   ["ts", "export const a = -amount;"],
   ["ts", "export const a = '' + amount;"],
   ["ts", "export const a = globalThis.parseFloat(amount);"],
   ["html", "@let f = view.free_to_deploy_usd; <p>{{ +f }}</p>"],
   ["html", "@let w = segment.share_bps; <p>{{ w / 100 }}</p>"],
+  ["html", "@let f = view.free_to_deploy_usd; <p>{{ f | currency }}</p>"],
+  ["html", "@let f = view.free_to_deploy_usd; <p>{{ f | number }}</p>"],
+  ["html", "<p>{{ segment.amount_usd | currency: 'USD' }}</p>"],
 ];
 
 /** Honest code that must stay clean. */
 const ALLOWED = [
-  [MONEY_SURFACES[0], "html", "<p>{{ segment.amount_usd | currency: 'USD' }}</p>"],
+  [MONEY_SURFACES[0], "html", "<p>{{ segment.amount_usd | authoredUsd }}</p>"],
   [MONEY_SURFACES[0], "html", "@if (segment.share_bps > 0) { <span [style.flex-grow]=\"segment.share_bps\"></span> }"],
   [MONEY_SURFACES[0], "ts", "export const offset = -1;"],
+  [MONEY_SURFACES[3], "ts", "export const next = (count: number) => count + 1;"],
   [MONEY_SURFACES[5], "ts", "export const free = (view: { free_to_deploy_usd: string }) => view.free_to_deploy_usd;"],
   [ANYWHERE, "ts", "export const quantity = Number(input);"],
   [ANYWHERE, "html", "<p>{{ count - 1 }}</p>"],
+  // A broker-authored number (a quote, not a `*_usd` string) may still be
+  // formatted by a numeric pipe away from the money surfaces.
+  [ANYWHERE, "html", "<p>{{ quote.bid | currency: 'USD' }}</p>"],
 ];
 
 async function moneyMessages(eslint, file, extension, code) {

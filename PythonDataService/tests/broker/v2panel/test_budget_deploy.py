@@ -24,6 +24,7 @@ from app.schemas.deployment_budget import (
     DeploymentBudgetInput,
     DeploymentBudgetPreview,
     DeploymentBudgetView,
+    MoneyParts,
     MoneySegment,
 )
 from app.schemas.exit_terms import ExitTermsInput
@@ -494,6 +495,20 @@ def test_a_shortfall_is_stated_only_where_something_is_short() -> None:
         MoneySegment.model_validate({**steady.model_dump(), "shortfall_usd": "0.00"})
     with pytest.raises(ValidationError, match="only when the account is overdrawn"):
         AccountMoneyView.model_validate({**_ready_money_view().model_dump(), "account_shortfall_usd": "0.00"})
+
+
+def test_a_stated_figure_is_whole_cents_never_a_truncated_one() -> None:
+    """A sub-cent or non-dollar string is refused, not floor-ed into a figure."""
+    overdrawn = {**_ready_money_view().model_dump(), "segments": [
+        {**_ready_money_view().segments[0].model_dump(), "amount_usd": "0.005", "share_bps": 10_000}]}
+    with pytest.raises(ValidationError, match=r"not whole cents: '0\.005'"):
+        AccountMoneyView.model_validate(overdrawn)
+    with pytest.raises(ValidationError, match=r"not whole cents: 'NaN'"):
+        MoneyParts.model_validate({"in_shares_usd": "NaN", "in_shares_bps": 10_000,
+                                   "pending_usd": "0.00", "pending_bps": 0, "free_usd": "0.00", "free_bps": 0})
+    with pytest.raises(ValidationError, match=r"not a dollar amount: 'abc'"):
+        MoneyParts.model_validate({"in_shares_usd": "abc", "in_shares_bps": 10_000,
+                                   "pending_usd": "0.00", "pending_bps": 0, "free_usd": "0.00", "free_bps": 0})
 
 
 def _ready_money_view() -> AccountMoneyView:

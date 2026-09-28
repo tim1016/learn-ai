@@ -1,9 +1,9 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, output, resource, signal, untracked } from '@angular/core';
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
 
 import { extractServerMessage } from '../operation-error';
 import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { DEPLOYMENT_WORLD_LABELS, BrokerV2PanelService, type DeployBotBody, type DeploymentBudgetInput, type DeploymentBudgetPreview } from '../v2-panel/lib/broker-v2-panel.service';
 
@@ -28,7 +28,7 @@ export function budgetReviewContext(target: ResourceTarget, body: DeployBotBody)
 @Component({
   selector: 'app-deploy-budget-review',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, FormField, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FormField, TimestampDisplayComponent],
   templateUrl: './deploy-budget-review.component.html',
   styleUrl: './deploy-budget-review.component.scss',
 })

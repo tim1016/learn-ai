@@ -1,6 +1,6 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { botHues } from '../v2-panel/lib/bot-hue';
 import type { AccountMoneyView, MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
 
@@ -36,7 +36,7 @@ interface DrawnSlice {
 @Component({
   selector: 'app-money-bar',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe],
+  imports: [AuthoredUsdPipe],
   templateUrl: './money-bar.component.html',
   styleUrl: './money-bar.component.scss',
   host: { '[attr.data-size]': 'size()' },

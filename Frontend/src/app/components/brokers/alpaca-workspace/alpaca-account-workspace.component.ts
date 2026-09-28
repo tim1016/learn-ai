@@ -8,7 +8,7 @@ import {
   inject,
   viewChild,
 } from '@angular/core';
-import { CurrencyPipe, DOCUMENT } from '@angular/common';
+import { DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 
@@ -27,6 +27,7 @@ import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
@@ -79,7 +80,7 @@ type WorkspaceAccountStatus =
   imports: [
     AlpacaAccountSwitcherComponent,
     AlpacaLaneModeChipComponent,
-    CurrencyPipe,
+    AuthoredUsdPipe,
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,

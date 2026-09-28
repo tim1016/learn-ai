@@ -1,4 +1,4 @@
-import { CurrencyPipe, DOCUMENT } from '@angular/common';
+import { DOCUMENT } from '@angular/common';
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, resource } from '@angular/core';
 import { RouterLink, type QueryParamsHandling } from '@angular/router';
 
@@ -17,7 +17,9 @@ import {
   type FleetCapability,
   type ResourceTarget,
 } from '../../../fleet/resource-target';
+import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import { accountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
@@ -82,7 +84,7 @@ type LaneCardState =
   selector: 'app-alpaca-lane-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { role: 'listitem' },
-  imports: [CurrencyPipe, RouterLink, ReceiptLabelPipe, AlpacaLaneModeChipComponent, MoneyBarComponent],
+  imports: [AuthoredUsdPipe, RouterLink, ReceiptLabelPipe, AlpacaLaneModeChipComponent, MoneyBarComponent],
   templateUrl: './alpaca-lane-card.component.html',
   styleUrl: './alpaca-lane-card.component.scss',
 })
@@ -190,7 +192,13 @@ export class AlpacaLaneCardComponent {
 
   protected readonly money = resource({
     params: () => this.moneyTarget(),
-    loader: ({ params }) => this.panel.getAccountMoney(params),
+    loader: async ({ params }) => {
+      const money = await this.panel.getAccountMoney(params);
+      if (!sameAlpacaAccount(money.account_id, params.accountId)) {
+        throw new Error('The Account Clerk returned money for an account outside this card.');
+      }
+      return money;
+    },
   });
 
   /** The card's account money in the one projection every money surface
