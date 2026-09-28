@@ -13,8 +13,8 @@ import { resourceTarget, laneKey } from '../../../fleet/resource-target';
 import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 
-/** One account read shared by the account workspace's header, its Overview
- * tab's active lens, and the Deploy tab — so the operator's equity, the
+/** One account read shared by the account workspace's header, its Home and
+ * the Deploy tab — so the operator's equity, the
  * account the header names, and the account a command is minted against all
  * come from the same confirmed read rather than three of them.
  *
@@ -42,7 +42,7 @@ export class AlpacaDeskAccountDataService {
    *
    * The URL names it on every account-scoped tab, and that is the only answer
    * those tabs ever take. The workspace's lane-scoped tabs — Configuration and
-   * the not-ready Bots and Gallery (FR-092) — name no account at all, and for
+   * a not-ready Home (FR-092) — name no account at all, and for
    * those the lane's own confirmed binding is the account the header is about:
    * "Configuration … renders inside the workspace from the lane's confirmed
    * account" (ADR 0064, FR-092).

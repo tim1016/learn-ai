@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -59,6 +60,12 @@ def _no_runtime() -> Iterator[None]:
     set_active_clerk_runtime(None)
 
 
+def _budgeted(repo: ClerkSqliteRepository) -> ClerkSqliteRepository:
+    """An account on budgets: it raises no "switch to budgets" line of its own."""
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
+    return repo
+
+
 def _raise_exit_not_flat(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, symbol: str
 ) -> None:
@@ -80,9 +87,9 @@ def _repo_with_two_episodes(
 ) -> tuple[ClerkSqliteRepository, _Clock]:
     clock = _Clock()
     clock.now_ms = start_ms
-    repo = ClerkSqliteRepository.initialize(
+    repo = _budgeted(ClerkSqliteRepository.initialize(
         account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock
-    )
+    ))
     for strategy_instance_id, symbol in (("ema-1", "SPY"), ("ema-2", "QQQ")):
         repo.register_strategy_instance(
             strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1", config_json='{"mode":"trade","quantity":1,"carryover_policy":"FORBID"}'
@@ -127,7 +134,9 @@ async def test_items_expose_the_uncertainty_id_symbol_and_order(
     # clears exactly when its episode resolves.
     assert first["condition_id"] == repo.active_uncertainties()[0]["uncertainty_id"]
     assert first["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
-    assert first["kind"] == "uncertainty"
+    assert first["kind"] == "exit"
+    # An exit that has not flattened is fixed from its bot's own page.
+    assert first["action"] == {"label": "Open bot", "destination": "bot"}
     assert first["severity"] == "blocking"
     assert first["symbol"] == "SPY"
     assert first["headline"] == "This bot's exit has not flattened its position"
@@ -253,7 +262,7 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
 @pytest.mark.asyncio
 async def test_attention_without_facade_retains_notice_but_cannot_invent_retry_time(tmp_path: Path) -> None:
     clock = _Clock()
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock))
     repo.register_strategy_instance(strategy_instance_id="ema-1", symbol="SPY", config_hash="h1", config_json='{"mode":"trade","quantity":1,"carryover_policy":"FORBID"}')
     raise_uncertainty(
         repo, strategy_instance_id="ema-1", reason_code=EXIT_NOT_FLAT_REASON_CODE,
@@ -287,7 +296,7 @@ async def test_dead_run_notice_reaches_account_desk_and_bell_without_selling(
     from app.services.broker_v2_panel import sqlite_roster_status
 
     clock = _Clock()
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock))
     repo.register_strategy_instance(strategy_instance_id="dead-bot", symbol="SPY", config_hash="h1", config_json='{"mode":"trade","quantity":1,"carryover_policy":"FORBID"}')
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
     path = stable_bot_lifecycle_state_path(tmp_path, "dead-bot")
@@ -339,3 +348,116 @@ async def test_corrupt_lifecycle_preserves_sibling_recovery_notices(tmp_path: Pa
         assert "could not be read" in unreadable["explanation"]
     finally:
         repo.close()
+
+
+# ── Home's attention lines (PRD #2560): one headline, one fix each ───────────
+
+_TRADE_CONFIG = '{"mode":"trade","quantity":1,"carryover_policy":"FORBID"}'
+
+
+def _hold_position(repo: ClerkSqliteRepository, sid: str, quantity: float) -> None:
+    repo._conn.execute(
+        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, 'SPY', ?, ?)",
+        (f"bot:{sid}", sid, quantity, _T0),
+    )
+    repo._conn.commit()
+
+
+async def _attention(repo: ClerkSqliteRepository) -> list[dict]:
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", _sqlite_repository=repo, account_id=ACCOUNT))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/attention")
+    assert response.status_code == 200
+    return response.json()["items"]
+
+
+async def test_a_stopped_bot_still_holding_is_one_line_with_flatten_and_finished_bots_are_quiet(
+    tmp_path: Path,
+) -> None:
+    """H13/H34: old flat bots are Finished, never attention; only the bot
+    nobody manages is a line, and a running bot manages its own shares."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=_Clock())
+    try:
+        for sid in ("held", "running", "finished"):
+            repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
+        submit_start_run(repo, account_id=ACCOUNT, strategy_instance_id="running", lifecycle_run_id="r1", clock=repo.clock)
+        _hold_position(repo, "held", 5)
+        _hold_position(repo, "running", 1)
+
+        items = await _attention(repo)
+    finally:
+        repo.close()
+
+    held, legacy = items
+    assert held == {
+        "condition_id": "stopped-holding:held", "reason_code": "STOPPED_STILL_HOLDING",
+        "kind": "stopped_holding", "action": {"label": "Flatten…", "destination": "bot"},
+        "severity": "warning", "strategy_instance_id": "held", "symbol": "SPY",
+        "headline": "held is stopped but still holds 5 SPY. No bot is managing it.",
+        "recovery_status": None,
+    }
+    # An account not yet on budgets says so once, with Settings as its fix.
+    assert (legacy["kind"], legacy["action"], legacy["strategy_instance_id"]) == (
+        "legacy_budget", {"label": "Open Settings", "destination": "settings"}, None,
+    )
+    assert legacy["headline"] == "This account has not switched to budgets. Switch it in Settings to see where its money is."
+
+
+async def test_holds_channels_and_out_of_sync_orders_each_link_to_where_their_fix_lives(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+        LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        STREAM_HEALTH_HOLD_REASON_CODE,
+        UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    )
+
+    clock = _Clock()
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock))
+    try:
+        raise_account_hold(repo, reason_code=STREAM_HEALTH_HOLD_REASON_CODE,
+                           evidence_refs=["market_data: IBKR connection lost"])
+        clock.now_ms += 1
+        raise_account_hold(repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, evidence_refs=["loss"], cause_facts={
+            "day_start_ms": _T0 - 1, "day_pnl_usd": -100, "loss_limit_usd": 100, "last_equity_usd": 1000,
+            "observed_at_ms": _T0,
+        })
+        clock.now_ms += 1
+        raise_account_hold(repo, reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE, evidence_refs=["broker-order-1"])
+
+        items = await _attention(repo)
+    finally:
+        repo.close()
+
+    lines = {item["reason_code"]: (item["kind"], item["action"], item["headline"]) for item in items}
+    assert lines == {
+        STREAM_HEALTH_HOLD_REASON_CODE: (
+            "channel", {"label": "Check connection", "destination": "settings"},
+            "New entries are on hold while a connection is down: IBKR market data (IBKR connection lost).",
+        ),
+        LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: (
+            "hold", {"label": "Open Settings", "destination": "settings"}, "The account is in loss hold",
+        ),
+        UNEXPLAINED_ORDER_HOLD_REASON_CODE: (
+            "out_of_sync", {"label": "Open order records", "destination": "activity"},
+            "An order this account did not submit is unreviewed",
+        ),
+    }
+    # Holds are holds: no line calls one "paused".
+    assert not any("paused" in item["headline"].lower() for item in items)
+
+
+async def test_a_bot_whose_exit_has_not_flattened_is_named_once(tmp_path: Path) -> None:
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=_Clock()))
+    try:
+        repo.register_strategy_instance(strategy_instance_id="ema-1", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
+        _raise_exit_not_flat(repo, strategy_instance_id="ema-1", symbol="SPY")
+        _hold_position(repo, "ema-1", 10)
+
+        items = await _attention(repo)
+    finally:
+        repo.close()
+
+    assert [(item["kind"], item["strategy_instance_id"]) for item in items] == [("exit", "ema-1")]

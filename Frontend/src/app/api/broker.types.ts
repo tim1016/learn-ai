@@ -9724,7 +9724,8 @@ export interface components {
          *     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
          *     (incremental cache). ``needs_attention`` and ``status_label`` drive the
          *     attention-first sort and the closed status vocabulary. No journal scan per
-         *     request.
+         *     request. ``group`` places the row on Home; a row's money is never here --
+         *     Home joins it from the account-money read by ``strategy_instance_id``.
          */
         BotCatalogView: {
             /** Account Id */
@@ -9738,12 +9739,21 @@ export interface components {
              * @enum {string}
              */
             desired_state: "RUNNING" | "STOPPED";
+            /** Ended At Ms */
+            ended_at_ms?: number | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
             };
             /** Fills Today */
             fills_today: number | null;
+            /** Final Result Usd */
+            final_result_usd?: string | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "running" | "holding" | "finished" | "dry_run";
             /** Last Activity At Ms */
             last_activity_at_ms: number | null;
             /**
@@ -9765,6 +9775,8 @@ export interface components {
             row_action?: components["schemas"]["PanelAction"] | null;
             /** Running */
             running: boolean;
+            /** Simulated Cash Usd */
+            simulated_cash_usd?: string | null;
             /** Status Explanation */
             status_explanation: string;
             /** Status Label */
@@ -9777,6 +9789,10 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            /** Trade Count */
+            trade_count?: number | null;
+            /** World Label */
+            world_label: string;
         };
         /**
          * BotControlAuthorityFacts
@@ -17855,29 +17871,42 @@ export interface components {
             runner_idle: boolean;
         };
         /**
+         * LaneAttentionAction
+         * @description An attention line's one fix: a link into the account's workspace.
+         *
+         *     ``bot`` opens the page of the item's own bot, so an item with that
+         *     destination always names one.
+         */
+        LaneAttentionAction: {
+            /**
+             * Destination
+             * @enum {string}
+             */
+            destination: "bot" | "activity" | "settings";
+            /** Label */
+            label: string;
+        };
+        /**
          * LaneAttentionItem
          * @description One condition currently needing the operator on this lane (#2228).
          *
-         *     ``condition_id`` is the uncertainty id — stable across polls, so the bell
-         *     dedupes by it and an item disappears exactly when the underlying episode
-         *     resolves. The narrow v1 set: active uncertainties only, which includes
-         *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+         *     ``condition_id`` is stable across polls, so the bell dedupes by it and an
+         *     item disappears exactly when its condition resolves: the uncertainty id
+         *     for an episode, or a key naming the bot or account fact otherwise. Every
+         *     item has one backend-authored ``headline`` and exactly one ``action``
+         *     (PRD #2560): only what the owner must act on is listed.
          */
         LaneAttentionItem: {
-            /**
-             * Action Label
-             * @default Open bot
-             */
-            action_label?: string;
+            action: components["schemas"]["LaneAttentionAction"];
             /** Condition Id */
             condition_id: string;
             /** Headline */
             headline: string;
             /**
              * Kind
-             * @default uncertainty
+             * @enum {string}
              */
-            kind?: string;
+            kind: "hold" | "channel" | "out_of_sync" | "exit" | "uncertainty" | "stopped_holding" | "position_unverified" | "legacy_budget";
             /** Reason Code */
             reason_code: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;

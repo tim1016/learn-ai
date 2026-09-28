@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import NoReturn
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -66,9 +67,11 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
+    CatalogHomeFacts,
     build_sqlite_catalog,
 )
 from app.services.broker_v2_panel.sqlite_roster_status import (
+    RosterMembership,
     build_roster_status,
     build_terminal_roster_status,
     roster_membership,
@@ -722,11 +725,21 @@ async def read_sqlite_catalog(
                 projections,
                 economic_rollups=economic_rollups,
                 account_id=account_id,
+                home=_catalog_home(facade, membership),
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
                 raise
     raise AssertionError("catalog coherence retry exhausted without a result")
+
+
+def _catalog_home(facade: SqliteAlpacaClerkFacade, membership: RosterMembership) -> CatalogHomeFacts:
+    """What places one authority's roster rows on its account's Home."""
+    return CatalogHomeFacts(
+        world=authority_kind_for_account(facade.account_id, account_mode=facade.account_mode),
+        holding_money=membership.holding_money,
+        read_results=facade.repository.bot_results,
+    )
 
 
 async def read_sqlite_catalog_from_facade(
@@ -799,6 +812,7 @@ async def read_sqlite_catalog_from_facade(
                 projections,
                 economic_rollups=economic_rollups,
                 account_id=account_id,
+                home=_catalog_home(facade, membership),
             )
         except SqliteCatalogRevisionMismatch:
             if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:

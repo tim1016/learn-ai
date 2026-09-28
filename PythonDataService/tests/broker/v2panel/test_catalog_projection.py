@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
@@ -24,7 +26,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     status_label_for,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import build_sqlite_catalog
-from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID
+from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID, home_facts
 
 
 def _status(
@@ -63,7 +65,9 @@ def _status(
     )
 
 
-def _economic_snapshot(*, sid: str, control_revision: int = 42) -> EconomicSnapshot:
+def _economic_snapshot(
+    *, sid: str, control_revision: int = 42, exposure: dict[str, float] | None = None,
+) -> EconomicSnapshot:
     return EconomicSnapshot(
         account_id=ACCT,
         strategy_instance_id=sid,
@@ -73,7 +77,7 @@ def _economic_snapshot(*, sid: str, control_revision: int = 42) -> EconomicSnaps
         session_close_ms=1_700_023_400_000,
         recent_fills=(),
         fills_today=3,
-        exposure={"SPY": 2.0},
+        exposure={"SPY": 2.0} if exposure is None else exposure,
         realized_pnl_today=12.5,
         open_pnl=3.25,
         marks_complete=True,
@@ -224,6 +228,7 @@ def test_sqlite_catalog_uses_config_identity_and_one_economic_rollup() -> None:
         projections={SID: _projection(sid=SID)},
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert len(catalog) == 1
@@ -244,6 +249,7 @@ def test_sqlite_catalog_refuses_a_registered_bot_without_immutable_config() -> N
             projections={SID: _projection(sid=SID)},
             economic_rollups={SID: _economic_snapshot(sid=SID)},
             account_id=ACCT,
+            home=home_facts(),
         )
 
 
@@ -261,6 +267,7 @@ def test_sqlite_catalog_refuses_a_registered_bot_without_config_display_name() -
             projections={SID: _projection(sid=SID)},
             economic_rollups={SID: _economic_snapshot(sid=SID)},
             account_id=ACCT,
+            home=home_facts(),
         )
 
 
@@ -280,6 +287,7 @@ def test_sqlite_catalog_refuses_economics_spanning_authority_revisions() -> None
                 OTHER_SID: _economic_snapshot(sid=OTHER_SID, control_revision=43),
             },
             account_id=ACCT,
+            home=home_facts(),
         )
 
 
@@ -290,6 +298,7 @@ def test_sqlite_catalog_refuses_custody_and_economics_from_different_revisions()
             projections={SID: _projection(sid=SID, control_revision=41)},
             economic_rollups={SID: _economic_snapshot(sid=SID, control_revision=42)},
             account_id=ACCT,
+            home=home_facts(),
         )
 
 
@@ -313,6 +322,7 @@ def test_an_attention_row_carries_its_primary_recovery_command() -> None:
         },
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     row = catalog[0]
@@ -339,6 +349,7 @@ def test_an_unavailable_recovery_command_is_offered_with_its_blocker() -> None:
         },
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     row_action = catalog[0].row_action
@@ -360,6 +371,7 @@ def test_a_healthy_row_carries_no_recovery_command() -> None:
         projections={SID: _projection(sid=SID, recovery_actions=(_recovery_capability(),))},
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].needs_attention is False
@@ -378,6 +390,7 @@ def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
         },
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].row_action is None
@@ -409,6 +422,7 @@ def test_a_crash_with_no_custody_problem_offers_no_reconcile_on_the_rail() -> No
         },
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     row = catalog[0]
@@ -440,6 +454,7 @@ def test_a_bot_scoped_custody_problem_keeps_its_reconcile_command() -> None:
         },
         economic_rollups={SID: _economic_snapshot(sid=SID)},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     row_action = catalog[0].row_action
@@ -479,6 +494,7 @@ def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:
             OTHER_SID: _economic_snapshot(sid=OTHER_SID),
         },
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert len(catalog) == 2
@@ -511,6 +527,7 @@ def test_a_bot_scoped_hold_still_commands_only_its_own_row() -> None:
             OTHER_SID: _economic_snapshot(sid=OTHER_SID),
         },
         account_id=ACCT,
+        home=home_facts(),
     )
 
     held, sibling = catalog
@@ -518,3 +535,95 @@ def test_a_bot_scoped_hold_still_commands_only_its_own_row() -> None:
     assert held.row_action.action_id == "cancel_verified_working_orders"
     assert sibling.needs_attention is False
     assert sibling.row_action is None
+
+
+# ── Home groups (PRD #2560 D5/D7) ────────────────────────────────────────────
+
+
+def _home_row(
+    *,
+    running: bool,
+    exposure: dict[str, float],
+    holding: tuple[str, ...] = (),
+    world: Literal["real_paper", "real_live", "shadow", "synthetic"] = "real_paper",
+    mode: Literal["log_only", "dry_run", "trade"] = "trade",
+    results: dict[str, BotResult] | None = None,
+):
+    [row] = build_sqlite_catalog(
+        [_status(sid=SID, mode=mode, running=running, phase="ON_DUTY" if running else "OFF_DUTY",
+                 desired_state="RUNNING" if running else "STOPPED", duty_kind=None if running else "STOPPED")],
+        projections={SID: _projection(sid=SID)},
+        economic_rollups={SID: _economic_snapshot(sid=SID, exposure=exposure)},
+        account_id=ACCT,
+        home=home_facts(world=world, holding=holding, results=results),
+    )
+    return row
+
+
+def test_a_running_bot_is_running_whatever_it_holds() -> None:
+    row = _home_row(running=True, exposure={"SPY": 2.0}, holding=(SID,))
+
+    assert (row.group, row.world_label, row.ended_at_ms) == ("running", "PAPER · practice money", None)
+    assert row.status_explanation == "Running · holds 2 SPY"
+    assert row.final_result_usd is None
+
+
+def test_a_stopped_bot_with_shares_is_holding_and_says_no_bot_manages_them() -> None:
+    row = _home_row(running=False, exposure={"SPY": 2.0}, holding=(SID,))
+
+    assert row.group == "holding"
+    assert row.status_explanation == "Stopped · still holds 2 SPY · no bot is managing it"
+    assert row.ended_at_ms == 2
+
+
+def test_a_stopped_flat_bot_whose_entry_still_claims_money_is_holding_not_finished() -> None:
+    row = _home_row(running=False, exposure={}, holding=(SID,))
+
+    assert row.group == "holding"
+    assert row.status_explanation == "Stopped · an entry order is still working · no bot is managing it"
+    assert row.final_result_usd is None
+
+
+def test_a_stopped_flat_fully_released_bot_is_finished_with_its_whole_life_result() -> None:
+    row = _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("9.9750"), trade_count=2)})
+
+    assert row.group == "finished"
+    # Python authors the dollars: half-even display cents, sign kept.
+    assert (row.final_result_usd, row.trade_count, row.ended_at_ms) == ("9.98", 2, 2)
+    assert row.status_explanation == "Off duty and flat."
+
+
+def test_a_finished_loss_keeps_its_sign() -> None:
+    row = _home_row(running=False, exposure={}, results={SID: BotResult(result=Decimal("-0.22"), trade_count=3)})
+
+    assert row.final_result_usd == "-0.22"
+
+
+def test_a_finished_result_the_fees_cannot_vouch_for_is_unknown_never_zero() -> None:
+    row = _home_row(running=False, exposure={})
+
+    assert row.group == "finished"
+    assert (row.final_result_usd, row.trade_count) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("world", "mode", "running", "label"),
+    [
+        ("synthetic", "trade", True, "DRY RUN · simulated cash"),
+        ("synthetic", "trade", False, "DRY RUN · simulated cash"),
+        ("real_paper", "dry_run", False, "PAPER · practice money"),
+    ],
+)
+def test_a_dry_run_is_its_own_group_whatever_it_holds(world, mode, running, label) -> None:
+    row = _home_row(running=running, exposure={"SPY": 1.0}, holding=(SID,), world=world, mode=mode)
+
+    assert (row.group, row.world_label) == ("dry_run", label)
+    assert row.final_result_usd is None
+
+
+@pytest.mark.parametrize(
+    ("world", "label"),
+    [("real_live", "LIVE · real money"), ("shadow", "SHADOW · simulated fills on your live account")],
+)
+def test_every_world_is_worded_one_way(world, label) -> None:
+    assert _home_row(running=True, exposure={}, world=world).world_label == label

@@ -141,13 +141,23 @@ class PanelAction(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+BotGroup = Literal["running", "holding", "finished", "dry_run"]
+"""Where a bot sits on its account's Home (PRD #2560 D5/D7).
+
+``running`` trades the account's money; ``holding`` is stopped with position
+cost or still-claimed money above zero; ``finished`` is stopped, flat and with
+nothing still claimed; ``dry_run`` trades simulated cash and never the
+account's money."""
+
+
 class BotCatalogView(BaseModel):
     """One roster row: bot status + slice-0 rollups (§5).
 
     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
     (incremental cache). ``needs_attention`` and ``status_label`` drive the
     attention-first sort and the closed status vocabulary. No journal scan per
-    request.
+    request. ``group`` places the row on Home; a row's money is never here --
+    Home joins it from the account-money read by ``strategy_instance_id``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -180,6 +190,28 @@ class BotCatalogView(BaseModel):
     # the same server-authored guard/token contract as panel actions so the
     # roster never performs a full-panel preflight before a mutation.
     row_action: PanelAction | None = None
+    group: BotGroup
+    # The world this bot trades in, worded once (PRD #2560 D4), e.g.
+    # "PAPER · practice money" or "DRY RUN · simulated cash".
+    world_label: str
+    # When a stopped bot's run ended (its last lifecycle transition).
+    ended_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # A Finished bot's whole life: its executions, and its result -- realized
+    # P&L less fees, what its balance gained over its budget. ``None`` when the
+    # fee evidence cannot vouch for it: never shown as $0.
+    trade_count: int | None = Field(default=None, ge=0)
+    final_result_usd: str | None = None
+    # A Dry Run's simulated starting cash (its consent amount); never the
+    # account's money.
+    simulated_cash_usd: str | None = None
+
+    @model_validator(mode="after")
+    def carries_its_group_facts(self) -> BotCatalogView:
+        if (self.trade_count is not None or self.final_result_usd is not None) and self.group != "finished":
+            raise ValueError("only a finished bot carries a whole-life result")
+        if self.simulated_cash_usd is not None and self.group != "dry_run":
+            raise ValueError("only a Dry Run carries simulated cash")
+        return self
 
 
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
@@ -1156,21 +1188,52 @@ class ChartHistoryResponse(BaseModel):
 # ── §Lane attention (one lane's bell items, #2228) ───────────────────────────
 
 
+LaneAttentionKind = Literal[
+    "hold",
+    "channel",
+    "out_of_sync",
+    "exit",
+    "uncertainty",
+    "stopped_holding",
+    "position_unverified",
+    "legacy_budget",
+]
+"""What one attention line is about (PRD #2560 "Home composition")."""
+
+LaneAttentionDestination = Literal["bot", "activity", "settings"]
+"""Where an attention line's fix lives, inside the account's workspace: the
+line's own bot page, Activity's order records and recovery, or Settings."""
+
+
+class LaneAttentionAction(BaseModel):
+    """An attention line's one fix: a link into the account's workspace.
+
+    ``bot`` opens the page of the item's own bot, so an item with that
+    destination always names one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1)
+    destination: LaneAttentionDestination
+
+
 class LaneAttentionItem(BaseModel):
     """One condition currently needing the operator on this lane (#2228).
 
-    ``condition_id`` is the uncertainty id — stable across polls, so the bell
-    dedupes by it and an item disappears exactly when the underlying episode
-    resolves. The narrow v1 set: active uncertainties only, which includes
-    ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+    ``condition_id`` is stable across polls, so the bell dedupes by it and an
+    item disappears exactly when its condition resolves: the uncertainty id
+    for an episode, or a key naming the bot or account fact otherwise. Every
+    item has one backend-authored ``headline`` and exactly one ``action``
+    (PRD #2560): only what the owner must act on is listed.
     """
 
     model_config = ConfigDict(frozen=True)
 
     condition_id: str
     reason_code: str
-    kind: str = "uncertainty"
-    action_label: str = "Open bot"
+    kind: LaneAttentionKind
+    action: LaneAttentionAction
     severity: str
     strategy_instance_id: str | None = None
     # From the episode's cause facts where the condition names one (an
@@ -1181,6 +1244,12 @@ class LaneAttentionItem(BaseModel):
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
     recovery_status: RecoveryStatusResponse | None = None
+
+    @model_validator(mode="after")
+    def a_bot_link_names_its_bot(self) -> LaneAttentionItem:
+        if self.action.destination == "bot" and self.strategy_instance_id is None:
+            raise ValueError("an attention line that opens a bot page must name its bot")
+        return self
 
 
 class LaneAttentionRead(BaseModel):

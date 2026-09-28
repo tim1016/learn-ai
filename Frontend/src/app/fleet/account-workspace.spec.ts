@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   accountWorkspaceBadgeRoute,
   accountWorkspaceBotRoute,
+  accountWorkspaceDeployAgainRoute,
   accountWorkspaceEntryRoute,
+  accountWorkspaceFixRoute,
+  accountWorkspaceHomeRoute,
   accountWorkspaceLens,
   accountWorkspaceLocation,
-  accountWorkspaceOriginTabRoute,
   accountWorkspaceSwitchRoute,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
@@ -20,7 +22,7 @@ const LOCATION: AccountWorkspaceLocation = {
   broker: 'alpaca',
   clerkId: 'clrk_spec',
   accountId: 'PA9',
-  tab: 'overview',
+  tab: 'home',
   botSid: null,
 };
 
@@ -28,19 +30,20 @@ const LOCATION: AccountWorkspaceLocation = {
  * account segment (FR-092). */
 const LANE_ONLY: AccountWorkspaceLocation = { ...LOCATION, accountId: null, tab: 'configuration' };
 
+const ACCOUNT = { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' };
+
 describe('accountWorkspaceLocation', () => {
   it.each([
-    [WORKSPACE, 'overview'],
-    [`${WORKSPACE}/bots`, 'bots'],
-    [`${WORKSPACE}/gallery`, 'gallery'],
+    [WORKSPACE, 'home'],
+    [`${WORKSPACE}?view=wall`, 'home'],
+    [`${WORKSPACE}/deploy`, 'deploy'],
   ] as const)('resolves the account-scoped %s to the %s tab', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab });
   });
 
   it.each([
     [`${LANE}/configuration`, 'configuration'],
-    [`${LANE}/bots`, 'bots'],
-    [`${LANE}/gallery`, 'gallery'],
+    [`${LANE}/home`, 'home'],
   ] as const)('resolves the lane-scoped %s to the %s tab with no account', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
   });
@@ -49,7 +52,7 @@ describe('accountWorkspaceLocation', () => {
     [`${WORKSPACE}?lens=operator`, 'a query string'],
     [`${WORKSPACE}#positions`, 'a fragment'],
     [`${WORKSPACE}/`, 'a trailing slash'],
-    [`${WORKSPACE}/bots?deploy=`, 'a query string on a tab'],
+    [`${WORKSPACE}/deploy?from=sid-1`, 'a query string on a tab'],
   ])('resolves %s — %s never hides the workspace', (url) => {
     expect(accountWorkspaceLocation(url)?.clerkId).toBe('clrk_spec');
   });
@@ -59,7 +62,7 @@ describe('accountWorkspaceLocation', () => {
       broker: 'alpaca',
       clerkId: 'clrk one',
       accountId: 'PA/9',
-      tab: 'overview',
+      tab: 'home',
       botSid: null,
     });
   });
@@ -68,27 +71,18 @@ describe('accountWorkspaceLocation', () => {
     ['/brokers/alpaca', 'the account list'],
     ['/brokers/alpaca/bots', 'a broker-wide chooser'],
     ['/brokers/alpaca/clerks/clrk_spec', 'a lane without a tab'],
-    [`${WORKSPACE}/gallery/sid-1`, 'a stray segment under Gallery'],
+    [`${WORKSPACE}/deploy/sid-1`, 'a stray segment under Deploy'],
     [`${WORKSPACE}/unknown`, 'an unknown tab segment'],
     ['/edge/regimes', 'an unrelated route'],
   ])('reports %s (%s) as outside any workspace', (url) => {
     expect(accountWorkspaceLocation(url)).toBeNull();
   });
 
-  describe("a bot's own page", () => {
-    it.each([
-      [`${WORKSPACE}/bots/sid-1?from=gallery`, 'gallery', 'the Gallery it was opened from'],
-      [`${WORKSPACE}/bots/sid-1?from=bots`, 'bots', 'the roster it was opened from'],
-      [`${WORKSPACE}/bots/sid-1`, 'bots', 'Bots when nothing stamped it'],
-      [`${WORKSPACE}/bots/sid-1?from=elsewhere`, 'bots', 'Bots when the stamp is unknown'],
-      [`${WORKSPACE}/bots/sid-1?lens=operator`, 'bots', 'Bots beside an unrelated parameter'],
-    ] as const)('resolves %s to %s — %s', (url, tab, _reason) => {
-      expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab, botSid: 'sid-1' });
-    });
-
-    it('decodes the bot identity the URL escaped', () => {
-      expect(accountWorkspaceLocation(`${WORKSPACE}/bots/sid%2F1`)?.botSid).toBe('sid/1');
-    });
+  it("puts a bot's own page under Home, whatever its query says", () => {
+    for (const url of [`${WORKSPACE}/bots/sid-1`, `${WORKSPACE}/bots/sid-1?from=gallery`]) {
+      expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, botSid: 'sid-1' });
+    }
+    expect(accountWorkspaceLocation(`${WORKSPACE}/bots/sid%2F1`)?.botSid).toBe('sid/1');
   });
 });
 
@@ -104,9 +98,8 @@ describe('accountWorkspaceLens', () => {
 
 describe('accountWorkspaceTabRoute', () => {
   it.each([
-    ['overview' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9']],
-    ['bots' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots']],
-    ['gallery' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'gallery']],
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy']],
     // Configuration is lane-scoped wherever it is opened from (FR-092).
     ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration']],
   ])('builds the %s tab route for a bound account', (tab, expected) => {
@@ -114,66 +107,64 @@ describe('accountWorkspaceTabRoute', () => {
   });
 
   it.each([
-    ['bots' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'bots']],
-    ['gallery' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'gallery']],
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'home']],
     ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration']],
   ])('addresses the %s tab of a lane with no account in place', (tab, expected) => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, tab)).toEqual(expected);
   });
 
-  it('has no Overview to offer a lane with no account', () => {
-    // Overview is the account's own page. Offering a substitute here would be
+  it('has no Deploy to offer a lane with no account', () => {
+    // Deploy binds a strategy to the account. Offering a substitute would be
     // the redirect-to-another-lane FR-096 forbids; the tab says so instead.
-    expect(accountWorkspaceTabRoute(LANE_ONLY, 'overview')).toBeNull();
+    expect(accountWorkspaceTabRoute(LANE_ONLY, 'deploy')).toBeNull();
   });
 
   it('round-trips every routed tab back through the resolver', () => {
-    for (const tab of ['overview', 'bots', 'gallery'] as const) {
+    for (const tab of ['home', 'deploy', 'configuration'] as const) {
       const url = accountWorkspaceTabRoute(LOCATION, tab)?.join('/') ?? '';
-      expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab });
+      expect(accountWorkspaceLocation(url)).toEqual(
+        tab === 'configuration' ? { ...LANE_ONLY, tab } : { ...LOCATION, tab },
+      );
     }
-    for (const tab of ['bots', 'gallery', 'configuration'] as const) {
+    for (const tab of ['home', 'configuration'] as const) {
       const url = accountWorkspaceTabRoute(LANE_ONLY, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
     }
   });
+
+  it("agrees with Home's own route, which always resolves", () => {
+    for (const address of [LOCATION, LANE_ONLY]) {
+      expect(accountWorkspaceHomeRoute(address)).toEqual(accountWorkspaceTabRoute(address, 'home'));
+    }
+  });
 });
 
-describe('accountWorkspaceOriginTabRoute', () => {
+describe('the links Home hands out', () => {
+  it("opens a bot's page under Home, with nothing stamped on it", () => {
+    expect(accountWorkspaceBotRoute(ACCOUNT, 'sid-1')).toEqual({
+      commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'sid-1'],
+      queryParams: {},
+    });
+  });
+
+  it('starts Deploy again from an ended bot', () => {
+    expect(accountWorkspaceDeployAgainRoute(ACCOUNT, 'sid-1')).toEqual({
+      commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy'],
+      queryParams: { from: 'sid-1' },
+    });
+  });
+
   it.each([
-    ['a bound account', LOCATION],
-    ['a lane with no account', LANE_ONLY],
-  ] as const)('resolves both origin tabs of %s without a null to guard', (_what, address) => {
-    // The narrowed sibling exists so a bot's page, which can only ever have
-    // come from Bots or Gallery, does not carry Overview's `null` into its
-    // template. It must never disagree with the general route.
-    for (const origin of ['bots', 'gallery'] as const) {
-      expect(accountWorkspaceOriginTabRoute(address, origin)).toEqual(
-        accountWorkspaceTabRoute(address, origin),
-      );
-    }
-  });
-});
-
-describe('accountWorkspaceBotRoute', () => {
-  const account = { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' };
-
-  it.each([['bots'], ['gallery']] as const)('stamps a bot link opened from %s', (origin) => {
-    const link = accountWorkspaceBotRoute(account, 'sid-1', origin);
-
-    expect(link.commands).toEqual([
-      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'sid-1',
-    ]);
-    expect(link.queryParams).toEqual({ from: origin });
+    ['bot' as const, 'sid-1', ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'sid-1']],
+    ['activity' as const, null, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],
+    // Settings stays lane-scoped, like the Configuration it replaces.
+    ['settings' as const, null, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
+  ])('links an attention line whose fix lives at %s', (destination, sid, commands) => {
+    expect(accountWorkspaceFixRoute(ACCOUNT, destination, sid)?.commands).toEqual(commands);
   });
 
-  it('round-trips the stamp back into the tab the page belongs to', () => {
-    for (const origin of ['bots', 'gallery'] as const) {
-      const link = accountWorkspaceBotRoute(account, 'sid-1', origin);
-      const url = `${link.commands.join('/')}?from=${link.queryParams['from']}`;
-
-      expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, tab: origin, botSid: 'sid-1' });
-    }
+  it('links no bot fix that names no bot', () => {
+    expect(accountWorkspaceFixRoute(ACCOUNT, 'bot', null)).toBeNull();
   });
 });
 
@@ -181,30 +172,26 @@ describe('accountWorkspaceSwitchRoute', () => {
   const target = { clerkId: 'clrk_live', accountId: 'PA_LIVE' };
 
   it.each([
-    ['overview' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
-    ['bots' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'bots']],
-    ['gallery' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'gallery']],
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'deploy']],
     ['configuration' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']],
   ])('lands on the same %s tab of the chosen account', (tab, expected) => {
     expect(accountWorkspaceSwitchRoute({ ...LOCATION, tab }, target, null).commands).toEqual(expected);
   });
 
-  it.each([['bots'], ['gallery']] as const)(
-    "lands on the chosen account's Bots from a bot's page opened from %s",
-    (origin) => {
-      // The chosen account need not run this bot, so the bot's page itself is
-      // never carried across (ADR 0064 Decision 4).
-      const from: AccountWorkspaceLocation = { ...LOCATION, tab: origin, botSid: 'sid-1' };
+  it("lands on the chosen account's Home from a bot's page", () => {
+    // The chosen account need not run this bot, so the bot's page itself is
+    // never carried across (ADR 0064 Decision 4).
+    const from: AccountWorkspaceLocation = { ...LOCATION, botSid: 'sid-1' };
 
-      expect(accountWorkspaceSwitchRoute(from, target, null).commands).toEqual([
-        '/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'bots',
-      ]);
-    },
-  );
+    expect(accountWorkspaceSwitchRoute(from, target, null).commands).toEqual([
+      '/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE',
+    ]);
+  });
 
   it.each([
-    ['overview' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']],
-    ['bots' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'bots']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']],
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'home']],
   ])('lands the %s tab on an unconfirmed account in place', (tab, expected) => {
     const unbound = { clerkId: 'clrk_live', accountId: null };
 
@@ -215,53 +202,42 @@ describe('accountWorkspaceSwitchRoute', () => {
     expect(accountWorkspaceSwitchRoute(LOCATION, target, 'operator').queryParams).toEqual({
       lens: 'operator',
     });
-    // An open Deploy drawer, a selected custody timeline and a bot's origin
-    // stamp are all `?`-addressed workspace state. The switch builds its query
-    // rather than merging, so none of them can retarget at the other account.
+    // An open Deploy form, a Wall view and a selected timeline are all
+    // `?`-addressed workspace state. The switch builds its query rather than
+    // merging, so none of them can retarget at the other account.
     expect(accountWorkspaceSwitchRoute(LOCATION, target, null).queryParams).toEqual({});
   });
 });
 
 describe('accountWorkspaceEntryRoute', () => {
-  it("opens a confirmed account on its own Overview page", () => {
+  it('opens a confirmed account on its own Home', () => {
     expect(accountWorkspaceEntryRoute(LOCATION)).toEqual([
       '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9',
     ]);
   });
 
-  it('opens a lane with no confirmed account on Configuration, the one tab it can serve', () => {
+  it('opens a lane with no confirmed account on Configuration, where binding it happens', () => {
     expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId: null })).toEqual([
       '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration',
     ]);
-  });
-
-  it('always resolves, so no caller has to invent a destination for a lane', () => {
-    // The whole point of the fallback: a card or a badge is one click target,
-    // and a lane that cannot offer Overview must still be openable in place
-    // rather than be rendered inert (FR-096).
-    for (const accountId of ['PA9', null]) {
-      expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId })).not.toHaveLength(0);
-    }
   });
 });
 
 describe('accountWorkspaceBadgeRoute', () => {
   const target = { broker: 'alpaca', clerkId: 'clrk_live', accountId: 'PA_LIVE' };
 
-  it.each([
-    ['overview' as const],
-    ['bots' as const],
-    ['gallery' as const],
-    ['configuration' as const],
-  ])('keeps the %s tab when the badge is clicked from inside a workspace', (tab) => {
-    const from: AccountWorkspaceLocation = { ...LOCATION, tab };
+  it.each([['home' as const], ['deploy' as const], ['configuration' as const]])(
+    'keeps the %s tab when the badge is clicked from inside a workspace',
+    (tab) => {
+      const from: AccountWorkspaceLocation = { ...LOCATION, tab };
 
-    // A badge is the account switcher reached from the top bar: identical
-    // behaviour, not a second answer to the same question.
-    expect(accountWorkspaceBadgeRoute(from, target, null)).toEqual(
-      accountWorkspaceSwitchRoute(from, target, null),
-    );
-  });
+      // A badge is the account switcher reached from the top bar: identical
+      // behaviour, not a second answer to the same question.
+      expect(accountWorkspaceBadgeRoute(from, target, null)).toEqual(
+        accountWorkspaceSwitchRoute(from, target, null),
+      );
+    },
+  );
 
   it('carries the lens across a switch made from a badge, exactly as the switcher does', () => {
     expect(accountWorkspaceBadgeRoute(LOCATION, target, 'operator').queryParams).toEqual({
@@ -269,16 +245,7 @@ describe('accountWorkspaceBadgeRoute', () => {
     });
   });
 
-  it('strips whatever was open over the workspace, the same as the switcher', () => {
-    // `?deploy`/`?deployLens` are workspace state addressed in the query. The
-    // destination's query is built from the lens alone, so an open Deploy
-    // drawer closes on a badge click rather than retargeting at this account.
-    const from: AccountWorkspaceLocation = { ...LOCATION, tab: 'bots' };
-
-    expect(accountWorkspaceBadgeRoute(from, target, null).queryParams).toEqual({});
-  });
-
-  it("lands on the chosen account's Overview from outside any workspace", () => {
+  it("lands on the chosen account's Home from outside any workspace", () => {
     expect(accountWorkspaceBadgeRoute(null, target, null)).toEqual({
       commands: ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE'],
       queryParams: {},
@@ -292,45 +259,28 @@ describe('accountWorkspaceBadgeRoute', () => {
   });
 
   it("opens another broker's account at its own front door, never under the broker being left", () => {
-    // `accountWorkspaceSwitchRoute` builds its destination under `from.broker`
-    // — right for a move between accounts, wrong for a move between brokers.
     const link = accountWorkspaceBadgeRoute(
       LOCATION,
       { broker: 'webull', clerkId: 'clrk_wb', accountId: 'WB1' },
       'operator',
     );
 
-    expect(link.commands).toEqual([
-      '/brokers', 'webull', 'clerks', 'clrk_wb', 'accounts', 'WB1',
-    ]);
+    expect(link.commands).toEqual(['/brokers', 'webull', 'clerks', 'clrk_wb', 'accounts', 'WB1']);
     expect(link.queryParams).toEqual({ lens: 'operator' });
-  });
-
-  it('round-trips a badge destination back into the workspace it addresses', () => {
-    const url = accountWorkspaceBadgeRoute(null, target, null).commands.join('/');
-
-    expect(accountWorkspaceLocation(url)).toEqual({
-      broker: 'alpaca',
-      clerkId: 'clrk_live',
-      accountId: 'PA_LIVE',
-      tab: 'overview',
-      botSid: null,
-    });
   });
 });
 
 describe('accountWorkspaceTitle', () => {
   it.each([
-    ['overview' as const, 'Overview · Paper'],
-    ['bots' as const, 'Bots · Paper'],
-    ['gallery' as const, 'Gallery · Paper'],
+    ['home' as const, 'Home · Paper'],
     ['configuration' as const, 'Configuration · Paper'],
+    ['deploy' as const, 'Deploy strategy · Paper'],
   ])('titles the %s tab with the account name beside it', (tab, expected) => {
     expect(accountWorkspaceTitle(tab, 'Paper', null)).toBe(expected);
   });
 
   it("titles a bot's page by the bot, not by the tab it sits under", () => {
-    expect(accountWorkspaceTitle('gallery', 'Paper', 'Deployment Validation')).toBe(
+    expect(accountWorkspaceTitle('home', 'Paper', 'Deployment Validation')).toBe(
       'Deployment Validation · Paper',
     );
   });

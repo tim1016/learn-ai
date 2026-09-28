@@ -7,8 +7,10 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money
@@ -18,7 +20,8 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
-from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryCashClaim, entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import DEAD_ORDER_STATES, EntryCashClaim, entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
 from app.broker.contract.models import OrderSide
@@ -140,6 +143,95 @@ def project_account_money(
                 pending_orders=pending.get(sid, ZERO) if sid is not None else ZERO,
             ))
     return account_money(projected.budget, unseen_fills=projected.unseen_fills, holdings=holdings)
+
+
+def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
+    """Bots with position cost or still-claimed money above zero (PRD #2560 D7).
+
+    The fact-level twin of ``account_money``'s stopped-slice rule
+    (``position_cost + still_claimed > 0``), read without a cash observation
+    so Home can group its bots while the money bar cannot be drawn: a nonzero
+    attributed position is cost on the bar, and an ENTRY holding a cash
+    reservation still claims its unfilled remainder -- the remainder
+    ``entry_cash_claims`` prices: nothing for a dead order, else its quantity
+    less its effective fills. A stopped bot in this set is holding; one
+    outside it is finished.
+    """
+    positions = conn.execute(
+        "SELECT strategy_instance_id, attributed_qty FROM positions "
+        "WHERE attributed_qty <> 0 AND strategy_instance_id IS NOT NULL"
+    ).fetchall()
+    claims = conn.execute(
+        "SELECT DISTINCT e.strategy_instance_id FROM envelope_reservations r "
+        "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
+        "JOIN effect_operations e ON e.effect_operation_id = r.effect_operation_id "
+        "WHERE e.strategy_instance_id IS NOT NULL "
+        f"AND LOWER(COALESCE(o.broker_state, '')) NOT IN ({', '.join('?' for _ in DEAD_ORDER_STATES)}) "
+        "AND r.quantity > COALESCE((SELECT SUM(f.qty) FROM fills f WHERE f.order_ref = o.order_ref "
+        "AND NOT EXISTS (SELECT 1 FROM fills s WHERE s.superseded_execution_ref = f.execution_id)), 0)",
+        DEAD_ORDER_STATES,
+    ).fetchall()
+    return frozenset(
+        {str(row[0]) for row in positions if position_quantity_is_nonzero(float(row[1]))}
+        | {str(row[0]) for row in claims}
+    )
+
+
+@dataclass(frozen=True)
+class BotResult:
+    """A bot's whole life in money: what its balance gained, and how it traded."""
+
+    result: Decimal
+    trade_count: int
+
+
+def project_bot_results(
+    conn: sqlite3.Connection, *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
+) -> dict[str, BotResult]:
+    """Each bot's whole-life result: what its balance gained over its budget.
+
+    Formula: result = canonical FIFO gross realized P&L - the bot's attributed
+      fees (``budgets.deployment_budget``'s balance - commitment); trade_count
+      = the bot's effective executions.
+    Reference: https://github.com/tim1016/learn-ai/issues/2560 (Finished rows);
+      money semantics are PRD #2540's, unchanged.
+    Canonical implementation: this composition; FIFO stays ``fifo_pnl.py`` and
+      fees the canonical fee reconciler.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_bot_results.py.
+    """
+    if not fees.known:
+        raise BudgetUnavailable("Fee evidence is unresolved: " + "; ".join(fees.unresolved))
+    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
+    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
+    results: dict[str, BotResult] = {}
+    with money_context():
+        for sid in strategy_instance_ids:
+            subject_id = bot_subject_id(sid)
+            fills = [fill for fill in records if fill.sid == subject_id]
+            realized = normalize_money(compute_fifo_pnl(fills).exact_realized_pnl)
+            results[sid] = BotResult(result=realized - fees.total_for(subject_id), trade_count=len(fills))
+    return results
+
+
+def read_bot_results(
+    db_path: Path, *, now_ms: int, fee_evidence_checked_at_ms: int | None, strategy_instance_ids: Sequence[str],
+) -> dict[str, BotResult]:
+    """``project_bot_results`` on its own query-only snapshot of the custody file.
+
+    A roster poll reads whole-life results without ever holding the Clerk's
+    writer: its lifetime fee projection is the costly part of the read.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
+
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("BEGIN")
+        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
+        return project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
+    finally:
+        conn.close()
 
 
 def _project(

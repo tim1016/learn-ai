@@ -7,15 +7,19 @@ Every action and action token comes from the SQLite recovery catalog.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_bps,
     realized_slippage_cost,
 )
+from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult, BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -28,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
-from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
+from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -55,11 +59,14 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
     compose_catalog_view,
+    holdings_text,
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
 from app.services.session_authority import SessionAuthorityState
+
+logger = logging.getLogger(__name__)
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -326,12 +333,27 @@ def adapt_sqlite_catalog(
     return adapted
 
 
+@dataclass(frozen=True)
+class CatalogHomeFacts:
+    """What places an authority's rows on its account's Home (PRD #2560).
+
+    ``world`` is the authority's own; ``holding_money`` the bots with position
+    cost or still-claimed money; ``read_results`` reads Finished bots'
+    whole-life results (``ClerkSqliteRepository.bot_results``).
+    """
+
+    world: AuthorityKind
+    holding_money: frozenset[str]
+    read_results: Callable[[Sequence[str]], dict[str, BotResult]]
+
+
 def build_sqlite_catalog(
     statuses: list[BotStatusView],
     projections: dict[str, ClerkProjection],
     *,
     economic_rollups: dict[str, EconomicSnapshot],
     account_id: str,
+    home: CatalogHomeFacts,
 ) -> list[BotCatalogView]:
     """Compose the activated catalog from SQLite config, folds, and economics."""
     identified_statuses = [require_sqlite_catalog_identity(status) for status in statuses]
@@ -346,11 +368,43 @@ def build_sqlite_catalog(
             status,
             sqlite_catalog_rollup(economic_rollups[status.strategy_instance_id]),
             account_id=account_id,
+            world=home.world,
+            holds_money=status.strategy_instance_id in home.holding_money,
         )
         for status in statuses
     ]
     rows = adapt_sqlite_catalog(rows, projections, economic_rollups)
-    return rows
+    return _with_finished_results(rows, home.read_results)
+
+
+def _with_finished_results(
+    rows: list[BotCatalogView],
+    read_results: Callable[[Sequence[str]], dict[str, BotResult]],
+) -> list[BotCatalogView]:
+    """Give each Finished row its whole life: its executions and its result.
+
+    Read only when a row is Finished. When the fee evidence cannot vouch for
+    a result the rows keep it unknown -- said in the log, never shown as $0 --
+    and the roster still renders.
+    """
+    finished = [row.strategy_instance_id for row in rows if row.group == "finished"]
+    if not finished:
+        return rows
+    try:
+        results = read_results(finished)
+    except BudgetUnavailable:
+        logger.warning(
+            "Finished bots' results are unavailable; the rows show them as unknown",
+            exc_info=True, extra={"action": "finished_results_unavailable", "bots": len(finished)},
+        )
+        return rows
+    return [
+        row if row.group != "finished" else row.model_copy(update={
+            "trade_count": results[row.strategy_instance_id].trade_count,
+            "final_result_usd": dollars(display_cents(results[row.strategy_instance_id].result)),
+        })
+        for row in rows
+    ]
 
 
 def _require_one_catalog_economic_revision(
@@ -430,21 +484,26 @@ def _sqlite_catalog_explanation(
     flat." beside it -- two authors, one of them wrong (#1806).
 
     So the unclean-exit case defers to the incoming explanation rather than
-    restating it here. Both off-duty strings are guarded, not just the flat
-    one: "Off duty with Clerk-attributed exposure." contradicts a crash label
-    exactly as much, and the exposure itself stays visible in ``exposure``
-    and ``needs_attention``.
+    restating it here, unless the bot still holds money: then the row says
+    what it holds and that no bot manages it (PRD #2560 D7), which a crash
+    label beside it never contradicts. The copy names no internal authority.
     """
-    if _clerk_needs_attention(projection):
-        return "SQLite Account Clerk evidence requires operator attention."
-    if row.phase == "RETIRED":
-        return "Retired; no further runs can start."
+    held = holdings_text(exposure)
     if row.running:
-        return "Running under SQLite Account Clerk custody."
+        return f"Running · holds {held}" if held else "Running · no position"
+    # What a stopped bot still holds is its row's headline on Home (PRD
+    # #2560 D7), whatever else is true of it: an unclean label beside it
+    # names how the run ended, and nothing here contradicts that.
+    if held:
+        return f"Stopped · still holds {held} · no bot is managing it"
+    if row.group == "holding":
+        return "Stopped · an entry order is still working · no bot is managing it"
+    if _clerk_needs_attention(projection):
+        return "Its order records need attention."
     if row.status_label in _UNCLEAN_EXIT_STATUS_LABELS:
         return row.status_explanation
-    if any(position_quantity_is_nonzero(quantity) for quantity in exposure.values()):
-        return "Off duty with Clerk-attributed exposure."
+    if row.phase == "RETIRED":
+        return "Retired; no further runs can start."
     return "Off duty and flat."
 
 

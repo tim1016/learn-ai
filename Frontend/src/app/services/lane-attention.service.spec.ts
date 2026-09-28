@@ -39,7 +39,8 @@ function item(overrides: Partial<{ condition_id: string; severity: string }> = {
   return {
     condition_id: 'unc-1',
     reason_code: 'EXIT_NOT_FLAT',
-    kind: 'uncertainty',
+    kind: 'exit' as const,
+    action: { label: 'Open bot', destination: 'bot' as const },
     severity: 'blocking',
     strategy_instance_id: 'ema-1',
     symbol: 'SPY',

@@ -10,7 +10,7 @@ import {
 import { RouterLink } from '@angular/router';
 
 import {
-  accountWorkspaceBotRoute,
+  accountWorkspaceFixRoute,
   type AccountWorkspaceLink,
 } from '../fleet/account-workspace';
 import {
@@ -29,9 +29,8 @@ import {
  * the item text too — colour is never the only signal (WCAG 1.4.1). */
 type BellTone = 'is-blocking' | 'is-warning' | 'is-unknown';
 
-/** One popover row: the server's item plus this client's way into the bot
- * it names (`null` when the item names no bot — an account-scoped condition
- * has no bot page to open). */
+/** One popover row: the server's item plus this client's way to its fix
+ * (`null` while the lane has no confirmed account to open it in). */
 interface BellItem {
   readonly item: LaneAttentionItem;
   /** Severity as a word, shown beside the colour: 'Blocking' | 'Warning'. */
@@ -55,8 +54,8 @@ interface BellItem {
  * identifier and goes through the shared pipe; a symbol renders through
  * `app-asset-identity` at its compact size; when the Clerk will next try on
  * its own (an `EXIT_NOT_FLAT`'s re-drive, #2440) renders through
- * `app-next-attempt`, as on the desk and the bot page. Each item links into its bot's
- * workspace page when the item names a strategy and the lane's account is
+ * `app-next-attempt`, as on the desk and the bot page. Each item links to its
+ * one fix — its bot's page, Activity or Settings — once the lane's account is
  * confirmed, and an item disappears exactly when its condition resolves —
  * the bell's count is `condition_id`-deduped, so it clears only when fixed.
  */
@@ -151,7 +150,7 @@ interface BellItem {
                   <app-next-attempt class="item__attempt" [facts]="row.item" />
                   @if (row.link; as link) {
                     <a class="item__open" [routerLink]="link.commands" [queryParams]="link.queryParams">
-                      {{ row.item.action_label ?? 'Open bot' }}
+                      {{ row.item.action.label }}
                     </a>
                   }
                 </li>
@@ -245,22 +244,21 @@ export class LaneAttentionBellComponent {
     };
   });
 
-  /** One popover row: the severity word, its class, and the way into the bot
-   * the item names — its bot page when the item carries a strategy id and
-   * the lane's account is confirmed, otherwise nothing to link (the banner
-   * beside this bell is already the way into the workspace). */
+  /** One popover row: the severity word, its class, and the way to the
+   * item's one fix — where the backend says it lives, once the lane's account
+   * is confirmed; otherwise nothing to link (the banner beside this bell is
+   * already the way into the workspace). */
   private rowFor(item: LaneAttentionItem): BellItem & { severityClass: string } {
     const blocking = item.severity === 'blocking';
     const lane = this.lane();
     const accountId = laneConfirmedAccount(lane);
-    const link =
-      item.strategy_instance_id && accountId
-        ? accountWorkspaceBotRoute(
-            { broker: lane.broker, clerkId: lane.clerk_id, accountId },
-            item.strategy_instance_id,
-            'bots',
-          )
-        : null;
+    const link = accountId
+      ? accountWorkspaceFixRoute(
+          { broker: lane.broker, clerkId: lane.clerk_id, accountId },
+          item.action.destination,
+          item.strategy_instance_id ?? null,
+        )
+      : null;
     return {
       item,
       severityWord: blocking ? 'Blocking' : 'Warning',

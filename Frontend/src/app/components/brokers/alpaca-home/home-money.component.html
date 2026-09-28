@@ -1,0 +1,26 @@
+<section class="home-money" aria-labelledby="home-money-title">
+  <header class="home-money__head">
+    <h2 id="home-money-title" class="home-money__title">Where the money is</h2>
+    @if (view(); as money) {
+      @if (money.state === 'ready') {
+        <span class="home-money__total">{{ money.total_usd | currency: 'USD' }}</span>
+        <span class="home-money__sub">{{ money.detail }}</span>
+      }
+    }
+  </header>
+
+  @if (view(); as money) {
+    @if (money.state === 'ready') {
+      <app-money-bar [segments]="money.segments ?? []" size="home" caption="Where the money is" />
+      @if (money.open_pnl_usd; as openPnl) {
+        <p class="home-money__note">
+          Open gain or loss on shares: {{ openPnl | currency: 'USD' }}. It counts once the shares are sold.
+        </p>
+      }
+    } @else {
+      <p class="home-money__reason" role="status">{{ money.detail }}</p>
+    }
+  } @else {
+    <p class="home-money__reason" role="status">{{ unread() }}</p>
+  }
+</section>

@@ -70,6 +70,11 @@ def display_dollars(amount: Decimal) -> str:
     return dollars(display_cents(amount))
 
 
+#: What an account that has not switched to budgets says in place of its
+#: money, and on its Home's attention line (PRD #2560).
+LEGACY_BUDGET_DETAIL = "This account has not switched to budgets. Switch it in Settings to see where its money is."
+
+
 def _primary(account_id: str) -> ActiveClerkRuntime:
     runtime = get_active_clerk_runtime()
     custody_id = None if runtime is None else runtime.selected_account_id
@@ -374,7 +379,7 @@ def account_money_view(account_id: str) -> AccountMoneyView:
         if repo.budget_authority_version() < 2:
             return AccountMoneyView(
                 state="legacy", world=world, account_id=account_id,
-                detail="This account has not switched to budgets. Switch it in Settings to see where its money is.",
+                detail=LEGACY_BUDGET_DETAIL,
             )
         try:
             if runtime.envelope_sync is None:

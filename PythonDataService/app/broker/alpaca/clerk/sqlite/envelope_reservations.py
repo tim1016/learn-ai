@@ -47,7 +47,8 @@ from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 
-_DEAD_ORDER_STATES = ("canceled", "expired", "rejected", "replaced")
+#: Broker states in which an ENTRY's unfilled remainder claims no more cash.
+DEAD_ORDER_STATES = ("canceled", "expired", "rejected", "replaced")
 
 
 def append_envelope_reservation_row(
@@ -143,7 +144,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                     unseen_cost += qty * normalize_money(fill["price"]) + fee
                     unseen_fees += fee
             remaining_quantity = (
-                ZERO if first["state"] in _DEAD_ORDER_STATES else
+                ZERO if first["state"] in DEAD_ORDER_STATES else
                 max(ZERO, normalize_money(first["quantity"]) - filled)
             )
             unfilled = remaining_quantity * normalize_money(first["reference_price"])

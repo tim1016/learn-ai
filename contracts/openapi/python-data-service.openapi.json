@@ -4214,7 +4214,7 @@
         "type": "object"
       },
       "BotCatalogView": {
-        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest.",
+        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest. ``group`` places the row on Home; a row's money is never here --\nHome joins it from the account-money read by ``strategy_instance_id``.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -4243,6 +4243,19 @@
             "title": "Desired State",
             "type": "string"
           },
+          "ended_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At Ms"
+          },
           "exposure": {
             "additionalProperties": {
               "type": "number"
@@ -4260,6 +4273,27 @@
               }
             ],
             "title": "Fills Today"
+          },
+          "final_result_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Result Usd"
+          },
+          "group": {
+            "enum": [
+              "running",
+              "holding",
+              "finished",
+              "dry_run"
+            ],
+            "title": "Group",
+            "type": "string"
           },
           "last_activity_at_ms": {
             "anyOf": [
@@ -4330,6 +4364,17 @@
             "title": "Running",
             "type": "boolean"
           },
+          "simulated_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Cash Usd"
+          },
           "status_explanation": {
             "title": "Status Explanation",
             "type": "string"
@@ -4353,6 +4398,22 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "trade_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Count"
+          },
+          "world_label": {
+            "title": "World Label",
+            "type": "string"
           }
         },
         "required": [
@@ -4374,7 +4435,9 @@
           "open_pnl",
           "day_pnl",
           "last_activity_at_ms",
-          "needs_attention"
+          "needs_attention",
+          "group",
+          "world_label"
         ],
         "title": "BotCatalogView",
         "type": "object"
@@ -23170,13 +23233,37 @@
         "title": "LaneAccountQuietRead",
         "type": "object"
       },
-      "LaneAttentionItem": {
-        "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is the uncertainty id \u2014 stable across polls, so the bell\ndedupes by it and an item disappears exactly when the underlying episode\nresolves. The narrow v1 set: active uncertainties only, which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator.",
+      "LaneAttentionAction": {
+        "additionalProperties": false,
+        "description": "An attention line's one fix: a link into the account's workspace.\n\n``bot`` opens the page of the item's own bot, so an item with that\ndestination always names one.",
         "properties": {
-          "action_label": {
-            "default": "Open bot",
-            "title": "Action Label",
+          "destination": {
+            "enum": [
+              "bot",
+              "activity",
+              "settings"
+            ],
+            "title": "Destination",
             "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "destination"
+        ],
+        "title": "LaneAttentionAction",
+        "type": "object"
+      },
+      "LaneAttentionItem": {
+        "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is stable across polls, so the bell dedupes by it and an\nitem disappears exactly when its condition resolves: the uncertainty id\nfor an episode, or a key naming the bot or account fact otherwise. Every\nitem has one backend-authored ``headline`` and exactly one ``action``\n(PRD #2560): only what the owner must act on is listed.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/LaneAttentionAction"
           },
           "condition_id": {
             "title": "Condition Id",
@@ -23187,7 +23274,16 @@
             "type": "string"
           },
           "kind": {
-            "default": "uncertainty",
+            "enum": [
+              "hold",
+              "channel",
+              "out_of_sync",
+              "exit",
+              "uncertainty",
+              "stopped_holding",
+              "position_unverified",
+              "legacy_budget"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -23235,6 +23331,8 @@
         "required": [
           "condition_id",
           "reason_code",
+          "kind",
+          "action",
           "severity",
           "headline"
         ],

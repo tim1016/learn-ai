@@ -16,10 +16,8 @@ import { DataLakeObservatoryComponent } from './components/data-lake-observatory
 import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component';
 import { AlpacaConfigurationPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component';
 import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk/alpaca-account-list-page.component';
-import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
+import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-home.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
-import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
-import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
 import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { routes } from './app.routes';
 
@@ -198,18 +196,16 @@ describe('routes', () => {
 
     it('nests every tab — account-scoped and lane-scoped — under one workspace route', async () => {
       expect(await workspace?.loadComponent?.()).toBe(AlpacaAccountWorkspaceComponent);
-      // The shell sits at the clerk level because two tabs name no account:
-      // Configuration is lane-scoped (FR-092), and a lane with no confirmed
-      // account still keeps its Bots and Gallery tabs (FR-096).
+      // The shell sits at the clerk level because a lane can be open without
+      // an account: Configuration is lane-scoped (FR-092), and a lane with no
+      // confirmed account still keeps its Home, which explains why (FR-096).
       expect(workspace?.children?.map((child) => child.path)).toEqual([
-        'configuration', 'bots', 'gallery', 'accounts/:accountId', '',
+        'configuration', 'home', 'bots', 'gallery', 'accounts/:accountId', '',
       ]);
-      // Overview is the account's empty child, so the account's own URL opens
-      // it and the canonical URLs are unchanged. `bots/:sid` is declared
-      // before the `bots` tab it nests under, so the longer path matches
-      // without relying on the router backtracking between siblings. Deploy
-      // is one of the five tabs (ADR 0064 Decision 1 extended), routed
-      // inline rather than opened as an overlay.
+      // Home is the account's empty child, so the account's own URL opens it.
+      // `bots/:sid` is declared before the retired `bots` tab it shares a
+      // segment with, so the longer path matches without relying on the
+      // router backtracking between siblings.
       expect(account?.children?.map((child) => child.path)).toEqual([
         'bots/:sid', 'bots', 'gallery', 'deploy', '',
       ]);
@@ -237,8 +233,7 @@ describe('routes', () => {
 
     it.each([
       ['configuration', AlpacaConfigurationPageComponent],
-      ['bots', AlpacaSurfaceNotReadyTabComponent],
-      ['gallery', AlpacaSurfaceNotReadyTabComponent],
+      ['home', AlpacaSurfaceNotReadyTabComponent],
     ])('loads the lane-scoped %s tab', async (path, expectedComponent) => {
       const route = workspace?.children?.find((candidate) => candidate.path === path);
       if (route === undefined) throw new Error(`Workspace tab ${path} is missing.`);
@@ -248,44 +243,42 @@ describe('routes', () => {
       expect(await route.loadComponent?.()).toBe(expectedComponent);
     });
 
-    it.each([
-      ['bots', 'bots'],
-      ['gallery', 'gallery'],
-    ])('tells the not-ready %s tab which surface it explains', (path, surface) => {
-      expect(workspace?.children?.find((child) => child.path === path)?.data).toMatchObject({
-        surface,
-      });
+    it('opens the account on Home — its own page, never a redirect to configuration', async () => {
+      // Regression: an operator reported a clerk-scoped URL landing on the
+      // broker configuration page. Home stays a loadComponent route with no
+      // redirectTo and no canActivate retargeting.
+      const route = account?.children?.find((candidate) => candidate.path === '');
+      if (route === undefined) throw new Error('Home is missing.');
+
+      expect(route.redirectTo).toBeUndefined();
+      expect(route.canActivate).toBeUndefined();
+      expect(await route.loadComponent?.()).toBe(AlpacaHomeComponent);
     });
 
     it.each([
-      ['', AlpacaDeskComponent, 'the account overview'],
-      ['bots', BotsListPageComponent, 'the bots roster'],
-      ['gallery', BotGalleryPageComponent, 'the gallery'],
-    ])(
-      'keeps the %s tab on its own operational component — never a redirect to configuration',
-      async (path, expectedComponent, _surfaceLabel) => {
-        // Regression: an operator reported a clerk-scoped Bots URL landing on
-        // the broker configuration page. No such redirect exists in the table;
-        // this pins that the canonical operational routes stay loadComponent
-        // routes with no redirectTo and no canActivate retargeting.
-        const route = account?.children?.find((candidate) => candidate.path === path);
-        if (route === undefined) throw new Error(`Workspace tab ${path} is missing.`);
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['/brokers/alpaca/clerks/clrk_spec/bots', '/brokers/alpaca/clerks/clrk_spec/home'],
+      ['/brokers/alpaca/clerks/clrk_spec/gallery', '/brokers/alpaca/clerks/clrk_spec/home?view=wall'],
+    ])('lands the retired tab %s on Home at %s', async (url, landed) => {
+      // Overview, Bots and Gallery merged into Home (PRD #2560); Gallery is
+      // its Wall view. A `?lens=` is retired with the lens and never travels.
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
 
-        expect(route.redirectTo).toBeUndefined();
-        expect(route.canActivate).toBeUndefined();
-        expect(await route.loadComponent?.()).toBe(expectedComponent);
-      },
-    );
+      await router.navigateByUrl(url);
+
+      expect(router.url).toBe(landed);
+    });
 
     it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'the Overview tab'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'the Bots tab'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'the Gallery tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'Home'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/deploy', 'Deploy'],
     ])('carries clerk and account identity into %s', async (url) => {
       // Asserted through the app's own router configuration, not a local one:
       // a non-empty child only inherits its parent's params under
-      // `paramsInheritanceStrategy: 'always'`, and without it the Bots and
-      // Gallery tabs would render without the lane their URL names (FR-092).
+      // `paramsInheritanceStrategy: 'always'` (FR-092).
       TestBed.configureTestingModule({ providers: appConfig.providers });
       const router = TestBed.inject(Router);
 
@@ -299,8 +292,7 @@ describe('routes', () => {
 
     it.each([
       ['/brokers/alpaca/clerks/clrk_spec/configuration', 'Configuration'],
-      ['/brokers/alpaca/clerks/clrk_spec/bots', 'the not-ready Bots tab'],
-      ['/brokers/alpaca/clerks/clrk_spec/gallery', 'the not-ready Gallery tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/home', 'the not-ready Home'],
     ])('carries clerk identity — and no account — into %s', async (url) => {
       TestBed.configureTestingModule({ providers: appConfig.providers });
       const router = TestBed.inject(Router);
@@ -328,20 +320,15 @@ describe('routes', () => {
       expect(await panel?.loadComponent?.()).toBe(BotPanelShellComponent);
     });
 
-    it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'bots/:sid'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'bots'],
-    ])('resolves %s to the %s child', async (url, path) => {
-      // The two siblings differ by one segment, so this pins that both still
-      // resolve — the Bots tab and one bot's page, in the app's own table.
+    it("resolves a bot's own page to its child, under Home", async () => {
       TestBed.configureTestingModule({ providers: appConfig.providers });
       const router = TestBed.inject(Router);
 
-      await router.navigateByUrl(url);
+      await router.navigateByUrl('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1');
 
       let route = router.routerState.snapshot.root;
       while (route.firstChild !== null) route = route.firstChild;
-      expect(route.routeConfig?.path).toBe(path);
+      expect(route.routeConfig?.path).toBe('bots/:sid');
     });
   });
 });

@@ -8,7 +8,7 @@ import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-ta
 describe('AlpacaSurfaceNotReadyTabComponent', () => {
   it('explains a lane that is not ready, and keeps configuration reachable', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-offline', surface: 'bots' },
+      inputs: { clerkId: 'clerk-offline' },
       providers: [
         provideRouter([]),
         provideFleetDirectory({
@@ -24,9 +24,9 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
       ],
     });
 
-    expect(screen.getByText(/Bots roster unavailable/i)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Home unavailable' })).toBeTruthy();
     expect(screen.getByText(/This lane is Starting,/i)).toBeTruthy();
-    expect(screen.getByText(/no other lane is substituted/i)).toBeTruthy();
+    expect(screen.getByText(/No other account is shown in its place/i)).toBeTruthy();
     expect(
       screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
     ).toBe('/brokers/alpaca/clerks/clerk-offline/configuration');
@@ -38,7 +38,7 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
 
   it('explains a ready lane with no confirmed account binding', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-unbound', surface: 'gallery' },
+      inputs: { clerkId: 'clerk-unbound' },
       providers: [
         provideRouter([]),
         provideFleetDirectory({
@@ -53,15 +53,15 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
       ],
     });
 
-    expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
+    expect(screen.getByText(/no confirmed account yet/i)).toBeTruthy();
     expect(
       screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
     ).toBe('/brokers/alpaca/clerks/clerk-unbound/configuration');
   });
 
-  it('explains a lane without the surface capability, through receiptLabel', async () => {
+  it('explains a lane without the Home capability, through receiptLabel', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-incapable', surface: 'bots' },
+      inputs: { clerkId: 'clerk-incapable' },
       providers: [
         provideRouter([]),
         provideFleetDirectory({
@@ -80,9 +80,9 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
     expect(screen.getByText(/capability,/i)).toBeTruthy();
   });
 
-  it('links a lane that became servable to its canonical URL instead of refusing', async () => {
+  it('links a lane that became servable to its account\'s Home instead of refusing', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-ready', surface: 'bots' },
+      inputs: { clerkId: 'clerk-ready' },
       providers: [
         provideRouter([]),
         provideFleetDirectory({
@@ -92,15 +92,15 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
       ],
     });
 
-    expect(screen.getByText(/This lane now serves its Bots roster/i)).toBeTruthy();
+    expect(screen.getByText(/This lane now serves its account's Home/i)).toBeTruthy();
     expect(
-      screen.getByRole('link', { name: 'Open the Bots roster' }).getAttribute('href'),
-    ).toContain('/accounts/');
+      screen.getByRole('link', { name: 'Open Home' }).getAttribute('href'),
+    ).toBe(`/brokers/alpaca/clerks/clerk-ready/accounts/${testLane().provider_summary?.confirmed_account_id}`);
   });
 
   it('says so in place when the directory does not list the clerk', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-unknown', surface: 'bots' },
+      inputs: { clerkId: 'clerk-unknown' },
       providers: [provideRouter([]), provideFleetDirectory()],
     });
 

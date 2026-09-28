@@ -1,6 +1,7 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 
+import { HOME_VIEW_QUERY_PARAM, HOME_WALL_VIEW } from './account-workspace';
 import { FleetDirectoryService } from './fleet-directory.service';
 import { laneIsReady } from './fleet-directory.types';
 
@@ -38,18 +39,15 @@ export function brokerClerkRedirectGuard(
     if (lane === undefined || !laneIsReady(lane)) {
       return true;
     }
-    const segments: string[] = ['/brokers', broker, 'clerks', lane.clerk_id];
-    if (accountId !== null) {
-      segments.push('accounts', accountId);
+    // Bots and Gallery merged into the account's Home (PRD #2560): the old
+    // roster lands on Home, the old Gallery on its Wall, and a bot's page
+    // keeps its own URL under Home.
+    const segments: string[] = ['/brokers', broker, 'clerks', lane.clerk_id, 'accounts', accountId];
+    if (suffix === '/bots/:sid' && sid !== null) {
+      segments.push('bots', sid);
     }
-    if (suffix === '/bots' || suffix === '/bots/:sid') {
-      segments.push('bots');
-      if (suffix === '/bots/:sid' && sid !== null) {
-        segments.push(sid);
-      }
-    } else if (suffix === '/gallery') {
-      segments.push('gallery');
-    }
-    return router.createUrlTree(segments);
+    return router.createUrlTree(segments, {
+      queryParams: suffix === '/gallery' ? { [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW } : {},
+    });
   };
 }

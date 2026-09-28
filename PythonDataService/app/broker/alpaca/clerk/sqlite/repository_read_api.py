@@ -9,7 +9,7 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
     from app.broker.alpaca.clerk.budgets import AccountBudget
+    from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
 
@@ -794,3 +795,19 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             fees = self.fee_attribution(now_ms=self.clock())
             return project_account_money(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
+
+    def bots_holding_money(self: ClerkSqliteRepository) -> frozenset[str]:
+        """The bots with position cost or still-claimed money (see ``budget_projection``)."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import bots_holding_money
+
+        with self._write_lock:
+            return bots_holding_money(self._conn)
+
+    def bot_results(self: ClerkSqliteRepository, strategy_instance_ids: Sequence[str]) -> dict[str, BotResult]:
+        """Whole-life results, read on a query-only snapshot: never under the writer's lock."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import read_bot_results
+
+        return read_bot_results(
+            self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
+            strategy_instance_ids=strategy_instance_ids,
+        )

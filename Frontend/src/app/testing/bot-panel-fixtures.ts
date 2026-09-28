@@ -178,7 +178,7 @@ export function fakeCatalogBot(overrides: Partial<BotCatalogView> = {}): BotCata
     strategy_label: 'Deployment Validation',
     mode: 'trade',
     status_label: 'Working',
-    status_explanation: 'Running under Account Clerk custody.',
+    status_explanation: 'Running · no position',
     exposure: {},
     fills_today: 2,
     realized_pnl_today: realized,
@@ -186,6 +186,8 @@ export function fakeCatalogBot(overrides: Partial<BotCatalogView> = {}): BotCata
     day_pnl: realized === null && open === null ? null : (realized ?? 0) + (open ?? 0),
     last_activity_at_ms: 1_700_000_000_000,
     needs_attention: false,
+    group: 'running',
+    world_label: 'PAPER · practice money',
     ...overrides,
   };
 }

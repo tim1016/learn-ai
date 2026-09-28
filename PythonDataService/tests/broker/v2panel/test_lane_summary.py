@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
+from app.schemas.broker_v2_panel import LaneAttentionAction, LaneAttentionItem, LaneAttentionRead
 from app.services.broker_v2_panel import lane_summary
 
 
@@ -19,7 +19,7 @@ def lane(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     state = SimpleNamespace(
         statuses=[_status("trade", True), _status("trade", True), _status("trade", False),
                   _status("dry_run", True), _status("log_only", True)],
-        items=[LaneAttentionItem(condition_id="c", reason_code="EXIT_NOT_FLAT", severity="blocking", headline="Flatten")],
+        items=[LaneAttentionItem(condition_id="c", reason_code="EXIT_NOT_FLAT", kind="exit", severity="blocking", headline="Flatten", strategy_instance_id="bot-1", action=LaneAttentionAction(label="Open bot", destination="bot"))],
     )
     registry = SimpleNamespace(list_bots=lambda broker: state.statuses)
 

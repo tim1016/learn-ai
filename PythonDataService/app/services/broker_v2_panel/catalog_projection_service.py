@@ -4,23 +4,62 @@ The ``status_label`` maps the lifecycle phase to the closed status vocabulary
 (Working / Off duty / Retired, §5). ``needs_attention`` is the OR of the
 rollup's decision-based heuristic and lifecycle-derived attention (a hold, an
 unclean duty outcome) — the attention-first sort (§5) reads this flag.
+``group`` places the row on the account's Home (PRD #2560 D5/D7) and
+``world_label`` names the world it trades in, worded once.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.v2panel.vocabulary import copy_for, duty_outcome_copy_key
+from app.schemas.account_authority import AuthorityKind
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import BotCatalogView
+from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
 
 # Phase → the closed status label (§5). RUNNING/STOPPED desired-state overlays
 # the phase for the "Working" label so a stopped-but-on-duty bot reads honestly.
 _STATUS_LABEL_WORKING = "Working"
 _STATUS_LABEL_OFF_DUTY = "Off duty"
 _STATUS_LABEL_RETIRED = "Retired"
+
+
+#: The one wording of each world a bot can trade in (PRD #2560 D4). Dry Run
+#: is its own world: simulated cash, never the account's money.
+WORLD_LABELS: dict[AuthorityKind, str] = {
+    "real_live": "LIVE · real money",
+    "real_paper": "PAPER · practice money",
+    "shadow": "SHADOW · simulated fills on your live account",
+    "synthetic": "DRY RUN · simulated cash",
+}
+
+
+def holdings_text(exposure: Mapping[str, float]) -> str:
+    """What a bot holds, as the owner reads it: "5 SPY, 2 QQQ" ("" when flat).
+
+    The caller passes only nonzero quantities (``position_quantity_is_nonzero``).
+    """
+    return ", ".join(f"{quantity:g} {symbol}" for symbol, quantity in sorted(exposure.items()))
+
+
+def bot_group(*, world: AuthorityKind, mode: str, running: bool, holds_money: bool) -> BotGroup:
+    """Where a bot sits on its account's Home (PRD #2560 D5/D7).
+
+    A Dry Run -- a simulated world, or a bot configured to simulate -- is
+    always its own group, whatever it holds. Any other bot is running while it
+    runs; once stopped it is holding while it has position cost or
+    still-claimed money (``holds_money``), and finished when it is flat with
+    nothing still claimed. Nothing is archived by hand: a holding bot moves to
+    finished by itself once its money is released.
+    """
+    if world == "synthetic" or mode == "dry_run":
+        return "dry_run"
+    if running:
+        return "running"
+    return "holding" if holds_money else "finished"
 
 
 class SqliteCatalogProjectionUnavailable(RuntimeError):
@@ -158,6 +197,8 @@ def compose_catalog_view(
     rollup: CatalogEconomicRollup,
     *,
     account_id: str,
+    world: AuthorityKind,
+    holds_money: bool,
 ) -> BotCatalogView:
     """Compose one roster row from a bot's status and its rollup (§5).
 
@@ -183,4 +224,7 @@ def compose_catalog_view(
         day_pnl=day_pnl(rollup.realized_pnl_today, rollup.open_pnl),
         last_activity_at_ms=rollup.last_activity_at_ms,
         needs_attention=rollup.needs_attention or _lifecycle_needs_attention(status),
+        group=bot_group(world=world, mode=status.mode, running=status.running, holds_money=holds_money),
+        world_label=WORLD_LABELS[world],
+        ended_at_ms=None if status.running else status.last_transition_at_ms,
     )

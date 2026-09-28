@@ -98,6 +98,7 @@ from tests.broker.v2panel.fixtures import (
     SID,
     decision_receipt,
     fill_entry,
+    home_facts,
     intent_entry,
     reconciliation_entry,
     submit_acked_entry,
@@ -1074,6 +1075,7 @@ def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> N
         projections={SID: projection},
         economic_rollups={SID: economics},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].exposure == {}
@@ -1124,6 +1126,7 @@ def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
         projections={SID: projection},
         economic_rollups={SID: economics},
         account_id=ACCT,
+        home=home_facts(),
     )
 
     assert catalog[0].status_label == "Crashed"

@@ -1,0 +1,42 @@
+:host {
+  display: block;
+}
+
+.home-money {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+
+.home-money__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+
+.home-money__title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.home-money__total {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-money__sub,
+.home-money__note,
+.home-money__reason {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}

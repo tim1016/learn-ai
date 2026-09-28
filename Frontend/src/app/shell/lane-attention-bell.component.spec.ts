@@ -2,7 +2,7 @@ import { provideRouter } from '@angular/router';
 import { render, screen, fireEvent } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import { testLane } from '../fleet/fleet-directory-testing';
+import { TEST_ACCOUNT_ID, TEST_CLERK_ID, testLane } from '../fleet/fleet-directory-testing';
 import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import {
   LaneAttentionService,
@@ -17,7 +17,8 @@ function item(overrides: Partial<LaneAttentionItem> = {}): LaneAttentionItem {
   return {
     condition_id: 'unc-1',
     reason_code: 'EXIT_NOT_FLAT',
-    kind: 'uncertainty',
+    kind: 'exit',
+    action: { label: 'Open bot', destination: 'bot' },
     severity: 'blocking',
     strategy_instance_id: 'ema-1',
     symbol: 'SPY',
@@ -47,14 +48,29 @@ function bellButton(): HTMLElement {
 }
 
 describe('LaneAttentionBellComponent', () => {
-  it('offers the backend Flatten action for an unmanaged position', async () => {
+  it('offers the backend Flatten action for a stopped bot still holding', async () => {
     await renderBell({ unknown: false, errorReason: null, items: [item({
-      kind: 'position_unmanaged', reason_code: 'POSITION_UNMANAGED', severity: 'warning',
-      headline: 'Bot is not managing this position', action_label: 'Flatten',
+      kind: 'stopped_holding', reason_code: 'STOPPED_STILL_HOLDING', severity: 'warning',
+      headline: 'ema-1 is stopped but still holds 5 SPY. No bot is managing it.',
+      action: { label: 'Flatten…', destination: 'bot' },
     })] });
     await fireEvent.click(bellButton());
-    expect(screen.getByText('Bot is not managing this position')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Flatten' })).toBeTruthy();
+    expect(screen.getByText('ema-1 is stopped but still holds 5 SPY. No bot is managing it.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Flatten…' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}/bots/ema-1`,
+    );
+  });
+
+  it('links an account-level line to where its fix lives', async () => {
+    await renderBell({ unknown: false, errorReason: null, items: [item({
+      condition_id: 'hold-1', kind: 'out_of_sync', reason_code: 'UNEXPLAINED_ORDER_HOLD', strategy_instance_id: null,
+      headline: 'An order this account did not submit is unreviewed',
+      action: { label: 'Open order records', destination: 'activity' },
+    })] });
+    await fireEvent.click(bellButton());
+    expect(screen.getByRole('link', { name: 'Open order records' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}/activity`,
+    );
   });
 
   it('renders nothing while the lane is quiet', async () => {

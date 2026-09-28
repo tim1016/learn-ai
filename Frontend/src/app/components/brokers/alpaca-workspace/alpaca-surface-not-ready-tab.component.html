@@ -1,5 +1,5 @@
-<main class="surface-not-ready" [attr.aria-label]="surfaceName()">
-  <h2 class="surface-not-ready__title">{{ surfaceName() }} unavailable</h2>
+<main class="surface-not-ready" aria-label="Home">
+  <h2 class="surface-not-ready__title">Home unavailable</h2>
 
   @if (loading()) {
     <p class="surface-not-ready__state" role="status">Resolving the clerk lane…</p>
@@ -15,26 +15,24 @@
     </p>
   } @else if (canonicalRoute(); as canonical) {
     <p class="surface-not-ready__state" role="status">
-      This lane now serves its {{ surfaceName() }}.
+      This lane now serves its account's Home.
     </p>
-    <a class="surface-not-ready__primary" [routerLink]="canonical">Open the {{ surfaceName() }}</a>
+    <a class="surface-not-ready__primary" [routerLink]="canonical">Open Home</a>
   } @else if (refusal(); as refusal) {
     <p class="surface-not-ready__state" role="alert">
       @switch (refusal.kind) {
         @case ('lifecycle') {
           This lane is {{ refusal.lifecycleState | receiptLabel }}, so its
-          {{ surfaceName() }} cannot open. It renders in place — no other lane
-          is substituted (FR-096).
+          Home cannot open. No other account is shown in its place.
         }
         @case ('unbound') {
-          This lane has no confirmed account binding yet, so its
-          {{ surfaceName() }} has no account to serve. Confirm an account
-          binding in this lane's configuration to open it.
+          This lane has no confirmed account yet, so its Home has no account
+          to show. Confirm an account in this lane's configuration to open it.
         }
         @case ('capability') {
           This lane does not declare the
-          {{ SURFACE_CAPABILITY[surface()] | receiptLabel }} capability,
-          so its {{ surfaceName() }} is not served from this lane.
+          {{ HOME_CAPABILITY | receiptLabel }} capability, so its Home is
+          not served from this lane.
         }
       }
     </p>

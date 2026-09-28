@@ -1,0 +1,91 @@
+<main class="home" aria-label="Home">
+  <app-alpaca-manual-order-host />
+
+  <app-home-attention
+    [items]="attentionState().items"
+    [unknown]="attentionState().unknown"
+    [account]="account()"
+  />
+
+  <app-home-money [view]="money()" [unread]="moneyUnread()" />
+
+  @if (outcome(); as done) {
+    <p
+      #outcomeNotice
+      class="home__outcome"
+      [class.home__outcome--danger]="done.tone === 'danger'"
+      tabindex="-1"
+      [attr.role]="done.tone === 'danger' ? 'alert' : 'status'"
+    >{{ done.message }}</p>
+  }
+
+  <section class="home__section" aria-labelledby="home-bots-title">
+    <header class="home__section-head">
+      <h2 id="home-bots-title">Bots</h2>
+      <span class="home__count">{{ bots().running.length }} running · {{ bots().holding.length }} stopped, still holding</span>
+      <div class="home__view" role="group" aria-label="Show bots as">
+        <button type="button" [attr.aria-pressed]="!wall()" (click)="showView(false)">List</button>
+        <button type="button" [attr.aria-pressed]="wall()" (click)="showView(true)">Wall</button>
+      </div>
+      <details class="home__menu">
+        <summary>Bot actions</summary>
+        <div class="home__menu-items">
+          <button type="button" [attr.aria-busy]="catalog.isLoading()" (click)="refresh()">Refresh</button>
+          <button type="button" (click)="openCohortFlatten()">Flatten a group of bots…</button>
+        </div>
+      </details>
+    </header>
+
+    @if (catalogFailure(); as failure) {
+      <p class="home__notice" role="alert">
+        {{ failure.message }} {{ failure.why ?? '' }}
+        <button type="button" (click)="refresh()">Try again</button>
+      </p>
+    }
+
+    @if (firstRead()) {
+      <p class="home__empty" role="status">Reading this account's bots…</p>
+    } @else if (botList().length === 0) {
+      <p class="home__empty">
+        No bots are running.
+        @if (deployRoute(); as deploy) { <a [routerLink]="deploy">Deploy a bot</a> }
+      </p>
+    } @else {
+      <app-home-bot-group
+        label="Bots" [entries]="botList()" [wall]="wall()" [account]="account()" [pendingSids]="pendingSids()"
+        [barsBySymbol]="wallStore.barsBySymbol()" [markersBySid]="wallStore.markersBySid()"
+        (stopRequested)="stop($event)"
+      />
+    }
+  </section>
+
+  @if (bots().dryRun.length > 0) {
+    <section class="home__section home__section--dry-run" aria-labelledby="home-dry-run-title">
+      <header class="home__section-head">
+        <h2 id="home-dry-run-title">Dry Run</h2>
+        <span class="home__count">simulated cash · never uses this account's money</span>
+      </header>
+      <app-home-bot-group
+        label="Dry Run bots" [entries]="bots().dryRun" [wall]="wall()" [account]="account()" [pendingSids]="pendingSids()"
+        [barsBySymbol]="wallStore.barsBySymbol()" [markersBySid]="wallStore.markersBySid()"
+        (stopRequested)="stop($event)"
+      />
+    </section>
+  }
+
+  <app-home-finished [bots]="bots().finished" [account]="account()" />
+
+  <details class="home__details">
+    <summary><strong>Account details</strong> · buying power, margin, SMA from Alpaca</summary>
+    <app-alpaca-account-card />
+  </details>
+</main>
+
+<app-cohort-flatten-drawer
+  [visible]="flattenOpen()"
+  broker="alpaca"
+  [clerkId]="clerkId()"
+  [accountId]="accountId()"
+  (closed)="closeCohortFlatten()"
+  (flattened)="refresh()"
+/>
