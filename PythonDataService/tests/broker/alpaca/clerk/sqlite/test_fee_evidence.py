@@ -134,3 +134,30 @@ def test_complete_short_provider_page_proves_a_young_account(day_pnl_repo) -> No
     _seed(repo)
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
     assert custody_fee_attribution(repo._conn, now_ms=NOON).known
+
+
+def test_undated_fee_is_unresolved_instead_of_disappearing(day_pnl_repo) -> None:
+    row = _activity("undated", "FEE", YESTERDAY_NOON, -0.05).model_copy(update={"occurred_at_ms": None})
+    record_fee_evidence(day_pnl_repo, [row], checked_at_ms=NOON, history_complete=True)
+    projection = custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON)
+    assert not projection.known and projection.unattributed == Decimal("0.05")
+
+
+async def test_background_producer_uses_completion_proof_without_ui(day_pnl_repo) -> None:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+    from app.broker.contract.models import BrokerActivityEvidence
+
+    class Read:
+        async def read_activity_evidence(self) -> BrokerActivityEvidence:
+            return BrokerActivityEvidence(activities=[], history_complete=True)
+
+    _seed(day_pnl_repo)
+    assert await FeeEvidenceSync(repo=day_pnl_repo, read=Read()).tick()
+    assert custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON).known
+
+
+def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:
+    record_fee_evidence(day_pnl_repo, [], checked_at_ms=NOON + 1, history_complete=True)
+    result = custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON)
+    assert not result.known
+    assert any("stale" in reason for reason in result.unresolved)

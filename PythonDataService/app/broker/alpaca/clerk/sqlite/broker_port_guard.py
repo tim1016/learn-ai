@@ -16,6 +16,7 @@ from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerActivityEvidence,
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
@@ -82,6 +83,16 @@ class GuardedBrokerReadPort:
     ) -> list[BrokerActivity]:
         self._assert_unfenced("list_activities")
         return await self._inner.list_activities(after_ms=after_ms, limit=limit)
+
+    async def read_activity_evidence(self) -> BrokerActivityEvidence:
+        self._assert_unfenced("read_activity_evidence")
+        reader = getattr(self._inner, "read_activity_evidence", None)
+        if callable(reader):
+            return await reader()
+        return BrokerActivityEvidence(
+            activities=await self._inner.list_activities(after_ms=0, limit=100),
+            history_complete=False,
+        )
 
     async def list_assets(
         self,

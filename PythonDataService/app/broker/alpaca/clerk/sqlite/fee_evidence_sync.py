@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerReadPort
 
@@ -27,14 +29,26 @@ class FeeEvidenceSync:
 
         # The bounded read reaches across dates, including late historical FEE
         # activities. A truncated read never proves the missing fee population.
-        activities = await asyncio.wait_for(self._read.list_activities(after_ms=0, limit=1000), timeout=20)
-        return await asyncio.to_thread(record_fee_evidence, self._repo, activities, checked_at_ms=self._repo.clock())
+        reader = getattr(self._read, "read_activity_evidence", None)
+        if callable(reader):
+            evidence = await asyncio.wait_for(reader(), timeout=20)
+            activities, complete = evidence.activities, evidence.history_complete
+        else:
+            activities = await asyncio.wait_for(self._read.list_activities(after_ms=0, limit=100), timeout=20)
+            complete = False
+        return await asyncio.to_thread(
+            record_fee_evidence,
+            self._repo,
+            activities,
+            checked_at_ms=self._repo.clock(),
+            history_complete=complete,
+        )
 
     async def _run(self) -> None:
         while True:
             try:
                 await self.tick()
-            except (BrokerError, TimeoutError, ValueError):
+            except (BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError):
                 logger.warning("Account fee evidence could not be refreshed", exc_info=True)
             await asyncio.sleep(15)
 

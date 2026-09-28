@@ -106,7 +106,7 @@ class FeeAttribution:
         cash observation. Its trade-date timestamp does not prove recognition.
         Caller MUST refuse admission when ``known`` is false.
         """
-        return self.unattributed + sum(
+        return max(ZERO, self.unattributed) + sum(
             (
                 max(ZERO, share.amount)
                 for share in self.shares
@@ -238,7 +238,7 @@ def attribute_session_fees(
         observed = None
     original: dict[str, dict[str, Decimal]] = {}
     refunded: dict[str, Decimal] = {}
-    reversed_shares: dict[str, dict[str, Decimal]] = {}
+    remaining_shares: dict[str, dict[str, Decimal]] = {}
     for charge in sorted(unique.values(), key=lambda row: (row.refund_of is not None, row.charge_id)):
         amount = charge.amount
         reason: str | None = None
@@ -251,11 +251,12 @@ def attribute_session_fees(
             if amount > 0 or source is None or cumulative > sum(source.values(), ZERO):
                 reason = "its original charge/refund linkage is unavailable or inconsistent"
             else:
-                target = apportion_cents(-cumulative, source)
-                previous = reversed_shares.get(charge.refund_of, {})
-                portions = {key: value - previous.get(key, ZERO) for key, value in target.items()}
+                remaining = remaining_shares.get(charge.refund_of, source)
+                portions = apportion_cents(amount, remaining)
                 refunded[charge.refund_of] = cumulative
-                reversed_shares[charge.refund_of] = target
+                remaining_shares[charge.refund_of] = {
+                    key: value + portions.get(key, ZERO) for key, value in remaining.items()
+                }
         elif amount % CENT:
             reason = "the settlement is not in whole cents"
         elif amount < 0:

@@ -135,3 +135,28 @@ async def test_activity_cursor_stops_after_its_strict_page_bound(
 
     assert client.page_tokens == [None, "page-1-24", "page-2-24"]
     assert activities == []
+
+
+async def test_activity_evidence_carries_provider_exhaustion_and_retains_unknown_dates(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    _, non_trade = load_alpaca_fixture("activities", "activities.json")
+    client = _ActivitiesClient({None: [non_trade]})
+    evidence = await AlpacaBroker(client=client).read_activity_evidence()
+    assert client.limit == 100
+    assert evidence.history_complete
+    assert len(evidence.activities) == 1
+
+
+async def test_activity_evidence_never_claims_completion_at_page_bound(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    _, non_trade = load_alpaca_fixture("activities", "activities.json")
+    pages = {None: [{**non_trade, "id": f"first-{i}"} for i in range(100)],
+        "first-99": [{**non_trade, "id": f"second-{i}"} for i in range(100)],
+        "second-99": [{**non_trade, "id": f"third-{i}"} for i in range(100)]}
+    client = _ActivitiesClient(pages)
+    evidence = await AlpacaBroker(client=client).read_activity_evidence()
+    assert not evidence.history_complete
+    assert len(evidence.activities) == 300
+    assert client.page_tokens == [None, "first-99", "second-99"]

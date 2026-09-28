@@ -265,6 +265,17 @@ class BrokerActivity(_ContractModel):
     observed_at_ms: int
 
 
+class BrokerActivityEvidence(_ContractModel):
+    """A bounded activity read with explicit provider pagination exhaustion.
+
+    ``history_complete`` is true only when a provider returned a short final
+    page. A consumer must not infer it from the filtered activity list's length.
+    """
+
+    activities: list[BrokerActivity]
+    history_complete: bool
+
+
 class PortfolioHistoryRange(StrEnum):
     """The account-history windows the broker desk can request."""
 

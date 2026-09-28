@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker.alpaca.clerk.money import money_context
+from app.broker.alpaca.clerk.money import money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -103,8 +103,10 @@ def _effective_fills(conn: sqlite3.Connection) -> tuple[dict[date, list[FeeFill]
         ).fetchone()
         is None
     )
-    orders: set[str] = set()
+    orders = {row[0] for row in conn.execute("SELECT broker_order_id FROM orders WHERE broker_order_id IS NOT NULL")}
     for record in records:
+        if record.quantity == 0:
+            continue
         grouped[et_date_at_ms(record.filled_at_ms)].append(
             FeeFill(
                 fill_id=record.event_key,
@@ -154,18 +156,26 @@ def custody_fee_attribution(
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
     covered_days: set[date] = set()
     conflicting: set[date] = set()
+    all_activities: dict[str, BrokerActivity] = {}
+    undated: dict[str, BrokerActivity] = {}
     # Preserve oldest observation of each activity so repeated polling never
     # turns an already recognized fee back into an unrecognized cash claim.
     for snapshot in snapshots:
         for activity in snapshot.activities:
+            prior = all_activities.get(activity.activity_id)
+            if prior is not None:
+                if prior.model_dump(exclude={"observed_at_ms"}) != activity.model_dump(exclude={"observed_at_ms"}):
+                    for at in (prior.occurred_at_ms, activity.occurred_at_ms):
+                        if at is not None:
+                            conflicting.add(et_date_at_ms(at))
+                continue
+            all_activities[activity.activity_id] = activity
             if activity.occurred_at_ms is None:
+                if activity.activity_type in {"FEE", "FILL", "PARTIAL_FILL"}:
+                    undated[activity.activity_id] = activity
                 continue
             day = et_date_at_ms(activity.occurred_at_ms)
-            prior = by_date[day].get(activity.activity_id)
-            if prior is None:
-                by_date[day][activity.activity_id] = activity
-            elif prior.model_dump(exclude={"observed_at_ms"}) != activity.model_dump(exclude={"observed_at_ms"}):
-                conflicting.add(day)
+            by_date[day][activity.activity_id] = activity
         oldest = min(
             (row.occurred_at_ms for row in snapshot.activities if row.occurred_at_ms is not None), default=None
         )
@@ -183,15 +193,26 @@ def custody_fee_attribution(
         )
     }
     witnessed_external: set[str] = set()
+    execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
+    from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
+
     for day, rows in by_date.items():
         for row in rows.values():
-            if row.activity_type != "FILL" or row.native_order_id in owned_orders:
+            if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
+                continue
+            if row.native_order_id in owned_orders:
+                if _execution_id_from_activity_id(row.activity_id) not in execution_ids:
+                    population_complete = False
                 continue
             if (
                 row.native_order_id is None
                 or row.quantity is None
                 or row.price is None
                 or row.side not in {"buy", "sell"}
+                or not Decimal(str(row.quantity)).is_finite()
+                or not Decimal(str(row.price)).is_finite()
+                or row.quantity <= 0
+                or row.price <= 0
             ):
                 population_complete = False
                 continue
@@ -211,10 +232,15 @@ def custody_fee_attribution(
     shares = []
     unresolved = []
     unattributed = Decimal(0)
+    if undated:
+        unresolved.append("A broker fee or fill has no economic date. Reconcile account activity evidence.")
+        for row in undated.values():
+            if row.activity_type == "FEE" and row.net_amount is not None:
+                unattributed -= normalize_money(row.net_amount)
     observed = Decimal(0)
     predicted = Decimal(0)
     predicted_known = observed_known = True
-    if not simulated and (not snapshots or now_ms - snapshots[-1].checked_at_ms > FEE_EVIDENCE_MAX_AGE_MS):
+    if not simulated and (not snapshots or not 0 <= now_ms - snapshots[-1].checked_at_ms <= FEE_EVIDENCE_MAX_AGE_MS):
         unresolved.append("Account fee evidence is missing or stale. Refresh account evidence before deploying.")
     for day in sorted(
         set(grouped)

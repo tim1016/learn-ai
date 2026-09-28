@@ -25,6 +25,7 @@ from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWi
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerActivityEvidence,
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
@@ -163,36 +164,31 @@ class AlpacaBroker:
             payloads = await self._client.list_activities(limit=limit)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
-        # Recovery is explicitly bounded. Alpaca's page cursor is not the
-        # canonical occurred-at cursor, so follow at most this small fixed
-        # number of newest-first pages and filter mapped contract records here.
+        evidence = await self._activity_evidence(page_size=limit)
+        return list({row.activity_id: row for row in evidence.activities if row.occurred_at_ms is not None and row.occurred_at_ms >= after_ms}.values())
+
+    async def read_activity_evidence(self) -> BrokerActivityEvidence:
+        """Read raw dated evidence with the provider's explicit page completion.
+
+        Alpaca Trading API documents page_size 1..100. A bounded unfinished
+        walk is useful evidence, but never proof that an empty young account
+        or an old fee date has no further rows.
+        """
+        return await self._activity_evidence(page_size=100)
+
+    async def _activity_evidence(self, *, page_size: int) -> BrokerActivityEvidence:
         activities: list[BrokerActivity] = []
-        seen_activity_ids: set[str] = set()
         page_token: str | None = None
         for _ in range(_ACTIVITY_MAX_PAGES):
-            payloads = await self._client.list_activities(
-                limit=limit,
-                page_token=page_token,
-            )
-            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads):
-                if (
-                    activity.activity_id not in seen_activity_ids
-                    and activity.occurred_at_ms is not None
-                    and activity.occurred_at_ms >= after_ms
-                ):
-                    seen_activity_ids.add(activity.activity_id)
-                    activities.append(activity)
-            if len(payloads) < limit:
+            payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
+            activities.extend(adapter.from_alpaca_activity(payload) for payload in payloads)
+            if len(payloads) < page_size:
+                return BrokerActivityEvidence(activities=activities, history_complete=True)
+            next_token = payloads[-1].get("id")
+            if not isinstance(next_token, str) or not next_token or next_token == page_token:
                 break
-            next_page_token = payloads[-1].get("id")
-            if (
-                not isinstance(next_page_token, str)
-                or not next_page_token
-                or next_page_token == page_token
-            ):
-                break
-            page_token = next_page_token
-        return activities
+            page_token = next_token
+        return BrokerActivityEvidence(activities=activities, history_complete=False)
 
     async def list_assets(
         self,
