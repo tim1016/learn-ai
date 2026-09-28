@@ -26,9 +26,10 @@ import {
   UNPOLLED_LANE_STATE,
   type LaneVerdictState,
 } from '../../../services/alpaca-live-verdict.service';
+import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
-import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-list-page.component';
 import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
@@ -166,7 +167,7 @@ async function renderWorkspace(
     url?: string;
     directory?: FleetDirectoryDouble;
     verdict?: LaneVerdictState;
-    clerkStatusFails?: boolean;
+    money?: () => Promise<AccountMoneyView>;
   } = {},
 ) {
   const directory = overrides.directory ?? provideFleetDirectory();
@@ -188,17 +189,18 @@ async function renderWorkspace(
         provide: BrokersService,
         useValue: {
           getAccount,
-          getClerkStatus: () =>
-            overrides.clerkStatusFails === true
-              ? Promise.reject(new Error('clerk unavailable'))
-              : Promise.resolve(fakeClerkStatus()),
+          getClerkStatus: () => Promise.resolve(fakeClerkStatus()),
         },
       },
-      // `getCatalog` and `readDeskState` are the account list's cards, not
-      // this workspace's: the account-list route above renders them.
+      // The header's figures are the account-money read's. `readDeskState`
+      // is the account list's cards, not this workspace's: the account-list
+      // route above renders them.
       {
         provide: BrokerV2PanelService,
-        useValue: { getCatalog: () => Promise.resolve([]) },
+        useValue: {
+          getAccountMoney: (target: { accountId: string | null }) =>
+            overrides.money?.() ?? Promise.resolve(fakeAccountMoney({ account_id: target.accountId ?? '' })),
+        },
       },
       {
         provide: BrokerConfigurationService,
@@ -290,7 +292,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       );
       // A confirmed lane reads its account's own facts there, exactly as the
       // account-scoped tabs do (FR-092: "from the lane's confirmed account").
-      expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
+      expect(await screen.findByText('$98,329.57')).toBeTruthy();
     });
 
     it('keeps the workspace for a lane Alpaca has confirmed no account for', async () => {
@@ -306,7 +308,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       // "Not reconciled" here would report a failed read where there was none.
       expect(screen.getByText('No confirmed account')).toBeTruthy();
       expect(screen.queryByText(/Equity/)).toBeNull();
-      expect(screen.queryByText(/Reconciliation unavailable/)).toBeNull();
+      expect(screen.queryByText(/Free to deploy/)).toBeNull();
     });
 
     it('offers no Overview to a lane with no account, rather than another lane’s', async () => {
@@ -356,40 +358,66 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     );
   });
 
-  it('renders the account’s equity and reconciliation verdict beside its name', async () => {
+  it('renders Free to deploy, Cash, Equity and Today exactly as the money read authored them', async () => {
     await renderWorkspace();
 
-    expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
-    // `clean` is a backend identifier, so it reaches the operator through the
-    // shared receipt label, never raw.
-    expect(screen.getByText('Clean')).toBeTruthy();
+    const figure = async (term: string) =>
+      (await screen.findByText(term, { selector: 'dt' })).nextElementSibling?.textContent?.trim();
+    expect(await figure('Free to deploy')).toBe('$98,329.57');
+    expect(await figure('Cash')).toBe('$98,564.86');
+    expect(await figure('Equity')).toBe('$100,012.40');
+    expect(await figure('Today')).toBe('-$3.20');
   });
 
-  it('says the reconciliation read failed rather than showing nothing', async () => {
-    await renderWorkspace({ clerkStatusFails: true });
+  it('carries no sync indicator — an out-of-sync account is a Home attention line', async () => {
+    await renderWorkspace();
+    await screen.findByText('Free to deploy');
 
-    expect(await screen.findByText('Reconciliation unavailable')).toBeTruthy();
+    expect(screen.queryByText(/^Sync/)).toBeNull();
+    expect(screen.queryByText('Clean')).toBeNull();
   });
 
-  it.each([
-    ['paper', fakeVerdictState('paper'), 'Paper money'],
-    ['live', fakeVerdictState('live', {}), 'Live'],
-    ['unread', UNPOLLED_LANE_STATE, 'Mode unknown — assume real money'],
-  ])('renders the mode chip the %s server verdict declares', async (_label, verdict, mode) => {
-    await renderWorkspace({ verdict });
-
-    expect(await screen.findByText(mode)).toBeTruthy();
-  });
-
-  it('names the Shadow simulation world separately from Live', async () => {
+  it('says why the money cannot be read, in the backend’s words, never $0', async () => {
     await renderWorkspace({
-      verdict: fakeVerdictState('shadow', {
-        clerk_authority: 'shadow',
+      money: () => Promise.resolve({
+        ...unavailableAccountMoney('No daily loss limit is set for this account, so new entries are refused. Set one in Settings.'),
+        account_id: TEST_ACCOUNT_ID,
       }),
     });
 
-    expect(await screen.findByText('Shadow')).toBeTruthy();
+    expect(await screen.findByText(/No daily loss limit is set for this account/)).toBeTruthy();
+    expect(screen.queryByText('Free to deploy')).toBeNull();
+    expect(screen.queryByText(/\$0\.00/)).toBeNull();
+  });
+
+  it('says a failed money read failed rather than showing nothing', async () => {
+    await renderWorkspace({ money: () => Promise.reject(new Error('money read failed')) });
+
+    expect(await screen.findByText('Account money could not be read.')).toBeTruthy();
+  });
+
+  it.each([
+    ['paper', fakeVerdictState('paper'), 'PAPER · practice money'],
+    ['live', fakeVerdictState('live', {}), 'LIVE · real money'],
+    ['shadow', fakeVerdictState('shadow', { clerk_authority: 'shadow' }), 'SHADOW · simulated fills on your live account'],
+  ])('words the %s mode the one way the server verdict declares', async (_label, verdict, mode) => {
+    await renderWorkspace({ verdict });
+
+    expect(await screen.findByText(mode)).toBeTruthy();
     expect(screen.queryByText(/armed/)).toBeNull();
+  });
+
+  it('reads a cold load as reading the mode, never as a real-money warning (H4)', async () => {
+    await renderWorkspace({ verdict: UNPOLLED_LANE_STATE });
+
+    expect(await screen.findByText('Reading account mode…')).toBeTruthy();
+    expect(screen.queryByText(/assume real money/)).toBeNull();
+  });
+
+  it('keeps the fail-closed wording when the mode read failed', async () => {
+    await renderWorkspace({ verdict: { verdict: null, lastError: new Error('verdict read failed') } });
+
+    expect(await screen.findByText('Mode unknown — assume real money')).toBeTruthy();
   });
 
   it('points Deploy at the workspace’s own lane and account from every other tab', async () => {
@@ -497,7 +525,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       directory.rebind({ observed_at_ms: 2, clerks: [testLane()] });
       await directory.useValue.refresh?.();
       await view.fixture.whenStable();
-      await screen.findByText(/\$15,000\.00/);
+      await screen.findByText('$98,329.57');
 
       expect(document.activeElement).not.toBe(workspaceBody());
     });
@@ -570,7 +598,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       // never folded into one string.
       const live = screen.getByRole('link', { name: /^Live/ });
       expect(live.textContent).toContain('Live');
-      expect(live.textContent).toContain('Paper money');
+      expect(live.textContent).toContain('PAPER · practice money');
       expect(screen.getByRole('link', { name: /^Paper/ }).getAttribute('aria-current')).toBe('true');
     });
 

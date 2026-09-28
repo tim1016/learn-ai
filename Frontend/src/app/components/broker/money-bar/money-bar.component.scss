@@ -1,0 +1,134 @@
+:host {
+  display: block;
+  --money-bar-height: 24px;
+}
+
+:host([data-size='home']) {
+  --money-bar-height: 36px;
+}
+
+:host([data-size='row']) {
+  --money-bar-height: 8px;
+}
+
+:host([data-size='mini']) {
+  --money-bar-height: 6px;
+}
+
+.money-bar__track {
+  display: flex;
+  gap: 2px;
+  height: var(--money-bar-height);
+}
+
+/* Width is the backend's basis points as flex-grow over a zero basis: exact
+   proportions with no arithmetic here. The minimum keeps a 1 bp slice
+   visible. */
+.money-bar__slice {
+  display: flex;
+  flex: 0 1 0;
+  min-width: 3px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+:host([data-size='row']) .money-bar__slice,
+:host([data-size='mini']) .money-bar__slice {
+  border-radius: 2px;
+}
+
+.money-bar__part {
+  flex: 0 1 0;
+  min-width: 0;
+}
+
+.money-bar__part--shares,
+.money-bar__swatch.money-bar__slice--bot {
+  background: var(--money-bar-hue);
+}
+
+.money-bar__part--pending {
+  background:
+    repeating-linear-gradient(135deg, var(--money-bar-hue) 0 3px, transparent 3px 7px),
+    color-mix(in srgb, var(--money-bar-hue) 22%, var(--bg-sunken));
+}
+
+.money-bar__part--free {
+  background: color-mix(in srgb, var(--money-bar-hue) 30%, var(--bg-sunken));
+}
+
+.money-bar__slice--stopped {
+  background: repeating-linear-gradient(135deg, #7a7f8c 0 4px, #2a2e39 4px 8px);
+}
+
+.money-bar__slice--outside {
+  background: radial-gradient(#9598a1 1px, transparent 1.5px) 0 0 / 5px 5px, #2a2e39;
+}
+
+.money-bar__slice--charges {
+  background: #4a4f5c;
+}
+
+.money-bar__slice--new {
+  background: repeating-linear-gradient(135deg, var(--accent) 0 7px, #173aa0 7px 14px);
+  box-shadow: inset 0 0 0 1px var(--accent-text);
+}
+
+.money-bar__slice--free {
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-sunken);
+}
+
+.money-bar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.money-bar__legend--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.money-bar__entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.money-bar__swatch {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.money-bar__name {
+  font-family: var(--font-mono);
+}
+
+.money-bar__amount {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.money-bar__parts {
+  flex-basis: 100%;
+  padding-left: calc(12px + var(--space-2));
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+}

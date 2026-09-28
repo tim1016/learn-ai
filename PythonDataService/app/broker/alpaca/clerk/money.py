@@ -15,11 +15,12 @@ an admission answer. This cannot recover precision already lost in old floats.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from decimal import (
     ROUND_CEILING,
     ROUND_FLOOR,
+    ROUND_HALF_EVEN,
     Context,
     Decimal,
     DivisionByZero,
@@ -28,6 +29,7 @@ from decimal import (
     Overflow,
     localcontext,
 )
+from fractions import Fraction
 
 _MONEY_CONTEXT = Context(prec=1400, traps=[InvalidOperation, DivisionByZero, Overflow, Inexact])
 ZERO = Decimal(0)
@@ -89,6 +91,13 @@ def cents_spendable(amount: Decimal) -> int:
         return int((amount * 100).to_integral_value(rounding=ROUND_FLOOR))
 
 
+def display_cents(amount: Decimal) -> int:
+    """Half-even whole cents for a figure that is shown, never admitted."""
+    with money_context() as context:
+        context.traps[Inexact] = False
+        return int((amount * 100).to_integral_value(rounding=ROUND_HALF_EVEN))
+
+
 def consent_cents(value: object) -> int:
     """Reject fractional cents rather than silently changing user consent."""
     with money_context():
@@ -120,3 +129,36 @@ def cash_admits(*, cash: object, claims: object, required: object) -> bool:
         if not claim.is_finite() or not needed.is_finite() or claim < ZERO or needed < ZERO:
             raise MoneyInputError("Cash claims and requirements must be finite and nonnegative.")
         return claim + needed <= cash_value
+
+
+def apportion_units(units: int, weights: Mapping[str, Decimal]) -> dict[str, int]:
+    """Split whole units in proportion to exact weights, losing none.
+
+    Formula: u_k = floor(U * w_k / sum(w)); the U - sum(u) leftover units go
+    one each to the largest exact fractional remainders, ties ordered by key.
+    Reference: Hamilton (largest-remainder) apportionment; PRD #2540 fee
+      attribution contract and PRD #2560 money-bar widths.
+    Canonical implementation: this function. Fee cents
+      (``alpaca_fee_attribution.apportion_cents``) and money-bar basis points
+      (``account_money.share_bps``) both delegate here.
+    Validated against: tests/broker/alpaca/clerk/test_money.py and the
+      tests/fixtures/golden/alpaca-fee-attribution cases (exact integers).
+
+    ``Fraction`` compares remainders exactly, so Decimal context precision can
+    never decide who receives a unit. Every key is returned, sorted.
+    """
+    if isinstance(units, bool) or not isinstance(units, int) or units < 0:
+        raise ValueError("apportioned units must be a nonnegative integer")
+    if any(not weight.is_finite() or weight < 0 for weight in weights.values()):
+        raise ValueError("apportionment weights must be finite and nonnegative")
+    total = sum((Fraction(weight) for weight in weights.values()), Fraction())
+    if not total:
+        if units:
+            raise ValueError("units have no positive weight to follow")
+        return dict.fromkeys(sorted(weights), 0)
+    quotas = {key: units * Fraction(weight) / total for key, weight in weights.items()}
+    floors = {key: quota.numerator // quota.denominator for key, quota in quotas.items()}
+    ranked = sorted(quotas, key=lambda key: (-(quotas[key] - floors[key]), key))
+    for key in ranked[: units - sum(floors.values())]:
+        floors[key] += 1
+    return {key: floors[key] for key in sorted(floors)}

@@ -304,4 +304,17 @@ $container-lg: 1400px;
   --verdict-paper-soft:    var(--info-soft);
   --verdict-unsafe:        var(--bear);
   --verdict-unsafe-soft:   var(--bear-soft);
+
+  // ─ Lane identity (PRD #2560 D4) ────────────────────────────
+  // One colour per account world: Live is the existing bear red, Paper cyan,
+  // Shadow violet. They drive the workspace frame, header wash, tab
+  // underline, mode badge, Accounts cards and top-bar pills. Colour is never
+  // the only carrier — the mode is always worded beside it. Dry Run is not a
+  // lane colour: it is dashed and says "DRY RUN".
+  --lane-live:        var(--bear);
+  --lane-live-soft:   var(--bear-soft);
+  --lane-paper:       #26c6da;
+  --lane-paper-soft:  rgba(38, 198, 218, 0.14);
+  --lane-shadow:      #a78bfa;
+  --lane-shadow-soft: rgba(167, 139, 250, 0.14);
 }

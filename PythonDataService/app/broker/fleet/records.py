@@ -109,6 +109,12 @@ _DETAIL_MAX_CHARS = 200
 #: (test_admission_probes_2026_09_13.py) pins the two together instead. Raise
 #: both together, never just one.
 _ACCOUNT_NICKNAME_MAX_CHARS = 120
+#: PRD #2560: the bot and attention counts a lane reports for its account
+#: card. Whole, non-negative and bounded like every other summary field; the
+#: bound is far above any real fleet and exists only so the key cannot carry
+#: an arbitrary number.
+LANE_COUNT_KEYS = ("running_count", "dry_run_count", "attention_count")
+_LANE_COUNT_MAX = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,10 +137,17 @@ class ProviderSummaryObservation:
     #: accepts this key before any agent sends it, and an absent key parses
     #: exactly as it did before this field existed.
     account_nickname: str | None = None
+    #: The lane's own counts for its account card (PRD #2560): bots running
+    #: in the lane's world, running Dry Runs, and the items its attention
+    #: read lists. Each is absent when the lane could not count it this beat
+    #: -- never reported as zero.
+    running_count: int | None = None
+    dry_run_count: int | None = None
+    attention_count: int | None = None
 
     def to_json(self) -> str:
         """The strict storage encoding for the session row."""
-        payload: dict[str, str] = {
+        payload: dict[str, str | int] = {
             "endpoint_mode": str(self.endpoint_mode),
             "authority_state": self.authority_state,
         }
@@ -142,7 +155,12 @@ class ProviderSummaryObservation:
             payload["detail"] = self.detail
         if self.account_nickname is not None:
             payload["account_nickname"] = self.account_nickname
+        payload.update(self.counts())
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def counts(self) -> dict[str, int]:
+        """The counts this lane reported, keyed as the directory publishes them."""
+        return {key: value for key in LANE_COUNT_KEYS if (value := getattr(self, key)) is not None}
 
     @classmethod
     def parse(cls, raw: object) -> ProviderSummaryObservation | None:
@@ -163,10 +181,10 @@ class ProviderSummaryObservation:
             payload = dict(raw)
         else:
             raise ValueError("a lane summary must be a JSON object")
-        if set(payload) - {"endpoint_mode", "authority_state", "detail", "account_nickname"}:
+        if set(payload) - {"endpoint_mode", "authority_state", "detail", "account_nickname", *LANE_COUNT_KEYS}:
             raise ValueError(
                 "a lane summary carries only endpoint_mode, authority_state, "
-                "detail and account_nickname"
+                "detail, account_nickname and the lane's bot and attention counts"
             )
         mode = payload.get("endpoint_mode")
         if mode not in tuple(item.value for item in SummaryEndpointMode):
@@ -185,11 +203,18 @@ class ProviderSummaryObservation:
             or len(account_nickname) > _ACCOUNT_NICKNAME_MAX_CHARS
         ):
             raise ValueError("summary account_nickname must be a short string")
+        counts = {key: payload.get(key) for key in LANE_COUNT_KEYS}
+        for key, value in counts.items():
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _LANE_COUNT_MAX
+            ):
+                raise ValueError(f"summary {key} must be a whole count")
         return cls(
             endpoint_mode=SummaryEndpointMode(mode),
             authority_state=authority,
             detail=detail,
             account_nickname=account_nickname,
+            **counts,
         )
 
 

@@ -1,9 +1,10 @@
 """UI contracts for one reviewed deployment and its custody-derived money."""
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
@@ -44,6 +45,114 @@ class DeploymentBudgetShortcut(BaseModel):
     explanation: str
 
 
+FULL_BAR_BPS = 10_000
+MoneySegmentKind = Literal["bot", "stopped", "outside", "charges", "new", "free"]
+
+
+def _cents(amount_usd: str) -> int:
+    return int(Decimal(amount_usd) * 100)
+
+
+class MoneyParts(BaseModel):
+    """A bot's slice, shaded. Widths are basis points of the slice itself."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    in_shares_usd: str
+    in_shares_bps: int = Field(ge=0, le=FULL_BAR_BPS)
+    pending_usd: str
+    pending_bps: int = Field(ge=0, le=FULL_BAR_BPS)
+    free_usd: str
+    free_bps: int = Field(ge=0, le=FULL_BAR_BPS)
+
+    @model_validator(mode="after")
+    def widths_fill_the_slice(self) -> MoneyParts:
+        if self.in_shares_bps + self.pending_bps + self.free_bps != FULL_BAR_BPS:
+            raise ValueError("a slice's part widths must sum to 10000 basis points")
+        return self
+
+
+class MoneySegment(BaseModel):
+    """One place the account's money is, in display order on the money bar.
+
+    ``label`` is the legend's words for the slice; ``share_bps`` its width.
+    ``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``
+    and ``still_claimed_usd`` to a stopped bot that still holds money.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: MoneySegmentKind
+    strategy_instance_id: str | None = None
+    label: str
+    amount_usd: str
+    share_bps: int = Field(ge=0, le=FULL_BAR_BPS)
+    parts: MoneyParts | None = None
+    shortfall_usd: str | None = None
+    released_usd: str | None = None
+    still_claimed_usd: str | None = None
+
+    @model_validator(mode="after")
+    def carries_its_kind_fields(self) -> MoneySegment:
+        bot, stopped = self.kind == "bot", self.kind == "stopped"
+        if (self.strategy_instance_id is not None) != (bot or stopped):
+            raise ValueError("only a bot or stopped slice names a bot")
+        if (self.parts is not None, self.shortfall_usd is not None) != (bot, bot):
+            raise ValueError("parts and shortfall_usd belong to a running bot's slice")
+        if (self.released_usd is not None, self.still_claimed_usd is not None) != (stopped, stopped):
+            raise ValueError("released_usd and still_claimed_usd belong to a stopped bot's slice")
+        return self
+
+
+class AccountMoneyView(BaseModel):
+    """Where one account's money is: the single read every money bar draws.
+
+    Python authors every dollar string and every width. When ``ready``, the
+    segments sum exactly (in cents) to ``total_usd``, their widths to 10000
+    basis points, and ``free_to_deploy_usd`` is the Deploy preview's
+    unreserved cash. Otherwise every figure is absent and ``detail`` names
+    the reason and its fix -- an unknown is never shown as $0.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["ready", "unavailable", "legacy"]
+    detail: str
+    world: AuthorityKind
+    account_id: str
+    observed_at_ms: EpochMs | None = None
+    total_usd: str | None = None
+    cash_usd: str | None = None
+    free_to_deploy_usd: str | None = None
+    in_bots_usd: str | None = None
+    held_by_stopped_usd: str | None = None
+    outside_bots_usd: str | None = None
+    account_charges_usd: str | None = None
+    # Notes beside the bar, never slices of it: Alpaca's equity less the
+    # bar's total, the equity itself and today's account P&L.
+    open_pnl_usd: str | None = None
+    equity_usd: str | None = None
+    today_pnl_usd: str | None = None
+    segments: tuple[MoneySegment, ...] = ()
+
+    @model_validator(mode="after")
+    def conserves_every_dollar(self) -> AccountMoneyView:
+        figures = (self.total_usd, self.cash_usd, self.free_to_deploy_usd, self.in_bots_usd,
+                   self.held_by_stopped_usd, self.outside_bots_usd, self.account_charges_usd)
+        if self.state != "ready":
+            if self.segments or any(value is not None for value in (*figures, self.open_pnl_usd, self.equity_usd, self.today_pnl_usd)):
+                raise ValueError("an unavailable money read carries a reason, never figures")
+            return self
+        total = self.total_usd
+        if total is None or any(value is None for value in figures) or self.observed_at_ms is None or not self.segments:
+            raise ValueError("a ready money read carries every headline figure and its segments")
+        if sum(_cents(segment.amount_usd) for segment in self.segments) != _cents(total):
+            raise ValueError("the money bar's segments must sum exactly to total_usd")
+        if sum(segment.share_bps for segment in self.segments) != FULL_BAR_BPS:
+            raise ValueError("the money bar's widths must sum to 10000 basis points")
+        free = [segment for segment in self.segments if segment.kind == "free"]
+        if len(free) != 1 or free[0] is not self.segments[-1]:
+            raise ValueError("free to deploy is the bar's last slice, exactly once")
+        return self
+
+
 class DeploymentBudgetPreview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -62,6 +171,11 @@ class DeploymentBudgetPreview(BaseModel):
     shortcuts: tuple[DeploymentBudgetShortcut, ...] = ()
     review_token: str | None = None
     confirmation_text: str | None = None
+    # The account's money bar with this Deploy drawn in: the proposed budget
+    # is a ``new`` slice carved out of free to deploy (no amount yet: today's
+    # bar). ``None`` when the preview itself is not ready, and for Dry Run,
+    # which never uses the account's money.
+    money_after: AccountMoneyView | None = None
 
 
 class DeploymentBudgetView(BaseModel):
@@ -83,6 +197,8 @@ class DeploymentBudgetView(BaseModel):
     shortfall_usd: str | None = None
     entry_eligible: bool = False
     observed_at_ms: EpochMs | None = None
+    # This bot's slice, shaded exactly as its segment on the account's bar.
+    parts: MoneyParts | None = None
 
 
 class BudgetDeployCommandReceipt(BaseModel):

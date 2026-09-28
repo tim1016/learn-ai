@@ -1,0 +1,37 @@
+<!-- The drawing is decorative: the legend below carries every slice's name
+     and amount, visibly or for assistive technology. -->
+<div class="money-bar__track" aria-hidden="true">
+  @for (slice of slices(); track slice.key) {
+    @if (slice.segment.share_bps > 0) {
+      <span
+        class="money-bar__slice money-bar__slice--{{ slice.segment.kind }}"
+        [style.flex-grow]="slice.segment.share_bps"
+        [style.--money-bar-hue]="slice.hue"
+      >
+        @if (slice.segment.parts; as parts) {
+          <span class="money-bar__part money-bar__part--shares" [style.flex-grow]="parts.in_shares_bps"></span>
+          <span class="money-bar__part money-bar__part--pending" [style.flex-grow]="parts.pending_bps"></span>
+          <span class="money-bar__part money-bar__part--free" [style.flex-grow]="parts.free_bps"></span>
+        }
+      </span>
+    }
+  }
+</div>
+<ul class="money-bar__legend" [class.money-bar__legend--hidden]="!legendVisible()" [attr.aria-label]="caption()">
+  @for (slice of slices(); track slice.key) {
+    <li class="money-bar__entry">
+      <span
+        class="money-bar__swatch money-bar__slice--{{ slice.segment.kind }}"
+        [style.--money-bar-hue]="slice.hue"
+        aria-hidden="true"
+      ></span>
+      <span class="money-bar__name">{{ slice.segment.label }}</span>&ngsp;<span class="money-bar__amount">{{ slice.segment.amount_usd | currency: 'USD' }}</span>
+      @if (slice.segment.parts; as parts) {
+        &ngsp;<span class="money-bar__parts">
+          in shares {{ parts.in_shares_usd | currency: 'USD' }} · in entry orders
+          {{ parts.pending_usd | currency: 'USD' }} · free {{ parts.free_usd | currency: 'USD' }}
+        </span>
+      }
+    </li>
+  }
+</ul>

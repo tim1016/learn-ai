@@ -65,7 +65,12 @@ from app.schemas.canary_admission import (
     CanaryActivationRequest,
     CanaryAdmissionEvent,
 )
-from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeploymentBudgetPreview, DeploymentBudgetView
+from app.schemas.deployment_budget import (
+    AccountMoneyView,
+    BudgetDeployCommandReceipt,
+    DeploymentBudgetPreview,
+    DeploymentBudgetView,
+)
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
@@ -389,6 +394,20 @@ async def preview_deployment_budget_scoped(broker: str, account_id: str, request
         return await panel_deploy.preview_alpaca_deployment_budget(broker, account_id, request)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/money",
+    response_model=AccountMoneyView,
+    summary="Where the account's money is: the one read every money bar draws",
+)
+async def read_account_money_scoped(broker: str, account_id: str) -> AccountMoneyView:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Account money is available on Alpaca accounts.")
+    try:
+        return budget_deploy.account_money_view(account_id)
+    except BudgetUnavailable as error:
+        _raise_alpaca_deploy_error(budget_deploy.money_error(error))
 
 
 @router.get("/{broker}/accounts/{account_id}/bots/{sid}/budget", response_model=DeploymentBudgetView)

@@ -1,9 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
+
+/** The runbooks each dead-end state points at: how to add an account, and
+ * how to bring the account list back. They live in the repository, where
+ * the served architecture manual links too. */
+const RUNBOOKS = 'https://github.com/tim1016/learn-ai/blob/master/docs/runbooks';
+export const ADD_ACCOUNT_RUNBOOK_URL = `${RUNBOOKS}/add-an-alpaca-account.md`;
+export const DIRECTORY_RUNBOOK_URL = `${RUNBOOKS}/fleet-directory-unavailable.md`;
 
 /**
  * The Alpaca account list at `/brokers/alpaca` — the only multi-account page
@@ -21,7 +28,8 @@ import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
  * "lane directory" (CONTEXT.md's own vocabulary lists it under Avoid for this
  * page) names only the fleet read underneath, never the page.
  *
- * Directory-level loading and failure are stated once here; each card owns
+ * Directory-level loading and failure are stated once here, each with its
+ * next step: try the read again, or the runbook that fixes it. Each card owns
  * its own reads, so a failed read on one account never blanks another
  * (FR-093).
  */
@@ -46,4 +54,15 @@ export class AlpacaAccountListPageComponent {
   protected readonly accounts = computed(() => this.fleet.lanesOf('alpaca'));
   protected readonly loading = this.fleet.isLoading;
   protected readonly failed = computed(() => this.fleet.error() !== undefined);
+  protected readonly addAccountRunbook = ADD_ACCOUNT_RUNBOOK_URL;
+  protected readonly directoryRunbook = DIRECTORY_RUNBOOK_URL;
+
+  /** A retry the owner asked for that failed again, said in the alert so a
+   * click never looks like it did nothing. */
+  protected readonly retryFailed = signal(false);
+
+  protected retry(): void {
+    this.retryFailed.set(false);
+    this.fleet.refresh().catch(() => this.retryFailed.set(true));
+  }
 }

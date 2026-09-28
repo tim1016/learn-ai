@@ -734,29 +734,49 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
     )
 
 
-def test_summary_with_live_nickname_adds_replaces_and_removes_the_one_key() -> None:
-    """#2182 Major 3: the per-beat merge touches only `account_nickname` —
+def test_summary_with_live_facts_adds_replaces_and_removes_the_nickname() -> None:
+    """#2182 Major 3: the per-beat merge touches only the per-beat keys —
     every other key in the confirm-time snapshot passes through untouched,
     in both directions (a fresh nickname appearing, and one disappearing)."""
-    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_nickname
+    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_facts
 
     base = {"endpoint_mode": "paper", "authority_state": "real_paper"}
 
-    assert _summary_with_live_nickname(base, "Strategy lab") == {
+    assert _summary_with_live_facts(base, "Strategy lab") == {
         **base,
         "account_nickname": "Strategy lab",
     }
-    assert _summary_with_live_nickname(base, None) == base
-    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, "New name") == {
+    assert _summary_with_live_facts(base, None) == base
+    assert _summary_with_live_facts({**base, "account_nickname": "Old name"}, "New name") == {
         **base,
         "account_nickname": "New name",
     }
     # A nickname that was set and then unset (Configuration allows only
     # setting, but the merge must stay correct either way).
-    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, None) == base
+    assert _summary_with_live_facts({**base, "account_nickname": "Old name"}, None) == base
     # Not a bounded typed observation at all: nothing to merge into.
-    assert _summary_with_live_nickname("not-a-mapping", "Strategy lab") is None
-    assert _summary_with_live_nickname(None, "Strategy lab") is None
+    assert _summary_with_live_facts("not-a-mapping", "Strategy lab") is None
+    assert _summary_with_live_facts(None, "Strategy lab") is None
+
+
+def test_summary_with_live_facts_replaces_counts_and_drops_one_not_counted() -> None:
+    """PRD #2560: a count this beat could not take is absent, never a stale
+    value carried from the last beat and never a zero."""
+    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_facts
+
+    base = {"endpoint_mode": "paper", "authority_state": "real_paper", "running_count": 4, "attention_count": 2}
+    merged = _summary_with_live_facts(base, None, {"running_count": 1, "dry_run_count": 0})
+    assert merged == {"endpoint_mode": "paper", "authority_state": "real_paper", "running_count": 1, "dry_run_count": 0}
+    parsed = ProviderSummaryObservation.parse(merged)
+    assert parsed is not None and parsed.counts() == {"running_count": 1, "dry_run_count": 0}
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, True, "3", 100_001])
+def test_lane_summary_refuses_a_count_that_is_not_a_whole_bounded_number(value: object) -> None:
+    with pytest.raises(ValueError, match="attention_count"):
+        ProviderSummaryObservation.parse(
+            {"endpoint_mode": "paper", "authority_state": "real_paper", "attention_count": value}
+        )
 
 
 @pytest.mark.parametrize(

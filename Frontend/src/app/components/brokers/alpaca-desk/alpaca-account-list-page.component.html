@@ -11,26 +11,34 @@
   }
 
   @if (failed()) {
-    <p class="account-list__state" role="alert">
-      The fleet directory is unavailable. Accounts stay reachable through
-      their canonical clerk routes.
-    </p>
+    <div class="account-list__state account-list__state--failed" role="alert">
+      <p>
+        The fleet directory is unavailable, so the accounts cannot be listed.
+        @if (retryFailed()) { It is still unavailable. }
+      </p>
+      <p class="account-list__next">
+        <button type="button" class="account-list__retry" [disabled]="loading()" (click)="retry()">Try again</button>
+        <a [href]="directoryRunbook" target="_blank" rel="noopener">How to bring the account list back</a>
+      </p>
+    </div>
   } @else if (accounts().length === 0) {
-    <p class="account-list__state">
-      @if (loading()) {
-        Loading the clerk fleet directory…
-      } @else {
-        No Alpaca accounts are registered. Enrol a lane volume with the
-        host ceremony to begin.
-      }
-    </p>
+    @if (loading()) {
+      <p class="account-list__state">Reading your Alpaca accounts…</p>
+    } @else {
+      <div class="account-list__state">
+        <p>No Alpaca accounts are registered yet.</p>
+        <p class="account-list__next">
+          <a [href]="addAccountRunbook" target="_blank" rel="noopener">Add an Alpaca account</a>
+        </p>
+      </div>
+    }
   }
 
   @if (accounts().length > 0) {
-    <ul class="account-list__accounts" aria-label="Alpaca accounts">
+    <div class="account-list__accounts" role="list" aria-label="Alpaca accounts">
       @for (account of accounts(); track account.clerk_id) {
         <app-alpaca-lane-card [lane]="account" [deployIntent]="deployIntent()" />
       }
-    </ul>
+    </div>
   }
 </main>

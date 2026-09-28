@@ -1,32 +1,42 @@
-/* display: contents gives the host no box of its own, so the `<li>` it
-   renders is the flex item of the account list — and the list's effective
-   direct child for layout and the accessibility tree — instead of the host
-   wrapping it. */
+/* The host is the account list's list item and its flex item. */
 :host {
-  display: contents;
-}
-
-.lane-card-item {
   display: flex;
-  flex: 1 1 16rem;
-  min-width: 16rem;
-  max-width: 24rem;
+  flex: 1 1 20rem;
+  min-width: min(20rem, 100%);
+  max-width: 28rem;
 }
 
 /* The whole card is the click target (ADR 0064 Decision 2): one account, one
    way in. Nothing inside it is separately clickable, so the card carries the
    link's focus ring rather than a nested control stealing it. */
 .lane-card {
+  --lane: var(--border-strong);
   display: flex;
   flex: 1;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.4rem;
-  border: 1px solid var(--surface-border, #ddd);
+  align-items: stretch;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--lane) 35%, var(--border-light));
+  border-top: 3px solid var(--lane);
   border-radius: 6px;
-  padding: 0.65rem 0.75rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--bg-surface, transparent);
   color: inherit;
   text-decoration: none;
+}
+
+/* The lane colour frames the card (PRD #2560 D4); the chip in its head words
+   the mode, so the colour is never the only carrier. */
+.lane-card[data-lane='live'] {
+  --lane: var(--lane-live);
+}
+
+.lane-card[data-lane='paper'] {
+  --lane: var(--lane-paper);
+}
+
+.lane-card[data-lane='shadow'] {
+  --lane: var(--lane-shadow);
 }
 
 .lane-card:hover {
@@ -43,9 +53,10 @@
 }
 
 .lane-card__head {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
 }
 
 .lane-card__label {
@@ -58,20 +69,47 @@
   opacity: 0.65;
 }
 
-.lane-card__facts {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  font-size: 0.8125rem;
+.lane-card__money {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-subtle);
 }
 
-.lane-card__equity {
+.lane-card__figure {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.lane-card__figure--end {
+  text-align: right;
+}
+
+.lane-card__figure strong {
+  font-family: var(--font-mono);
+  font-size: 1rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
 }
 
-.lane-card__bots {
-  color: var(--text-color-secondary, #777);
+.lane-card__money-reason {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.lane-card__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.lane-card__attention--needs {
+  color: var(--warn);
 }
 
 .lane-card__readiness {

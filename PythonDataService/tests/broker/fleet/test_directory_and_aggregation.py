@@ -560,6 +560,41 @@ async def test_http_directory_carries_the_alpaca_account_nickname_in_the_provide
         service.close()
 
 
+@pytest.mark.asyncio
+async def test_http_directory_carries_the_lanes_own_bot_and_attention_counts(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PRD #2560: the Accounts page reads each lane's running and attention
+    counts from one directory field each; a count the lane did not report is
+    absent, never zero."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters={"alpaca": AlpacaProviderAdapter()},
+        clock=clock,
+    )
+    try:
+        lane = provision_lane(service, broker="alpaca", label="count-lane", tmp_path=control_dir.parent)
+        session, _confirmed = bind_lane(service, lane, account="acct-counts")
+        service.observe_session(
+            clerk_id=lane.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            reported_summary={
+                "endpoint_mode": "paper", "authority_state": "real_paper",
+                "running_count": 2, "dry_run_count": 1, "attention_count": 0,
+            },
+        )
+        async with AsyncClient(transport=ASGITransport(app=_coordinator_app(service)), base_url="http://test") as client:
+            response = await client.get("/api/broker-clerks", headers={CONTROL_SECRET_HEADER: _TEST_SECRET})
+
+        summary = response.json()["clerks"][0]["provider_summary"]
+        assert (summary["running_count"], summary["dry_run_count"], summary["attention_count"]) == (2, 1, 0)
+        assert "account_nickname" not in summary
+    finally:
+        service.close()
+
+
 # ── async partial aggregation: lane-scoped reads that leave the process ─────
 
 

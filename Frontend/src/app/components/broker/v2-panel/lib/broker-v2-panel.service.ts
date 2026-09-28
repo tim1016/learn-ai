@@ -79,6 +79,11 @@ export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandRece
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
 export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
+/** Where one account's money is (PRD #2560): every dollar string and every
+ * slice width is Python-authored; the browser only draws it. */
+export type AccountMoneyView = components['schemas']['AccountMoneyView'];
+export type MoneySegment = components['schemas']['MoneySegment'];
+export type MoneyParts = components['schemas']['MoneyParts'];
 export const DEPLOYMENT_WORLD_LABELS: Readonly<Record<BudgetDeployReceipt['world'], string>> = {
   real_paper: 'Paper', real_live: 'Live', shadow: 'Shadow', synthetic: 'Dry Run',
 };
@@ -153,6 +158,12 @@ export class BrokerV2PanelService {
 
   getBudget(target: ResourceTarget, sid: string): Promise<DeploymentBudgetView> {
     return firstValueFrom(this.http.get<DeploymentBudgetView>(operationUrl('bot_budget_read', { ...target, sid })));
+  }
+
+  /** Where the account's money is (`account_money_read`). Polled by the
+   * workspace header and the account cards, so it shares their scheduler. */
+  getAccountMoney(target: ResourceTarget): Promise<AccountMoneyView> {
+    return this.polls.get<AccountMoneyView>(operationUrl('account_money_read', target));
   }
 
   getDeployCommand(target: ResourceTarget, sid: string): Promise<BudgetDeployReceipt> {

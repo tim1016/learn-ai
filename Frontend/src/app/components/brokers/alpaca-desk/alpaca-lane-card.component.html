@@ -1,34 +1,55 @@
-<li class="lane-card-item">
-  <a
-    class="lane-card"
-    [class.lane-card--degraded]="state().kind !== 'serving'"
-    [routerLink]="openRoute()"
-    [queryParams]="openQuery()"
-    [queryParamsHandling]="openQueryHandling()"
-  >
-    <span class="lane-card__head">
-      <span class="lane-card__label">{{ displayName().name }}</span>
-      @if (displayName().disambiguator; as disambiguator) {
-        <span class="lane-card__disambiguator">({{ disambiguator }})</span>
-      }
-    </span>
-    <app-alpaca-lane-mode-chip [chip]="modeChip()" />
-    @let cardState = state();
-    @switch (cardState.kind) {
-      @case ('serving') {
-        <span class="lane-card__facts">
-          <span class="lane-card__equity">{{ equityLine() }}</span>
-          <span class="lane-card__bots">{{ botsLine() }}</span>
-        </span>
-      }
-      @case ('lifecycle') {
-        <span class="lane-card__readiness">
-          This lane is {{ cardState.lifecycleState | receiptLabel }}.
-        </span>
-      }
-      @case ('unbound') {
-        <span class="lane-card__readiness">{{ readinessLine() }}</span>
-      }
+<a
+  class="lane-card"
+  [class.lane-card--degraded]="state().kind !== 'serving'"
+  [attr.data-lane]="laneColour()"
+  [routerLink]="openRoute()"
+  [queryParams]="openQuery()"
+  [queryParamsHandling]="openQueryHandling()"
+>
+  <span class="lane-card__head">
+    <span class="lane-card__label">{{ displayName().name }}</span>
+    @if (displayName().disambiguator; as disambiguator) {
+      <span class="lane-card__disambiguator">({{ disambiguator }})</span>
     }
-  </a>
-</li>
+    <app-alpaca-lane-mode-chip [chip]="modeChip()" />
+  </span>
+  @let cardState = state();
+  @switch (cardState.kind) {
+    @case ('serving') {
+      @let money = cardMoney();
+      @switch (money.kind) {
+        @case ('ready') {
+          <span class="lane-card__money">
+            <span class="lane-card__figure">
+              Account money <strong>{{ money.view.total_usd | currency: 'USD' }}</strong>
+            </span>
+            <span class="lane-card__figure lane-card__figure--end">
+              Free to deploy <strong>{{ money.view.free_to_deploy_usd | currency: 'USD' }}</strong>
+            </span>
+          </span>
+          <app-money-bar class="lane-card__bar" size="mini" [segments]="money.view.segments ?? []" [caption]="barCaption()" />
+        }
+        @case ('reason') {
+          <span class="lane-card__money-reason">{{ money.text }}</span>
+        }
+      }
+      <span class="lane-card__status">
+        @for (count of botCounts(); track count) {
+          <span>{{ count }}</span>
+        }
+        <span class="lane-card__attention" [class.lane-card__attention--needs]="attention().needs">
+          @if (attention().needs) { <span aria-hidden="true">⚠</span> }
+          {{ attention().text }}
+        </span>
+      </span>
+    }
+    @case ('lifecycle') {
+      <span class="lane-card__readiness">
+        This lane is {{ cardState.lifecycleState | receiptLabel }}.
+      </span>
+    }
+    @case ('unbound') {
+      <span class="lane-card__readiness">{{ readinessLine() }}</span>
+    }
+  }
+</a>

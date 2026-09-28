@@ -72,6 +72,70 @@ def test_completed_manual_buy_claims_its_unseen_exact_debit(tmp_path: Path) -> N
         repo.close()
 
 
+def test_manual_shares_are_outside_any_bot_and_counted_once_before_and_after_cash_sees_them(tmp_path: Path) -> None:
+    """PRD #2560: the money bar places manual shares outside every bot, at
+    cost, and never counts a bought share as cash too -- whether or not the
+    cash observation has caught up with the fill."""
+    from app.broker.alpaca.clerk.account_money import money_bar
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        accepted = accept_manual_order(
+            repo, account_id=repo.account_id, operator_id=OPERATOR_ID, ticket_id=TICKET_ID,
+            leg_id=LEG_ID, leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=6),
+        )
+        leg = accepted.leg
+        assert leg.order_ref and leg.effect_operation_id
+        repo.append_transition(TransitionInput(
+            command_id=accepted.command.command_id, effect_operation_id=leg.effect_operation_id,
+            order_ref=leg.order_ref, transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress", source_event_at_ms=NOON, clerk_observed_at_ms=NOON,
+            summary_code="EXECUTION_SLICE_FILLED", facts_json=ExecutionSliceFilledFacts(
+                execution_id="manual-outside", symbol="SPY", side="BUY", slice_qty=6,
+                slice_price=100, fee=.03, fee_fidelity="reported", evidence_source="websocket",
+                source_event_at_ms=NOON,
+            ).to_facts_json(),
+        ))
+        fold_order_acknowledgement(repo, effect_operation_id=leg.effect_operation_id, order=filled_order(leg.order_ref).model_copy(update={
+            "quantity": 6, "filled_quantity": 6, "filled_avg_price": 100, "updated_at_ms": NOON, "observed_at_ms": NOON,
+        }))
+        unseen = repo.account_money(cash=1000, seen_before_ms=NOON)
+        seen = repo.account_money(cash="399.97", seen_before_ms=NOON + 1)
+        for money in (unseen, seen):
+            assert money.outside == Decimal(600) and money.cash == Decimal("399.97")
+            assert money.total == Decimal("999.97")
+            bar = money_bar(money)
+            assert [(segment.kind, segment.cents) for segment in bar.segments] == [("outside", 60_000), ("free", 39_997)]
+            assert bar.total_cents == 99_997
+    finally:
+        repo.close()
+
+
+def test_stopped_bot_still_holding_keeps_its_shares_on_the_bar_and_releases_its_free_budget(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.account_money import money_bar
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 50_000)
+        _deploy(repo, "b", 30_000)
+        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="hold",
+            lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2), reference_price=100, envelope=_gate())
+        _append_slice(repo, accepted, execution_id="held", quantity=2, price=100, source_event_at_ms=NOON - 1, fee=0)
+        submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=repo.clock)
+
+        money = repo.account_money(cash=800, seen_before_ms=NOON + 1)
+        bar = money_bar(money)
+
+        assert [(segment.kind, segment.strategy_instance_id, segment.cents) for segment in bar.segments] == [
+            ("bot", "b", 30_000), ("stopped", "a", 20_000), ("free", None, 50_000),
+        ]
+        assert bar.segments[1].released_cents == 30_000
+        assert bar.total_cents == 100_000 and money.budget.unreserved_cents == 50_000
+    finally:
+        repo.close()
+
+
 @pytest.mark.parametrize("status,reported,recorded", [("filled", 10, 0), ("canceled", 3, 0), ("canceled", 3, 2.9999999999)])
 def test_missing_legacy_terminal_execution_is_unknown_until_reconciled(
     day_pnl_repo, status: str, reported: float, recorded: float,

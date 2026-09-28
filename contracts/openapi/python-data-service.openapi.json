@@ -100,6 +100,179 @@
         "title": "AccountFreezeState",
         "type": "object"
       },
+      "AccountMoneyView": {
+        "additionalProperties": false,
+        "description": "Where one account's money is: the single read every money bar draws.\n\nPython authors every dollar string and every width. When ``ready``, the\nsegments sum exactly (in cents) to ``total_usd``, their widths to 10000\nbasis points, and ``free_to_deploy_usd`` is the Deploy preview's\nunreserved cash. Otherwise every figure is absent and ``detail`` names\nthe reason and its fix -- an unknown is never shown as $0.",
+        "properties": {
+          "account_charges_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Charges Usd"
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Usd"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "equity_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equity Usd"
+          },
+          "free_to_deploy_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free To Deploy Usd"
+          },
+          "held_by_stopped_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held By Stopped Usd"
+          },
+          "in_bots_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Bots Usd"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "open_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Usd"
+          },
+          "outside_bots_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outside Bots Usd"
+          },
+          "segments": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/MoneySegment"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable",
+              "legacy"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "today_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Today Pnl Usd"
+          },
+          "total_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Usd"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "world",
+          "account_id"
+        ],
+        "title": "AccountMoneyView",
+        "type": "object"
+      },
       "AccountOperatorPosture": {
         "additionalProperties": false,
         "description": "One canonical account-level operator decision, authored from one\nevidence cut (issue #1664).\n\n``condition`` is ``None`` exactly when the account is healthy; in that\ncase the ``account_desk`` projection is also ``None`` and\n``status_headline`` / ``status_detail`` carry the backend-authored healthy\ncopy. Whenever ``condition`` is set, ``account_desk`` is required \u2014 a\nnon-null condition can never validate without it, so the desk never\nsilently reads ``None`` for a live blocking condition. The projection\nshares ``condition`` (identity and severity) and carries the desk's\ndisposition, copy, and moves per ADR 0027; its own ``host`` field is\nvalidated to be ``account_desk``. The former ``fleet_roster`` projection\nwas retired with its host (#2192). Consumers must never re-derive a\nverdict from raw evidence.",
@@ -13786,6 +13959,16 @@
             ],
             "title": "Minimum Budget Usd"
           },
+          "money_after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountMoneyView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "observed_at_ms": {
             "anyOf": [
               {
@@ -13975,6 +14158,16 @@
               }
             ],
             "title": "Outstanding Cash Usd"
+          },
+          "parts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyParts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "pending_orders_usd": {
             "anyOf": [
@@ -26355,6 +26548,146 @@
           "evaluated_at_ms"
         ],
         "title": "MissionVerdictView",
+        "type": "object"
+      },
+      "MoneyParts": {
+        "additionalProperties": false,
+        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.",
+        "properties": {
+          "free_bps": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Free Bps",
+            "type": "integer"
+          },
+          "free_usd": {
+            "title": "Free Usd",
+            "type": "string"
+          },
+          "in_shares_bps": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "In Shares Bps",
+            "type": "integer"
+          },
+          "in_shares_usd": {
+            "title": "In Shares Usd",
+            "type": "string"
+          },
+          "pending_bps": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Pending Bps",
+            "type": "integer"
+          },
+          "pending_usd": {
+            "title": "Pending Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "in_shares_usd",
+          "in_shares_bps",
+          "pending_usd",
+          "pending_bps",
+          "free_usd",
+          "free_bps"
+        ],
+        "title": "MoneyParts",
+        "type": "object"
+      },
+      "MoneySegment": {
+        "additionalProperties": false,
+        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` and ``shortfall_usd`` belong to a running bot; ``released_usd``\nand ``still_claimed_usd`` to a stopped bot that still holds money.",
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "bot",
+              "stopped",
+              "outside",
+              "charges",
+              "new",
+              "free"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "parts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyParts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "released_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released Usd"
+          },
+          "share_bps": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Share Bps",
+            "type": "integer"
+          },
+          "shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfall Usd"
+          },
+          "still_claimed_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Still Claimed Usd"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "amount_usd",
+          "share_bps"
+        ],
+        "title": "MoneySegment",
         "type": "object"
       },
       "MonteCarloConfig": {
@@ -54507,6 +54840,73 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/money": {
+      "get": {
+        "operationId": "read_account_money_scoped_api_brokers__broker__accounts__account_id__money_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountMoneyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the account's money is: the one read every money bar draws",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
       "post": {
         "operationId": "confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post",
@@ -60875,6 +61275,81 @@
           }
         },
         "summary": "Fleet Manual Order Cancel",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/money": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/money (bot_panel_read).",
+        "operationId": "fleet_account_money_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__money_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Account Money Read",
         "tags": [
           "broker-clerks"
         ]

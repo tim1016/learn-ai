@@ -122,6 +122,7 @@ from app.broker.fleet.presence import (
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
 from app.broker.fleet.records import (
     _ACCOUNT_NICKNAME_MAX_CHARS,
+    LANE_COUNT_KEYS,
     LANE_QUIET_CONDITIONS,
     AccountAssignmentRecord,
     StoredLifecycleState,
@@ -930,23 +931,37 @@ async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> st
     return nickname
 
 
-def _summary_with_live_nickname(
-    summary: object, nickname: str | None
+async def _guarded_lane_counts() -> Mapping[str, int]:
+    """This lane's bot and attention counts for its account card (PRD #2560).
+
+    Read fresh every beat, like the nickname, and just as unable to end it:
+    each count is taken and guarded on its own by ``lane_counts``, and a count
+    it could not take is simply absent from this beat -- never sent as zero.
+    """
+    from app.services.broker_v2_panel.lane_summary import lane_counts
+
+    return (await lane_counts()).reported()
+
+
+def _summary_with_live_facts(
+    summary: object, nickname: str | None, counts: Mapping[str, int] | None = None,
 ) -> Mapping[str, object] | None:
-    """``summary`` with its ``account_nickname`` replaced by a fresh read.
+    """``summary`` with its per-beat facts replaced by fresh reads.
 
     Everything else in the bounded summary (``endpoint_mode``,
     ``authority_state``, ``detail``) is confirm-time state that only changes
-    on a rebind, so only this one key gets touched here — the rest is
-    whatever ``heartbeat_facts`` last computed at confirm/boot.
+    on a rebind, so only the nickname and the lane counts are touched here —
+    the rest is whatever ``heartbeat_facts`` last computed at confirm/boot. A
+    count missing from ``counts`` is removed rather than left stale.
     """
     if not isinstance(summary, Mapping):
         return None
-    refreshed = dict(summary)
+    refreshed = {key: value for key, value in summary.items() if key not in LANE_COUNT_KEYS}
     if nickname is not None:
         refreshed["account_nickname"] = nickname
     else:
         refreshed.pop("account_nickname", None)
+    refreshed.update(counts or {})
     return refreshed
 
 
@@ -1198,12 +1213,13 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 reported = boot.reported_facts
                 summary = reported.get("reported_summary")
                 account_id = reported.get("reported_account_id")
-                live_summary = _summary_with_live_nickname(
+                live_summary = _summary_with_live_facts(
                     summary,
                     await _guarded_live_nickname(
                         clerk_id=boot.clerk_id,
                         account_id=account_id if isinstance(account_id, str) else None,
                     ),
+                    await _guarded_lane_counts(),
                 )
                 try:
                     learned_lifecycle = await boot.presence.observe(
@@ -1426,7 +1442,8 @@ def heartbeat_facts(
     and visibly. The account's nickname (PRD #2182) is not part of this
     confirm-time snapshot — it is folded in fresh, per beat, by
     ``start_heartbeat`` (see its docstring), which is the only place that
-    ever writes ``account_nickname`` onto the outgoing summary.
+    ever writes ``account_nickname`` or the lane counts onto the outgoing
+    summary.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather

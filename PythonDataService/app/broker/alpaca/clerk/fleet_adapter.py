@@ -29,6 +29,7 @@ from app.broker.fleet.provider import (
     ProviderOperation,
     ServedContext,
 )
+from app.broker.fleet.records import LANE_COUNT_KEYS
 
 _ADAPTER_VERSION = "alpaca-fleet.9"
 
@@ -412,6 +413,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         ),
         _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
         _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
+        _op("account_money_read", "GET", "/accounts/{account_id}/money", capability=Capability.BOT_PANEL_READ, account=True),
         _op("bot_deploy_command_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-command", capability=Capability.BOT_PANEL_READ, account=True),
         _op(
             "bot_cohort_archive_read",
@@ -914,8 +916,9 @@ class AlpacaProviderAdapter:
 
         The agent's bounded typed observation (endpoint mode, authority
         state, and — when the confirmed account has one set — its nickname,
-        PRD #2182) is carried through with the registry's confirmed facts; no
-        financial quantity is computed or combined here (FR-034).
+        PRD #2182, and the lane's own bot and attention counts, PRD #2560) is
+        carried through with the registry's confirmed facts; no financial
+        quantity is computed or combined here (FR-034).
         """
         reported = observation.get("reported_summary")
         summary: dict[str, object] = {
@@ -933,6 +936,8 @@ class AlpacaProviderAdapter:
                 summary["detail"] = reported.get("detail")
             if reported.get("account_nickname") is not None:
                 summary["account_nickname"] = reported.get("account_nickname")
+            # Counted by the lane itself; carried, never recomputed here.
+            summary.update({key: reported[key] for key in LANE_COUNT_KEYS if reported.get(key) is not None})
         return summary
 
     def validate_served_context(self, context: ServedContext) -> None:

@@ -6,27 +6,41 @@ installed authorities. Browser amounts are consent, never cash observations.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from decimal import Decimal, Inexact, localcontext
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id, synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.account_money import (
+    AccountMoney,
+    BarParts,
+    BarSegment,
+    MoneyBarUnavailable,
+    MoneyConservationError,
+    bot_parts,
+    money_bar,
+)
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime, get_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.budgets import budget_entry_decision, entry_requirement
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
     cents_required,
     cents_spendable,
     consent_cents,
+    display_cents,
     dollars,
     money_context,
     normalize_money,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
@@ -35,22 +49,25 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
+    AccountMoneyView,
     BudgetDeployCommandReceipt,
     DeployBudgetConsent,
     DeploymentBudgetPreview,
     DeploymentBudgetShortcut,
     DeploymentBudgetView,
+    MoneyParts,
+    MoneySegment,
 )
 from app.services.bot_runner import UnknownBotError, get_bot_task_registry
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.market_liveness import prepared_top_of_book
 
+logger = logging.getLogger(__name__)
+
 
 def display_dollars(amount: Decimal) -> str:
     """Display only; this rounded value never feeds custody admission."""
-    with money_context(), localcontext() as context:
-        context.traps[Inexact] = False
-        return str(amount.quantize(Decimal("0.01")))
+    return dollars(display_cents(amount))
 
 
 def _primary(account_id: str) -> ActiveClerkRuntime:
@@ -100,6 +117,9 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             )
         requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         minimum = cents_required(requirement)
+        amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
+        # Dry Run never draws on the account's money, so it has no bar.
+        money_after: AccountMoneyView | None = None
         if world == "synthetic":
             # Private starting cash is the consent amount, never a copy of
             # parent cash. No real account risk policy is borrowed.
@@ -123,6 +143,9 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                     raise BudgetUnavailable("Apply account risk limits in Configuration and wait for fresh cash and risk evidence.")
                 projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
                 available = projection.unreserved_cents
+                # Drawn under the same fence from the same observation, so the
+                # bar's free to deploy is exactly this preview's unreserved cash.
+                money_after = _money_view(repo, observation, world=world, account_id=account_id, new_cents=amount)
                 observed_at = observation.observed_at_ms
                 risk_revision = snapshot.policy.revision
                 with money_context():
@@ -140,8 +163,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                     shortcuts.append(DeploymentBudgetShortcut(key=key, label=label, amount_usd=dollars(cents), explanation=f"{label} of ${dollars(available)} currently unreserved cash."))
         token = None
         confirmation = None
-        if request.budget is not None:
-            amount = consent_cents(request.budget.amount_usd)
+        if request.budget is not None and amount is not None:
             if request.budget.risk_revision != risk_revision:
                 raise BudgetUnavailable("Risk limits changed. Review the current limits and budget again.")
             if amount < minimum:
@@ -164,6 +186,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             estimated_price_usd=display_dollars(normalize_money(quote.ask)), risk_revision=risk_revision,
             risk_limits_summary=risk_summary,
             shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
+            money_after=money_after,
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return DeploymentBudgetPreview(state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id)
@@ -282,9 +305,7 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
         if sync is None:
             raise BudgetUnavailable("Wait for fresh account cash and risk evidence. The original commitment is retained.")
         risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
-        observation = sync.envelope.fresh_observation(repo.clock())
-        if observation is None:
-            raise BudgetUnavailable(risk.detail)
+        observation = _fresh_observation(repo, sync.envelope)
         projected = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
         own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
         eligible, detail = False, risk.detail
@@ -317,10 +338,139 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
                 shortfall_usd=dollars(cents_required(max(Decimal(0), -own.free))),
                 entry_eligible=eligible,
                 observed_at_ms=observation.observed_at_ms,
+                parts=_parts_view(bot_parts(own)),
             )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError, ValidationError) as exc:
         return DeploymentBudgetView(state="unavailable", detail=str(exc), strategy_instance_id=sid, world=world, committed_usd=dollars(row["committed_cents"]))
 
 
+def _fresh_observation(repo: ClerkSqliteRepository, envelope: LiveEnvelopeGate) -> AccountObservation:
+    """The cash observation every money read judges, or why there is none.
+
+    It is the one the Deploy preview admits against. A missing one is named
+    by the one readiness check -- a missing loss limit, a loss hold, evidence
+    that aged out -- and is never a zero.
+    """
+    observation = envelope.fresh_observation(repo.clock())
+    if observation is None:
+        raise BudgetUnavailable(current_risk_readiness(repo, envelope=envelope, now_ms=repo.clock()).detail)
+    return observation
+
+
+def _read_account_money(repo: ClerkSqliteRepository, observation: AccountObservation) -> AccountMoney:
+    return repo.account_money(
+        cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,
+        modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms,
+    )
+
+
+def account_money_view(account_id: str) -> AccountMoneyView:
+    """Where this account's money is, from its own clerk (``account_money_read``)."""
+    runtime = _primary(account_id)
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    world = runtime.account_authority_kind
+    with repo.write_fence():
+        if repo.budget_authority_version() < 2:
+            return AccountMoneyView(
+                state="legacy", world=world, account_id=account_id,
+                detail="This account has not switched to budgets. Switch it in Settings to see where its money is.",
+            )
+        try:
+            if runtime.envelope_sync is None:
+                raise BudgetUnavailable("Wait for fresh account cash and risk evidence.")
+            observation = _fresh_observation(repo, runtime.envelope_sync.envelope)
+        except BudgetUnavailable as exc:
+            return AccountMoneyView(state="unavailable", detail=str(exc), world=world, account_id=account_id)
+        return _money_view(repo, observation, world=world, account_id=account_id)
+
+
+def _money_view(
+    repo: ClerkSqliteRepository, observation: AccountObservation, *, world: AuthorityKind, account_id: str,
+    new_cents: int | None = None,
+) -> AccountMoneyView:
+    """Draw the account's bar in Python-authored dollars, or say why it cannot be.
+
+    The caller holds the custody fence. ``new_cents`` is a proposed Deploy,
+    carved out of free to deploy as a ``new`` slice.
+    """
+    try:
+        money = _read_account_money(repo, observation)
+        bar = money_bar(money, new_cents=new_cents)
+    except (BudgetUnavailable, MoneyBarUnavailable, MoneyInputError, RateNotPinnedError) as exc:
+        return AccountMoneyView(state="unavailable", detail=str(exc), world=world, account_id=account_id)
+    except MoneyConservationError:
+        # A projection bug, never a display: said loudly here and to the owner,
+        # without taking the Deploy preview that embeds this bar down with it.
+        logger.exception("Account money does not add up", extra={"action": "account_money_unconserved", "account_id": account_id})
+        return AccountMoneyView(
+            state="unavailable", world=world, account_id=account_id,
+            detail="This account's money does not add up, so the bar is withheld. The fault is logged for repair.",
+        )
+    with money_context():
+        equity = None if observation.equity_usd is None else normalize_money(observation.equity_usd)
+        today = None
+        if observation.equity_usd is not None and observation.last_equity_usd is not None:
+            day = observed_day_pnl(observation=observation, now_ms=repo.clock())
+            today = normalize_money(day.total_usd) if day.known else None
+        return AccountMoneyView(
+            state="ready", detail="Cash plus shares at the price paid.", world=world, account_id=account_id,
+            observed_at_ms=observation.observed_at_ms,
+            total_usd=dollars(bar.total_cents), cash_usd=dollars(bar.cash_cents),
+            free_to_deploy_usd=dollars(bar.cents_of("free")), in_bots_usd=dollars(bar.cents_of("bot")),
+            held_by_stopped_usd=dollars(bar.cents_of("stopped")), outside_bots_usd=dollars(bar.cents_of("outside")),
+            account_charges_usd=dollars(bar.cents_of("charges")),
+            open_pnl_usd=None if equity is None else dollars(display_cents(equity - money.total)),
+            equity_usd=None if equity is None else dollars(display_cents(equity)),
+            today_pnl_usd=None if today is None else dollars(display_cents(today)),
+            segments=tuple(_segment_view(segment) for segment in bar.segments),
+        )
+
+
+def _segment_label(segment: BarSegment) -> str:
+    """The legend's words for a slice: one wording per fact (PRD #2560)."""
+    match segment.kind, segment.strategy_instance_id:
+        case "bot", str(sid):
+            return sid
+        case "stopped", str(sid):
+            return f"held by stopped bot {sid}"
+        case "outside", None:
+            return "held outside any bot"
+        case "charges", None:
+            return "account charges"
+        case "new", None:
+            return "new bot"
+        case "free", None:
+            return "free to deploy"
+    raise ValueError(f"a {segment.kind} slice cannot name bot {segment.strategy_instance_id!r}")
+
+
+def _segment_view(segment: BarSegment) -> MoneySegment:
+    return MoneySegment(
+        kind=segment.kind, strategy_instance_id=segment.strategy_instance_id, label=_segment_label(segment),
+        amount_usd=dollars(segment.cents), share_bps=segment.bps,
+        parts=None if segment.parts is None else _parts_view(segment.parts),
+        shortfall_usd=None if segment.shortfall_cents is None else dollars(segment.shortfall_cents),
+        released_usd=None if segment.released_cents is None else dollars(segment.released_cents),
+        still_claimed_usd=None if segment.still_claimed_cents is None else dollars(segment.still_claimed_cents),
+    )
+
+
+def _parts_view(parts: BarParts) -> MoneyParts:
+    return MoneyParts(
+        in_shares_usd=dollars(parts.in_shares_cents), in_shares_bps=parts.in_shares_bps,
+        pending_usd=dollars(parts.pending_cents), pending_bps=parts.pending_bps,
+        free_usd=dollars(parts.free_cents), free_bps=parts.free_bps,
+    )
+
+
 def budget_error(exc: BudgetUnavailable) -> PanelRunnerError:
     return PanelRunnerError("Deployment budget is unavailable.", detail=str(exc), next_action="Review the current budget and account evidence, then retry.", http_status=409, operation_attempted=False)
+
+
+def money_error(exc: BudgetUnavailable) -> PanelRunnerError:
+    """This clerk is not serving the account's custody, so no money can be read."""
+    return PanelRunnerError(
+        "This account's money cannot be read right now.", detail=str(exc),
+        next_action="Open the account's Settings to see why, then retry.", http_status=503, operation_attempted=False,
+    )

@@ -9,10 +9,12 @@ import pytest
 
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
+    apportion_units,
     cash_admits,
     cents_required,
     cents_spendable,
     consent_cents,
+    display_cents,
     money_context,
     normalize_money,
     notional,
@@ -91,3 +93,27 @@ def test_dollars_renders_signed_cents_with_two_decimals() -> None:
     assert dollars(5) == "0.05"
     assert dollars(125) == "1.25"
     assert dollars(-125) == "-1.25"
+
+
+def test_apportion_units_is_largest_remainder_with_key_ties_and_loses_no_unit() -> None:
+    assert apportion_units(10, {"b": Decimal(1), "a": Decimal(1), "c": Decimal(1)}) == {"a": 4, "b": 3, "c": 3}
+    assert apportion_units(0, {"a": Decimal(0)}) == {"a": 0}
+    weights = {"x": Decimal("0.125"), "y": Decimal("10.01"), "z": Decimal("3")}
+    shares = apportion_units(10_000, weights)
+    assert sum(shares.values()) == 10_000
+    total = sum(Fraction(value) for value in weights.values())
+    for key, value in weights.items():
+        assert abs(Fraction(shares[key]) - 10_000 * Fraction(value) / total) < 1
+
+
+@pytest.mark.parametrize(("units", "weights"), [(1, {"a": Decimal(0)}), (-1, {"a": Decimal(1)}), (1, {"a": Decimal(-1)})])
+def test_apportion_units_refuses_to_invent_or_lose_units(units: int, weights: dict[str, Decimal]) -> None:
+    with pytest.raises(ValueError):
+        apportion_units(units, weights)
+
+
+@pytest.mark.parametrize(("amount", "cents"), [
+    ("0.005", 0), ("0.015", 2), ("1.25125", 125), ("764.715", 76472), ("-3.205", -320), ("-0.004", 0),
+])
+def test_display_cents_rounds_half_even_for_shown_figures(amount: str, cents: int) -> None:
+    assert display_cents(Decimal(amount)) == cents

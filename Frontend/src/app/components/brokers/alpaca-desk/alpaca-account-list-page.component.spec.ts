@@ -1,9 +1,9 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
+import axe from 'axe-core';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
 import {
   provideFleetDirectory,
   testLane,
@@ -14,40 +14,21 @@ import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import type { FleetDirectoryResponse } from '../../../fleet/fleet-directory.types';
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AlpacaLiveVerdictService } from '../../../services/alpaca-live-verdict.service';
-import { BrokersService } from '../../../services/brokers.service';
+import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
-import { fakeCatalogBot } from '../../../testing/bot-panel-fixtures';
-import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
-import { AlpacaAccountListPageComponent } from './alpaca-account-list-page.component';
+import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import {
+  ADD_ACCOUNT_RUNBOOK_URL,
+  AlpacaAccountListPageComponent,
+  DIRECTORY_RUNBOOK_URL,
+} from './alpaca-account-list-page.component';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 
 const LIVE_CLERK_ID = 'clrk_live0000000000000000bb';
 const LIVE_ACCOUNT_ID = 'live-account-0001';
 
-function fakeAccount(equity: number, accountId: string): BrokerAccountSnapshot {
-  return {
-    broker: 'alpaca',
-    account_id: accountId,
-    account_mode: 'paper',
-    account_status: 'ACTIVE',
-    account_blocked: false,
-    trading_blocked: false,
-    pattern_day_trader: false,
-    currency: 'USD',
-    cash: equity,
-    equity,
-    buying_power: equity,
-    portfolio_value: equity,
-    long_market_value: 0,
-    short_market_value: 0,
-    created_at_ms: null,
-    observed_at_ms: 1_757_000_000_000,
-  } as BrokerAccountSnapshot;
-}
-
 interface ListDoubles {
-  getAccount?: (target: ResourceTarget) => Promise<BrokerAccountSnapshot>;
-  getCatalog?: (target: ResourceTarget) => Promise<ReturnType<typeof fakeCatalogBot>[]>;
+  getAccountMoney?: (target: ResourceTarget) => Promise<AccountMoneyView>;
 }
 
 async function renderList(
@@ -63,17 +44,12 @@ async function renderList(
       provideRouter([]),
       { provide: AlpacaLiveVerdictService, useValue: { stateFor: () => fakeVerdictState('paper') } },
       {
-        provide: BrokersService,
-        useValue: {
-          getAccount:
-            doubles.getAccount
-            ?? ((target: ResourceTarget) =>
-              Promise.resolve(fakeAccount(10_000, target.accountId ?? ''))),
-        },
-      },
-      {
         provide: BrokerV2PanelService,
-        useValue: { getCatalog: doubles.getCatalog ?? (() => Promise.resolve([fakeCatalogBot()])) },
+        useValue: {
+          getAccountMoney:
+            doubles.getAccountMoney
+            ?? ((target: ResourceTarget) => Promise.resolve(fakeAccountMoney({ account_id: target.accountId ?? '' }))),
+        },
       },
       {
         provide: BrokerConfigurationService,
@@ -89,6 +65,31 @@ async function renderList(
       },
     ],
   });
+}
+
+/** A directory double in a given load state, for the page-level states. */
+function directoryDouble(state: { error?: unknown; loading?: boolean; refresh?: () => Promise<unknown> }) {
+  return {
+    provide: FleetDirectoryService,
+    useValue: {
+      value: () => undefined,
+      error: () => state.error,
+      isLoading: () => state.loading ?? false,
+      lanesOf: () => [],
+      refresh: state.refresh ?? (() => Promise.reject(new Error('still down'))),
+    },
+  };
+}
+
+function routeDouble() {
+  return {
+    provide: ActivatedRoute,
+    useValue: {
+      queryParamMap: of(convertToParamMap({})),
+      paramMap: of(convertToParamMap({})),
+      snapshot: { queryParamMap: convertToParamMap({}), paramMap: convertToParamMap({}) },
+    },
+  };
 }
 
 /** Paper and Live side by side — the two-account shape every isolation
@@ -169,69 +170,69 @@ describe('AlpacaAccountListPageComponent', () => {
     expect(screen.queryByText(/open its bots roster/i)).toBeNull();
   });
 
-  it('says the directory itself is unavailable rather than showing an empty list', async () => {
+  it('says the directory itself is unavailable, with a retry and the runbook that fixes it', async () => {
+    const refresh = vi.fn(() => Promise.reject(new Error('still down')));
     await render(AlpacaAccountListPageComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: FleetDirectoryService,
-          useValue: {
-            value: () => undefined,
-            error: () => new Error('directory down'),
-            isLoading: () => false,
-            lanesOf: () => [],
-          },
-        },
-        {
-          provide: ActivatedRoute,
-          useValue: {
-            queryParamMap: of(convertToParamMap({})),
-            paramMap: of(convertToParamMap({})),
-            snapshot: { queryParamMap: convertToParamMap({}), paramMap: convertToParamMap({}) },
-          },
-        },
-      ],
+      providers: [provideRouter([]), directoryDouble({ error: new Error('directory down'), refresh }), routeDouble()],
     });
 
-    expect(screen.getByRole('alert').textContent).toContain('fleet directory is unavailable');
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('fleet directory is unavailable');
+    expect(screen.getByRole('link', { name: 'How to bring the account list back' }).getAttribute('href')).toBe(
+      DIRECTORY_RUNBOOK_URL,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/It is still unavailable\./)).toBeTruthy();
   });
 
-  it("keeps one account whole while another's reads fail (FR-093)", async () => {
-    // Every card owns its own reads, so a failure is that account's alone.
-    // The proof is two accounts side by side: one card reporting what it
-    // could not read while the other renders its money and its bots intact.
-    const getAccount = vi.fn((target: ResourceTarget) =>
-      target.clerkId === LIVE_CLERK_ID
-        ? Promise.reject(new Error('live account read failed'))
-        : Promise.resolve(fakeAccount(10_000, target.accountId ?? '')),
-    );
-    const getCatalog = vi.fn((target: ResourceTarget) =>
-      target.clerkId === LIVE_CLERK_ID
-        ? Promise.reject(new Error('live roster read failed'))
-        : Promise.resolve([fakeCatalogBot()]),
-    );
-    await renderList({}, twoAccounts(), { getAccount, getCatalog });
+  it('names the next step when no account is registered yet', async () => {
+    await render(AlpacaAccountListPageComponent, {
+      providers: [provideRouter([]), directoryDouble({}), routeDouble()],
+    });
 
-    expect(await screen.findByText('Equity unavailable')).toBeTruthy();
-    expect(await screen.findByText('Bot count unavailable')).toBeTruthy();
+    expect(screen.getByText('No Alpaca accounts are registered yet.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Add an Alpaca account' }).getAttribute('href')).toBe(
+      ADD_ACCOUNT_RUNBOOK_URL,
+    );
+  });
+
+  it("keeps one account whole while another's money read fails (FR-093)", async () => {
+    // Every card owns its own read, so a failure is that account's alone.
+    const getAccountMoney = vi.fn((target: ResourceTarget) =>
+      target.clerkId === LIVE_CLERK_ID
+        ? Promise.reject(new Error('live money read failed'))
+        : Promise.resolve(fakeAccountMoney({ account_id: target.accountId ?? '' })),
+    );
+    await renderList({}, twoAccounts(), { getAccountMoney });
+
+    expect(await screen.findByText('Account money could not be read. Open the account to see why.')).toBeTruthy();
     // The healthy account is untouched by its sibling's outage.
-    expect(await screen.findByText('$10,000.00')).toBeTruthy();
-    expect(await screen.findByText('1 bot running')).toBeTruthy();
+    expect((await screen.findByText(/Account money/, { selector: '.lane-card__figure' })).textContent).toContain('$100,000.00');
     expect(screen.getAllByRole('link')).toHaveLength(2);
   });
 
   it('reads each account under its own lane identity, never a sibling’s', async () => {
-    const getAccount = vi.fn((target: ResourceTarget) =>
-      Promise.resolve(fakeAccount(10_000, target.accountId ?? '')),
+    const getAccountMoney = vi.fn((target: ResourceTarget) =>
+      Promise.resolve(fakeAccountMoney({ account_id: target.accountId ?? '' })),
     );
-    await renderList({}, twoAccounts(), { getAccount });
+    await renderList({}, twoAccounts(), { getAccountMoney });
 
-    await vi.waitFor(() => expect(getAccount).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(getAccountMoney).toHaveBeenCalledTimes(2));
     expect(
-      getAccount.mock.calls.map(([target]) => [target.clerkId, target.accountId]),
+      getAccountMoney.mock.calls.map(([target]) => [target.clerkId, target.accountId]),
     ).toEqual([
       [TEST_CLERK_ID, TEST_ACCOUNT_ID],
       [LIVE_CLERK_ID, LIVE_ACCOUNT_ID],
     ]);
+  });
+
+  it('has no detectable accessibility violations with its mini bars and counts', async () => {
+    await renderList({}, twoAccounts());
+    await screen.findAllByText(/Free to deploy/);
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+
+    expect(results.violations).toEqual([]);
   });
 });

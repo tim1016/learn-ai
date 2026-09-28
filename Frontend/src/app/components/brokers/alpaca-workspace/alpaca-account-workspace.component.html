@@ -14,19 +14,26 @@
         }
       </span>
     } @else {
-      <span class="account-workspace__fact">
-        Equity <strong>{{ fmtCurrency(equity()) }}</strong>
-      </span>
-
-      <span class="account-workspace__fact">
-        Sync
-        @if (reconciliation(); as sync) {
-          <strong>{{ sync.verdict | receiptLabel }}</strong>
-          <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
-        } @else {
-          <strong>{{ syncUnavailable() }}</strong>
+      @let header = money();
+      @switch (header.kind) {
+        @case ('ready') {
+          <dl class="account-workspace__figures">
+            <div><dt>Free to deploy</dt><dd>{{ header.view.free_to_deploy_usd | currency: 'USD' }}</dd></div>
+            <div><dt>Cash</dt><dd>{{ header.view.cash_usd | currency: 'USD' }}</dd></div>
+            <div>
+              <dt>Equity</dt>
+              <dd>{{ header.view.equity_usd ? (header.view.equity_usd | currency: 'USD') : 'Unavailable' }}</dd>
+            </div>
+            <div>
+              <dt>Today</dt>
+              <dd>{{ header.view.today_pnl_usd ? (header.view.today_pnl_usd | currency: 'USD') : 'Unavailable' }}</dd>
+            </div>
+          </dl>
         }
-      </span>
+        @case ('reason') {
+          <p class="account-workspace__money-reason">{{ header.text }}</p>
+        }
+      }
     }
 
     @if (botsPageActions(); as actions) {

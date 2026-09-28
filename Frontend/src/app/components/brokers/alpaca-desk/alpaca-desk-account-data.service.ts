@@ -3,6 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
@@ -21,10 +22,15 @@ import { CurrentUrlService } from '../../../shell/current-url.service';
  * read: the workspace's sync indicator and `AlpacaHoldBannerComponent` both
  * name this account's hold and reconciliation state, so both read the one
  * resource here rather than each polling `getClerkStatus` on its own (#2185
- * — the same fact was read three times on one screen). */
+ * — the same fact was read three times on one screen).
+ *
+ * `money` is the account-money read (PRD #2560 D12): the header's Free to
+ * deploy, Cash, Equity and Today, and every money bar on the account's
+ * pages, draw from this one resource. */
 @Injectable()
 export class AlpacaDeskAccountDataService {
   private readonly brokers = inject(BrokersService);
+  private readonly panel = inject(BrokerV2PanelService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly route = inject(ActivatedRoute);
   private readonly routeParams = toSignal(this.route.paramMap, {
@@ -137,6 +143,26 @@ export class AlpacaDeskAccountDataService {
         throw new Error('The Clerk is observing an account outside the rendered account route.');
       }
       return status;
+    },
+  });
+
+  /** Where this account's money is, confirmed against the routed account on
+   * the same terms as `account`. Read only from a lane that declares the
+   * bot-panel read it is served under; a lane that does not has no money
+   * read to fail. */
+  readonly money = resource({
+    params: () => {
+      const target = this.target();
+      if (target === null) return undefined;
+      const lane = this.fleetDirectory.lane('alpaca', target.clerkId);
+      return lane?.capabilities.includes('bot_panel_read') ? target : undefined;
+    },
+    loader: async ({ params }) => {
+      const money = await this.panel.getAccountMoney(params);
+      if (!sameAlpacaAccount(money.account_id, params.accountId)) {
+        throw new Error('The Account Clerk returned money for an account outside the rendered desk route.');
+      }
+      return money;
     },
   });
 }

@@ -8,7 +8,7 @@ import {
   inject,
   viewChild,
 } from '@angular/core';
-import { DOCUMENT } from '@angular/common';
+import { CurrencyPipe, DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 
@@ -17,7 +17,7 @@ import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chi
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
 import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
-import { fmtCurrency } from '../../broker/format';
+import type { AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import {
   ACCOUNT_WORKSPACE_TABS,
   accountWorkspaceLocation,
@@ -30,13 +30,20 @@ import { laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
-/** How often the header re-reads the account and its Clerk status. Carried
- * over from the Bots roster's own account poll, which this header replaced:
- * equity and the reconciliation verdict both move while an operator sits on
- * one tab, and neither is pushed. */
+/** How often the header re-reads the account's money, its account read and
+ * its Clerk status — the shared reads its tabs render too. Carried over from
+ * the Bots roster's own account poll, which this header replaced: the money,
+ * equity and the reconciliation verdict all move while an operator sits on
+ * one tab, and none is pushed. */
 const ACCOUNT_POLL_MS = 15_000;
+
+/** The header's money figures, or why there are none. Every figure is a
+ * backend-authored string from the account-money read; the header adds
+ * nothing up and never shows an unknown as $0. */
+type HeaderMoney =
+  | { readonly kind: 'ready'; readonly view: AccountMoneyView }
+  | { readonly kind: 'reason'; readonly text: string };
 
 /** Why the Overview tab is not offered on a lane with no confirmed account:
  * it is that account's own page, and there is no account. */
@@ -62,11 +69,12 @@ type WorkspaceAccountStatus =
  * alone (FR-091/FR-092); nothing here remembers a last-used account.
  *
  * Every fact on the header is one lane's own: the name from the lane
- * descriptor, the mode from that lane's server-owned live verdict (never
- * composed here — ADR 0011 §7), equity and the reconciliation verdict from
- * this account's own confirmed reads. One lane's failure is its own
- * (FR-093); the header says what it could not read rather than borrowing a
- * sibling's fact.
+ * descriptor, the mode from that lane's server-owned live verdict worded one
+ * way (never composed here — ADR 0011 §7), and Free to deploy, Cash, Equity
+ * and Today from this account's own money read (PRD #2560). One lane's
+ * failure is its own (FR-093); the header says what it could not read rather
+ * than borrowing a sibling's fact. The sync verdict is not a header fact: an
+ * out-of-sync account is an attention line on Home.
  *
  * Deploy is one of the five tabs, not an overlay: `AlpacaDeployTabComponent`
  * reads this same `AlpacaDeskAccountDataService` instance for its target
@@ -79,10 +87,10 @@ type WorkspaceAccountStatus =
   imports: [
     AlpacaAccountSwitcherComponent,
     AlpacaLaneModeChipComponent,
+    CurrencyPipe,
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,
-    TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-account-workspace.component.html',
   styleUrl: './alpaca-account-workspace.component.scss',
@@ -105,8 +113,6 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
-
-  protected readonly fmtCurrency = fmtCurrency;
 
   /** The rendered route owns lane identity — the same stance
    * `AlpacaDeskAccountDataService` takes, so the header and the tab below it
@@ -191,27 +197,17 @@ export class AlpacaAccountWorkspaceComponent {
     return laneIsReady(lane) ? { kind: 'unbound' } : { kind: 'lifecycle', state: lane.lifecycle_state };
   });
 
-  protected readonly equity = computed(() =>
-    this.accountData.account.hasValue() ? this.accountData.account.value().equity : null,
-  );
-
-  /** The latest Clerk↔broker reconciliation, or `null` when none has been
-   * recorded for this account yet. Read through `AlpacaDeskAccountDataService`
-   * — the Overview tab's hold banner names the same fact, so both read the
-   * one shared resource rather than each polling `getClerkStatus` on their
-   * own (#2185). */
-  protected readonly reconciliation = computed(() =>
-    this.accountData.clerkStatus.hasValue()
-      ? (this.accountData.clerkStatus.value().latest_reconciliation ?? null)
-      : null,
-  );
-
-  /** What the sync indicator says when there is no verdict to show. The read
-   * failing and the account never having been reconciled are different
-   * facts, so they read differently. */
-  protected readonly syncUnavailable = computed(() =>
-    this.accountData.clerkStatus.error() === undefined ? 'Not reconciled' : 'Reconciliation unavailable',
-  );
+  protected readonly money = computed<HeaderMoney>(() => {
+    const money = this.accountData.money;
+    if (money.hasValue()) {
+      const view = money.value();
+      return view.state === 'ready' ? { kind: 'ready', view } : { kind: 'reason', text: view.detail };
+    }
+    if (money.error() !== undefined) return { kind: 'reason', text: 'Account money could not be read.' };
+    return money.status() === 'idle'
+      ? { kind: 'reason', text: 'This lane does not report account money.' }
+      : { kind: 'reason', text: 'Reading account money…' };
+  });
 
   private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
 
@@ -263,11 +259,12 @@ export class AlpacaAccountWorkspaceComponent {
       queueMicrotask(() => this.workspaceBody().nativeElement.focus());
     });
 
-    // Equity and the reconciliation verdict both move while the operator
-    // stays on one tab. Paused while the tab is hidden, as every other poll
-    // on this surface is.
+    // The money, the account read and the reconciliation verdict all move
+    // while the operator stays on one tab. Paused while the tab is hidden, as
+    // every other poll on this surface is.
     const accountTimer = setInterval(() => {
       if (this.document.visibilityState !== 'visible') return;
+      if (!this.accountData.money.isLoading()) this.accountData.money.reload();
       if (!this.accountData.account.isLoading()) this.accountData.account.reload();
       if (!this.accountData.clerkStatus.isLoading()) this.accountData.clerkStatus.reload();
     }, ACCOUNT_POLL_MS);
