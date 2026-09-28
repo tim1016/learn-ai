@@ -20,6 +20,7 @@ import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-hom
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
+import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -316,6 +317,35 @@ describe('routes', () => {
       expect(route.params).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9' });
       expect(route.data).toMatchObject({ broker: 'alpaca' });
     });
+
+    // Review B3 (#2562): every place an attention line's fix can send the
+    // owner resolves through the app's own route table to its own page —
+    // never the `**` wildcard, which lands on the Data Lab. Keyed by every
+    // destination, so a new one cannot land without a row here.
+    const FIX_PAGES: Readonly<Record<AccountWorkspaceFixDestination, { url: string; page: unknown }>> = {
+      bot: { url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', page: BotPanelShellComponent },
+      activity: { url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', page: AlpacaActivityPageComponent },
+      settings: { url: '/brokers/alpaca/clerks/clrk_spec/settings', page: AlpacaSettingsPageComponent },
+    };
+
+    it.each(Object.entries(FIX_PAGES) as [AccountWorkspaceFixDestination, { url: string; page: unknown }][])(
+      'opens the %s fix on its own page through the app’s routes',
+      async (destination, { url, page }) => {
+        TestBed.configureTestingModule({ providers: appConfig.providers });
+        const router = TestBed.inject(Router);
+        const link = accountWorkspaceFixRoute(
+          { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }, destination, 'sid-1',
+        );
+        if (link === null) throw new Error(`The ${destination} fix has no link.`);
+
+        await router.navigateByUrl(router.createUrlTree([...link.commands], { queryParams: link.queryParams }));
+
+        expect(router.url).toBe(url);
+        let route = router.routerState.snapshot.root;
+        while (route.firstChild !== null) route = route.firstChild;
+        expect(await route.routeConfig?.loadComponent?.()).toBe(page);
+      },
+    );
 
     it.each([
       ['/brokers/alpaca/clerks/clrk_spec/settings', 'Settings'],
