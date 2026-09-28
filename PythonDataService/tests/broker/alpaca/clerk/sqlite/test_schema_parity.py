@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from app.broker.alpaca.clerk.sqlite import schema
+from app.broker.alpaca.clerk.sqlite import database_verification, schema
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 
@@ -216,6 +216,142 @@ def test_v10_multi_leg_ticket_migrates_to_distinct_stable_sequence_indices() -> 
         "SELECT leg_id, sequence_index FROM manual_order_legs WHERE ticket_id = 'ticket' ORDER BY sequence_index"
     ).fetchall()
     assert rows == [("leg-a", 0), ("leg-b", 1)]
+
+
+def _authority_built_up_to(conn: sqlite3.Connection, target_version: int) -> None:
+    """Build the historical v9 baseline, then replay the exact registered
+    migration chain (``SCHEMA_MIGRATIONS``, via the real ``migrate_schema``)
+    up to ``target_version``. ``SCHEMA_VERSION`` is patched for the duration
+    so the same production upgrade path used every day is what builds the
+    fixture, rather than a second hand-rolled copy of it drifting from the
+    real one."""
+    schema.apply_v9_schema(conn)
+    conn.execute(
+        "INSERT INTO control_meta "
+        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
+        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
+        "execution_lease_owner, execution_lease_expires_at_ms) "
+        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
+    )
+    conn.commit()
+
+    import pytest
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(schema, "SCHEMA_VERSION", target_version)
+        schema.migrate_schema(conn, from_version=9)
+    finally:
+        mp.undo()
+
+
+def _seed_one_active_run_position_and_working_order(conn: sqlite3.Connection) -> None:
+    """Evidence shape a pre-#2550 Paper/Live account has on disk today: one
+    ACTIVE run, one open position, one working (unfilled) order."""
+    conn.execute(
+        "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms) "
+        "VALUES ('spy', 'SPY', 'hash', 1, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO custody_subjects (subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('bot:spy', 'BOT', 'spy', NULL, 1)"
+    )
+    conn.execute(
+        "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, stopped_at_ms) "
+        "VALUES ('run-1', 'spy', 'run-1', 'ACTIVE', 1, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO commands "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
+        "strategy_instance_id, run_id, action, state, created_at_ms, updated_at_ms) "
+        "VALUES ('cmd-1', 1, 'bot:spy', 'cmd-1', 'h', 'strategy_decision', 'spy', 'run-1', "
+        "'ENTER', 'accepted', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO effect_operations "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
+        "VALUES ('eff-1', 1, 'bot:spy', 'eff-1', 'cmd-1', 'spy', 'run-1', 'ENTER', 'accepted', "
+        "'ACCOUNT_CLERK', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO orders "
+        "(order_ref, effect_operation_id, client_order_id, broker_order_id, role, broker_state, "
+        "submitted_at_ms, updated_at_ms) "
+        "VALUES ('order-1', 'eff-1', 'order-1', NULL, 'ENTRY', 'working', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES ('bot:spy', 'spy', 'SPY', 10, 1)"
+    )
+    conn.commit()
+
+
+def _assert_migration_from_version_reaches_current_intact(tmp_path: Path, from_version: int) -> None:
+    """Every production Paper/Live custody DB is at v18 (or, mid-rollout,
+    already at v19/v20) and runs the new ALTERs on its first open after
+    #2550. A reviewer proved by hand that positions/orders/runs survive,
+    ``authorization_version`` defaults to 1, and no ``deployment_budgets``
+    rows appear; this pins that for v18, v19, and v20."""
+    import pytest
+
+    db_path = tmp_path / f"clerk-{from_version}.db"
+    conn = sqlite3.connect(db_path)
+    schema.configure_connection(conn)
+    _authority_built_up_to(conn, from_version)
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == from_version
+    _seed_one_active_run_position_and_working_order(conn)
+
+    schema.migrate_schema(conn, from_version=from_version)
+
+    assert (
+        conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
+        == schema.SCHEMA_VERSION
+    )
+    assert conn.execute("SELECT authorization_version FROM control_meta WHERE id = 1").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM deployment_budgets").fetchone()[0] == 0
+    assert conn.execute("SELECT run_id, state FROM runs WHERE run_id = 'run-1'").fetchone() == (
+        "run-1",
+        "ACTIVE",
+    )
+    assert conn.execute(
+        "SELECT subject_id, symbol, attributed_qty FROM positions WHERE subject_id = 'bot:spy'"
+    ).fetchone() == ("bot:spy", "SPY", 10.0)
+    assert conn.execute(
+        "SELECT order_ref, broker_state FROM orders WHERE order_ref = 'order-1'"
+    ).fetchone() == ("order-1", "working")
+    conn.close()
+
+    # Hash-chain/mirror parity: verify_database is the same read-only check
+    # backup/restore/cutover run against a live authority file.
+    verification = database_verification.verify_database(db_path, expected_account_id="PA1")
+    assert verification.schema_version == schema.SCHEMA_VERSION
+
+    # Re-running the migration against the same (now stale) from_version is
+    # refused cleanly -- migrate_schema's contract is fail-closed (raise +
+    # roll back), not a silent idempotent no-op, once the target columns and
+    # tables already exist.
+    conn = sqlite3.connect(db_path)
+    schema.configure_connection(conn)
+    with pytest.raises(sqlite3.OperationalError):
+        schema.migrate_schema(conn, from_version=from_version)
+    assert (
+        conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
+        == schema.SCHEMA_VERSION
+    )
+    conn.close()
+
+
+def test_v18_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
+    _assert_migration_from_version_reaches_current_intact(tmp_path, 18)
+
+
+def test_v19_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
+    _assert_migration_from_version_reaches_current_intact(tmp_path, 19)
+
+
+def test_v20_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
+    _assert_migration_from_version_reaches_current_intact(tmp_path, 20)
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
