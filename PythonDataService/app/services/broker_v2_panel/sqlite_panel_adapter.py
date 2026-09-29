@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
+from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.program_leg import LegRefusal
@@ -60,7 +61,6 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
     compose_catalog_view,
-    holdings_text,
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
@@ -625,7 +625,6 @@ def _flatten_session_blocker(
             scope="bot",
             host="bot_cockpit",
             anchor=SURFACE_ANCHOR,
-            audience="both",
             disposition="fix_here",
             headline="The trading session is unknown, so an unpriced flatten cannot be sent.",
             detail=(
@@ -641,7 +640,6 @@ def _flatten_session_blocker(
             scope="bot",
             host="bot_cockpit",
             anchor=SURFACE_ANCHOR,
-            audience="both",
             disposition="wait",
             headline=verdict.explanation,
             detail=(
@@ -659,7 +657,6 @@ def _flatten_session_blocker(
         scope="bot",
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
-        audience="both",
         disposition="fix_here",
         headline="Outside regular hours a flatten is a limit order you price.",
         detail=(
@@ -687,7 +684,6 @@ def _capability_blocker(capability: RecoveryCapability) -> OperatorBlocker:
         scope="bot" if capability.scope == "CUSTODY_SUBJECT" else "account",
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
-        audience="both",
         disposition="fix_here" if curable_here else "wait",
         headline=capability.unavailable_reason or "This recovery action is unavailable.",
         detail=capability.next_step,

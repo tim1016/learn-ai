@@ -10,14 +10,12 @@ export const OPERATOR_BLOCKER_ANCHOR_KINDS = [
   'surface',
   'verdict',
   'lease',
-  'clerk',
   'reconciliation',
   'holdings_row',
   'event',
   'cure_tools',
 ] as const;
 export type OperatorBlockerAnchorKind = (typeof OPERATOR_BLOCKER_ANCHOR_KINDS)[number];
-export type OperatorBlockerAudience = 'trader' | 'operator' | 'both';
 
 export interface OperatorBlockerAnchor {
   kind: OperatorBlockerAnchorKind;
@@ -43,11 +41,6 @@ export interface ConfirmInFormAction {
   anchor: string;
 }
 
-export interface OpenRunbookAction {
-  kind: 'open_runbook';
-  slug: string;
-}
-
 export interface RetireReplaceAction {
   kind: 'retire_replace';
 }
@@ -59,7 +52,6 @@ export interface RemoveAction {
 export type OperatorAction =
   | NavigateAction
   | ConfirmInFormAction
-  | OpenRunbookAction
   | RetireReplaceAction
   | RemoveAction;
 
@@ -95,8 +87,6 @@ export interface OperatorBlocker {
   condition: OperatorCondition;
   host: OperatorHost;
   anchor: OperatorBlockerAnchor;
-  /** Presentational routing only; never use it as an authorization decision. */
-  audience: OperatorBlockerAudience;
   disposition: Disposition;
   headline: string;
   // Optional below: the wire schema default makes the OpenAPI contract mark

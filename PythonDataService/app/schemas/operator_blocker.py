@@ -22,13 +22,11 @@ OperatorBlockerAnchorKind = Literal[
     "surface",
     "verdict",
     "lease",
-    "clerk",
     "reconciliation",
     "holdings_row",
     "event",
     "cure_tools",
 ]
-OperatorBlockerAudience = Literal["trader", "operator", "both"]
 
 _SUBJECT_KEY_ANCHOR_KINDS: frozenset[OperatorBlockerAnchorKind] = frozenset(
     {"holdings_row", "event"}
@@ -78,15 +76,6 @@ class ConfirmInFormAction(BaseModel):
     anchor: str
 
 
-class OpenRunbookAction(BaseModel):
-    """Move: open an operator runbook by backend-authored slug."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["open_runbook"]
-    slug: str
-
-
 class RetireReplaceAction(BaseModel):
     """Move: retire this bot and start a fresh deploy flow with lineage kept."""
 
@@ -104,7 +93,7 @@ class RemoveAction(BaseModel):
 
 
 OperatorAction = Annotated[
-    NavigateAction | ConfirmInFormAction | OpenRunbookAction | RetireReplaceAction | RemoveAction,
+    NavigateAction | ConfirmInFormAction | RetireReplaceAction | RemoveAction,
     Field(discriminator="kind"),
 ]
 
@@ -144,9 +133,8 @@ class OperatorCondition(BaseModel):
 class OperatorBlocker(BaseModel):
     """Host-scoped, backend-authored guidance for one operator condition.
 
-    Audience is presentational routing and confers no permission. Frontends
-    render this backend-authored guidance and must never infer a cure from a
-    reason code.
+    Frontends render this backend-authored guidance and must never infer a
+    cure from a reason code.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -154,7 +142,6 @@ class OperatorBlocker(BaseModel):
     condition: OperatorCondition
     host: OperatorHost
     anchor: OperatorBlockerAnchor
-    audience: OperatorBlockerAudience
     disposition: Disposition
     headline: str
     detail: str | None = None
@@ -170,7 +157,6 @@ class OperatorBlocker(BaseModel):
         scope: ConditionScope,
         host: OperatorHost,
         anchor: OperatorBlockerAnchor,
-        audience: OperatorBlockerAudience,
         disposition: Disposition,
         headline: str,
         detail: str | None,
@@ -189,7 +175,6 @@ class OperatorBlocker(BaseModel):
             ),
             host=host,
             anchor=anchor,
-            audience=audience,
             disposition=disposition,
             headline=headline,
             detail=detail,

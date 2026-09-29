@@ -16,7 +16,6 @@ const CONTRACT_BLOCKER: OperatorBlocker = {
   },
   host: 'bot_cockpit',
   anchor: { kind: 'reconciliation', subject_key: null },
-  audience: 'operator',
   disposition: 'fix_elsewhere',
   headline: 'Fleet state blocks starts',
   detail: 'Clear the account fleet state before starting another bot.',
@@ -34,7 +33,6 @@ describe('OperatorBlocker contract mirror', () => {
     expect(Object.keys(CONTRACT_BLOCKER).sort()).toEqual([
       'anchor',
       'applies_to',
-      'audience',
       'condition',
       'detail',
       'disposition',
@@ -47,7 +45,6 @@ describe('OperatorBlocker contract mirror', () => {
       'surface',
       'verdict',
       'lease',
-      'clerk',
       'reconciliation',
       'holdings_row',
       'event',
@@ -57,8 +54,8 @@ describe('OperatorBlocker contract mirror', () => {
 
   it('includes secondary moves for every non-wait disposition, not just terminal', () => {
     const secondaryMove: OperatorMove = {
-      label: 'Open runbook',
-      action: { kind: 'open_runbook', slug: 'fleet-contamination' },
+      label: 'Open Settings',
+      action: { kind: 'navigate', route: '/brokers/alpaca', fragment: null },
       target: null,
     };
     const fixHere: OperatorBlocker = {

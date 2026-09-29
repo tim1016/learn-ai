@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class EvidenceEntry(BaseModel):
-    """One redacted, size-capped journal entry exposed to the operator lens."""
+    """One redacted, size-capped custody record entry exposed as evidence."""
 
     model_config = ConfigDict(frozen=True)
 

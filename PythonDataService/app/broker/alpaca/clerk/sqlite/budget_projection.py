@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money
+from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money, holdings_text, quantity_text
 from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
 from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -184,25 +184,13 @@ def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
     """One holder's open shorts as one phrase, a total per symbol (H35).
 
     FIFO keeps one open lot per sale; the note names the position, not each
-    lot: "4 TSLA, 8 QQQ and 8 AAPL sold short by outside orders".
+    lot: "8 AAPL, 8 QQQ, 4 TSLA sold short by outside orders".
     """
     short: dict[str, Decimal] = {}
     for lot in lots:
         if lot.side is not OrderSide.BUY:
             short[lot.symbol] = short.get(lot.symbol, ZERO) + lot.exact_qty
-    if not short:
-        return []
-    return [f"{_and_list([f'{_quantity(qty)} {symbol}' for symbol, qty in short.items()])} sold short by {holder}"]
-
-
-def _quantity(value: Decimal) -> str:
-    """A share count as plain digits: ``4``, never ``4.000000`` or ``4E+0``."""
-    return f"{value.normalize():f}"
-
-
-def _and_list(items: Sequence[str]) -> str:
-    """``a``, ``a and b``, ``a, b and c``."""
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+    return [f"{holdings_text(short)} sold short by {holder}"] if short else []
 
 
 def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
@@ -235,7 +223,7 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     for lot in fifo.open_lots:
         if lot.side is OrderSide.BUY:
             held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_qty * lot.exact_cost
-    named = [f"{_quantity(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
+    named = [f"{quantity_text(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
     named += _shorts(fifo.open_lots, holder="outside orders")
     return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named
 

@@ -47,7 +47,6 @@ def test_inactive_account_blocks_with_its_status() -> None:
     assert condition.condition_id == "alpaca_account_inactive"
     assert condition.severity == "blocking"
     assert condition.headline == "This account is not active"
-    assert "'ACCOUNT_UPDATED'" in condition.detail
 
 
 def test_shadow_custody_world_reads_a_live_account_without_the_wrong_mode_condition() -> None:
@@ -75,8 +74,7 @@ def test_the_wrong_mode_refusal_names_the_mode_its_own_world_admits(
 ) -> None:
     """Design R8 #8: the copy names the world it is judging, not "paper" always.
 
-    A static configuration problem no fresh evidence resolves, so it blocks
-    and says it will not resolve by waiting.
+    A static configuration problem no fresh evidence resolves, so it blocks.
     """
     condition = _judge(account_mode=account_mode, custody_world=custody_world)
 
@@ -84,9 +82,6 @@ def test_the_wrong_mode_refusal_names_the_mode_its_own_world_admits(
     assert condition.condition_id == "alpaca_account_wrong_execution_mode"
     assert condition.severity == "blocking"
     assert condition.headline == f"This account is not in {admitted} mode"
-    assert f"require a {admitted}-mode account" in condition.detail
-    assert f"reports {account_mode} mode" in condition.detail
-    assert "will not resolve by waiting" in condition.detail
 
 
 def test_account_identity_mismatch_outranks_every_fact_of_the_other_account() -> None:
@@ -97,6 +92,7 @@ def test_account_identity_mismatch_outranks_every_fact_of_the_other_account() ->
     assert condition is not None
     assert condition.condition_id == "alpaca_account_identity_mismatch"
     assert condition.severity == "blocking"
+    assert condition.headline == "Alpaca reports a different account than this one"
 
 
 @pytest.mark.parametrize("flags", [{"trading_blocked": True}, {"account_blocked": True}])

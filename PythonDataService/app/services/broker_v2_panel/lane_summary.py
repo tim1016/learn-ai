@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
+from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
@@ -65,7 +66,6 @@ from app.schemas.broker_v2_panel import (
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
-from app.services.broker_v2_panel.catalog_projection_service import holdings_text
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
 from app.services.sqlite_clerk_compat import account_eligibility
 

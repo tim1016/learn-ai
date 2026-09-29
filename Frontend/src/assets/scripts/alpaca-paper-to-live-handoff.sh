@@ -168,26 +168,34 @@ lanes = [lane for lane in json.load(sys.stdin).get("clerks", []) if lane.get("br
 print(lanes[0]["clerk_id"] if len(lanes) == 1 else "")'
 }
 
-# This lane's Settings page, or a failure when no single lane can be named.
+# This lane's Settings page, or a failure -- saying why on stderr -- when no
+# single lane can be named.
 settings_page_url() {
   local clerk_id="$fleet_clerk_id"
   if [[ -z "$clerk_id" ]]; then
     local directory_json
-    directory_json="$(curl --fail --silent --show-error \
-      -H "X-Data-Plane-Control-Secret: $control_secret" "$data_plane_url/api/broker-clerks" 2>/dev/null || true)"
-    if [[ -n "$directory_json" ]]; then
-      clerk_id="$(printf '%s' "$directory_json" | single_alpaca_lane 2>/dev/null || true)"
+    if ! directory_json="$(curl --fail --silent --show-error \
+      -H "X-Data-Plane-Control-Secret: $control_secret" "$data_plane_url/api/broker-clerks" 2>&1)"; then
+      echo "The account directory ($data_plane_url/api/broker-clerks) could not be read: ${directory_json:-no response}" >&2
+      return 1
+    fi
+    if ! clerk_id="$(printf '%s' "$directory_json" | single_alpaca_lane 2>/dev/null)"; then
+      echo "The account directory's answer is not the lane list this script reads." >&2
+      return 1
+    fi
+    if [[ -z "$clerk_id" ]]; then
+      echo "The account directory does not list exactly one Alpaca lane." >&2
+      return 1
     fi
   fi
-  [[ -n "$clerk_id" ]] || return 1
   printf 'http://localhost:4200/brokers/alpaca/clerks/%s/settings' "$clerk_id"
 }
 
 if ! settings_url="$(settings_page_url)"; then
   cat >&2 <<EOF
-This worker does not name its lane, and the account directory does not list
-exactly one Alpaca lane, so the Settings page cannot be opened for you. The
-worker is running. Finish by hand:
+This worker does not name its lane, and no single Alpaca lane could be read
+from the account directory (the reason is above), so the Settings page cannot
+be opened for you. The worker is running. Finish by hand:
   1. Open http://localhost:4200/brokers/alpaca and choose the Paper account.
   2. Open Settings. Under Broker connection, stage the saved Live profile if
      needed, then click Apply staged revision.

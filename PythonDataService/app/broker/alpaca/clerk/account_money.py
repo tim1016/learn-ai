@@ -70,6 +70,25 @@ FULL_BAR_BPS = 10_000
 SegmentKind = Literal["bot", "stopped", "outside", "charges", "settling", "new", "free"]
 
 
+def quantity_text(quantity: float | Decimal) -> str:
+    """A share count as the owner reads it: ``4``, ``0.125`` -- never ``4.000000`` or ``1e+06``.
+
+    A float position is read to six significant digits first, so storage
+    noise (``0.30000000000000004``) never reaches the owner.
+    """
+    return f"{Decimal(f'{quantity:g}').normalize():f}"
+
+
+def holdings_text(exposure: Mapping[str, float | Decimal]) -> str:
+    """What is held, as the owner reads it: "5 SPY, 2 QQQ" ("" when nothing).
+
+    The one wording of a holding on the account's pages -- a bot's row, its
+    attention line, and the money bar's note on shorts. The caller passes
+    only nonzero quantities (``position_quantity_is_nonzero``).
+    """
+    return ", ".join(f"{quantity_text(quantity)} {symbol}" for symbol, quantity in sorted(exposure.items()))
+
+
 class MoneyConservationError(AssertionError):
     """The projected parts do not add up to the account: a bug, never a display."""
 

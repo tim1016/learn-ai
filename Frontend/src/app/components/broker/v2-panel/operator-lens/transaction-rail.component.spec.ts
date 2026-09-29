@@ -178,7 +178,6 @@ describe('TransactionRailComponent', () => {
           },
           host: 'bot_cockpit',
           anchor: { kind: 'surface', subject_key: null },
-          audience: 'operator',
           disposition: 'wait',
           headline: 'No live binding',
           detail: 'The broker is not connected.',

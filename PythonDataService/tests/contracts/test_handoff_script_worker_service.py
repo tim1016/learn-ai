@@ -424,7 +424,7 @@ def _settings_page(*, fleet_clerk_id: str, directory: str | None) -> subprocess.
     that answers the account directory (or fails, when ``directory`` is
     ``None``), exactly as the ceremony calls it after the worker restarts."""
     curl = (
-        "curl() { return 22; }\n"
+        "curl() { echo 'curl: (7) Failed to connect to 127.0.0.1 port 8000' >&2; return 7; }\n"
         if directory is None
         else f"curl() {{ printf '%s' {json.dumps(directory)}; }}\n"
     )
@@ -478,6 +478,26 @@ def test_the_combined_posture_refuses_rather_than_guess_a_lane(directory: str | 
 
     assert completed.returncode != 0
     assert completed.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("directory", "reason"),
+    [
+        (None, "The account directory (http://127.0.0.1:8000/api/broker-clerks) could not be read: "
+               "curl: (7) Failed to connect to 127.0.0.1 port 8000"),
+        (_directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")), "does not list exactly one Alpaca lane"),
+        ("<html>proxy error</html>", "is not the lane list this script reads"),
+    ],
+    ids=["directory-unreadable", "two-alpaca-lanes", "not-a-lane-list"],
+)
+def test_the_refusal_says_why_no_lane_was_named(directory: str | None, reason: str) -> None:
+    """Review A (minor): an unreachable directory was reported as "does not
+    list exactly one Alpaca lane", because curl's own error was discarded.
+    Each failure now names itself, with curl's error when it has one."""
+    completed = _settings_page(fleet_clerk_id="", directory=directory)
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
 
 
 def test_the_refusal_names_the_by_hand_procedure_loudly() -> None:

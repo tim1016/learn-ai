@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     custody_account_id_for,
@@ -19,10 +18,8 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.live_arming import (
     ArmingStatus,
-    LiveArmingRecord,
     arming_status,
     instance_ids,
-    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
@@ -84,28 +81,14 @@ def instance_seal_hashes(
 
 @dataclass(frozen=True)
 class AccountArming:
-    """One live account's arming evidence, from a single read of its ledger.
+    """One live account's per-instance arming statuses, from a single read of its ledger.
 
-    Every fact R11 publishes about an account -- the per-instance statuses, the
-    record that sealed its envelope, the armed count and the envelope state --
-    is derived here from the same ``records()`` tuple. Two readers of one
-    verdict can therefore never describe two different snapshots of a file an
+    Every status is derived from the same ``records()`` tuple, so two readers
+    of one verdict can never describe two different snapshots of a file an
     operator may be appending to while the verdict is being composed.
     """
 
     statuses: dict[str, ArmingStatus]
-    sealed: LiveArmingRecord | None
-
-    @property
-    def armed_instance_count(self) -> int:
-        """How many of the named instances are armed at the judged instant (R11)."""
-        return sum(1 for status in self.statuses.values() if status.state == "armed")
-
-    @property
-    def envelope_state(self) -> Literal["configured_unsealed", "sealed"]:
-        """Whether any arming record has sealed this account's envelope (R11)."""
-        return "configured_unsealed" if self.sealed is None else "sealed"
-
 
 
 def account_arming(
@@ -162,5 +145,5 @@ def account_arming(
             now_ms=now_ms,
             invalidated_record_shas=invalidated,
         )
-    return AccountArming(statuses=statuses, sealed=latest_arming(records))
+    return AccountArming(statuses=statuses)
 

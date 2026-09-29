@@ -475,7 +475,7 @@ class WorkingOrderView(BaseModel):
 
 
 class RecentDecisionView(BaseModel):
-    """Bounded backend-authored decision receipt for the Trader lens."""
+    """Bounded backend-authored decision receipt shown on the bot page."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -534,7 +534,7 @@ class RecentDecisionView(BaseModel):
 
 
 class RecentFillView(BaseModel):
-    """Bounded Clerk-attributed fill receipt for the Trader lens."""
+    """Bounded Clerk-attributed fill receipt shown on the bot page."""
 
     model_config = ConfigDict(frozen=True)
 

@@ -10,7 +10,6 @@ unclean duty outcome) — the attention-first sort (§5) reads this flag.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
@@ -35,14 +34,6 @@ WORLD_LABELS: dict[AuthorityKind, str] = {
     "shadow": "SHADOW · simulated fills on your live account",
     "synthetic": "DRY RUN · simulated cash",
 }
-
-
-def holdings_text(exposure: Mapping[str, float]) -> str:
-    """What a bot holds, as the owner reads it: "5 SPY, 2 QQQ" ("" when flat).
-
-    The caller passes only nonzero quantities (``position_quantity_is_nonzero``).
-    """
-    return ", ".join(f"{quantity:g} {symbol}" for symbol, quantity in sorted(exposure.items()))
 
 
 def bot_world(authority_world: AuthorityKind, mode: str) -> AuthorityKind:

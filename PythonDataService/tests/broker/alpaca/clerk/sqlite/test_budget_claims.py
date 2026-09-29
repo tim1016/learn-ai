@@ -256,7 +256,8 @@ def test_outside_shorts_are_named_once_per_symbol_never_once_per_lot(tmp_path: P
             observe_external_order(repo, order=order)
         record_fee_evidence(repo, [fill for _, fill in sales], checked_at_ms=NOON, history_complete=True)
         money = repo.account_money(cash=1600, seen_before_ms=NOON + 10)
-        assert money.unvalued == ("2 TSLA, 3 QQQ and 1 AAPL sold short by outside orders",)
+        # The one holding formatter the bot rows use (``holdings_text``).
+        assert money.unvalued == ("1 AAPL, 3 QQQ, 2 TSLA sold short by outside orders",)
     finally:
         repo.close()
 

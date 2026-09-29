@@ -97,7 +97,6 @@ def _blocker(
         scope=scope,
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
-        audience="both",
         disposition="wait",
         headline=headline,
         detail=detail,

@@ -123,4 +123,8 @@ status no longer carries `operator_posture`; `AccountOperatorPosture` and
 contract, the generated frontend types and the TS mirror. The account's own
 eligibility (identity mismatch, wrong mode, inactive, blocked) is Home's
 account attention line (`account_eligibility.py`). The remaining hosts are
-`bot_cockpit`, `deploy_preflight` and `account_monitor`.
+`bot_cockpit`, `deploy_preflight` and `account_monitor`. The posture was also
+the only producer of the `open_runbook` move, the `clerk` anchor and any
+audience other than `both`, so those are gone too: the `audience` field left
+the wire with the lenses it routed between (Decision item 2's "audience" is
+historical).

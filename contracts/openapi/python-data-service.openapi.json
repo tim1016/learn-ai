@@ -16652,7 +16652,7 @@
         "type": "object"
       },
       "EvidenceEntry": {
-        "description": "One redacted, size-capped journal entry exposed to the operator lens.",
+        "description": "One redacted, size-capped custody record entry exposed as evidence.",
         "properties": {
           "broker_state": {
             "anyOf": [
@@ -28063,29 +28063,9 @@
         "title": "OhlcvBar",
         "type": "object"
       },
-      "OpenRunbookAction": {
-        "additionalProperties": false,
-        "description": "Move: open an operator runbook by backend-authored slug.",
-        "properties": {
-          "kind": {
-            "const": "open_runbook",
-            "title": "Kind"
-          },
-          "slug": {
-            "title": "Slug",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "slug"
-        ],
-        "title": "OpenRunbookAction",
-        "type": "object"
-      },
       "OperatorBlocker": {
         "additionalProperties": false,
-        "description": "Host-scoped, backend-authored guidance for one operator condition.\n\nAudience is presentational routing and confers no permission. Frontends\nrender this backend-authored guidance and must never infer a cure from a\nreason code.",
+        "description": "Host-scoped, backend-authored guidance for one operator condition.\n\nFrontends render this backend-authored guidance and must never infer a\ncure from a reason code.",
         "properties": {
           "anchor": {
             "$ref": "#/components/schemas/OperatorBlockerAnchor"
@@ -28097,15 +28077,6 @@
               "both"
             ],
             "title": "Applies To",
-            "type": "string"
-          },
-          "audience": {
-            "enum": [
-              "trader",
-              "operator",
-              "both"
-            ],
-            "title": "Audience",
             "type": "string"
           },
           "condition": {
@@ -28167,7 +28138,6 @@
           "condition",
           "host",
           "anchor",
-          "audience",
           "disposition",
           "headline",
           "applies_to"
@@ -28184,7 +28154,6 @@
               "surface",
               "verdict",
               "lease",
-              "clerk",
               "reconciliation",
               "holdings_row",
               "event",
@@ -28434,7 +28403,6 @@
               "mapping": {
                 "confirm_in_form": "#/components/schemas/ConfirmInFormAction",
                 "navigate": "#/components/schemas/NavigateAction",
-                "open_runbook": "#/components/schemas/OpenRunbookAction",
                 "remove": "#/components/schemas/RemoveAction",
                 "retire_replace": "#/components/schemas/RetireReplaceAction"
               },
@@ -28446,9 +28414,6 @@
               },
               {
                 "$ref": "#/components/schemas/ConfirmInFormAction"
-              },
-              {
-                "$ref": "#/components/schemas/OpenRunbookAction"
               },
               {
                 "$ref": "#/components/schemas/RetireReplaceAction"
@@ -30347,7 +30312,7 @@
       },
       "PortfolioHistoryProofResponse": {
         "additionalProperties": false,
-        "description": "C1 + C2 + C3 bundle for the Trader lens historical scope.",
+        "description": "C1 + C2 + C3 bundle for the historical scope.",
         "properties": {
           "attribution": {
             "anyOf": [
@@ -32970,7 +32935,7 @@
         "type": "object"
       },
       "RecentDecisionView": {
-        "description": "Bounded backend-authored decision receipt for the Trader lens.",
+        "description": "Bounded backend-authored decision receipt shown on the bot page.",
         "properties": {
           "authority_account_id": {
             "anyOf": [
@@ -33090,7 +33055,7 @@
         "type": "object"
       },
       "RecentFillView": {
-        "description": "Bounded Clerk-attributed fill receipt for the Trader lens.",
+        "description": "Bounded Clerk-attributed fill receipt shown on the bot page.",
         "properties": {
           "authority_account_id": {
             "anyOf": [

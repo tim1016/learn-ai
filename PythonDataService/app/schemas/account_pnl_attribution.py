@@ -134,7 +134,7 @@ class AccountPnlReconciliationResponse(BaseModel):
 
 
 class PortfolioHistoryProofResponse(BaseModel):
-    """C1 + C2 + C3 bundle for the Trader lens historical scope."""
+    """C1 + C2 + C3 bundle for the historical scope."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -31,30 +31,31 @@ def observe_loss_hold(runtime: ActiveClerkRuntime | None) -> LossHoldState:
     return "held" if active is not None else "clear"
 
 
-def _readiness(runtime: ActiveClerkRuntime | None, *, held: bool) -> tuple[int, DeploymentReadiness, str]:
-    """The account's Deploy readiness and the sentence the pill's tooltip says about it.
+def _readiness(runtime: ActiveClerkRuntime | None, *, held: bool) -> tuple[int, DeploymentReadiness, str | None]:
+    """The account's Deploy readiness, and the shared risk check's own sentence when it refuses.
 
     A current-risk refusal is worded by the shared risk check itself, so the
     pill names the same fix Deploy and Settings do -- a missing daily loss
     limit is "set one in Settings", never "evidence is unavailable" (H7).
+    Every other readiness is worded by ``_READINESS_COPY``.
     """
     repo = None if runtime is None else runtime.sqlite_repository
     if repo is None:
-        return 0, "not_applicable", _READINESS_COPY["not_applicable"]
+        return 0, "not_applicable", None
     version = repo.budget_authority_version()
     if version < 2:
-        return version, "upgrade_required", _READINESS_COPY["upgrade_required"]
+        return version, "upgrade_required", None
     if held:
-        return version, "loss_hold", _READINESS_COPY["loss_hold"]
+        return version, "loss_hold", None
     sync = runtime.envelope_sync
     if sync is None:
-        return version, "risk_not_observed", _READINESS_COPY["risk_not_observed"]
+        return version, "risk_not_observed", None
     current = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
     if current.reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE:
-        return version, "loss_hold", _READINESS_COPY["loss_hold"]
+        return version, "loss_hold", None
     if not current.allowed:
         return version, "risk_not_observed", current.detail
-    return version, "ready", _READINESS_COPY["ready"]
+    return version, "ready", None
 
 
 _READINESS_COPY: dict[DeploymentReadiness, str] = {
@@ -86,7 +87,8 @@ def alpaca_live_verdict(
         "unobserved" if account_id is None or refusal == "BROKER_ACCOUNT_UNAVAILABLE" else "agreed"
     )
     hold = observe_loss_hold(runtime) if loss_hold is None else loss_hold
-    version, readiness, readiness_copy = _readiness(runtime, held=hold == "held")
+    version, readiness, risk_sentence = _readiness(runtime, held=hold == "held")
+    readiness_copy = risk_sentence or _READINESS_COPY[readiness]
     common = {
         "configured_mode": "unconfigured" if settings is None else settings.mode,
         "observed_account_id": account_id,

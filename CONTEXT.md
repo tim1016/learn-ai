@@ -1780,12 +1780,9 @@ vocabulary for older ADRs and receipts.
 - **Operator lens** (historical) — the mechanism-and-repair view: *why is the
   system working or not, and what fixes it?* The dominant posture headline with
   its fix attached, plus forensic evidence.
-- **Audience** — the backend-authored field on an operator blocker that routed it
-  to the trader lens, the operator lens, or both; the field remains on the wire
-  though no page switches lenses. `both` is reserved for guidance
-  that is genuinely identical in each lens; differing guidance is two blockers
-  sharing one condition identity. Presentational routing only — never an
-  authorization decision.
+- **Historical audience** — the field that once routed an operator blocker to
+  the trader lens, the operator lens, or both. PRD #2560 (#2567) removed it
+  from the wire with the lenses: every blocker now renders on its one page.
 - **Historical account overview** — the account workspace's former first tab
   for one broker account, carrying both lenses (formerly the Broker Desk,
   renamed 2026-09-16; older ADRs keep that name). PRD #2560 retired it on

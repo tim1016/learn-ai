@@ -15077,7 +15077,7 @@ export interface components {
         };
         /**
          * EvidenceEntry
-         * @description One redacted, size-capped journal entry exposed to the operator lens.
+         * @description One redacted, size-capped custody record entry exposed as evidence.
          */
         EvidenceEntry: {
             /** Broker State */
@@ -20187,25 +20187,11 @@ export interface components {
             volume: number;
         };
         /**
-         * OpenRunbookAction
-         * @description Move: open an operator runbook by backend-authored slug.
-         */
-        OpenRunbookAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "open_runbook";
-            /** Slug */
-            slug: string;
-        };
-        /**
          * OperatorBlocker
          * @description Host-scoped, backend-authored guidance for one operator condition.
          *
-         *     Audience is presentational routing and confers no permission. Frontends
-         *     render this backend-authored guidance and must never infer a cure from a
-         *     reason code.
+         *     Frontends render this backend-authored guidance and must never infer a
+         *     cure from a reason code.
          */
         OperatorBlocker: {
             anchor: components["schemas"]["OperatorBlockerAnchor"];
@@ -20214,11 +20200,6 @@ export interface components {
              * @enum {string}
              */
             applies_to: "deploy" | "run" | "both";
-            /**
-             * Audience
-             * @enum {string}
-             */
-            audience: "trader" | "operator" | "both";
             condition: components["schemas"]["OperatorCondition"];
             /** Detail */
             detail?: string | null;
@@ -20250,7 +20231,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "surface" | "verdict" | "lease" | "clerk" | "reconciliation" | "holdings_row" | "event" | "cure_tools";
+            kind: "surface" | "verdict" | "lease" | "reconciliation" | "holdings_row" | "event" | "cure_tools";
             /** Subject Key */
             subject_key: string | null;
         };
@@ -20334,7 +20315,7 @@ export interface components {
         /** OperatorMove */
         OperatorMove: {
             /** Action */
-            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["OpenRunbookAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
             confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Label */
             label: string;
@@ -21216,7 +21197,7 @@ export interface components {
         };
         /**
          * PortfolioHistoryProofResponse
-         * @description C1 + C2 + C3 bundle for the Trader lens historical scope.
+         * @description C1 + C2 + C3 bundle for the historical scope.
          */
         PortfolioHistoryProofResponse: {
             attribution?: components["schemas"]["AccountPnlAttributionResponse"] | null;
@@ -22221,7 +22202,7 @@ export interface components {
         };
         /**
          * RecentDecisionView
-         * @description Bounded backend-authored decision receipt for the Trader lens.
+         * @description Bounded backend-authored decision receipt shown on the bot page.
          */
         RecentDecisionView: {
             /** Authority Account Id */
@@ -22261,7 +22242,7 @@ export interface components {
         };
         /**
          * RecentFillView
-         * @description Bounded Clerk-attributed fill receipt for the Trader lens.
+         * @description Bounded Clerk-attributed fill receipt shown on the bot page.
          */
         RecentFillView: {
             /** Authority Account Id */
