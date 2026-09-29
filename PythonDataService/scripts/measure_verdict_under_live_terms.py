@@ -190,10 +190,14 @@ VARIANTS: tuple[Terms, ...] = (
     Terms("qty_1sh_100k", "T1 (capital sensitivity): fixed 1 share on $100k", fixed_quantity=LIVE_QUANTITY),
     Terms(
         "fill_next_bar_open",
-        "T2a: engine next_bar_open (open of the minute after the decision minute)",
+        "T2a: engine next_bar_open, the pessimistic bound (open of the minute after the decision minute)",
         fill="next_bar_open",
     ),
-    Terms("fill_decision_minute_open", "T2b: open of the decision minute (live proxy)", fill="decision_minute_open"),
+    Terms(
+        "fill_decision_minute_open",
+        "T2b: open of the decision minute, the optimistic bound",
+        fill="decision_minute_open",
+    ),
     Terms("fees_alpaca", "T3: Alpaca regulatory fees instead of $1/order", fees="alpaca_regulatory"),
     Terms("spread_1c", "T4: $0.01/share per fill", slippage_per_share=0.01),
     Terms("spread_2c", "T4: $0.02/share per fill", slippage_per_share=0.02),
