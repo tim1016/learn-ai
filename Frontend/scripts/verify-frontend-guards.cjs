@@ -11,6 +11,13 @@ const guardCommands = [
   ["chart series color token guard", "node", ["scripts/verify-chart-series-color-tokens-guard.cjs"]],
   ["money arithmetic lint guard", "node", ["scripts/verify-money-arithmetic-lint-guard.cjs"]],
   ["run test budget shard guard", "node", ["scripts/verify-run-test-budget-shard-guard.cjs"]],
+  // Node loads vitest.ci.config.ts by stripping its types; the package has no
+  // "type", so Node notes that it detected ES module syntax.
+  [
+    "ci shard balance guard",
+    "node",
+    ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "scripts/verify-ci-shard-balance-guard.cjs"],
+  ],
 ];
 
 for (const [label, command, args] of guardCommands) {
