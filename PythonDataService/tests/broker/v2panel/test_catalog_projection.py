@@ -79,7 +79,7 @@ def _economic_snapshot(
         fills_today=3,
         exposure={"SPY": 2.0} if exposure is None else exposure,
         realized_pnl_today=12.5,
-        open_pnl=3.25,
+        exact_open_pnl=Decimal("3.25"),
         marks_complete=True,
         mark_observed_at_ms={"SPY": 1_700_010_000_000},
         fee_fidelity="reported",

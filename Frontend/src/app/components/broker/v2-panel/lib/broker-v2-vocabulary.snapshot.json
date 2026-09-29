@@ -41,7 +41,6 @@
     "reconcile_now",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
-    "retire",
     "satisfied",
     "stale",
     "stop",
@@ -196,10 +195,6 @@
     "resolve_execution_coverage": {
       "label": "Resolve execution coverage",
       "explanation": "Replace one matching cumulative recovery record with verified exact execution evidence."
-    },
-    "retire": {
-      "label": "Retire",
-      "explanation": "Permanently decommission this bot. Its id is never reused. This is irreversible."
     },
     "satisfied": {
       "label": "Satisfied",

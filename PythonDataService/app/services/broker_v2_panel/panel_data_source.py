@@ -41,7 +41,6 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
@@ -446,7 +445,7 @@ async def _get_panel_with_entries_from_authority(
         exposure=dict(economics.exposure),
         fills_today=economics.fills_today,
         realized_pnl_today=economics.realized_pnl_today,
-        open_pnl=economics.open_pnl,
+        exact_open_pnl=economics.exact_open_pnl,
         latest_decision=decision,
         last_bar_at_ms=economics.last_activity_at_ms,
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
@@ -458,10 +457,6 @@ async def _get_panel_with_entries_from_authority(
         sealed_program=binding.sealed_program,
         program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
-        # Pure file read of the sweep-produced fact (#1795) — no broker I/O
-        # enters this read path. Mode-scoped: Alpaca listing is not Dry Run's
-        # admission invariant, so it cannot prove a Dry Run bot is dead.
-        symbol_unresolvable=symbol_unresolvable_for_mode(binding.symbol, binding.mode),
         market_pulse=build_market_pulse(
             market_data_feed,
             # Captured after every await above, not at request start: the
@@ -645,21 +640,6 @@ def _action_performers(
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
         return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
 
-    async def _retire(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        await registry.retire(
-            broker,
-            sid,
-            updated_by=operator,
-            reason=f"Panel retire by {operator}",
-        )
-        return (
-            "Registration retired and taken off the roster. It issues no further "
-            "feed subscriptions and can start no new runs."
-        )
-
     async def _archive(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
@@ -733,7 +713,6 @@ def _action_performers(
 
     return {
         "stop": _stop,
-        "retire": _retire,
         "archive": _archive,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,

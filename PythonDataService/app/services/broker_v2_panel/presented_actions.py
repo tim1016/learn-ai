@@ -11,8 +11,7 @@ Lifecycle semantics (§12) drive the enablement:
 - ``stop``   — running bot; stops signals + cancels working entries, exposure
                untouched.
 - ``flatten_stop`` — running/exposed bot, only when the broker supports flatten.
-- ``retire`` — non-retired bot; terminal, carries ``replaces_sid`` lineage on
-               the replacement deploy (not this action).
+- ``archive`` — stopped, settled, flat bot; terminal (Clear on Home, ADR 0052).
 - ``cancel_order`` — a working order exists.
 - ``reconcile_now`` — always available (triggers a sweep).
 
@@ -25,19 +24,8 @@ import path.
 from __future__ import annotations
 
 from app.broker.v2panel.action_policy import ActionGuardContext, build_actions_from_registry
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
-
-
-def strategy_runtime_missing(strategy_key: str) -> bool:
-    """True when no runtime is registered for this bot's strategy key.
-
-    A registration the runtime no longer knows can never run again -- the
-    legacy bot bound to a mistyped symbol is the standing example -- and
-    retire is its only cure (#1778, S5).
-    """
-    return strategy_key not in _STRATEGY_REGISTRY
 
 
 def build_actions(
@@ -52,17 +40,12 @@ def build_actions(
     working_order_count: int,
     account_working_order_count: int,
     account_expected_exposure: dict[str, float],
-    symbol_unresolvable: bool = False,
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
 
     ``exposure`` is the bot's attributed net exposure per symbol (from the S0
     rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
     a position.
-
-    ``symbol_unresolvable`` is the durable symbol-validity fact (#1795); the
-    fail-closed ``False`` default means a caller that has not read the store
-    leaves retire disabled rather than offering it speculatively.
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     del channel_fresh, account_working_order_count, account_expected_exposure
@@ -79,8 +62,6 @@ def build_actions(
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
         working_order_count=working_order_count,
-        strategy_runtime_missing=strategy_runtime_missing(status.strategy_key),
-        symbol_unresolvable=symbol_unresolvable,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 
