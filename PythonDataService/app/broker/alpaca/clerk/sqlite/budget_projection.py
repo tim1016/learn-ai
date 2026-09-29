@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.account_money import (
 )
 from app.broker.alpaca.clerk.budgets import (
     AccountBudget,
+    BudgetUnavailable,
     DeploymentBudget,
     ReleaseAtStop,
     account_budget,
@@ -35,7 +36,11 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError, effective_fill_records
-from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryCashClaim, entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
+    ENTRY_ORDER_ENDED_SQL,
+    EntryCashClaim,
+    entry_cash_claims,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
@@ -44,10 +49,6 @@ from app.broker.contract.models import OrderSide
 
 if TYPE_CHECKING:
     from app.services.alpaca_fee_attribution import FeeFill
-
-
-class BudgetUnavailable(ValueError):
-    """A named unknown prevents authorizing money; it is never a zero."""
 
 
 class BudgetFees(Protocol):
@@ -252,15 +253,17 @@ def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
     so Home can group its bots while the money bar cannot be drawn. Still
     claimed is exactly what the bar prices it as: ``entry_cash_claims``'
     unfilled remainder (nothing for a dead order, else its quantity less its
-    effective fills) and its fee -- the one definition, never a second copy
-    in SQL. Position cost is a nonzero attributed position. A stopped bot in
-    this set is holding; one outside it is finished.
+    effective fills) -- the one definition, never a second copy in SQL. Its
+    fee only ever accompanies that remainder, so the remainder's cost alone
+    decides, even while an earlier order's fee is unknown. Position cost is a
+    nonzero attributed position. A stopped bot in this set is holding; one
+    outside it is finished.
     """
     with money_context():
         claimed = {
             claim.strategy_instance_id
             for claim in entry_cash_claims(conn, seen_before_ms=0)
-            if claim.unfilled_cost + claim.unfilled_fee > ZERO
+            if claim.unfilled_cost > ZERO
         }
     positioned = {
         str(row[0])
@@ -447,10 +450,14 @@ def _project(
     ).fetchone()
     if manual:
         raise BudgetUnavailable("A manual order is still working, so its cash is not yet known. Resolve it first.")
+    # An entry order with no reservation row prices nothing, so it blocks
+    # until it ends -- by the one rule ``entry_cash_claims`` reads -- and its
+    # last fills are inside observed cash.
     unpriced_legacy = conn.execute(
-        "SELECT 1 FROM orders o LEFT JOIN envelope_reservations r ON r.effect_operation_id=o.effect_operation_id "
+        "SELECT 1 FROM orders o JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
+        "LEFT JOIN envelope_reservations r ON r.effect_operation_id=o.effect_operation_id "
         "WHERE o.role='ENTRY' AND r.effect_operation_id IS NULL AND "
-        "(o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN ('filled','canceled','expired','rejected','replaced') "
+        f"((LOWER(COALESCE(o.broker_state, ''))<>'filled' AND NOT {ENTRY_ORDER_ENDED_SQL}) "
         "OR EXISTS (SELECT 1 FROM fills f WHERE f.order_ref=o.order_ref AND f.recorded_at_ms>=?)) LIMIT 1",
         (seen_before_ms,),
     ).fetchone()

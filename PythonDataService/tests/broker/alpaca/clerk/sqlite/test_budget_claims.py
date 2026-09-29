@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, _external_cash_claim
+from app.broker.alpaca import regulatory_fees
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
@@ -447,7 +450,12 @@ def test_same_state_broker_quantity_changes_are_retained_exactly(day_pnl_repo, p
     assert repo.custody_transitions() == after
 
 
-def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Path) -> None:
+def test_a_partly_filled_entry_keeps_claiming_its_whole_fee_provision(tmp_path: Path) -> None:
+    """Owner decision 2026-09-29 (#2553): no proportional share of the recorded fee.
+
+    While any of the order is unfilled, its remainder claims the whole
+    provision the ENTER was admitted with, until the order fills or ends.
+    """
     repo = _new_budget_repo(tmp_path)
     try:
         _deploy(repo)
@@ -459,17 +467,51 @@ def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Pat
         _append_slice(repo, accepted, execution_id="filled-part", quantity=3000, price=.1, source_event_at_ms=NOON)
         projection = repo.account_budget(cash=1000, seen_before_ms=NOON)
         own = projection.deployments[0]
-        # CAT: 3000 filled shares settle to .01; the separate pending quote
-        # for 1000 shares settles upward to .01. The original .02 quote may
-        # not survive unchanged alongside the filled-share fee projection.
+        # CAT: 3000 filled shares settle to .01 in the fee attribution; the
+        # unfilled 1000 still claim the whole recorded .02 provision.
         assert own.fees == Decimal(".01")
-        assert own.pending_orders == Decimal("100.01")
-        assert own.free == Decimal("599.98")
+        assert own.pending_orders == Decimal("100.02")
+        assert own.free == Decimal("599.97")
         assert projection.available == 0
         _append_correction(repo, accepted, execution_id="corrected-part", superseded_execution_ref="filled-part",
                            quantity=2000, source_event_at_ms=NOON + 1)
         corrected = repo.account_budget(cash=1000, seen_before_ms=NOON)
-        assert corrected.deployments[0].pending_orders == Decimal("200.01")
+        assert corrected.deployments[0].pending_orders == Decimal("200.02")
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(("filled", "pending"), [
+    # Nothing filled: the whole recorded .02 provision (4000 x $0.000003 CAT, rounded up).
+    (0, Decimal("400.02")),
+    # 3000 filled: the unfilled 1000 still claim the whole recorded .02.
+    (3000, Decimal("100.02")),
+])
+def test_a_reservation_claims_its_recorded_fee_provision_after_a_fee_model_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filled: int, pending: Decimal,
+) -> None:
+    """Regression (#2553): the fee an ENTER was admitted with is the fee it claims.
+
+    The provision is recorded once, from the entry requirement at admission.
+    Re-quoting it from the fee model on every read let a later rate change
+    silently move a past claim.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        accepted = accept_enter(
+            repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="recorded-fee",
+            lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=4000),
+            reference_price=.1, envelope=_gate(),
+        )
+        if filled:
+            _append_slice(repo, accepted, execution_id="filled-part", quantity=filled, price=.1, source_event_at_ms=NOON)
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).deployments[0].pending_orders == pending
+
+        # A later model: CAT a full cent a share. The recorded provision stands.
+        monkeypatch.setattr(regulatory_fees, "_CAT_PER_SHARE", ((date(2026, 9, 1), Decimal("0.01")),))
+
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).deployments[0].pending_orders == pending
     finally:
         repo.close()
 

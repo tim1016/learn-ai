@@ -1,9 +1,19 @@
 """The envelope's ENTER-time check — the sibling of ``require_admission`` (ADR 0059 D4).
 
-Order of refusals, each fail-closed: a sealed envelope that disagrees with
-the environment; no fresh observation; a market leg with no decision-bar
-price; then the cash rule (plan R1). The loss hold is not checked here: it
-is an account hold ``require_admission`` already refuses on.
+Order of refusals, each fail-closed: an account not yet switched to
+budgets; a sealed envelope that disagrees with the environment; no fresh
+observation; a market leg with no decision-bar price; then the budget rule.
+The loss hold is not checked here: it is an account hold
+``require_admission`` already refuses on.
+
+Only a budgeted account admits an entry (#2553, owner decision 2026-09-29):
+one still on authority version 1 refuses under ``BUDGETS_NOT_SWITCHED_ON``
+and is never switched automatically. ``budget_entry_decision`` prices the
+ENTER through the one entry requirement (``budgets.entry_requirement``: its
+notional plus the canonical BUY fee provision) against the deployment's
+budget and the account's other claims, and the reservation -- exact price
+and fee provision -- rides the ``ENTER_ACCEPTED`` facts, so no claim is ever
+re-quoted or priced without its fee.
 
 Nothing here contacts the broker. The cash fact arrives as an
 ``AccountObservation`` the sync already published onto the gate, and the
@@ -15,7 +25,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.broker.alpaca.clerk.budgets import budget_entry_decision
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable, budget_entry_decision
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_CASH_EXCEEDED,
     LIVE_ENVELOPE_DISAGREEMENT,
@@ -23,8 +33,12 @@ from app.broker.alpaca.clerk.live_envelope import (
     EnvelopeReservation,
     LiveEnvelopeGate,
 )
-from app.broker.alpaca.clerk.money import MoneyInputError, cash_admits, normalize_money, notional
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.money import MoneyInputError, normalize_money
+from app.broker.alpaca.clerk.sqlite.budget_authority import (
+    BUDGET_AUTHORIZATION,
+    BUDGETS_NOT_SWITCHED_ON,
+    BUDGETS_NOT_SWITCHED_ON_WHY,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -54,7 +68,7 @@ def require_envelope_admission(
     leg: BrokerOrderLeg,
     reference_price: float | Decimal | None,
     now_ms: int,
-    strategy_instance_id: str | None = None,
+    strategy_instance_id: str,
 ) -> EnvelopeReservation:
     """Admit one ENTER against the envelope, or raise; returns what it reserves."""
     if leg.side is not OrderSide.BUY:
@@ -62,6 +76,8 @@ def require_envelope_admission(
         # a named LIVE_ENVELOPE_* code of its own, which is a fifth code beyond
         # the plan's four and an owner decision (follow-up).
         raise ValueError("the envelope admits BUY legs only; every program ENTER is a BUY")
+    if repo.budget_authority_version() != BUDGET_AUTHORIZATION:
+        raise _refuse(BUDGETS_NOT_SWITCHED_ON, BUDGETS_NOT_SWITCHED_ON_WHY)
     if envelope.agreement == "disagreed":
         raise _refuse(
             LIVE_ENVELOPE_DISAGREEMENT,
@@ -75,41 +91,21 @@ def require_envelope_admission(
             LIVE_ENVELOPE_UNOBSERVED,
             "A market ENTER has no decision-bar price to bound it against cash.",
         )
-    # Built before the bound is asked, so the notional the refusal names and
-    # the notional the reservation will claim are the same one property.
-    # Preserve the historical sibling-row shape before budget cutover. The
-    # budget branch below additionally seals the exact price for replay.
-    # Transition seam (PRD #2540): the legacy composition above is the v1
-    # affordability verdict — no fee provision, no budget claims. It is
-    # unreachable once budget authority is version 2 (enter.py refuses a
-    # budgetless deployment first) and dies out with the cutover; do not
-    # extend it. New admission facts belong in budget_entry_decision.
-    reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=float(price))
     try:
-        reserved = repo.reserved_cash_decimal(seen_before_ms=observation.fills_seen_before_ms)
-        required = notional(leg.quantity, price)
-        affordable = cash_admits(cash=observation.cash_available_usd, claims=reserved, required=required)
-        if strategy_instance_id is not None and repo.deployment_budget(strategy_instance_id) is not None:
-            projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
-            decision = budget_entry_decision(projection, strategy_instance_id=strategy_instance_id,
-                quantity=leg.quantity, price=price, at_ms=now_ms)
-            required, fee_cents, affordable = decision.required, decision.fee_cents, decision.allowed
-            if not affordable:
-                raise _refuse(LIVE_ENVELOPE_CASH_EXCEEDED, decision.detail)
-            reservation = EnvelopeReservation(
-                quantity=leg.quantity, reference_price=float(price),
-                exact_reference_price=str(normalize_money(price)), fee_provision_cents=fee_cents,
-            )
-    except (MoneyInputError, BudgetUnavailable, RateNotPinnedError) as exc:
+        projection = repo.account_budget(cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms, modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms)
+        decision = budget_entry_decision(projection, strategy_instance_id=strategy_instance_id,
+            quantity=leg.quantity, price=price, at_ms=now_ms)
+        exact_price = str(normalize_money(price))
+    except BudgetUnavailable as exc:
+        raise _refuse(exc.reason_code or LIVE_ENVELOPE_UNOBSERVED, str(exc)) from exc
+    except (MoneyInputError, RateNotPinnedError) as exc:
         raise _refuse(LIVE_ENVELOPE_UNOBSERVED, str(exc)) from exc
-    if not affordable:
-        raise _refuse(
-            LIVE_ENVELOPE_CASH_EXCEEDED,
-            f"ENTER needs {required:.2f} USD; "
-            f"{observation.cash_available_usd:.2f} USD cash "
-            f"with {reserved:.2f} USD reserved by working entries.",
-        )
-    return reservation
+    if not decision.allowed:
+        raise _refuse(LIVE_ENVELOPE_CASH_EXCEEDED, decision.detail)
+    return EnvelopeReservation(
+        quantity=leg.quantity, reference_price=float(price),
+        exact_reference_price=exact_price, fee_provision_cents=decision.fee_cents,
+    )
 
 
 __all__ = ["require_envelope_admission"]

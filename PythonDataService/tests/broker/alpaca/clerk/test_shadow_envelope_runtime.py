@@ -10,12 +10,17 @@ into ``accept_enter``.
 No wall clock: the shadow repository is opened on a clock pinned to the
 decision bar's close, so the observation stamp, the freshness question and the
 ET day the P&L spans are all the same fixed instant.
+
+Only an account switched to budgets admits an ENTER (#2553), so the running
+bot is a budgeted Deploy through the facade, exactly as the Deploy page's
+launch makes one.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -29,10 +34,14 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.models import EffectPurpose
+from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
+from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
@@ -80,9 +89,14 @@ async def _compose_shadow(
 
 @pytest.fixture()
 async def shadow_runtime(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[ActiveClerkRuntime, _LiveBroker]]:
-    """One composed shadow authority, envelope included."""
+    """One composed shadow authority, envelope included.
+
+    Its facade prices a Deploy's minimum position at the IBKR ask, read here
+    as the decision bar's close.
+    """
+    monkeypatch.setattr(sqlite_runtime, "prepared_top_of_book", lambda _symbol, _now_ms: SimpleNamespace(ask=int(BAR_CLOSE)))
     broker = _LiveBroker(now_ms=NOW_MS)
     runtime = await _compose_shadow(tmp_path, broker)
     assert runtime.authority_kind == "shadow", runtime.startup_failure
@@ -92,15 +106,32 @@ async def shadow_runtime(
         await runtime.close()
 
 
+async def _switch_to_budgets(runtime: ActiveClerkRuntime) -> None:
+    """The owner's switch in Settings and a daily loss limit, then a reading that names it."""
+    repo, sync = runtime.sqlite_repository, runtime.envelope_sync
+    assert repo is not None and sync is not None
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="reviewed", stop_receipt="empty")
+    sync.apply_risk_policy(AccountRiskPolicy(
+        1, TEST_ENVELOPE_VALUES.loss_fraction, TEST_ENVELOPE_VALUES.loss_usd, "profile", 1, "owner", NOW_MS,
+    ), expected_revision=0)
+    assert await sync.tick() == "observed"
+
+
 @pytest.fixture()
 async def registered_running_bot(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker], tmp_path: Path
 ) -> AsyncIterator[RetainedSourceBar]:
-    """One registered, running instance and the decision bar its ENTER is priced at."""
+    """One budgeted, running instance and the decision bar its ENTER is priced at."""
     runtime, _broker = shadow_runtime
     assert runtime.clerk is not None
+    await _switch_to_budgets(runtime)
     await runtime.clerk.register_strategy_run(
-        _binding(use_rth=True).model_copy(update={"sealed_account_id": SHADOW_ACCT})
+        _binding(use_rth=True).model_copy(update={
+            "sealed_account_id": SHADOW_ACCT,
+            "budget_consent": DeployBudgetConsent(
+                committed_cents=1_000_000, risk_revision=1, actor="owner", request_fingerprint="reviewed", world="shadow",
+            ),
+        })
     )
     bars = SourceBarLedger(
         artifacts_root=tmp_path,
@@ -216,8 +247,9 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     """The decision bar's close is the price the envelope bounds the ENTER at."""
     runtime, broker = shadow_runtime
     # 100 shares at the bar's close is the whole account; a program ENTER's
-    # quantity is capped at 100, so the bound is proved by moving the cash.
-    broker.cash = 5_000.0
+    # quantity is capped at 100, so the bound is proved by moving the cash:
+    # exactly 50 shares' notional plus their one-cent fee provision.
+    broker.cash = 5_000.01
     assert runtime.envelope_sync is not None
 
     assert await runtime.envelope_sync.tick() == "observed"
@@ -225,11 +257,12 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     refused = await _enter(runtime, registered_running_bot, quantity=51)
     assert refused.state.value == "rejected"
     assert refused.explanation.startswith("LIVE_ENVELOPE_CASH_EXCEEDED:")
-    # 51 × 100.00: the notional is priced at the *decision bar's* close, which
-    # is the whole point of the ``reference_price`` the facade now passes. A
-    # market ENTER with no price is refused UNOBSERVED, so a wrong wiring here
-    # cannot hide behind a plausible-looking refusal.
-    assert "ENTER needs 5100.00 USD" in refused.explanation, refused.explanation
+    # 51 × 100.00 plus the one-cent fee provision: the notional is priced at
+    # the *decision bar's* close, which is the whole point of the
+    # ``reference_price`` the facade now passes. A market ENTER with no price
+    # is refused UNOBSERVED, so a wrong wiring here cannot hide behind a
+    # plausible-looking refusal.
+    assert "The next position needs 5100.01 USD" in refused.explanation, refused.explanation
 
     admitted = await _enter(
         runtime, registered_running_bot, quantity=50, decision_id="d2"
@@ -306,7 +339,7 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_attributed_
 ) -> None:
     """The deterministic Shadow fill is attributed before another ENTER can be admitted."""
     runtime, broker = shadow_runtime
-    broker.cash = 5_000.0
+    broker.cash = 5_000.01  # 50 shares at 100.00 and their one-cent fee provision
     assert runtime.envelope_sync is not None
     assert await runtime.envelope_sync.tick() == "observed"
 
@@ -363,7 +396,7 @@ async def test_shadow_rollover_clearance_ignores_foreign_live_positions(
 
     runtime, broker = shadow_runtime
     repo, sync = runtime.sqlite_repository, runtime.envelope_sync
-    append_risk_policy(repo, policy=AccountRiskPolicy(1, .05, 50, "profile", 1, "owner", NOW_MS), expected_revision=0)
+    append_risk_policy(repo, policy=AccountRiskPolicy(2, .05, 50, "profile", 1, "owner", NOW_MS), expected_revision=1)
     assert await sync.tick() == "observed"
     entered = await _enter(runtime, registered_running_bot, quantity=1)
     assert entered.state.value == "submitted", entered.explanation

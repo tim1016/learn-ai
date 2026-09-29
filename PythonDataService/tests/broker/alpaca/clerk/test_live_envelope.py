@@ -1,4 +1,7 @@
-"""The live risk envelope's values, agreement, cash rule and loss rule."""
+"""The live risk envelope's values, agreement and loss rule.
+
+The cash rule is judged at the ENTER seam: ``sqlite/test_envelope_admission.py``.
+"""
 
 from __future__ import annotations
 
@@ -14,11 +17,9 @@ from app.broker.alpaca.clerk.live_envelope import (
     FILL_VISIBILITY_GRACE_MS,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
-    EnvelopeReservation,
     LiveEnvelopeGate,
     LiveEnvelopeIncomplete,
     LiveEnvelopeValues,
-    cash_bound_admits,
     envelope_agreement,
     loss_breached,
     loss_limit_usd,
@@ -84,13 +85,6 @@ def test_the_loss_limit_is_the_tighter_of_fraction_and_usd() -> None:
     assert loss_limit_usd(TEST_ENVELOPE_VALUES, last_equity_usd=40_000.0) == pytest.approx(2_000.0)
     assert loss_breached(day_pnl_usd=-2_000.0, loss_limit_usd=2_000.0)
     assert not loss_breached(day_pnl_usd=-1_999.99, loss_limit_usd=2_000.0)
-
-
-def test_the_cash_rule_counts_the_new_order_and_working_reservations_only() -> None:
-    assert cash_bound_admits(cash_available_usd=10_000.0, reserved_usd=0.0, notional_usd=10_000.0)
-    assert not cash_bound_admits(cash_available_usd=10_000.0, reserved_usd=0.01, notional_usd=10_000.0)
-    assert cash_bound_admits(cash_available_usd=10_000.0, reserved_usd=4_000.0, notional_usd=6_000.0)
-    assert EnvelopeReservation(quantity=10, reference_price=12.5).notional_usd == pytest.approx(125.0)
 
 
 def test_the_fill_visibility_grace_is_positive_and_shorter_than_one_sync_interval() -> None:
@@ -189,12 +183,14 @@ def test_withdrawing_drops_the_observation_at_once() -> None:
     assert gate.latest_observation() is None
 
 
-def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
+def test_the_admission_reason_codes_are_the_envelope_refusals() -> None:
+    """The plan's four, plus the unknown fee of a pre-provision entry order (#2553)."""
     assert set(ENVELOPE_ADMISSION_REASON_CODES) == {
         "LIVE_ENVELOPE_CASH_EXCEEDED",
         "LIVE_ENVELOPE_LOSS_HOLD",
         "LIVE_ENVELOPE_DISAGREEMENT",
         "LIVE_ENVELOPE_UNOBSERVED",
+        "ENTRY_FEE_PROVISION_UNRECORDED",
     }
     assert isinstance(ENVELOPE_ADMISSION_REASON_CODES, frozenset)
 

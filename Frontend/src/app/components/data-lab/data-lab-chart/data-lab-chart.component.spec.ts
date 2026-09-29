@@ -53,6 +53,10 @@ vi.mock('lightweight-charts', () => {
 });
 
 const NOTICE_SELECTOR = '.source-notice';
+const WARMUP_NOTICE_SELECTOR = '.warmup-notice';
+const WARMUP_NOTE =
+  'Indicator values on all 2 bars are not fully warmed up: the chart warms its indicators up on '
+  + '1,000 bars of earlier history, and only 113 bars are available before this range.';
 
 function chartResponse(barSources?: ChartDataResponse['bar_sources']): ChartDataResponse {
   const response: ChartDataResponse = {
@@ -110,7 +114,7 @@ async function renderChart() {
 async function renderChartWith(response: ChartDataResponse) {
   const { fixture, container } = await renderChart();
   const http = TestBed.inject(HttpTestingController);
-  const emitted: { barSources: BarSources | null }[] = [];
+  const emitted: { barSources: BarSources | null; warmupNote: string | null }[] = [];
   fixture.componentInstance.dataLoaded.subscribe((event) => emitted.push(event));
 
   fixture.componentInstance.fetchData();
@@ -234,6 +238,63 @@ describe('DataLabChartComponent saved-session provenance', () => {
     fixture.detectChanges();
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
+  });
+});
+
+describe('DataLabChartComponent indicator warm-up notice', () => {
+  it('shows the backend note on values the held history could not warm up, verbatim', async () => {
+    const { container } = await renderChartWith({
+      ...chartResponse(),
+      indicator_warmup: { note: WARMUP_NOTE },
+    });
+
+    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)?.textContent?.trim()).toBe(WARMUP_NOTE);
+    expect(screen.getByRole('status').textContent).toContain('not fully warmed up');
+  });
+
+  it('shows no warm-up notice when every value is warmed up', async () => {
+    const { container } = await renderChartWith({
+      ...chartResponse(),
+      indicator_warmup: { note: null },
+    });
+
+    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)).toBeNull();
+  });
+
+  it('shows no warm-up notice when no indicators were requested', async () => {
+    const { container } = await renderChartWith(chartResponse());
+
+    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)).toBeNull();
+  });
+
+  it('hands the note to the parent so a save can carry it', async () => {
+    const { emitted } = await renderChartWith({
+      ...chartResponse(),
+      indicator_warmup: { note: WARMUP_NOTE },
+    });
+
+    expect(emitted[0].warmupNote).toBe(WARMUP_NOTE);
+  });
+
+  it('restores the note a saved snapshot was showing', async () => {
+    const { fixture, container } = await renderChart();
+
+    fixture.componentInstance.loadCachedData({ ...cachedSnapshot(), warmupNote: WARMUP_NOTE });
+    fixture.detectChanges();
+
+    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)?.textContent?.trim()).toBe(WARMUP_NOTE);
+  });
+
+  it('does not leave a previous warm-up note standing over restored bars', async () => {
+    const { fixture, container } = await renderChartWith({
+      ...chartResponse(),
+      indicator_warmup: { note: WARMUP_NOTE },
+    });
+
+    fixture.componentInstance.loadCachedData(cachedSnapshot());
+    fixture.detectChanges();
+
+    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)).toBeNull();
   });
 });
 

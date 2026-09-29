@@ -22,7 +22,7 @@ from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
 )
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError

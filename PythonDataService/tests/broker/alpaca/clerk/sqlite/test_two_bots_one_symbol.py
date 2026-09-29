@@ -78,8 +78,6 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     clocked_repo,  # noqa: F401 -- pytest fixture, used by name
 )
 
-# #2553 absorbed #2469's follow-up A; these xfails flip when it lands.
-_RELEASE_REJECTED_CLAIM = "#2553: an ENTER that never reached the broker's book keeps its cash claim"
 # Placeholder the orchestrator replaces with the filed issue number.
 _NAME_ORDER_REJECTIONS = "#2621: Alpaca's order-level 403 (wash trade) reads as a credentials failure"
 
@@ -299,7 +297,6 @@ async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_agai
 
 
 @pytest.mark.parametrize("refusal", ["broker_wash_trade", "preflight"])
-@pytest.mark.xfail(strict=True, reason=_RELEASE_REJECTED_CLAIM)
 async def test_an_enter_that_never_reached_the_book_releases_its_cash_claim(
     tmp_path: Path, refusal: str,
 ) -> None:
@@ -324,28 +321,6 @@ async def test_an_enter_that_never_reached_the_book_releases_its_cash_claim(
         assert budget.order_claims == 0
         assert budget.deployments[0].pending_orders == 0
         assert "b" not in repo.bots_holding_money()
-    finally:
-        repo.close()
-
-
-async def test_a_refused_enter_keeps_its_cash_claim_today(tmp_path: Path) -> None:
-    """Current behaviour behind ``_RELEASE_REJECTED_CLAIM``: 2 × $100 + fee stays claimed after Stop."""
-    repo = _new_budget_repo(tmp_path)
-    try:
-        _deploy(repo, "b", 50_000)
-        leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=2)
-        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
-                                lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=_gate())
-        await submit_accepted_enter(repo, accepted=accepted, leg=leg,
-                                    trade=_FakeTradePort(submit_error=_wash_trade_rejection()))
-        submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="b",
-                        lifecycle_run_id="run-b", clock=repo.clock)
-
-        budget = repo.account_budget(cash=1000, seen_before_ms=NOON + 1)
-
-        assert budget.order_claims == Decimal("200.01")
-        assert budget.available == Decimal("799.99")
-        assert repo.bots_holding_money() == frozenset({"b"})
     finally:
         repo.close()
 

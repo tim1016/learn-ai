@@ -60,13 +60,26 @@ advanced before the cash observation recognizes them. These facts never enter
 a bot's FIFO or commitment. `sqlite/test_budget_claims.py` covers those cases,
 historical serialization, and mirror rebuild with exact Decimal assertions.
 
-Pending entry fee quotes price only the unfilled remainder at the original
-reference price and quote date, through the canonical regulatory model. Filled
-shares belong exclusively to the canonical fee attribution. A remaining order
-quote rounds its prospective component settlement upward independently, so it
-can retain conservative cent headroom relative to a final combined day charge;
-it is not an exact forecast of that later settlement. Original zero-provision
-legacy reservations are preserved rather than silently rewritten.
+A pending entry's fee claim is the provision its entry requirement recorded
+at admission (`budgets.entry_requirement`, through the canonical regulatory
+model), never a re-quote: a later fee-model change cannot move a past claim
+(#2553). While any of the order is unfilled, its remainder claims the whole
+recorded provision until the order fills or ends (owner decision 2026-09-29):
+no share is computed, so no cent is rounded here. Filled shares' fees also sit
+in the canonical fee attribution, so a partly filled entry claims up to its
+provision twice over -- conservative headroom of cents, never a shortfall.
+Only an account switched to budgets admits an ENTER; one still on authority
+version 1 refuses every ENTER (`BUDGETS_NOT_SWITCHED_ON`) and is never switched
+automatically. Reservations written before provisions were recorded are
+preserved rather than silently rewritten; their fills still price at actual
+cost, but while one has an unfilled remainder its fee is unknown, so every
+money read refuses (`ENTRY_FEE_PROVISION_UNRECORDED`, transient at ENTER, and
+carried as the money read's reason code) instead of pricing that fee at zero.
+An entry the broker never knew -- its effect terminal with no broker order id
+and no fill -- has no remainder at all, so it neither claims cash nor blocks
+the account. Regressions: `sqlite/test_budget_claims.py` (recorded provision
+survives a fee-model change; a partly filled entry keeps its whole provision),
+`sqlite/test_envelope_reservations.py` (legacy rows, dead and unknown entries).
 
 The deployment projection is `clerk/budgets.py`, composed over canonical
 FIFO, effective fills and fee attribution by `sqlite/budget_projection.py`.

@@ -45,12 +45,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.money import money_context
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.budget_projection import (
     BotResult,
     BudgetFees,
-    BudgetUnavailable,
     bots_holding_money,
     project_bot_results,
 )

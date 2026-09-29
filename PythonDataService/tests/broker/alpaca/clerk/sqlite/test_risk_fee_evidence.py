@@ -31,6 +31,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     complete_fee_evidence,
 )
 from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _hold, _policy
+from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_fee_evidence import _activity
 from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
 
@@ -81,20 +82,20 @@ async def test_equity_including_a_fee_is_not_debited_by_its_provision_again(day_
         await sync.stop()
 
 
-async def test_new_unknown_fee_evidence_blocks_enter_after_a_healthy_tick(day_pnl_repo: ClerkSqliteRepository) -> None:
-    repo = day_pnl_repo
-    complete_fee_evidence(repo)
+async def test_new_unknown_fee_evidence_blocks_enter_after_a_healthy_tick(tmp_path: Path) -> None:
+    """A budgeted account (#2553: only one admits an ENTER) whose healthy reading an unknown fee withdraws."""
+    repo = _new_budget_repo(tmp_path)
+    _deploy(repo)
     sync = LiveEnvelopeSync(repo=repo, read=_Read(), envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
     try:
         await sync.observe()
-        sync.apply_risk_policy(_policy(), expected_revision=0)
-        assert sync.envelope.latest_observation() is not None
+        assert current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock()).allowed
         undated = _activity("unresolved-fee", "FEE", NOON, -.05).model_copy(update={"occurred_at_ms": None})
         complete_fee_evidence(repo, (undated,))
         before = len(repo.custody_transitions())
         with pytest.raises(AdmissionBlockedError) as refused:
-            accept_enter(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID,
-                decision_id="after-unknown-fee", lifecycle_run_id=DAY_PNL_RUN_ID,
+            accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a",
+                decision_id="after-unknown-fee", lifecycle_run_id="run-a",
                 leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1), reference_price=100, envelope=sync.envelope)
         assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
         assert sync.envelope.latest_observation() is None
@@ -102,6 +103,7 @@ async def test_new_unknown_fee_evidence_blocks_enter_after_a_healthy_tick(day_pn
         assert _hold(repo) is None
     finally:
         await sync.stop()
+        repo.close()
 
 
 @pytest.mark.parametrize("stale_unrealized", [0, 200])

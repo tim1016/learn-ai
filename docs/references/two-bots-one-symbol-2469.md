@@ -26,7 +26,7 @@ committed in the repo.
   while the other exits.
 - **The Clerk handles that refusal poorly today:**
   - it reads the refusal as bad credentials;
-  - a refused ENTER keeps its cash claim forever (now part of #2553);
+  - a refused ENTER kept its cash claim forever (fixed by #2553);
   - a refused EXIT is re-sent automatically, but late. In the regular session
     it goes out 120 s after the refusal. Outside it, the retry waits for the next
     session: a 17:00 refusal is retried at 04:00 the next morning.
@@ -189,8 +189,10 @@ The decision itself is discarded.
 - [code] `clerk/sqlite/enter.py:411-424`
 - [test] `test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again`
 
-**Its cash claim is never released. This is a defect, and not only for two
-bots.** It is folded into #2553, which reworks the same claim query.
+**Its cash claim was never released. This was a defect, and not only for two
+bots.** It was folded into #2553, which reworked the same claim query: an ENTER
+whose effect failed before the broker assigned an order id now ends its claim.
+The findings below describe the code before that change.
 
 - **Where it comes from.** The claim query prices a working order's unfilled
   remainder unless the broker state is canceled, expired, rejected or replaced.
@@ -204,9 +206,8 @@ bots.** It is folded into #2553, which reworks the same claim query.
 - **The pre-broker refusal leaks too.** A post-acceptance refusal
   (`ENTER_SUBMISSION_REFUSED`, the market-liveness re-check) uses the same fold
   and leaks the same way.
-- **Tests.**
-  - [test] `test_a_refused_enter_keeps_its_cash_claim_today`
-  - [xfail] `test_an_enter_that_never_reached_the_book_releases_its_cash_claim[broker_wash_trade|preflight]`
+- **Test.** [test] `test_an_enter_that_never_reached_the_book_releases_its_cash_claim[broker_wash_trade|preflight]`
+  (a strict xfail until #2553 landed)
 
 **A refused EXIT** folds `EXIT_NOT_FLAT` and the bot keeps its shares
 [code] `exit_resolution.py:1629-1639,1680-1725`.
@@ -363,7 +364,7 @@ Two bots on one symbol add no new path: the bound is account-wide.
 **Why guard:** Alpaca's wash-trade protection makes opposite-side orders from two
 bots fail predictably. Today each failure has a cost:
 
-- a refused ENTER holds a cash claim that never releases (#2553);
+- a refused ENTER held a cash claim that never released (fixed by #2553);
 - the refusal is labelled as bad credentials;
 - a refused EXIT goes out late: 120 s later in the regular session, or at the
   next session outside it. The owner also sees a refused-exit notice in the
@@ -392,7 +393,7 @@ or the next session), and escalation when B's order keeps working through
 
 - **Follow-up A went into #2553** (comment on that issue): a refused or rejected
   ENTER keeps its cash claim forever (bug, all accounts). #2553 reworks the same
-  claim query. The two strict xfails flip when it lands.
+  claim query. It has landed; the two cases now pass.
 - **#2621:** Alpaca's order-level 403 reads as a credentials failure, and
   its code is dropped.
 - **#2622:** check another bot's opposite working order before sending
@@ -418,7 +419,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-20 passed, 3 xfailed
+21 passed, 1 xfailed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -427,10 +428,10 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
   submitted earlier); the budget harness from `test_budget_commands`;
   `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
   from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
-- **The xfails.** Each is `strict=True` and names its issue: #2553 for the two
-  cash-claim cases, follow-up B for the error mapping. Run with `--runxfail`,
-  they fail on the asserted defect: `BrokerAuthError` is not
-  `BrokerOrderRejected`, and `order_claims` is `200.01`, not 0.
+- **The xfail.** It is `strict=True` and names its issue, #2621, for the error
+  mapping. Run with `--runxfail`, it fails on the asserted defect:
+  `BrokerAuthError` is not `BrokerOrderRejected`. The two #2553 cash-claim
+  cases were strict xfails until #2553 landed and now pass.
 
 ## Sources
 

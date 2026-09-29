@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    TRANSIENT_ADMISSION_REASON_CODES,
     AdmissionBlockedError,
     ReductionIntent,
     RefusalClass,
@@ -461,6 +462,19 @@ def test_missing_budget_commitment_is_its_own_transient_refusal_code() -> None:
     )
 
     assert classify_admission_refusal(BUDGET_COMMITMENT_MISSING) is RefusalClass.TRANSIENT
+
+
+def test_an_account_not_on_budgets_refuses_transiently_and_old_arming_refusals_stay_recognised() -> None:
+    """#2553: the version-1 refusal is account-scoped, so a bot is never halted for it.
+
+    ENTERs are no longer judged by arming, but ``blocked`` receipts recorded
+    under the old arming codes still classify, so history reads unchanged.
+    """
+    from app.broker.alpaca.clerk.live_arming import ARMING_ADMISSION_REASON_CODES
+    from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
+
+    assert classify_admission_refusal(BUDGETS_NOT_SWITCHED_ON) is RefusalClass.TRANSIENT
+    assert ARMING_ADMISSION_REASON_CODES <= TRANSIENT_ADMISSION_REASON_CODES
 
 
 def test_classify_admission_refusal_fails_closed_for_unknown_or_subject_codes() -> None:
