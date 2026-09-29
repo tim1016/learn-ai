@@ -209,7 +209,9 @@ class AccountObservation:
     cash_available_usd: float | Decimal
     last_equity_usd: float | None
     position_count: int | None
-    equity_usd: float | None = None
+    # The broker's float under real custody; simulated custody's exact
+    # ``Decimal`` (FIFO's exact fields, #2556), shown to the owner unchanged.
+    equity_usd: float | Decimal | None = None
     # Simulated custody's exact FIFO open P&L, for display; never the loss authority.
     unrealized_pl_usd: Decimal = ZERO
     risk_cash_flows: tuple[BrokerActivity, ...] = ()
