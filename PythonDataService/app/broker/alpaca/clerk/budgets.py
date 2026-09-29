@@ -4,6 +4,8 @@ Formula: balance = commitment + canonical FIFO gross realized P&L - fees;
 free = balance - open FIFO cost - unfilled orders (including provisions);
 available = observed cash - sum(active max(free, 0)) - all order-overlap
 claims - fees not already reflected in cash or an order-overlap claim.
+A stopped deployment's release is the Stop's recorded fact (#2555), read back
+as ``DeploymentBudget.release``; it is never re-derived from later money.
 Reference: https://github.com/tim1016/learn-ai/issues/2540, Money contract.
 Canonical implementation: this file; no mutable balance and no second FIFO.
 Validated against: tests/broker/alpaca/clerk/test_budgets.py (conservation fixtures).
@@ -34,6 +36,19 @@ class BudgetUnavailable(ValueError):
 
 
 @dataclass(frozen=True)
+class ReleaseAtStop:
+    """What a deployment's Stop released, in display cents, as the Stop recorded it (#2555).
+
+    ``held_cents`` is what stayed claimed at that instant -- its shares at cost
+    and its entry orders. Money that comes back after the Stop is never added
+    to ``released_cents``.
+    """
+
+    released_cents: int
+    held_cents: int
+
+
+@dataclass(frozen=True)
 class DeploymentBudget:
     strategy_instance_id: str
     committed_cents: int
@@ -45,6 +60,10 @@ class DeploymentBudget:
     balance: Decimal
     free: Decimal
     cash_claim: Decimal
+    # The Stop's recorded release; ``None`` while running, and for a Stop
+    # that recorded none (every Stop before #2555, or one that could not be
+    # valued at that instant).
+    release: ReleaseAtStop | None = None
 
     @property
     def spendable_cents(self) -> int:
@@ -68,6 +87,7 @@ class AccountBudget:
 def deployment_budget(
     *, strategy_instance_id: str, committed_cents: int, active: bool,
     realized_gross: object, fees: Decimal, position_cost: Decimal, pending_orders: Decimal,
+    release: ReleaseAtStop | None = None,
 ) -> DeploymentBudget:
     """Project the immutable commitment over canonical custody facts."""
     with money_context():
@@ -79,6 +99,7 @@ def deployment_budget(
             active=active, realized_gross=gross, fees=fees,
             position_cost=position_cost, pending_orders=pending_orders,
             balance=balance, free=free, cash_claim=max(ZERO, free) if active else ZERO,
+            release=release,
         )
 
 

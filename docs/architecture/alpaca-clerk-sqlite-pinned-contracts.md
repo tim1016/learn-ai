@@ -125,6 +125,11 @@
   After arming refresh, the explicit legacy upgrade seals any remaining old
   registrations once and appends `EXIT_TERMS_UPGRADE_COMPLETED`. New Starts must
   supply deployed terms; binding JSON is never a pricing or arming authority.
+- Schema-v22 (#2555) adds `released_cents` and `held_cents` to
+  `deployment_budgets`: what a Stop released and what stayed claimed then, folded
+  from its `RUN_STOPPED` facts (both or neither) so a money read takes them from
+  the budget row instead of searching the journal. The v21 → v22 migration fills
+  them from the Stops already recorded, without rewriting any hash.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1206,6 +1211,9 @@ CREATE TRIGGER trg_deployment_budget_identity_immutable BEFORE UPDATE OF strateg
 CREATE TRIGGER trg_deployment_budget_delete_forbidden BEFORE DELETE ON deployment_budgets BEGIN SELECT RAISE(ABORT, 'deployment budget commitments are append-only'); END;
 ALTER TABLE control_meta ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1 CHECK(authorization_version IN (1,2));
 CREATE TRIGGER trg_budget_authority_monotonic BEFORE UPDATE OF authorization_version ON control_meta WHEN OLD.authorization_version <> 1 OR NEW.authorization_version <> 2 BEGIN SELECT RAISE(ABORT, 'budget authorization cannot be reversed'); END;
+ALTER TABLE deployment_budgets ADD COLUMN released_cents INTEGER CHECK(released_cents IS NULL OR (typeof(released_cents) = 'integer' AND released_cents >= 0));
+ALTER TABLE deployment_budgets ADD COLUMN held_cents INTEGER CHECK((held_cents IS NULL) = (released_cents IS NULL) AND (held_cents IS NULL OR (typeof(held_cents) = 'integer' AND held_cents >= 0)));
+UPDATE deployment_budgets SET (released_cents, held_cents) = (SELECT json_extract(t.facts_json, '$.released_cents'), json_extract(t.facts_json, '$.held_cents') FROM custody_transitions t WHERE t.strategy_instance_id = deployment_budgets.strategy_instance_id AND t.run_id = deployment_budgets.run_id AND t.transition_kind = 'RUN_STOPPED' ORDER BY t.sequence LIMIT 1) WHERE released_at_ms IS NOT NULL;
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13
@@ -1300,7 +1308,7 @@ must round-trip through facts.
 | --- | --- |
 | `RUN_STARTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
 | `COMMAND_REJECTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `reason_code`, `operator_reason` |
-| `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
+| `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason`; for a budgeted run whose money could be valued at the Stop, `released_cents` and `held_cents` together — what it released and what stayed claimed (#2555). Both are omitted when absent, so every other Stop keeps the bytes earlier Stops have; the fold copies them onto the run's `deployment_budgets` row (schema v22). |
 | `ENTER_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; complete immutable broker leg/captured order fields |
 | `MANUAL_ORDER_ACCEPTED` | immutable `ticket_id`/`leg_id`/manual-subject/operator identities; ticket-leg instruction hash; command idempotency key/hash/kind/action; effect idempotency key/kind; complete BUY/market/DAY broker leg. The outer strategy and run identities are null. |
 | `MANUAL_ORDER_FILLED` | none (`{}`). It may be appended only after the broker's terminal `filled` state and effective exact execution quantity both cover the immutable manual leg; its fold creates the shared terminal success receipt and completes the one-leg ticket. |

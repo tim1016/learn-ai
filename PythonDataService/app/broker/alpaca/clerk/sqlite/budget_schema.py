@@ -22,3 +22,22 @@ BUDGET_SCHEMA_STATEMENTS = (
     "BEGIN SELECT RAISE(ABORT, 'deployment budget commitments are append-only'); END",
 )
 BUDGET_SCHEMA_DDL = "\n".join(f"{statement};" for statement in BUDGET_SCHEMA_STATEMENTS)
+
+# v21 -> v22 (#2555): what a Stop released and what stayed claimed then, in
+# display cents, folded from its RUN_STOPPED facts onto the budget row it
+# released, so a money read takes them without searching the journal. Both
+# or neither: a Stop that could not value its release recorded none. The
+# backfill fills them from the Stops already recorded; a fresh file has none.
+SCHEMA_V22_STATEMENTS = (
+    "ALTER TABLE deployment_budgets ADD COLUMN released_cents INTEGER "
+    "CHECK(released_cents IS NULL OR (typeof(released_cents) = 'integer' AND released_cents >= 0))",
+    "ALTER TABLE deployment_budgets ADD COLUMN held_cents INTEGER "
+    "CHECK((held_cents IS NULL) = (released_cents IS NULL) "
+    "AND (held_cents IS NULL OR (typeof(held_cents) = 'integer' AND held_cents >= 0)))",
+    "UPDATE deployment_budgets SET (released_cents, held_cents) = ("
+    "SELECT json_extract(t.facts_json, '$.released_cents'), json_extract(t.facts_json, '$.held_cents') "
+    "FROM custody_transitions t WHERE t.strategy_instance_id = deployment_budgets.strategy_instance_id "
+    "AND t.run_id = deployment_budgets.run_id AND t.transition_kind = 'RUN_STOPPED' ORDER BY t.sequence LIMIT 1) "
+    "WHERE released_at_ms IS NOT NULL",
+)
+SCHEMA_V22_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V22_STATEMENTS)
