@@ -58,7 +58,8 @@ def _mapped_evidence[T](evidence: str, mapping: Callable[[], T]) -> T:
     -- a named 503 a caller can hold on -- never the adapter's raw error,
     which no broker-contract consumer is written to catch (#2627).
     ``message`` and ``detail`` stay owner copy, because a router returns both;
-    the adapter's own error is chained and logged for the operator.
+    the adapter's own error is chained and logged, with its traceback, for
+    the operator: a real adapter bug must not read only as a bad answer.
     """
     try:
         return mapping()
@@ -70,11 +71,12 @@ def _mapped_evidence[T](evidence: str, mapping: Callable[[], T]) -> T:
                 "evidence": evidence,
                 "cause": f"{type(exc).__name__}: {exc}",
             },
+            exc_info=True,
         )
         raise BrokerEvidenceUnavailable(
-            f"Alpaca {evidence} evidence was malformed.",
+            f"Alpaca sent {evidence} data this app could not read.",
             broker=BROKER_ID,
-            detail=f"The {evidence} response could not be mapped to the broker contract.",
+            detail=f"Part of Alpaca's {evidence} data was missing or in a form this app does not recognize.",
         ) from exc
 
 

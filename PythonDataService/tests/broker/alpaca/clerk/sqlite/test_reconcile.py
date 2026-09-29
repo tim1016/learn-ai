@@ -1533,7 +1533,7 @@ async def test_reconcile_holds_the_account_stale_on_a_malformed_broker_snapshot(
     result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "stale"
-    assert result.stale_cause is not None and "evidence was malformed" in result.stale_cause.message
+    assert result.stale_cause is not None and "data this app could not read" in result.stale_cause.message
     assert repo.active_uncertainty(
         scope="ACCOUNT_CLERK",
         reason_code="BROKER_SNAPSHOT_STALE",

@@ -457,7 +457,7 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
         client=_ActivitiesClient({None: [malformed]})  # type: ignore[arg-type]
     )
 
-    with pytest.raises(BrokerUnavailable, match="evidence was malformed") as info:
+    with pytest.raises(BrokerUnavailable, match="transfer activity data this app could not read") as info:
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,
@@ -506,7 +506,7 @@ async def test_generic_activity_reads_name_a_malformed_row_as_unavailable_eviden
     }
     broker = AlpacaBroker(client=_ActivitiesClient({None: rows[shape]}))  # type: ignore[arg-type, dict-item]
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="activity evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="activity data this app could not read") as info:
         await _GENERIC_ACTIVITY_READS[read](broker)
 
     assert info.value.detail is not None
@@ -519,7 +519,7 @@ async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_eviden
         client=_ActivitiesClient({None: [None]})  # type: ignore[list-item, arg-type]
     )
 
-    with pytest.raises(BrokerUnavailable, match="evidence was malformed") as info:
+    with pytest.raises(BrokerUnavailable, match="transfer activity data this app could not read") as info:
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,

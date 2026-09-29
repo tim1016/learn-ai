@@ -242,7 +242,7 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     }
     broker = AlpacaBroker(client=_OrdersClient(rows[shape]))  # type: ignore[arg-type]
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="order evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
         await broker.list_orders(status="open", limit=500)
 
     assert info.value.http_status == 503

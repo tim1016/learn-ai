@@ -468,8 +468,8 @@ async def test_a_malformed_alpaca_answer_reaches_the_owner_as_a_named_503(path: 
     assert response.status_code == 503
     assert response.json()["detail"] == {
         "broker": "alpaca",
-        "message": f"Alpaca {evidence} evidence was malformed.",
-        "why": f"The {evidence} response could not be mapped to the broker contract.",
+        "message": f"Alpaca sent {evidence} data this app could not read.",
+        "why": f"Part of Alpaca's {evidence} data was missing or in a form this app does not recognize.",
     }
 
 

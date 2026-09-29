@@ -103,7 +103,7 @@ async def test_broker_names_a_malformed_position_as_unavailable_evidence(
     long_position = load_alpaca_fixture("positions", "positions.json")[0]
     broker = AlpacaBroker(client=_PositionsClient(_malformed_rows(long_position)[shape]))  # type: ignore[arg-type]
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="position evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="position data this app could not read") as info:
         await broker.list_positions()
 
     assert info.value.http_status == 503
@@ -130,3 +130,5 @@ async def test_malformed_position_logs_the_adapter_cause_for_the_operator(
     assert record.action == "alpaca_evidence_malformed"
     assert record.evidence == "position"
     assert record.cause == "KeyError: 'qty'"
+    # The traceback survives, so an adapter bug is not read only as a bad answer.
+    assert record.exc_info is not None and isinstance(record.exc_info[1], KeyError)

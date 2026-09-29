@@ -144,7 +144,7 @@ async def test_broker_names_a_malformed_account_response_as_unavailable_evidence
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload[field] = value
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="account data this app could not read") as info:
         await _broker(payload).get_account()
 
     assert info.value.http_status == 503
@@ -162,7 +162,7 @@ async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload.pop("equity")
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="account data this app could not read") as info:
         await _broker(payload).get_account()
 
     assert info.value.detail is not None
@@ -206,7 +206,7 @@ async def test_broker_names_an_unusable_account_number_as_unavailable_evidence(
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload["account_number"] = account_number
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+    with pytest.raises(BrokerEvidenceUnavailable, match="account data this app could not read") as info:
         await _broker(payload, mode).get_account()
 
     assert info.value.http_status == 503
