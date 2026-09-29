@@ -19,19 +19,19 @@
 /* The lane tokens (PRD #2560 D4): the mode is worded in full beside its
    colour, so the colour is never the only carrier. */
 .lane-mode-chip--paper {
-  color: #b9f3fb;
+  color: var(--lane-paper-text);
   border-color: var(--lane-paper);
   background: var(--lane-paper-soft);
 }
 
 .lane-mode-chip--live {
-  color: #ffd0cf;
+  color: var(--lane-live-text);
   border-color: var(--lane-live);
   background: var(--lane-live-soft);
 }
 
 .lane-mode-chip--shadow {
-  color: #d9caff;
+  color: var(--lane-shadow-text);
   border-color: var(--lane-shadow);
   background: var(--lane-shadow-soft);
 }
@@ -42,9 +42,9 @@
 }
 
 .lane-mode-chip--undetermined {
-  color: #fff;
-  border-color: #ffb020;
-  background: rgba(122, 61, 0, 0.85);
+  color: var(--lane-on-fill);
+  border-color: var(--lane-undetermined);
+  background: var(--lane-undetermined-fill);
 }
 
 /* The header's mode badge: the lane colour fills it and the words sit on it

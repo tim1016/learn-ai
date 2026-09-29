@@ -6,6 +6,7 @@ import { accountWorkspaceEntryRoute, accountWorkspaceTabRoute } from '../../../f
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   type LaneDescriptor,
+  laneAttention,
   laneConfirmedAccount,
   laneDisplayName,
   laneDisplayNameText,
@@ -233,10 +234,15 @@ export class AlpacaLaneCardComponent {
   /** How many things need the owner on this account — the lane attention
    * read's own count, carried by the directory. */
   protected readonly attention = computed(() => {
-    const count = this.lane().provider_summary?.attention_count ?? null;
-    if (count === null) return { needs: false, text: 'Attention unknown' };
-    if (count === 0) return { needs: false, text: 'All clear' };
-    return { needs: true, text: count === 1 ? '1 needs you' : `${count} need you` };
+    const attention = laneAttention(this.lane());
+    switch (attention.kind) {
+      case 'unknown':
+        return { needs: false, text: 'Attention unknown' };
+      case 'none':
+        return { needs: false, text: 'All clear' };
+      case 'count':
+        return { needs: true, text: attention.count === 1 ? '1 needs you' : `${attention.count} need you` };
+    }
   });
 
   /** The unbound lane whose readiness is read, as a string so a directory

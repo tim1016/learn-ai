@@ -11,15 +11,17 @@
 }
 
 /* The lane frame (PRD #2560 D4): the account's lane colour frames the
-   workspace, washes its header and underlines the open tab. `--lane` stays
-   the neutral border until the mode is read; the mode badge in the header
-   words the mode, so the colour is never the only carrier. */
+   workspace — a heavy top rule and, as the mockup draws it, a quieter rim on
+   the other sides — washes its header and underlines the open tab. `--lane`
+   stays the neutral border until the mode is read; the mode badge in the
+   header words the mode, so the colour is never the only carrier. */
 .account-workspace {
   --lane: var(--border-strong);
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--lane) 38%, var(--border));
   border-top: 3px solid var(--lane);
 }
 

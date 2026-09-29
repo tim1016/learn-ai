@@ -1,5 +1,6 @@
 import { provideRouter } from '@angular/router';
 import { render, screen, fireEvent } from '@testing-library/angular';
+import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { TEST_ACCOUNT_ID, TEST_CLERK_ID, testLane } from '../fleet/fleet-directory-testing';
@@ -200,5 +201,27 @@ describe('LaneAttentionBellComponent', () => {
 
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(bellButton());
+  });
+
+  it.each([
+    ['closed', false],
+    ['open', true],
+  ])('has no detectable accessibility violations with the popover %s', async (_name, open) => {
+    await renderBell({ unknown: false, errorReason: null, items: [
+      item(),
+      item({
+        condition_id: 'stopped-holding:ema-2', kind: 'stopped_holding', reason_code: 'STOPPED_STILL_HOLDING',
+        severity: 'warning', strategy_instance_id: 'ema-2', headline: 'ema-2 is stopped but still holds 5 SPY.',
+        action: { label: 'Flatten…', destination: 'bot' },
+      }),
+    ] });
+    if (open) {
+      await fireEvent.click(bellButton());
+      expect(screen.getByRole('dialog')).toBeTruthy();
+    }
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+
+    expect(results.violations).toEqual([]);
   });
 });

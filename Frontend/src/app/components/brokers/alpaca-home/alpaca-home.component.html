@@ -26,9 +26,11 @@
       @if (read.kind === 'ready') {
         <span class="home__count">{{ bots().running.length }} running · {{ bots().holding.length }} stopped, still holding</span>
       }
-      <div class="home__view" role="group" aria-label="Show bots as">
-        <button type="button" [attr.aria-pressed]="!wall()" (click)="showView(false)">List</button>
-        <button type="button" [attr.aria-pressed]="wall()" (click)="showView(true)">Wall</button>
+      <div class="home__view" role="radiogroup" aria-label="Show bots as">
+        <button #listRadio type="button" role="radio" [attr.aria-checked]="!wall()" [attr.tabindex]="wall() ? -1 : 0"
+                (click)="showView(false)" (keydown)="onViewKeydown($event)">List</button>
+        <button #wallRadio type="button" role="radio" [attr.aria-checked]="wall()" [attr.tabindex]="wall() ? 0 : -1"
+                (click)="showView(true)" (keydown)="onViewKeydown($event)">Wall</button>
       </div>
       <details class="home__menu">
         <summary>Bot actions</summary>

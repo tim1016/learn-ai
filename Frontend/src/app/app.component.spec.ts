@@ -297,6 +297,13 @@ describe('AppComponent', () => {
     expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeNull();
   });
 
+  it('names the top-bar region for what it holds: each account, with its attention bell (review B minor 4)', () => {
+    const region = fixture.nativeElement.querySelector('[data-shell-slot="connection"] nav');
+    // It carries the account pills AND each account's bell, so it is not
+    // a "Switch account" control.
+    expect(region?.getAttribute('aria-label')).toBe('Accounts');
+  });
+
   it('should contain a router-outlet', () => {
     expect(fixture.nativeElement.querySelector('router-outlet')).toBeTruthy();
   });

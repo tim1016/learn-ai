@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { testLane } from './fleet-directory-testing';
-import { laneDisplayName, laneDisplayNameText, type LaneDescriptor } from './fleet-directory.types';
+import { laneAttention, laneDisplayName, laneDisplayNameText, type LaneDescriptor } from './fleet-directory.types';
 
 function lane(overrides: Partial<LaneDescriptor> = {}): LaneDescriptor {
   return testLane(overrides);
@@ -129,5 +129,22 @@ describe('laneDisplayNameText', () => {
     expect(laneDisplayNameText({ name: 'Strategy lab', disambiguator: 'Paper' })).toBe(
       'Strategy lab (Paper)',
     );
+  });
+});
+
+describe('laneAttention', () => {
+  it.each([
+    ['a count above zero', 3, { kind: 'count', count: 3 }],
+    ['zero', 0, { kind: 'none' }],
+    ['a null count', null, { kind: 'unknown' }],
+    ['an absent count', undefined, { kind: 'unknown' }],
+  ] as const)('reads %s as the pill and the card both show it', (_name, count, expected) => {
+    const summary = count === undefined ? {} : { attention_count: count };
+
+    expect(laneAttention(lane({ provider_summary: summary }))).toEqual(expected);
+  });
+
+  it('reads a lane with no provider summary as unknown, never as zero', () => {
+    expect(laneAttention(lane({ provider_summary: undefined }))).toEqual({ kind: 'unknown' });
   });
 });

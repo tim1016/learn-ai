@@ -1822,7 +1822,7 @@ for the account pills it hosts.
 - **Menubar** — the top-bar navigation row projected from the app menu. Group
   labels open their items and never navigate themselves. It replaced the left
   **rail** (retired), and is distinct from the **transaction rail**, the
-  per-transaction station pipeline in the bot panel's operator lens.
+  per-transaction station pipeline in a bot page's order records.
 - **Active menu node** — the single app-menu node one URL resolves to, by longest
   match. It is the sole resolver behind menubar highlighting and, outside an
   account workspace, the window title, which is why those two can never
@@ -2092,7 +2092,7 @@ Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-
 - **Operation catalog** — the provider-owned typed declarations (method, public and agent path templates, capability, readiness, account requirement, idempotency kind, stream kind) that are the single source for the coordinator's forwarding allowlist, the agent's mounts, the exported OpenAPI and the generated frontend builders. An operation's **readiness** is either `configuration_access` (routable for an unbound lane so its configuration can be repaired) or `execution` (requires the confirmed binding).
 - **Routing attempt** — one coordinator-side delivery attempt with its pinned context (epoch, binding generation, instance, nonsecret target) persisted before dispatch. Outcomes: `not_dispatched`, `provider_refused`, `delivered` (terminal, carrying the provider's receipt reference) or `outcome_unknown` (reconcile by identity, never auto-resubmit). The provider clerk stays the sole deduplication and outcome authority.
 - **Deployment namespace** — the deployment-owned scope qualifying volume-root comparisons: the same path string in two containers is two mounts, not one shared volume. An **approved endpoint** is the deployment-owned internal destination a registration may cite but never change.
-- **Lane** — the provider-plus-clerk routing dimension of the frontend, orthogonal to the Trader/Operator **lens**: routes carry broker and clerk identity explicitly, and a browser selection is never command authority.
+- **Lane** — the provider-plus-clerk routing dimension of the frontend: routes carry broker and clerk identity explicitly, and a browser selection is never command authority. (It was once orthogonal to the Trader/Operator **lens**, retired by PRD #2560.)
 - **Fleet directory** — the broker-neutral read-only listing of every lane's identity, lifecycle, generations, capabilities and provider-authored summary, with per-lane provenance preserved on partial failure.
 - **Fleet role** — a deployment names each process's composition: `combined` (legacy posture, byte-for-byte the historical single process), `fleet_coordinator` (data-plane core + fleet registry + `/internal/fleet` surface; no broker client, clerk authority, stream or bot runner) or `clerk_agent` (one lane: the Alpaca boot, its streams, its bot runner, mounted under the deployment's approved endpoint). Once a volume is fleet-enrolled, a non-combined role missing its marker or fleet configuration refuses rather than falling back to unfenced authority.
 - **Fleet presence** — the agent's session at the coordinator through one seam with two transports (in-process and the token-authenticated internal HTTP surface). Its boot order is the admission protocol: volume gate, registration (epoch), reservation before custody, confirmation after the local acknowledgement, then heartbeats that observe and never confirm.

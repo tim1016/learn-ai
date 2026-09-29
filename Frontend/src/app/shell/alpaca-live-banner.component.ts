@@ -10,7 +10,9 @@ import {
 } from '../fleet/account-workspace';
 import { FleetDirectoryService } from '../fleet/fleet-directory.service';
 import {
+  laneAttention,
   laneConfirmedAccount,
+  type LaneAttention,
   laneDisplayName,
   laneDisplayNameText,
   type LaneDescriptor,
@@ -32,14 +34,6 @@ const ASSUME_REAL_MONEY = 'Assume real money until a read succeeds.';
 
 /** Which of the five treatments a badge renders in. */
 type BadgeTone = 'is-paper' | 'is-live' | 'is-shadow' | 'is-reading' | 'is-undetermined';
-
-/** Whether the lane's account needs the owner (PRD #2560 D4): the lane's own
- * `attention_count`, carried by the fleet directory. Unknown is its own
- * state, never a zero — the dot says so rather than disappearing. */
-type PillAttention =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'count'; readonly count: number }
-  | { readonly kind: 'unknown' };
 
 /**
  * Everything known about one lane's badge before its extra facts (shadow
@@ -177,13 +171,20 @@ interface LaneBadge {
     }
     /* The lane tokens (PRD #2560 D4): the pill's colour is its account's
        lane; the mode word inside it is the carrier, never the colour. */
-    .alpaca-banner.is-paper { --lane: var(--lane-paper); color: #b9edff; }
-    .alpaca-banner.is-live { --lane: var(--lane-live); color: #fff; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
-    .alpaca-banner.is-shadow { --lane: var(--lane-shadow); color: #d9caff; font-weight: 650; }
+    .alpaca-banner.is-paper { --lane: var(--lane-paper); color: var(--lane-paper-text); }
+    .alpaca-banner.is-live {
+      --lane: var(--lane-live); color: var(--lane-on-fill); background: var(--lane-live-fill); font-weight: 750;
+    }
+    .alpaca-banner.is-shadow { --lane: var(--lane-shadow); color: var(--lane-shadow-text); font-weight: 650; }
     .alpaca-banner.is-reading { color: var(--text-secondary); border-style: dashed; }
-    .alpaca-banner.is-undetermined { --lane: #ffb020; color: #fff; background: rgba(122, 61, 0, 0.85); font-weight: 750; }
-    .alpaca-banner.is-active {
-      border-width: 2px;
+    .alpaca-banner.is-undetermined {
+      --lane: var(--lane-undetermined); color: var(--lane-on-fill); background: var(--lane-undetermined-fill);
+      font-weight: 750;
+    }
+    /* The account you are in: a heavier rim. Live and undetermined keep their
+       loud fills, so the pill you stand on never reads quieter than the rest. */
+    .alpaca-banner.is-active { border-width: 2px; }
+    .alpaca-banner.is-active:not(.is-live):not(.is-undetermined) {
       background: color-mix(in srgb, var(--lane) 18%, rgba(5, 8, 14, 0.42));
     }
     .alpaca-banner__mode { font-weight: 750; }
@@ -270,12 +271,9 @@ export class AlpacaLiveBannerComponent {
   /** The attention dot's state: none, a count, or unknown — `null` or an
    * absent count is unknown, never a zero. The roster-unknown badge has no
    * lane to count for, so it has no dot. */
-  protected readonly attention = computed<PillAttention>(() => {
+  protected readonly attention = computed<LaneAttention>(() => {
     const lane = this.lane();
-    if (lane === null) return { kind: 'none' };
-    const count = lane.provider_summary?.attention_count;
-    if (count === null || count === undefined) return { kind: 'unknown' };
-    return count > 0 ? { kind: 'count', count } : { kind: 'none' };
+    return lane === null ? { kind: 'none' } : laneAttention(lane);
   });
 
   /** Whether the operator is currently standing inside this lane's own
@@ -356,7 +354,7 @@ export class AlpacaLiveBannerComponent {
  * the one place those facts turn into text, so trimming the pill's
  * visible content down to the mode word and a dot can never mean losing
  * them; they move to the hover/screen-reader surface instead. */
-function finalizeBadge(raw: LaneBadgeFacts, attention: PillAttention): LaneBadge {
+function finalizeBadge(raw: LaneBadgeFacts, attention: LaneAttention): LaneBadge {
   const parts: string[] = [];
   if (raw.shadow) parts.push('Shadow authority');
   if (raw.lossHold) parts.push('loss hold');
@@ -378,7 +376,7 @@ function finalizeBadge(raw: LaneBadgeFacts, attention: PillAttention): LaneBadge
 }
 
 /** What the attention dot means, in words — `null` when there is no dot. */
-function attentionSentence(attention: PillAttention): string | null {
+function attentionSentence(attention: LaneAttention): string | null {
   switch (attention.kind) {
     case 'none':
       return null;

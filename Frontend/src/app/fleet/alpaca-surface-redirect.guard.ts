@@ -1,7 +1,7 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 
-import { RETIRED_LENS_QUERY_PARAM, withoutRetiredLens } from './home-redirect.guard';
+import { RETIRED_LENS_QUERY_PARAM, withoutRetiredLens } from './retired-lens.guard';
 
 /** Retire the desk's old `?surface=bots|gallery` bookmark shape, and the
  * retired `?lens=` (PRD #2560 D2).

@@ -195,6 +195,8 @@ export class AlpacaHomeComponent {
   protected readonly outcome = signal<Outcome | null>(null);
   protected readonly flattenOpen = signal(false);
   private readonly outcomeNotice = viewChild<ElementRef<HTMLElement>>('outcomeNotice');
+  private readonly listRadio = viewChild<ElementRef<HTMLButtonElement>>('listRadio');
+  private readonly wallRadio = viewChild<ElementRef<HTMLButtonElement>>('wallRadio');
   private flattenOpener: HTMLElement | null = null;
 
   /** The last clear sent: a retry re-sends it verbatim, under its own key. */
@@ -245,6 +247,20 @@ export class AlpacaHomeComponent {
       queryParams: { [HOME_VIEW_QUERY_PARAM]: wall ? HOME_WALL_VIEW : null },
       queryParamsHandling: 'merge',
     });
+  }
+
+  /** Arrow keys, Home and End move the List/Wall choice and the keyboard with
+   * it (the ARIA radio group pattern). With two choices every move flips it. */
+  protected onViewKeydown(event: KeyboardEvent): void {
+    const wall =
+      ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(event.key) ? !this.wall()
+      : event.key === 'Home' ? false
+      : event.key === 'End' ? true
+      : null;
+    if (wall === null) return;
+    event.preventDefault();
+    this.showView(wall);
+    (wall ? this.wallRadio() : this.listRadio())?.nativeElement.focus();
   }
 
   protected refresh(): void {

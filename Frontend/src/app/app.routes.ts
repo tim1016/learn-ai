@@ -1,7 +1,8 @@
 import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
-import { dropRetiredLensGuard, homeRedirectGuard } from "./fleet/home-redirect.guard";
+import { homeRedirectGuard } from "./fleet/home-redirect.guard";
+import { dropRetiredLensGuard } from "./fleet/retired-lens.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>

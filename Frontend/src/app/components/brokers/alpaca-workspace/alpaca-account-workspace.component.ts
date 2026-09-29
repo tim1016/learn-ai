@@ -131,6 +131,7 @@ export class AlpacaAccountWorkspaceComponent {
           accountId: this.accountId(),
           tab: 'home',
           botSid: null,
+          wall: false,
         }
       : { ...routed, accountId: routed.accountId ?? this.accountId() };
   });

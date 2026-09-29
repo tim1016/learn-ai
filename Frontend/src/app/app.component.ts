@@ -107,7 +107,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
-        <nav class="shell-actions" shell-connection aria-label="Switch account">
+        <nav class="shell-actions" shell-connection aria-label="Accounts">
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
             <app-lane-attention-bell [lane]="lane" />

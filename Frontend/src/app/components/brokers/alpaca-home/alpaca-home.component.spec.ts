@@ -410,14 +410,36 @@ describe('AlpacaHomeComponent', () => {
     const listOrder = sids(screen.getByRole('list', { name: 'Bots' }));
     expect(wall.start).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Wall' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Wall' }));
     await view.fixture.whenStable();
 
     await vi.waitFor(() => expect(router.url).toBe(`${ACCOUNT_URL}?view=wall`));
     await screen.findByText('STOPPED · STILL HOLDING');
     expect(sids(screen.getByRole('list', { name: 'Bots' }))).toEqual(listOrder);
-    expect(screen.getByRole('button', { name: 'Wall' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Wall' }).getAttribute('aria-checked')).toBe('true');
     expect(wall.start).toHaveBeenCalledWith('alpaca', TEST_CLERK_ID, TEST_ACCOUNT_ID, expect.anything(), expect.anything());
+  });
+
+  it('offers List and Wall as one radio group the arrow keys move, keeping the keyboard on the choice', async () => {
+    const { router, view } = await renderHome();
+    const group = screen.getByRole('radiogroup', { name: 'Show bots as' });
+    const list = within(group).getByRole('radio', { name: 'List' });
+    const wall = within(group).getByRole('radio', { name: 'Wall' });
+    expect(list.getAttribute('aria-checked')).toBe('true');
+    // One tab stop: the checked choice.
+    expect([list.tabIndex, wall.tabIndex]).toEqual([0, -1]);
+
+    list.focus();
+    fireEvent.keyDown(list, { key: 'ArrowRight' });
+    await view.fixture.whenStable();
+
+    await vi.waitFor(() => expect(router.url).toBe(`${ACCOUNT_URL}?view=wall`));
+    await vi.waitFor(() => expect(wall.getAttribute('aria-checked')).toBe('true'));
+    expect(document.activeElement).toBe(wall);
+
+    fireEvent.keyDown(wall, { key: 'ArrowLeft' });
+    await vi.waitFor(() => expect(router.url).toBe(ACCOUNT_URL));
+    await vi.waitFor(() => expect(document.activeElement).toBe(list));
   });
 
   it('keeps no arrangement of its own on the Wall: nothing drags, nothing is stored, nothing resets (D11)', async () => {
@@ -440,7 +462,7 @@ describe('AlpacaHomeComponent', () => {
       expect(row.querySelector('app-asset-identity.asset-identity--xs')?.textContent).toContain('SPY');
     }
 
-    fireEvent.click(screen.getByRole('button', { name: 'Wall' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Wall' }));
     await view.fixture.whenStable();
     await screen.findByText('STOPPED · STILL HOLDING');
 

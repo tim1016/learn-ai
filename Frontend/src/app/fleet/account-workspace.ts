@@ -77,6 +77,9 @@ export interface AccountWorkspaceLocation {
    * open. A bot's page is not a tab of its own: it belongs to Home, which is
    * what keeps Home highlighted while it is open. */
   readonly botSid: string | null;
+  /** Home is open as its Wall (`?view=wall`). The Wall is how Home is being
+   * looked at, so an account pill keeps it, like the tab (story 38). */
+  readonly wall: boolean;
 }
 
 /** The account — or the account-less lane — a route is built for. A route
@@ -126,12 +129,14 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
   const account = ACCOUNT_WORKSPACE_URL.exec(path);
   if (account !== null) {
     const [, broker, clerkId, accountId, segment, sid] = account;
+    const tab = segment === 'activity' || segment === 'deploy' ? segment : 'home';
     return {
       broker: decodeURIComponent(broker),
       clerkId: decodeURIComponent(clerkId),
       accountId: decodeURIComponent(accountId),
-      tab: segment === 'activity' || segment === 'deploy' ? segment : 'home',
+      tab,
       botSid: sid === undefined ? null : decodeURIComponent(sid),
+      wall: tab === 'home' && sid === undefined && routeQueryOf(url).get(HOME_VIEW_QUERY_PARAM) === HOME_WALL_VIEW,
     };
   }
 
@@ -144,6 +149,7 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
     accountId: null,
     tab: surface === 'settings' ? 'settings' : 'home',
     botSid: null,
+    wall: false,
   };
 }
 
@@ -253,8 +259,9 @@ export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): re
  * broker than the workspace the operator is in is a move between brokers, so
  * it takes the front door too.
  *
- * Nothing that was open *over* the workspace travels: the destination has no
- * query at all, so an open Deploy form, a selected custody timeline, a
+ * Home's Wall travels with Home: it is how the tab is being looked at, so
+ * Live's Wall lands on Paper's Wall (story 38). Nothing that was open *over*
+ * the workspace travels: an open Deploy form, a selected custody timeline, a
  * retired `?lens=`, or any later `?`-addressed state closes on a switch
  * instead of retargeting itself at the other account.
  */
@@ -267,7 +274,8 @@ export function accountWorkspaceBadgeRoute(
   }
   const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'home';
   const commands = accountWorkspaceTabRoute(target, tab) ?? settingsRoute(target);
-  return { commands, queryParams: {} };
+  const wall = from.wall && target.accountId !== null;
+  return { commands, queryParams: wall ? { [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW } : {} };
 }
 
 /**
@@ -310,6 +318,11 @@ function settingsRoute(address: AccountWorkspaceAddress): string[] {
 /** `url` without its query string, fragment, or trailing slash — the part a
  * route pattern matches on. Shared with `app-menu`, which matches its entries
  * against the same path this module parses workspace URLs out of. */
+/** The query of a router URL, without its fragment. */
+function routeQueryOf(url: string): URLSearchParams {
+  return new URLSearchParams(url.split('#')[0].split('?')[1] ?? '');
+}
+
 export function routePathOf(url: string): string {
   const path = url.split('#')[0].split('?')[0];
   return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
