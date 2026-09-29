@@ -55,6 +55,10 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   AMEX: 'NYSE American',
 };
 
+/** `card` frames the picker on its own; `flat` drops the frame; `field` sits
+ * among a form's filled fields, its ticker box filled rather than outlined. */
+export type InstrumentCardAppearance = 'card' | 'flat' | 'field';
+
 @Component({
   selector: 'app-instrument-card',
   imports: [
@@ -83,7 +87,7 @@ export class InstrumentCardComponent {
   readonly listboxId = `ticker-range-picker-listbox-${InstrumentCardComponent.nextListboxId++}`;
 
   readonly value = model.required<TickerRange>();
-  readonly appearance = input<'card' | 'flat'>('card');
+  readonly appearance = input<InstrumentCardAppearance>('card');
   /**
    * The card's landmark and combobox name. Pages that mount several cards
    * (an order entry with N legs) must name each — AXE's landmark-unique

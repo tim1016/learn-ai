@@ -2,7 +2,10 @@ import { ChangeDetectionStrategy, Component, computed, input, model } from '@ang
 
 import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
 import type { PriceAdjustmentMode } from '../data-lake';
-import { InstrumentCardComponent } from '../ticker-range-picker/parts/instrument-card.component';
+import {
+  InstrumentCardComponent,
+  type InstrumentCardAppearance,
+} from '../ticker-range-picker/parts/instrument-card.component';
 import type { TickerRange } from '../ticker-range-picker/ticker-range-picker.types';
 
 /**
@@ -38,7 +41,7 @@ export class SymbolPickerComponent {
   /** The lake tree this host's run reads; coverage and gating follow it. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
 
-  readonly appearance = input<'card' | 'flat'>('flat');
+  readonly appearance = input<InstrumentCardAppearance>('flat');
 
   /** The picker's landmark and combobox name — name every picker on a page. */
   readonly label = input('Symbol');

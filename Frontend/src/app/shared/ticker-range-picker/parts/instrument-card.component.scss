@@ -17,6 +17,16 @@
     padding: var(--space-4);
   }
 
+  // A form field among other filled fields: no frame of its own, and the
+  // ticker box carries the fill instead of an outline.
+  &--field {
+    gap: var(--space-1);
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
   &__head {
     display: flex;
     align-items: center;
@@ -81,6 +91,21 @@
   &--open {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-faint);
+  }
+
+  .group--field & {
+    height: 2.5rem;
+    border-color: transparent;
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+
+    &:hover { background: var(--bg-hover); }
+  }
+
+  .group--field &--open {
+    border-color: transparent;
+    background: var(--bg-hover);
+    box-shadow: 0 0 0 2px var(--accent);
   }
 
   &__icon {
