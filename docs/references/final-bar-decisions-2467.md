@@ -143,7 +143,7 @@ The comparison uses held IBKR one-minute bars from 246 source-ledger copies (234
 
 **The final minute is special.** It is where the lake and live disagree: 11 of 12 closes differ, against 24% of ordinary minutes. The size is small, a few cents, below one basis point. But it moves live's exit anchor and the last bucket's indicator inputs.
 
-**Receipt replay.** The lake cannot reproduce live decisions digit for digit. Replaying the 85 held EMA receipts (paper, 2026-09-16 to 09-24, 5 on the final bar) from lake buckets matches **0 of 85 trace digests**. The decision kind matches for **83 of 83** ordinary receipts (all NO_ACTION). The other two are a crash candidate and a quarantine receipt. The EMA carries every differing bucket close forward, so digests diverge from the first receipt of each run.
+**Receipt replay.** The lake cannot reproduce live decisions digit for digit. Replaying the 85 held EMA receipts that carry a trace digest (paper, 2026-09-16 to 09-24, 5 on the final bar) from lake buckets matches **0 of 85 trace digests**. The decision kind matches for **82 of 84** ordinary receipts, all of which were NO_ACTION live. The two that differ are QQQ on 2026-09-16 at 14:00 and 15:15 ET: from the lake's bars the strategy would have staged an ENTER and then an EXIT that live's bars did not. The 85th receipt is a crash candidate and is not compared; a quarantine receipt carries no digest and is not replayed. The EMA carries every differing bucket close forward, so digests diverge from the first receipt of each run, and near a crossover that drift can flip a decision.
 
 This replay cannot tell grouping apart from vendor data. Section 5 answers the grouping question on the bars live actually used.
 
@@ -262,7 +262,7 @@ POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.meas
   --out final-bar-decisions-2467.json
 ```
 
-**The models.** Each model runs the production `BacktestEngine`, with one change: a subclass settles a final-bar stage DISCARD instead of COMMIT. That is the settlement live applies to a refused ENTER. The script refuses to load if the engine hook it overrides is renamed, and refuses a run in which the engine never called it. The revised run reproduced the first run's share, model, closing-print, receipt-replay and grouping numbers exactly; only the after-hours prices changed.
+**The models.** Each model runs the production `BacktestEngine`, with one change: a subclass settles a final-bar stage DISCARD instead of COMMIT. That is the settlement live applies to a refused ENTER. The script refuses to load if the engine hook it overrides is renamed, and refuses a run in which the engine never called it. The revised run reproduced the first run's share, model, closing-print, receipt-replay and grouping numbers exactly; only the after-hours prices changed. A later fix stopped the receipt replay counting a crash-candidate receipt as a decision match; `receipt_replay` was regenerated from the fixed function over the same clerk copy, and no other section changed.
 
 **Scratch checks, not committed:**
 

@@ -3123,7 +3123,7 @@
       "run_started_ms": 1789580903147,
       "receipts": 10,
       "reproduced": 0,
-      "same_decision": 8,
+      "same_decision": 7,
       "first_mismatch_bar_close_ms": 1789402500000,
       "final_bar_receipts": 1,
       "final_bar_reproduced": 0

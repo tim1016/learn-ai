@@ -782,6 +782,8 @@ class ReceiptReplay:
 
 #: A receipt outcome's staged candidate (``EvaluationTrace.staged_candidate``).
 _RECEIPT_CANDIDATE: dict[str, str | None] = {"no_action": None, "enter_intent": "ENTER", "exit_intent": "EXIT"}
+# Crash-candidate and quarantine receipts have no decision kind to compare; they never count as a match.
+_UNMAPPED = "unmapped"
 
 
 def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
@@ -814,7 +816,7 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
         close_ms = facts.get("decision_bar_close_ms")
         if digest is None or close_ms is None:
             continue
-        by_run.setdefault(facts["run_id"], []).append((int(close_ms), digest, _RECEIPT_CANDIDATE.get(outcome)))
+        by_run.setdefault(facts["run_id"], []).append((int(close_ms), digest, _RECEIPT_CANDIDATE.get(outcome, _UNMAPPED)))
     reader = LakeFileReader([lake_root], session="regular")
     replays: list[ReceiptReplay] = []
     for sid, run_id, started_ms in runs:
@@ -840,7 +842,7 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
             trace = traces.get(close_ms)
             same = trace is not None and trace_root([trace]) == digest
             reproduced += same
-            same_decision += trace is not None and trace.staged_candidate == candidate
+            same_decision += candidate != _UNMAPPED and trace is not None and trace.staged_candidate == candidate
             if is_final_bar_close(close_ms):
                 final_total += 1
                 final_reproduced += same
