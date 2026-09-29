@@ -642,12 +642,11 @@ def _money_view(
 
 def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation) -> dict[str, object]:
     """Alpaca's equity and today's account P&L, when the reading knows them."""
-    with money_context():
-        equity = _known_usd(observation.equity_usd)
-        today = None
-        if equity is not None and _known_usd(observation.last_equity_usd) is not None:
-            day = observed_day_pnl(observation=observation, now_ms=repo.clock())
-            today = _known_usd(day.total_usd) if day.known else None
+    equity = _known_usd(observation.equity_usd)
+    today = None
+    if equity is not None and _known_usd(observation.last_equity_usd) is not None:
+        day = observed_day_pnl(observation=observation, now_ms=repo.clock())
+        today = day.display_total_usd if day.known else None
     if equity is None and today is None:
         return {}
     return {
@@ -660,8 +659,8 @@ def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation
 def _known_usd(value: float | Decimal | None) -> Decimal | None:
     """A broker figure, or ``None`` when it is absent or not a finite number.
 
-    A simulated account's equity is already exact (#2556) and passes through
-    unchanged; a real broker's float is normalized once.
+    A simulated account's equity and baseline are already exact (#2556,
+    #2586) and pass through unchanged; a real broker's float is normalized once.
     """
     return None if value is None or not math.isfinite(value) else normalize_money(value)
 
