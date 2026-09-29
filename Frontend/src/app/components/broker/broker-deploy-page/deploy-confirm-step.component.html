@@ -95,10 +95,15 @@
       }
     </button>
     <small id="deploy-submit-guidance" aria-live="polite">{{ guidance() }}</small>
+    <button type="button" class="confirm-step__checks-open" popovertarget="deploy-checks">Every check and the last Start check</button>
   </div>
 
-  <details class="confirm-step__details">
-    <summary>Details: every check and the last Start check</summary>
+  <!-- A popover, not a fold: opening it never makes the column taller. -->
+  <div id="deploy-checks" class="confirm-step__checks" popover role="dialog" aria-labelledby="deploy-checks-title">
+    <header>
+      <h3 id="deploy-checks-title">Every check and the last Start check</h3>
+      <button type="button" popovertarget="deploy-checks" popovertargetaction="hide">Close</button>
+    </header>
     @if (checks(); as list) {
       <app-deploy-readiness-section [checks]="list" />
     } @else {
@@ -110,5 +115,5 @@
     @if (checksObservedAtMs(); as observed) {
       <p class="confirm-step__observed">Checks observed <app-timestamp-display [value]="observed" mode="local" /></p>
     }
-  </details>
+  </div>
 </div>

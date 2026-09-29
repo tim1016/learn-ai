@@ -1,50 +1,44 @@
 <div class="binding-strip">
-  <div class="binding-strip__fields grid gap-3">
-    <div class="grid content-start items-start gap-1 min-w-0">
-      @if (strategies().length === 1) {
-        <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Deployment strategy</span>
-        <strong>{{ selectedStrategy()?.label }}</strong>
-      } @else {
-        <label for="deploy-strategy" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Deployment strategy</label>
-        <select id="deploy-strategy" (change)="changeStrategy($event)">
-          @for (strategy of strategies(); track strategy.strategy_key) {
-            <option
-              [value]="strategy.strategy_key"
-              [selected]="strategy.strategy_key === strategyKey()"
-            >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
-          }
-        </select>
-      }
-      <div class="flex flex-wrap items-center justify-between gap-2 min-h-6">
-        @switch (selectedStrategy()?.evidence_status) {
-          @case ('evidence_only') {
-            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only</span>
-          }
-          @case ('blocked') {
-            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Blocked</span>
-          }
-          @default {
-            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Accepted evidence</span>
-          }
+  @if (strategies().length === 1) {
+    <span class="binding-strip__label">Deployment strategy</span>
+    <strong class="binding-strip__only">{{ selectedStrategy()?.label }}</strong>
+  } @else {
+    <label for="deploy-strategy" class="binding-strip__label">Deployment strategy</label>
+    <span class="binding-strip__select">
+      <select id="deploy-strategy" (change)="changeStrategy($event)">
+        @for (strategy of strategies(); track strategy.strategy_key) {
+          <option
+            [value]="strategy.strategy_key"
+            [selected]="strategy.strategy_key === strategyKey()"
+          >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
         }
-        @if (selectedStrategy(); as selected) {
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              class="info-tip"
-              [pTooltip]="selected.explanation"
-              tooltipPosition="top"
-              [attr.aria-label]="'About ' + selected.label + ': ' + selected.explanation"
-            >i</button>
-            <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }" class="text-[length:var(--fs-xs)] text-[var(--accent-text)]">
-              View validation
-            </a>
-          </div>
-        }
-      </div>
-      @if (selectedStrategy()?.blocked_explanation; as blockedReason) {
-        <p class="basis-full text-[length:var(--fs-xs)] text-[var(--bear)]">{{ blockedReason }}</p>
+      </select>
+    </span>
+  }
+  <div class="binding-strip__status">
+    @switch (selectedStrategy()?.evidence_status) {
+      @case ('evidence_only') {
+        <span class="binding-strip__evidence binding-strip__evidence--bad">Evidence only</span>
       }
-    </div>
+      @case ('blocked') {
+        <span class="binding-strip__evidence binding-strip__evidence--bad">Blocked</span>
+      }
+      @default {
+        <span class="binding-strip__evidence">✓ Accepted evidence</span>
+      }
+    }
+    @if (selectedStrategy(); as selected) {
+      <button
+        type="button"
+        class="info-tip"
+        [pTooltip]="selected.explanation"
+        tooltipPosition="top"
+        [attr.aria-label]="'About ' + selected.label + ': ' + selected.explanation"
+      >i</button>
+      <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">View validation</a>
+    }
   </div>
+  @if (selectedStrategy()?.blocked_explanation; as blockedReason) {
+    <p class="binding-strip__blocked">{{ blockedReason }}</p>
+  }
 </div>

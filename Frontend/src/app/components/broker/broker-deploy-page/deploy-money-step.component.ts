@@ -14,6 +14,7 @@ import {
   untracked,
 } from '@angular/core';
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
+import { TooltipModule } from 'primeng/tooltip';
 
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { extractServerMessage } from '../operation-error';
@@ -74,7 +75,7 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
 @Component({
   selector: 'app-deploy-money-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent, TooltipModule],
   templateUrl: './deploy-money-step.component.html',
   styleUrl: './deploy-money-step.component.scss',
 })
@@ -114,6 +115,11 @@ export class DeployMoneyStepComponent {
     loader: ({ params }) => this.service.previewBudget(params.target, params.body),
   });
   protected readonly factsView = computed(() => (this.facts.hasValue() ? this.facts.value() : null));
+  /** The facts once the account's money has been read for these settings. */
+  protected readonly readyFacts = computed(() => {
+    const view = this.factsView();
+    return view?.state === 'ready' ? view : null;
+  });
   protected readonly factsFailure = computed(() => {
     const error = this.facts.error();
     return error === undefined

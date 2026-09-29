@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal, viewChild, untracked } from '@angular/core';
-import { InputTextModule } from 'primeng/inputtext';
 import { TooltipModule } from 'primeng/tooltip';
 
 import type {
@@ -42,7 +41,7 @@ function parseStrictNumber(raw: string, type: string | null | undefined): number
 @Component({
   selector: 'app-deploy-parameters-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [InputTextModule, TooltipModule, InstrumentCardComponent, AssetIdentityComponent],
+  imports: [TooltipModule, InstrumentCardComponent, AssetIdentityComponent],
   templateUrl: './deploy-parameters-section.component.html',
   styleUrl: './deploy-parameters-section.component.scss',
 })

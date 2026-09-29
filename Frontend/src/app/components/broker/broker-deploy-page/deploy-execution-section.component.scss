@@ -1,3 +1,6 @@
+@use '../../../styles/eyebrow-heading' as *;
+@use '../../../styles/filled-controls' as *;
+
 :host { display: block; min-width: 0; }
 
 .execution-card {
@@ -5,14 +8,133 @@
   gap: var(--space-4);
 }
 
-.mode-option--selected { border-color: var(--bull); box-shadow: inset 0 0 0 1px var(--bull); }
-.mode-option--selected label > span { color: var(--bull); }
-.mode-option--planned { opacity: 0.68; }
-.mode-option--planned label > span { color: var(--info); }
+.choice {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 
-.sizing-option--selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  legend {
+    @include eyebrow-heading;
+    margin-bottom: var(--space-2);
+    padding: 0;
+  }
+}
 
-em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
+// One track, the chosen side lifted. The radios stay real: each lies,
+// transparent, over its own label, so a click lands on the radio itself.
+.segments {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+}
 
-.info-tip { display: grid; flex: 0 0 auto; place-items: center; width: 1.2rem; height: 1.2rem; padding: 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); cursor: help; background: transparent; border: 1px solid var(--border-strong); border-radius: 50%; }
-.info-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.segment {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2) 0 0;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: background-color var(--t-ui), color var(--t-ui);
+
+  &:hover:not(.segment--unavailable) { color: var(--text-primary); }
+  &:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  label {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--space-2);
+    min-width: 0;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+
+    &:disabled { cursor: not-allowed; }
+  }
+
+  strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+
+  span {
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+}
+
+.segment--selected {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+
+  strong::before {
+    content: '';
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin-right: var(--space-2);
+    border-radius: 50%;
+    background: var(--bull);
+    vertical-align: 0.1em;
+  }
+}
+
+.segment--unavailable {
+  opacity: 0.55;
+
+  span { color: var(--info); }
+}
+
+.quantity {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 12rem;
+
+  > span { @include field-label; }
+  input { @include filled-field; }
+  em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
+}
+
+.stop-behavior {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.carryover {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  cursor: pointer;
+
+  span { display: grid; gap: var(--space-1); }
+  small { color: var(--text-secondary); line-height: 1.4; }
+}
+
+.info-tip { @include info-tip; }

@@ -2,6 +2,9 @@
   <header class="deploy-step__head">
     <span class="deploy-step__number" aria-hidden="true">{{ number() }}</span>
     <h2 class="deploy-step__title" [id]="headingId">{{ heading() }}</h2>
+    @if (status(); as state) {
+      <span class="deploy-step__status" [class.deploy-step__status--ready]="state.tone === 'ready'">{{ state.label }}</span>
+    }
     @if (!open() && summary()) {
       <p class="deploy-step__summary">{{ summary() }}</p>
     }

@@ -58,8 +58,8 @@
     <ol class="deploy-steps">
       <li>
         <app-deploy-step
-          [number]="1" heading="What" [foldable]="true" [open]="whatOpen()" [summary]="whatSummary()"
-          [canFold]="whatComplete()" [foldHint]="whatFoldHint()"
+          [number]="1" heading="What" [foldable]="stepsFold()" [open]="whatOpen()" [summary]="whatSummary()"
+          [status]="whatStatus()" [canFold]="whatComplete()" [foldHint]="whatFoldHint()"
           (edit)="editStep('what')" (done)="foldStep('what')"
         >
           <app-deploy-binding-strip
@@ -79,6 +79,7 @@
           <div class="deploy-symbol">
             <app-symbol-picker
               id="deploy-symbol"
+              appearance="field"
               label="Trading symbol"
               [symbol]="ticket().symbol"
               (symbolChange)="setSymbol($event)"
@@ -100,8 +101,8 @@
 
       <li>
         <app-deploy-step
-          [number]="2" heading="How" [foldable]="true" [open]="howOpen()" [summary]="howSummary()"
-          [canFold]="howComplete()" foldHint="Choose where it trades, a size and exit terms first."
+          [number]="2" heading="How" [foldable]="stepsFold()" [open]="howOpen()" [summary]="howSummary()"
+          [status]="howStatus()" [canFold]="howComplete()" foldHint="Choose where it trades, a size and exit terms first."
           (edit)="editStep('how')" (done)="foldStep('how')"
         >
           <app-deploy-execution-section
@@ -126,20 +127,31 @@
           />
           <fieldset class="deploy-exit-terms">
             <legend>Exit terms · fixed for this bot’s life</legend>
-            <label>Exit allowance (bps)<input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /></label>
-            <label>Band multiple<input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /></label>
-            <label>Spread cap (bps)<input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /></label>
-            <p>{{ view.exit_steps_summary }}</p>
+            <div class="deploy-exit-terms__fields">
+              <label>
+                <span>Exit allowance<span class="sr-only"> (bps)</span></span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
+              </label>
+              <label>
+                <span>Band multiple</span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /><span aria-hidden="true">×</span></span>
+              </label>
+              <label>
+                <span>Spread cap<span class="sr-only"> (bps)</span></span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
+              </label>
+            </div>
             @if (!view.default_exit_terms) {
               <p>This account has no defaults for new bots, so these start empty.
                 <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
             }
+            <p class="deploy-exit-terms__steps">{{ view.exit_steps_summary }}</p>
           </fieldset>
         </app-deploy-step>
       </li>
 
       <li>
-        <app-deploy-step [number]="3" heading="Money" [open]="true">
+        <app-deploy-step [number]="3" heading="Money" [open]="true" [status]="moneyStatus()">
           <app-deploy-money-step
             [target]="budgetTarget()"
             [body]="budgetBody()"
@@ -194,7 +206,7 @@
     </ol>
   } @else if (deployView.isLoading()) {
     <section class="deploy-loading" role="status" aria-label="Loading Deploy">
-      <span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span>
       <strong>Reading this account’s Deploy options…</strong>
     </section>
   } @else if (deployView.error()) {

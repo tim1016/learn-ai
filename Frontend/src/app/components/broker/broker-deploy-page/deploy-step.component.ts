@@ -12,11 +12,19 @@ import {
 
 let nextStepId = 0;
 
+/** A step's state in two or three words, beside its heading. */
+export interface DeployStepStatus {
+  readonly label: string;
+  readonly tone: 'ready' | 'todo';
+}
+
 /**
  * One numbered step of Deploy (PRD #2560 D8): What → How → Money → Confirm.
  *
- * A foldable step shows its body while open and a one-line summary with Edit
- * once folded. The body stays in the page while folded (only hidden), so the
+ * Where the page has room the four steps stand side by side as columns and
+ * stay open; the host passes `foldable` only where they stack. A foldable
+ * step shows its body while open and a one-line summary with Edit once
+ * folded. The body stays in the page while folded (only hidden), so the
  * pickers and editors inside keep their state. Focus follows the owner:
  * Edit lands in the opened body, Done returns to the step's Edit button.
  */
@@ -32,6 +40,7 @@ export class DeployStepComponent {
   /** The folded step's one line. */
   readonly summary = input('');
   readonly open = input.required<boolean>();
+  readonly status = input<DeployStepStatus | null>(null);
   /** Offers Edit / Done. Money and Confirm are always open. */
   readonly foldable = input(false);
   /** Done waits for the step to be complete. */

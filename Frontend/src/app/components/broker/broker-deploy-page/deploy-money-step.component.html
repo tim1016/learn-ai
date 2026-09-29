@@ -6,7 +6,7 @@
   @if (factsFailure(); as failure) {
     <p class="money-step__refusal" role="alert">{{ failure }}</p>
   } @else if (facts.isLoading() && factsView() === null) {
-    <p role="status">Reading this account’s money…</p>
+    <p class="money-step__note" role="status">Reading this account’s money…</p>
   }
 
   @if (factsView(); as view) {
@@ -31,22 +31,8 @@
           <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
         }
       </dl>
-      @if (view.observed_at_ms) {
-        <p class="money-step__observed">Money observed <app-timestamp-display [value]="view.observed_at_ms" mode="local" /></p>
-      }
-      <div class="money-step__shortcuts" role="group" aria-label="Budget shortcuts">
-        @for (shortcut of view.shortcuts; track shortcut.key) {
-          <button
-            type="button"
-            [disabled]="disabled()"
-            [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
-            (click)="choose(shortcut.amount_usd)"
-          >{{ shortcut.label }} · {{ shortcut.amount_usd | authoredUsd }}</button>
-          <small [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
-        }
-      </div>
     } @else if (view.state === 'awaiting_price') {
-      <p role="status">{{ view.detail }}</p>
+      <p class="money-step__note" role="status">{{ view.detail }}</p>
     } @else {
       <p class="money-step__refusal" role="alert">{{ view.detail }}</p>
     }
@@ -54,14 +40,17 @@
 
   <div class="money-step__amount">
     <label for="deploy-money-amount">{{ dryRun() ? 'Simulated starting cash (USD)' : 'Dollar budget (USD)' }}</label>
-    <input
-      id="deploy-money-amount"
-      type="text"
-      inputmode="decimal"
-      autocomplete="off"
-      aria-describedby="deploy-money-outcome"
-      [formField]="fields"
-    />
+    <span class="money-step__dollars">
+      <span aria-hidden="true">$</span>
+      <input
+        id="deploy-money-amount"
+        type="text"
+        inputmode="decimal"
+        autocomplete="off"
+        aria-describedby="deploy-money-outcome"
+        [formField]="fields"
+      />
+    </span>
   </div>
   <div id="deploy-money-outcome" class="money-step__outcome">
     @if (fields().touched() && fields().invalid()) {
@@ -85,8 +74,27 @@
     }
   </div>
 
-  <div class="money-step__actions">
+  @if (readyFacts(); as view) {
+    <div class="money-step__shortcuts" role="group" aria-label="Budget shortcuts">
+      @for (shortcut of view.shortcuts; track shortcut.key) {
+        <button
+          type="button"
+          [disabled]="disabled()"
+          [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
+          [pTooltip]="shortcut.explanation"
+          tooltipPosition="top"
+          (click)="choose(shortcut.amount_usd)"
+        ><span>{{ shortcut.label }}</span><span class="sr-only"> · </span><strong>{{ shortcut.amount_usd | authoredUsd }}</strong></button>
+        <small class="sr-only" [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
+      }
+    </div>
+  }
+
+  <p class="money-step__note">The bot opens positions only while they fit this budget. Fills, fees and losses can go past it, and the size chosen in How stays as it is.</p>
+  <div class="money-step__observed">
+    @if (readyFacts()?.observed_at_ms; as observedAt) {
+      <span>Money observed <app-timestamp-display [value]="observedAt" mode="local" /></span>
+    }
     <button type="button" [disabled]="body() === null || disabled() || facts.isLoading()" (click)="refresh()">Refresh money</button>
   </div>
-  <p class="money-step__note">The bot opens positions only while they fit this budget. Fills, fees and losses can go past it, and the size chosen in How stays as it is.</p>
 </div>
