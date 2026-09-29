@@ -213,6 +213,21 @@ function refusedLeg(sid: string): CohortLegResult {
   };
 }
 
+/** The leg that ends a batch early: the account lost its authority, so no later leg ran. */
+function authorityLostLeg(sid: string): CohortLegResult {
+  return {
+    strategy_instance_id: sid,
+    outcome: 'failed',
+    result: null,
+    error: {
+      action_id: 'archive', outcome: 'failure', receipt_id: null, recorded_at_ms: 1,
+      message: 'This account’s execution authority can no longer be written to.',
+      why: 'Restart the data plane to acquire a fresh lease and reconcile custody on boot.',
+      reason_code: 'EXECUTION_LEASE_LOST',
+    },
+  };
+}
+
 function clearResult(legs: CohortLegResult[]): CohortActionResult {
   const count = (...kinds: string[]) => legs.filter((leg) => kinds.includes(leg.outcome)).length;
   return {
@@ -636,6 +651,39 @@ describe('AlpacaHomeComponent', () => {
       const [retryTarget, retry] = clearBots.mock.calls[1];
       expect(retry).toEqual(first);
       expect(retryTarget).toEqual(firstTarget);
+    });
+
+    it('names the bots a batch ended before reaching, and re-sends the same batch for them', async () => {
+      const clearBots = vi.fn()
+        .mockResolvedValueOnce(clearResult([clearedLeg('dry-old'), authorityLostLeg('old-bot')]))
+        .mockResolvedValueOnce(clearResult([
+          clearedLeg('dry-old', 'replayed'), clearedLeg('old-bot'), clearedLeg('older-bot'),
+        ]));
+      await renderHome({ getCatalog: () => Promise.resolve(withFinishedDryRun()), clearBots });
+      await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+      fireEvent.click(within(finishedFold()).getByRole('button', { name: 'Clear all finished' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 3' }));
+
+      const summary = await screen.findByText('Cleared 1 of 3 bots. 2 not cleared.');
+      expect(summary.closest('p')?.getAttribute('role')).toBe('alert');
+      const outcome = screen.getByRole('region', { name: 'Clear outcome' });
+      const failed = within(outcome).getByText('old-bot').closest('li');
+      if (failed === null) throw new Error('old-bot has no outcome line.');
+      expect(within(failed).getByText('Failed')).toBeTruthy();
+      expect(within(failed).getByText(formatReceiptLabel('EXECUTION_LEASE_LOST'))).toBeTruthy();
+      const unreached = within(outcome).getByText(/Not reached, safe to try again:/);
+      expect(within(unreached).getByText('older-bot')).toBeTruthy();
+      expect(within(unreached).queryByText('old-bot')).toBeNull();
+
+      fireEvent.click(within(outcome).getByRole('button', { name: 'Try again' }));
+
+      await screen.findByText('Cleared 3 of 3 bots.');
+      expect(clearBots).toHaveBeenCalledTimes(2);
+      const [firstTarget, first] = clearBots.mock.calls[0];
+      const [retryTarget, retry] = clearBots.mock.calls[1];
+      expect(retry).toEqual(first);
+      expect(retryTarget).toEqual(firstTarget);
+      expect(retry.strategy_instance_ids).toEqual(['dry-old', 'old-bot', 'older-bot']);
     });
 
     it('sends nothing when the confirmation is cancelled, and hands the keyboard back', async () => {
