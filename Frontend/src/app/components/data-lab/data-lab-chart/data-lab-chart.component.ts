@@ -75,6 +75,14 @@ export interface BarSources {
   notice_code: string | null;
 }
 
+/** The part of the backend's indicator warm-up receipt this chart reads: the
+ *  backend-authored note saying which values the held history could not warm
+ *  up. Null when every visible value is warmed up; the counts behind it are
+ *  left undeclared until a surface reads them. */
+export interface IndicatorWarmup {
+  note: string | null;
+}
+
 export interface ChartDataResponse {
   bars: ChartBar[];
   indicators: ChartIndicatorResult[];
@@ -84,6 +92,7 @@ export interface ChartDataResponse {
   recommended_timeframe: string;
   meta: { cached_resample: boolean; cached_indicators: boolean };
   bar_sources?: BarSources;
+  indicator_warmup?: IndicatorWarmup | null;
 }
 
 /** Closed operator-copy map for the chart's data-source notice.
@@ -252,6 +261,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     visibleIndicatorIds: string[];
     timeframe: string;
     barSources: BarSources | null;
+    warmupNote: string | null;
   }>();
 
   /** Emitted when the chart endpoint rejects the request with a
@@ -289,6 +299,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     const code = this.barSources()?.notice_code;
     return code ? BAR_SOURCE_NOTICE_COPY.get(code) ?? null : null;
   });
+
+  /** Backend-authored note naming the indicator values the held history could
+   *  not warm up. Rendered verbatim; null when there is nothing to say. */
+  warmupNote = signal<string | null>(null);
 
   // Chart data
   private bars = signal<ChartBar[]>([]);
@@ -365,6 +379,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     visibleIndicatorIds: string[];
     timeframe: string;
     barSources?: BarSources | null;
+    warmupNote?: string | null;
   }): void {
     this.bars.set(snapshot.bars);
     this.indicatorResults.set(snapshot.indicators);
@@ -373,6 +388,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     // before the receipt existed carries none, which reads as "nothing to say"
     // — never as the previous fetch's notice left standing over other bars.
     this.barSources.set(snapshot.barSources ?? null);
+    this.warmupNote.set(snapshot.warmupNote ?? null);
     this.allowedTimeframes.set(snapshot.allowedTimeframes);
     this.estimatedBars.set(snapshot.estimatedBarsPerTimeframe);
     this.recommendedTimeframe.set(snapshot.recommendedTimeframe);
@@ -441,6 +457,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       this.indicatorResults.set(resp.indicators);
       this.quality.set(resp.quality);
       this.barSources.set(resp.bar_sources ?? null);
+      this.warmupNote.set(resp.indicator_warmup?.note ?? null);
       this.allowedTimeframes.set(resp.allowed_timeframes);
       this.estimatedBars.set(resp.estimated_bars_per_timeframe);
       this.recommendedTimeframe.set(resp.recommended_timeframe);
@@ -467,6 +484,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         visibleIndicatorIds: visibleIds,
         timeframe: this.timeframe(),
         barSources: resp.bar_sources ?? null,
+        warmupNote: resp.indicator_warmup?.note ?? null,
       });
     } catch (error: unknown) {
       const detail = chartRequestErrorDetail(error);

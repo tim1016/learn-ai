@@ -130,6 +130,7 @@ export class ExploreComponent {
               visibleIndicatorIds: snapshot.visibleIndicatorIds,
               timeframe: snapshot.timeframe,
               barSources: snapshot.barSources ?? null,
+              warmupNote: snapshot.warmupNote ?? null,
             });
           });
         });
