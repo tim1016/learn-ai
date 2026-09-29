@@ -274,6 +274,8 @@ a defect.
   dead strategy key, or a broker-confirmed unlisted symbol — with the
   custody guard still the last word. The read path stays pure (#1776): both
   the panel guard and the retire commit read the store, never the broker.
+  **Superseded 2026-09-29 (#2578):** Retire and the symbol-validity store are
+  removed; Clear (archive) is the only way off Home.
 - **F17 — `prepare_safe_flatten` enablement vs. its view-action nature
   (low; reduced 2026-08-26).** The executor landed (#1756) and the POST path
   now raises a typed `ActionNotAvailableError` — "This recovery capability is
@@ -452,7 +454,7 @@ is the durable index, the issue is the working brief.
 - **T1 — narrow retire misses its motivating case. RESOLVED 2026-08-30.**
   The operator-visible contradiction went 2026-08-26; the widening landed
   2026-08-30 via the sweep-produced symbol-validity store. See §9 F16 and
-  **#1795**.
+  **#1795**. Superseded 2026-09-29: Retire is removed (#2578).
 - **T5 — panel reads 503 under write pressure (medium).** An honest
   fail-closed torn-read guard, but one torn read ends the request, so it
   surfaces as flakiness exactly when an operator inspects an active bot.

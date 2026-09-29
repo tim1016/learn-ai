@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # The runner's sealed bindings, read per tick: ``strategy_instance_id`` -> the
 # instance's current sealed-program hash. Injected as a callable so the clerk
-# layer stays free of bot-registration imports (the ``roster_symbols`` pattern).
+# layer stays free of bot-registration imports.
 type InstanceSeals = Callable[[], Mapping[str, str]]
 
 

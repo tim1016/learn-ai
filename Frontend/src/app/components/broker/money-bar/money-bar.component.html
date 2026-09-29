@@ -38,6 +38,9 @@
       @if (slice.segment.released_usd; as released) {
         &ngsp;<span class="money-bar__parts">
           released {{ released | authoredUsd }}
+          @if (slice.segment.released_estimated) {
+            (estimate)
+          }
           @if (slice.segment.still_claimed_usd; as stillClaimed) {
             · still claimed {{ stillClaimed | authoredUsd }}
           }

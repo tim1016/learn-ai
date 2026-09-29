@@ -10127,7 +10127,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -14220,9 +14220,10 @@ export interface components {
          *     owner's words -- holding a position is a normal state, never worded as a
          *     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
          *     it, in order: a running bot's budget, results, balance and where the
-         *     balance is; a stopped bot's balance and what was released and what is
-         *     still held, which add up to that balance. It is empty unless ``state``
-         *     is ``ready``.
+         *     balance is; a stopped bot's balance, what its Stop released (the Stop's
+         *     recorded figure, #2555), what came back or was charged since, signed,
+         *     and what is still held, which add up to that balance less any "Over its
+         *     budget by". It is empty unless ``state`` is ``ready``.
          *     ``segment`` is this bot's slice exactly as the account's money bar draws
          *     it (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of
          *     its own; ``None`` when the bot is finished and holds no money any more.
@@ -19775,7 +19776,9 @@ export interface components {
          *     ``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent
          *     beyond its balance -- absent, never "0.00", when nothing is short;
          *     ``released_usd`` and ``still_claimed_usd`` to a stopped bot that still
-         *     holds money.
+         *     holds money. ``released_usd`` is what its Stop released, as the Stop
+         *     recorded it (#2555); ``released_estimated`` marks a Stop that recorded
+         *     none, whose figure is an estimate from the bot's money now.
          *     ``palette_index`` is a bot's stable colour slot (its registration order
          *     on the account), the same on every surface that draws that bot.
          *     ``settling`` is sale proceeds on their way into cash: not yet free to
@@ -19794,6 +19797,11 @@ export interface components {
             /** Palette Index */
             palette_index?: number | null;
             parts?: components["schemas"]["MoneyParts"] | null;
+            /**
+             * Released Estimated
+             * @default false
+             */
+            released_estimated?: boolean;
             /** Released Usd */
             released_usd?: string | null;
             /** Share Bps */
@@ -20945,7 +20953,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20978,7 +20986,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -21007,7 +21015,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -21030,7 +21038,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21073,7 +21081,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
+            supported_action_ids: ("deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * PanelQuiesceActionRequest
@@ -22048,7 +22056,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**

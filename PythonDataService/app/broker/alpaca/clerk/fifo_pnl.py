@@ -22,9 +22,10 @@ Formula:
         ``money.normalize_money``; lots, closures, open valuation and totals
         are then exact ``Decimal`` under ``money.money_context`` (inexact
         arithmetic raises).  The ``exact_*`` fields are the money authority
-        (custody budgets read them).  Float attributes such as ``qty``,
-        ``realized_pnl`` and ``open_pnl`` are display views: the exact value
-        rounded once, never re-normalized into money.
+        (custody budgets and simulated account equity read them).  Float
+        attributes such as ``qty``, ``realized_pnl`` and ``open_pnl`` are
+        display views: the exact value rounded once, never re-normalized into
+        money.
 
 Reference:
     Standard FIFO inventory method (GAAP / IFRS).  No external software port —
@@ -54,7 +55,8 @@ Usage::
     result = compute_fifo_pnl(fills)
     # result.exact_realized_pnl — closed lots only, exact Decimal (money authority)
     # result.realized_pnl  — its float display view; 0.0 on no closed trades
-    # result.open_pnl      — None until mark_prices are supplied for ALL open symbols
+    # result.exact_open_pnl — None until mark_prices are supplied for ALL open symbols
+    # result.open_pnl      — its float display view
     # result.marks_complete — True only when all open-lot symbols have mark coverage
     # result.fee_total     — None when any fill has fee=None ("Fees not reported")
 """
@@ -62,7 +64,7 @@ Usage::
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -145,16 +147,18 @@ class PnLResult:
         ``0`` when no lots have been closed.  ``realized_pnl`` is its float
         display view.
 
-    ``open_pnl``:
+    ``exact_open_pnl``:
+        Exact open valuation of the remaining lots at the supplied marks.
         ``None`` when no current mark price is available OR when any open-lot
-        symbol is missing a mark (marks_complete=False).  ``0.0`` when there
+        symbol is missing a mark (marks_complete=False).  ``0`` when there
         is no open exposure (fully flat, marks_complete=True).  Non-None only
-        when ALL open-lot symbols have mark coverage.
+        when ALL open-lot symbols have mark coverage.  ``open_pnl`` is its
+        float display view.
 
-        IMPORTANT: ``open_pnl`` is never a partial sum.  If SPY and AAPL
-        both have open lots but only SPY has a mark, ``open_pnl`` is ``None``
-        (not just SPY's unrealized).  Callers must check ``marks_complete``
-        before using ``open_pnl``.
+        IMPORTANT: it is never a partial sum.  If SPY and AAPL both have open
+        lots but only SPY has a mark, ``exact_open_pnl`` is ``None`` (not just
+        SPY's unrealized).  Callers must check ``marks_complete`` before using
+        it.
 
     ``marks_complete``:
         ``True`` when either (a) there are no open lots (bot is flat) or
@@ -176,7 +180,7 @@ class PnLResult:
     """
 
     exact_realized_pnl: Decimal = ZERO
-    open_pnl: float | None = None
+    exact_open_pnl: Decimal | None = None
     marks_complete: bool = False
     fee_total: float | None = None
     closed_lots: list[ClosedLot] = field(default_factory=list)
@@ -187,12 +191,17 @@ class PnLResult:
         """Display view of ``exact_realized_pnl``, rounded once."""
         return float(self.exact_realized_pnl)
 
+    @property
+    def open_pnl(self) -> float | None:
+        """Display view of ``exact_open_pnl``, rounded once."""
+        return None if self.exact_open_pnl is None else float(self.exact_open_pnl)
+
 
 @dataclass(frozen=True)
 class OpenPnLResult:
     """Open-lot valuation shared by batch FIFO and the incremental cache."""
 
-    value: float | None
+    exact_value: Decimal | None
     marks_complete: bool
     open_lots: tuple[OpenLot, ...]
 
@@ -208,7 +217,7 @@ def apply_fill_to_lots(
 ) -> None:
     """Apply one fill to the FIFO lot queues in-place.
 
-    Extracted from ``compute_fifo_pnl``'s inner loop so that the rollup cache
+    Extracted from ``compute_fifo_pnl``'s inner loop so that the SQLite economic cache
     can maintain FIFO state incrementally (O(1) per fill on append) without
     calling ``compute_fifo_pnl`` over the full history on every read.
 
@@ -227,7 +236,7 @@ def apply_fill_to_lots(
     Canonical implementation: this file (delegate of compute_fifo_pnl).
     Validated against:
         PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py and
-        PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+        PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py.
     """
     sym = fill.symbol
     # Normalize each recorded value once; every product below is exact.
@@ -304,7 +313,7 @@ def apply_fill_to_lots(
 @money_context()
 def compute_open_pnl(
     lots: dict[str, deque[_Lot]],
-    mark_prices: dict[str, float],
+    mark_prices: Mapping[str, float | Decimal],
 ) -> OpenPnLResult:
     """Value current FIFO lots without ever returning a partial portfolio sum.
 
@@ -314,11 +323,12 @@ def compute_open_pnl(
     Canonical implementation: this file.
     Validated against:
       PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
-      PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+      PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py.
 
-    ``value`` is ``None`` until every symbol with an open lot has a mark.
-    Flat state is complete and has a value of ``0.0``.  Each mark is
-    normalized once; the sum is exact and ``value`` rounds it once.
+    ``exact_value`` is ``None`` until every symbol with an open lot has a
+    mark.  Flat state is complete and has a value of exactly ``0``.  Each mark
+    is normalized once; ``exact_value`` is the exact sum.  Its consumers
+    carry it as their own ``exact_open_pnl`` beside a float display view.
     """
     open_lots: list[OpenLot] = []
     symbols_with_open_lots: set[str] = set()
@@ -349,15 +359,15 @@ def compute_open_pnl(
                 total_open_pnl += signed_delta * lot.qty
 
     if not open_lots:
-        return OpenPnLResult(value=0.0, marks_complete=True, open_lots=())
+        return OpenPnLResult(exact_value=ZERO, marks_complete=True, open_lots=())
     if mark_prices.keys() >= symbols_with_open_lots:
         return OpenPnLResult(
-            value=float(total_open_pnl),
+            exact_value=total_open_pnl,
             marks_complete=True,
             open_lots=tuple(open_lots),
         )
     return OpenPnLResult(
-        value=None,
+        exact_value=None,
         marks_complete=False,
         open_lots=tuple(open_lots),
     )
@@ -380,7 +390,7 @@ def realized_pnl_for_window(
     Canonical implementation: this file.
     Validated against:
       PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
-      PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+      PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py.
     """
     return float(sum(
         (
@@ -396,7 +406,7 @@ def realized_pnl_for_window(
 def compute_fifo_pnl(
     fills: Iterable[FillRecord],
     *,
-    mark_prices: dict[str, float] | None = None,
+    mark_prices: Mapping[str, float | Decimal] | None = None,
 ) -> PnLResult:
     """Compute FIFO realized and open P&L over attributed bot fills.
 
@@ -414,10 +424,11 @@ def compute_fifo_pnl(
         Ordered chronologically (ascending ``filled_at_ms``).  Produced by
         ``project_instance_fills``.
     mark_prices:
-        Optional ``{symbol: current_price}`` for open-P&L calculation.
-        ``open_pnl`` is ``None`` unless ALL open-lot symbols appear in this
-        dict.  A partial mark set never produces a partial sum — ``open_pnl``
-        remains ``None`` when any symbol is uncovered.
+        Optional ``{symbol: current_price}`` for open-P&L calculation; each
+        recorded price is normalized once.  ``exact_open_pnl`` is ``None``
+        unless ALL open-lot symbols appear in this mapping.  A partial mark
+        set never produces a partial sum — it remains ``None`` when any
+        symbol is uncovered.
 
     Notes
     -----
@@ -429,7 +440,8 @@ def compute_fifo_pnl(
       (``fee=None``). This propagates "Fees not reported" honestly rather than
       masking unknown fees as $0.
     - ``marks_complete``: ``True`` iff bot is flat OR all open-lot symbols
-      have a mark in ``mark_prices``.  Check this before using ``open_pnl``.
+      have a mark in ``mark_prices``.  Check this before using
+      ``exact_open_pnl``.
     """
     lots: dict[str, deque[_Lot]] = {}
     result = PnLResult()
@@ -452,7 +464,7 @@ def compute_fifo_pnl(
 
     open_result = compute_open_pnl(lots, mark_prices or {})
     result.open_lots = list(open_result.open_lots)
-    result.open_pnl = open_result.value
+    result.exact_open_pnl = open_result.exact_value
     result.marks_complete = open_result.marks_complete
 
     return result
