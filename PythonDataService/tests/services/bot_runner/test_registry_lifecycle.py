@@ -1005,6 +1005,7 @@ async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
     managed_task = registry._bots[_SID].task
     managed_task.cancel()
     await asyncio.wait({managed_task})
+    assert str(managed_task.exception()) == "terminal duty record did not commit"
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
     assert registry.status("alpaca", _SID).phase == "ON_DUTY"
 
