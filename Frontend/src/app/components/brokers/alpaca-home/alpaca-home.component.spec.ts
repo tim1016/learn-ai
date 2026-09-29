@@ -28,7 +28,13 @@ import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/acco
 import { fakeBotPanelView, fakeCatalogBot, fakePanelAction } from '../../../testing/bot-panel-fixtures';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
 import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
-import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.types';
+import type {
+  BotCatalogView,
+  BotClearRequest,
+  CohortActionResult,
+  CohortLegResult,
+} from '../../broker/v2-panel/lib/broker-v2-panel.types';
+import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaHomeComponent } from './alpaca-home.component';
 
@@ -118,6 +124,7 @@ async function renderHome(overrides: {
   attention?: LaneAttentionState;
   runBotAction?: () => Promise<{ message: string }>;
   getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
+  clearBots?: (target: ResourceTarget, request: BotClearRequest) => Promise<CohortActionResult>;
   money?: AccountMoneyView;
 } = {}) {
   const panel = {
@@ -125,6 +132,8 @@ async function renderHome(overrides: {
     getAccountMoney: vi.fn(() => Promise.resolve(overrides.money ?? fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))),
     getPanel: vi.fn(() => Promise.resolve(fakeBotPanelView({ actions: [fakePanelAction('stop')] }))),
     runBotAction: vi.fn(overrides.runBotAction ?? (() => Promise.resolve({ message: 'Stop requested for spy-ema-20260929-0931.' }))),
+    clearBots: vi.fn(overrides.clearBots ?? ((_target: ResourceTarget, request: BotClearRequest) =>
+      Promise.resolve(clearResult(request.strategy_instance_ids.map((sid) => clearedLeg(sid)))))),
   };
   const wall = {
     start: vi.fn(() => Promise.resolve()),
@@ -165,6 +174,60 @@ async function renderHome(overrides: {
   await view.fixture.whenStable();
   if (overrides.getCatalog === undefined) await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
   return { view, router, panel, wall };
+}
+
+/** Two finished bots from the base roster, plus a finished Dry Run ended most recently. */
+function withFinishedDryRun(): BotCatalogView[] {
+  return [
+    ...catalog(),
+    fakeCatalogBot({
+      strategy_instance_id: 'dry-old', group: 'finished', mode: 'dry_run', running: false, phase: 'OFF_DUTY',
+      desired_state: 'STOPPED', ended_at_ms: 1_699_000_000_000, world_label: 'DRY RUN · simulated cash',
+      final_result_usd: '-1.25', trade_count: 2,
+    }),
+  ];
+}
+
+function clearedLeg(sid: string, outcome: 'applied' | 'replayed' = 'applied'): CohortLegResult {
+  return {
+    strategy_instance_id: sid,
+    outcome,
+    result: {
+      action_id: 'archive', outcome: 'success', receipt_id: `receipt-${sid}`, recorded_at_ms: 1_700_000_000_500,
+      applied: true, revision: 4, concurrency_token: 'next', message: `${sid} is cleared.`,
+    },
+    error: null,
+  };
+}
+
+function refusedLeg(sid: string): CohortLegResult {
+  return {
+    strategy_instance_id: sid,
+    outcome: 'refused',
+    result: null,
+    error: {
+      action_id: 'archive', outcome: 'conflict', receipt_id: null, recorded_at_ms: 1,
+      message: 'This bot still holds shares.', why: 'Flatten it first, then clear it.',
+      reason_code: 'ARCHIVE_WOULD_STRAND_CUSTODY',
+    },
+  };
+}
+
+function clearResult(legs: CohortLegResult[]): CohortActionResult {
+  const count = (...kinds: string[]) => legs.filter((leg) => kinds.includes(leg.outcome)).length;
+  return {
+    account_id: TEST_ACCOUNT_ID, receipt_id: 'clear-key', recorded_at_ms: 1_700_000_001_000, legs,
+    applied_count: count('applied'), replayed_count: count('replayed'), refused_count: count('refused'),
+    failed_count: count('failed', 'unknown'),
+  };
+}
+
+/** Open the Finished fold and return it. */
+function finishedFold(): HTMLDetailsElement {
+  const fold = screen.getByText('Finished', { selector: 'strong' }).closest('details');
+  if (fold === null) throw new Error('Finished is not a fold.');
+  fold.open = true;
+  return fold;
 }
 
 function sids(container: HTMLElement): string[] {
@@ -304,7 +367,7 @@ describe('AlpacaHomeComponent', () => {
     if (fold === null) throw new Error('Finished is not a fold.');
     expect(fold.open).toBe(false);
     const rows = within(fold).getAllByRole('row').slice(1);
-    expect(rows.map((row) => within(row).getAllByRole('cell')[0].textContent?.trim())).toEqual(['old-bot', 'older-bot']);
+    expect(rows.map((row) => within(row).getAllByRole('cell')[1].textContent?.trim())).toEqual(['old-bot', 'older-bot']);
     expect(within(rows[0]).getByText('$9.98')).toBeTruthy();
     expect(within(rows[0]).getByText('4')).toBeTruthy();
     // A result the fee evidence cannot vouch for is unknown, never $0.
@@ -422,6 +485,136 @@ describe('AlpacaHomeComponent', () => {
 
     expect(screen.getByRole('button', { name: 'Flatten a group of bots…' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
+  });
+
+  describe('clearing finished bots (owner decision 2026-09-28)', () => {
+    it('clears the ticked bots behind one plain confirmation, then says what it did', async () => {
+      let rows = withFinishedDryRun();
+      const { panel } = await renderHome({ getCatalog: () => Promise.resolve(rows) });
+      await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+      const fold = finishedFold();
+
+      // A finished Dry Run is listed with its world, and is selectable too.
+      const dryRow = within(fold).getByRole('link', { name: 'dry-old' }).closest('tr');
+      if (dryRow === null) throw new Error('dry-old has no row.');
+      expect(within(dryRow).getByText('DRY RUN · simulated cash')).toBeTruthy();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select dry-old' }));
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select older-bot' }));
+      expect(within(fold).getByRole('status').textContent).toContain('2 selected.');
+
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading').textContent).toBe('Clear 2 finished bots from Home?');
+      expect(dialog.textContent).toContain('Their history stays in Activity');
+      expect(dialog.textContent).toContain('This can’t be undone.');
+      // A plain confirmation: nothing to type.
+      expect(within(dialog).queryByRole('textbox')).toBeNull();
+      rows = rows.filter((bot) => !['dry-old', 'older-bot'].includes(bot.strategy_instance_id));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Clear 2' }));
+
+      const summary = await screen.findByText('Cleared 2 of 2 bots.');
+      await vi.waitFor(() => expect(document.activeElement).toBe(summary.closest('p')));
+      expect(summary.closest('p')?.getAttribute('role')).toBe('status');
+      expect(panel.clearBots).toHaveBeenCalledTimes(1);
+      const [target, request] = panel.clearBots.mock.calls[0];
+      expect(request.strategy_instance_ids).toEqual(['dry-old', 'older-bot']);
+      expect(target).toMatchObject({ clerkId: TEST_CLERK_ID, accountId: TEST_ACCOUNT_ID, idempotencyKey: request.idempotency_key });
+      // Cleared bots leave the list on the read that follows.
+      await vi.waitFor(() => expect(within(fold).queryByRole('link', { name: 'dry-old' })).toBeNull());
+      expect(within(fold).queryByRole('link', { name: 'older-bot' })).toBeNull();
+      expect(within(fold).getByRole('link', { name: 'old-bot' })).toBeTruthy();
+    });
+
+    it('clears every finished bot from Clear all finished', async () => {
+      const { panel } = await renderHome({ getCatalog: () => Promise.resolve(withFinishedDryRun()) });
+      await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+      const fold = finishedFold();
+
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear all finished' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading').textContent).toBe('Clear 3 finished bots from Home?');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Clear 3' }));
+
+      await screen.findByText('Cleared 3 of 3 bots.');
+      expect(panel.clearBots.mock.calls[0][1].strategy_instance_ids).toEqual(['dry-old', 'old-bot', 'older-bot']);
+    });
+
+    it('says a refused bot in the backend’s own words, and offers no pointless retry', async () => {
+      await renderHome({
+        clearBots: () => Promise.resolve(clearResult([clearedLeg('old-bot'), refusedLeg('older-bot')])),
+      });
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select all finished bots' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+
+      const summary = await screen.findByText('Cleared 1 of 2 bots. 1 not cleared.');
+      expect(summary.closest('p')?.getAttribute('role')).toBe('alert');
+      await vi.waitFor(() => expect(document.activeElement).toBe(summary.closest('p')));
+      const outcome = screen.getByRole('region', { name: 'Clear outcome' });
+      const refused = within(outcome).getByText('older-bot').closest('li');
+      if (refused === null) throw new Error('older-bot has no outcome line.');
+      expect(within(refused).getByText('Not cleared')).toBeTruthy();
+      expect(within(refused).getByText(formatReceiptLabel('ARCHIVE_WOULD_STRAND_CUSTODY'))).toBeTruthy();
+      expect(within(refused).getByText('This bot still holds shares.')).toBeTruthy();
+      expect(within(refused).getByText('Flatten it first, then clear it.')).toBeTruthy();
+      expect(within(outcome).queryByRole('button', { name: 'Try again' })).toBeNull();
+    });
+
+    it('re-sends the same batch under the same key when the first send reached no result', async () => {
+      const clearBots = vi.fn()
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce(clearResult([clearedLeg('old-bot', 'replayed'), clearedLeg('older-bot')]));
+      await renderHome({ clearBots });
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select all finished bots' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+
+      const unknown = await screen.findByText(/The clear did not reach a result/);
+      expect(unknown.closest('p')?.getAttribute('role')).toBe('alert');
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      await screen.findByText('Cleared 2 of 2 bots.');
+      expect(clearBots).toHaveBeenCalledTimes(2);
+      const [firstTarget, first] = clearBots.mock.calls[0];
+      const [retryTarget, retry] = clearBots.mock.calls[1];
+      expect(retry).toEqual(first);
+      expect(retryTarget).toEqual(firstTarget);
+    });
+
+    it('sends nothing when the confirmation is cancelled, and hands the keyboard back', async () => {
+      const { panel } = await renderHome();
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select old-bot' }));
+      const opener = within(fold).getByRole('button', { name: 'Clear selected (1)' });
+      opener.focus();
+      fireEvent.click(opener);
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading').textContent).toBe('Clear 1 finished bot from Home?');
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      await vi.waitFor(() => expect(document.activeElement).toBe(opener));
+      expect(panel.clearBots).not.toHaveBeenCalled();
+    });
+
+    it('has no detectable accessibility violations with bots ticked and an outcome shown', async () => {
+      await renderHome({
+        clearBots: () => Promise.resolve(clearResult([clearedLeg('old-bot'), refusedLeg('older-bot')])),
+      });
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select old-bot' }));
+      let results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear all finished' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+      await screen.findByText('Cleared 1 of 2 bots. 1 not cleared.');
+      results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+    });
   });
 
   it.each([

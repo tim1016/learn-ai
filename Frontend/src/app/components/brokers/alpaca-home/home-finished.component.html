@@ -3,10 +3,22 @@
   @if (rows().length === 0) {
     <p class="home-finished__empty">No finished bots yet.</p>
   } @else {
+    <div class="home-finished__toolbar" role="group" aria-label="Clear finished bots">
+      <button type="button" [disabled]="!canClear(selected().length)" (click)="review(selected())">
+        {{ copy.clearSelected(selected().length) }}
+      </button>
+      <button type="button" [disabled]="!canClear(bots().length)" (click)="reviewAll()">{{ copy.clearAll }}</button>
+      <span class="home-finished__count" role="status">{{ copy.selected(selected().length) }}</span>
+      @if (overCap()) { <span class="home-finished__count">{{ copy.overCap }}</span> }
+    </div>
     <table class="home-finished__table">
       <caption class="home-finished__sr-only">Finished bots</caption>
       <thead>
         <tr>
+          <th scope="col" class="home-finished__pick">
+            <input type="checkbox" [attr.aria-label]="copy.selectAll" [checked]="allSelected()"
+                   [indeterminate]="someSelected()" (change)="toggleAll()" />
+          </th>
           <th scope="col">Bot</th>
           <th scope="col">Ended</th>
           <th scope="col" class="home-finished__num">Trades</th>
@@ -16,8 +28,16 @@
       </thead>
       <tbody>
         @for (row of rows(); track row.bot.strategy_instance_id) {
-          <tr>
-            <td><a class="home-finished__sid" [routerLink]="row.page">{{ row.bot.strategy_instance_id }}</a></td>
+          <tr [class.home-finished__row--dry-run]="row.dryRun">
+            <td class="home-finished__pick">
+              <input type="checkbox" [attr.aria-label]="row.selectLabel"
+                     [checked]="isSelected(row.bot.strategy_instance_id)"
+                     (change)="toggle(row.bot.strategy_instance_id)" />
+            </td>
+            <td>
+              <a class="home-finished__sid" [routerLink]="row.page">{{ row.bot.strategy_instance_id }}</a>
+              @if (row.dryRun) { <span class="home-finished__chip">{{ row.bot.world_label }}</span> }
+            </td>
             <td>
               @if (row.bot.ended_at_ms !== null && row.bot.ended_at_ms !== undefined) {
                 <app-timestamp-display [value]="row.bot.ended_at_ms" mode="local" />
@@ -26,9 +46,7 @@
               }
             </td>
             <td class="home-finished__num">{{ row.bot.trade_count ?? 'unknown' }}</td>
-            <td class="home-finished__num">
-              {{ (row.bot.final_result_usd | authoredUsd) ?? 'unknown' }}
-            </td>
+            <td class="home-finished__num">{{ (row.bot.final_result_usd | authoredUsd) ?? 'unknown' }}</td>
             <td>
               <a class="home-finished__again" [routerLink]="row.again.commands" [queryParams]="row.again.queryParams"
                  [attr.aria-label]="row.againLabel">Deploy again</a>
@@ -38,4 +56,22 @@
       </tbody>
     </table>
   }
+
+  @if (clearing(); as count) {
+    <p class="home-finished__empty" role="status">{{ copy.clearing(count) }}</p>
+  } @else if (clearOutcome(); as outcome) {
+    <app-home-clear-outcome [outcome]="outcome" (retryRequested)="retryRequested.emit()" (dismissed)="outcomeDismissed.emit()" />
+  }
 </details>
+
+@if (pending(); as sids) {
+  <app-typed-halt-confirm
+    [heading]="copy.confirmHeading(sids.length)"
+    [message]="copy.confirmMessage(sids.length)"
+    [consequence]="copy.confirmConsequence"
+    requiredToken=""
+    [confirmLabel]="copy.confirmLabel(sids.length)"
+    (confirmed)="confirm()"
+    (cancelled)="pending.set(null)"
+  />
+}

@@ -20,6 +20,7 @@ import { operationUrl } from '../../../../fleet/operation-url';
 import type {
   BotCatalogView,
   BotPanelView,
+  BotClearRequest,
   CohortActionResult,
   CohortFlattenRequest,
   CohortFlattenView,
@@ -307,6 +308,21 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.post<CohortActionResult>(
         operationUrl('bot_cohort_flatten', target),
+        this.commandBody(target, 'bot_action', request),
+      ),
+    );
+  }
+
+  /**
+   * Clear exactly the named finished bots from Home (owner decision
+   * 2026-09-28). Each leg is that bot's own archive, re-proven by the
+   * backend, and every leg comes back typed in request order. A resend under
+   * the same key replays what already ran.
+   */
+  clearBots(target: ResourceTarget, request: BotClearRequest): Promise<CohortActionResult> {
+    return firstValueFrom(
+      this.http.post<CohortActionResult>(
+        operationUrl('bots_clear', target),
         this.commandBody(target, 'bot_action', request),
       ),
     );

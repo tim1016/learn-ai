@@ -85,7 +85,10 @@
       </section>
     }
 
-    <app-home-finished [bots]="bots().finished" [account]="account()" />
+    <app-home-finished
+      [bots]="bots().finished" [account]="account()" [clearing]="clearing()" [clearOutcome]="clearOutcome()"
+      (clearRequested)="clear($event)" (retryRequested)="retryClear()" (outcomeDismissed)="dismissClear()"
+    />
   }
 
   <details class="home__details">
