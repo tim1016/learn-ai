@@ -46,7 +46,7 @@ same on every OS, so they live in one place: sections 2–4 of
 4. **Start the stack:** `podman compose up -d`, then check it (section 3).
 
 The script's closing message still tells you to run `ng serve` on the host.
-Skip that: the frontend runs in its own container on port 4200.
+Skip that: the frontend runs in its own container on port 4200 (#2575).
 
 **The data-plane control secret.** Compose refuses to start the data plane and
 the frontend proxy while `DATA_PLANE_CONTROL_SECRET` in the root `.env` is
