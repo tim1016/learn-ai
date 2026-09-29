@@ -37,9 +37,9 @@ import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action
  * a recovery cure, Stop for a running bot, or none for a stopped one. A
  * stopped bot also offers Deploy again, which starts a new bot and never
  * takes over what this one still holds. The More menu carries the manual
- * order ticket. It never offers Retire or Archive, although the backend still
- * presents them: clearing a finished bot is Home's Finished fold alone (owner
- * decision 2026-09-28).
+ * order ticket. It never offers Archive, although the backend still presents
+ * it: clearing a finished bot is Home's Finished fold alone (owner decision
+ * 2026-09-28).
  *
  * A Dry Run bot is marked as simulated cash, never with the lane's colour
  * (hurdle H23): its money is not the account's.

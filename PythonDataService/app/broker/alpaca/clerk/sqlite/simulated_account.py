@@ -5,10 +5,13 @@ Formula: cash = reference capital - effective BUY costs + effective SELL
   realized + marked open P&L - all accrued modelled fees;
   baseline = retained initial capital + prior gross realized + prior open P&L
   - prior modelled fees, using the canonical previous-session close marks.
+  Realized and open P&L are canonical FIFO's exact fields
+  (``exact_realized_pnl``, ``exact_open_pnl``), never its float views (#2556).
 Reference: PRD #2540 world isolation; ADR 0059 simulation-risk amendment.
 Canonical implementation: this composition; FIFO and fees retain their existing
   authorities. No balance, position or fee ledger is introduced.
-Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py.
+Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
+  (exact ``Fraction`` oracle at a whole-cent boundary for equity and open P&L).
 """
 from __future__ import annotations
 
@@ -127,9 +130,9 @@ class SimulatedAccountProjection:
             raise SimulationEvidenceUnavailable("Choose simulated starting cash before deploying this Dry Run.")
         return normalize_money(self.initial_cash), False
 
-    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, float], tuple[str, ...], int | None]:
+    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, Decimal], tuple[str, ...], int | None]:
         open_symbols = {lot.symbol for lot in compute_fifo_pnl(records).open_lots}
-        marks: dict[str, float] = {}
+        marks: dict[str, Decimal] = {}
         refs: list[str] = []
         valid_until: int | None = None
         for symbol in open_symbols:
@@ -166,7 +169,7 @@ class SimulatedAccountProjection:
             price = normalize_money(latest[0].close)
             if price <= ZERO:
                 raise SimulationEvidenceUnavailable(f"Simulated price evidence for {symbol} is not positive.")
-            marks[symbol] = float(price)
+            marks[symbol] = price
             refs.append(latest[0].bar_ref)
             expires = latest_at + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
             valid_until = expires if valid_until is None else min(valid_until, expires)
@@ -205,10 +208,10 @@ class SimulatedAccountProjection:
             marks, refs, _ = self._marks(prior, at_ms=cutoff, exact_close=True)
             fifo = compute_fifo_pnl(prior, mark_prices=marks)
             fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=cutoff)
-            if not fees.known or fifo.open_pnl is None:
+            if not fees.known or fifo.exact_open_pnl is None:
                 raise SimulationEvidenceUnavailable("The prior simulation session cannot prove its equity baseline.")
             initial = rows[0].initial_capital_usd
-            equity = initial + normalize_money(fifo.realized_pnl) + normalize_money(fifo.open_pnl) - sum((share.amount for share in fees.shares), ZERO)
+            equity = initial + fifo.exact_realized_pnl + fifo.exact_open_pnl - sum((share.amount for share in fees.shares), ZERO)
             baseline = SimulationBaseline(session_start_ms=session_start, initial_capital_usd=initial,
                 equity_usd=equity, observed_at_ms=now_ms, mark_cutoff_ms=cutoff, mark_refs=refs)
         if persist:
@@ -255,15 +258,16 @@ class SimulatedAccountProjection:
                 raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
             marks, _, valid_until = self._marks(records, at_ms=now_ms)
             fifo = compute_fifo_pnl(records, mark_prices=marks)
-            if fifo.open_pnl is None:
+            open_pnl = fifo.exact_open_pnl
+            if open_pnl is None:
                 raise SimulationEvidenceUnavailable("Simulated open P&L cannot be valued from current price evidence.")
             baseline = self._baseline(records, capital=capital, now_ms=now_ms, persist=persist)
             accrued = sum((share.amount for share in fees.shares), ZERO)
             cash = _cash_after_fills(capital, records, fees)
             return AccountObservation(
                 observed_at_ms=observed_at_ms, broker_cash_usd=float(capital), cash_available_usd=cash,
-                last_equity_usd=float(baseline.equity_usd), unrealized_pl_usd=fifo.open_pnl,
-                equity_usd=float(baseline.initial_capital_usd + normalize_money(fifo.realized_pnl) + normalize_money(fifo.open_pnl) - accrued),
+                last_equity_usd=float(baseline.equity_usd), unrealized_pl_usd=open_pnl,
+                equity_usd=baseline.initial_capital_usd + fifo.exact_realized_pnl + open_pnl - accrued,
                 risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=0, risk_equity_window_start_ms=baseline.session_start_ms,
                 position_count=len(fifo.open_lots), risk_fill_sequence=risk_fill_sequence(self.repo),
                 simulation_cash_seen_before_ms=now_ms + 1, modelled_fees_seen_before_ms=now_ms + 1,

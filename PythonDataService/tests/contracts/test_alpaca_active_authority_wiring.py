@@ -465,7 +465,7 @@ def test_the_live_composition_binds_the_real_trade_port_and_both_gates() -> None
     assert "select_live_clerk_runtime(" in selector_source
     assert "store.latest(account.account_id)" in selector_source
     assert "live_arming=arming_gate," in runtime_source and "instance_seals=instance_seals," in runtime_source
-    # The seals reader is the composition root's, beside `_alpaca_roster_symbols`:
+    # The seals reader is the composition root's:
     # the clerk layer takes the callable and never learns the runner's root.
     assert "instance_seals=_alpaca_instance_seals," in main_source
     assert "def _alpaca_instance_seals(" in main_source

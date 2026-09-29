@@ -8,6 +8,7 @@ from typing import Any
 from app.broker.alpaca.clerk.exit_terms import read_exit_terms
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_facts import DeployCommittedFacts
+from app.broker.alpaca.clerk.sqlite.facts import RunStoppedFacts
 from app.schemas.account_authority import account_authority_agrees
 
 
@@ -65,11 +66,14 @@ def fold_deploy_launched(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
 
 
-def release_stopped_budget(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+def release_stopped_budget(conn: sqlite3.Connection, payload: dict[str, Any], facts: RunStoppedFacts) -> None:
     """RUN_STOPPED is the append-only release fact, including crash recovery.
 
     It releases the active free-cash claim, never deletes an order/fill/fee.
     Their claims are reprojected from custody, including later corrections.
+    What it released and what stayed claimed then, when the Stop could value
+    them, are its own facts (#2555); they are copied onto the budget row as
+    recorded -- both or neither -- and nothing here re-derives them.
     """
     if conn.execute("SELECT schema_version FROM control_meta WHERE id=1").fetchone()[0] < 20:
         # The explicitly offline v9 historical replay precedes this feature.
@@ -77,7 +81,10 @@ def release_stopped_budget(conn: sqlite3.Connection, payload: dict[str, Any]) ->
     row = conn.execute("SELECT command_id,launched_at_ms,released_at_ms FROM deployment_budgets WHERE run_id=?", (payload["run_id"],)).fetchone()
     if row is None or row["released_at_ms"] is not None:
         return
-    conn.execute("UPDATE deployment_budgets SET released_at_ms=? WHERE command_id=?", (payload["recorded_at_ms"], row["command_id"]))
+    conn.execute(
+        "UPDATE deployment_budgets SET released_at_ms=?, released_cents=?, held_cents=? WHERE command_id=?",
+        (payload["recorded_at_ms"], facts.released_cents, facts.held_cents, row["command_id"]),
+    )
     if row["launched_at_ms"] is None:
         from app.broker.alpaca.clerk.sqlite.folds import _attach_command_receipt
 

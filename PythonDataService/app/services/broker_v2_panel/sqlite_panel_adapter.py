@@ -78,16 +78,16 @@ _WORKING_BROKER_STATES = frozenset(
 # received zero fill and must not render as satisfied.
 _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 
-# SQLite owns broker-recovery actions after activation, but bot-lifecycle
-# actions remain the runner's.  Preserve them from the generic panel policy
-# instead of trying to reconstruct their guards from the custody projection.
+# SQLite owns broker-recovery actions after activation, but the bot-lifecycle
+# action (Clear's ``archive``) remains the runner's.  Preserve it from the
+# generic panel policy instead of trying to reconstruct its guard from the
+# custody projection.
 #
 # Membership does double duty: it is also what routes a POST past the SQLite
 # recovery executor to the generic performer (`sqlite_panel_source`).  An
 # action omitted here is silently deleted on the way to Angular however
-# completely its guard, performer and lens are wired -- which is exactly what
-# happened to `retire` (#1778, S5).
-SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"retire", "archive"})
+# completely its guard and performer are wired (#1778, S5).
+SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"archive"})
 
 
 def adapt_sqlite_panel(
@@ -194,7 +194,7 @@ def adapt_sqlite_panel(
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
             ),
-            **open_pnl_fields(None if economics is None else economics.open_pnl),
+            **open_pnl_fields(None if economics is None else economics.exact_open_pnl),
         }
     )
 
