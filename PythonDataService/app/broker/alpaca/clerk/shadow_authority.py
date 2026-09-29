@@ -112,13 +112,14 @@ async def select_shadow_clerk_runtime(
         )
     except Exception as exc:
         # The same fail-open-to-`unavailable` posture the paper path takes for
-        # its own account probe. Neither call above is exception-typed by the
-        # broker contract: `list_orders` adapts each vendor payload outside
-        # `AlpacaClient._call`, so a malformed one raises a raw
-        # `ValidationError`, and composition touches the filesystem. Unhandled,
-        # either aborts the whole data plane's startup -- and this is the
-        # real-money path. (`asyncio.CancelledError` is a `BaseException` and
-        # so still propagates: a cancelled boot is not a refused authority.)
+        # its own account probe. Composition is not exception-typed by the
+        # broker contract -- it touches the filesystem -- and a read port is
+        # only bound to it by convention (Alpaca's names a malformed order
+        # row as `BrokerEvidenceUnavailable`, the branch above, #2627).
+        # Unhandled, either aborts the whole data plane's startup -- and this
+        # is the real-money path. (`asyncio.CancelledError` is a
+        # `BaseException` and so still propagates: a cancelled boot is not a
+        # refused authority.)
         logger.warning(
             "Live account's shadow authority could not be composed; no authority installed",
             extra={

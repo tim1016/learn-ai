@@ -9,7 +9,13 @@ Fixture layout (positions.json):
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from app.broker.alpaca.adapter import from_alpaca_position
+from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
@@ -64,3 +70,65 @@ def test_missing_optional_fields_become_none(load_alpaca_fixture: AlpacaFixtureL
     assert position.prior_close_price is None
     assert position.unrealized_plpc is None
     assert position.asset_id is None
+
+
+class _PositionsClient:
+    """The client seam: returns the raw position rows the test built."""
+
+    def __init__(self, payloads: object) -> None:
+        self.payloads = payloads
+
+    async def list_positions(self) -> object:
+        return self.payloads
+
+
+def _malformed_rows(long_position: dict) -> dict[str, object]:
+    missing_qty = {key: value for key, value in long_position.items() if key != "qty"}
+    return {
+        "missing-field": [missing_qty],
+        "boolean-quantity": [{**long_position, "qty": True}],
+        "unparseable-quantity": [{**long_position, "qty": "one"}],
+        "non-object-row": [long_position, None],
+    }
+
+
+@pytest.mark.parametrize(
+    "shape", ["missing-field", "boolean-quantity", "unparseable-quantity", "non-object-row"]
+)
+async def test_broker_names_a_malformed_position_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    shape: str,
+) -> None:
+    """A malformed row once escaped as a raw KeyError/TypeError/ValueError (#2627)."""
+    long_position = load_alpaca_fixture("positions", "positions.json")[0]
+    broker = AlpacaBroker(client=_PositionsClient(_malformed_rows(long_position)[shape]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="position data this app could not read") as info:
+        await broker.list_positions()
+
+    assert info.value.http_status == 503
+    # Owner copy stays plain; the technical reason rides on the chain.
+    assert info.value.detail is not None
+    assert type(info.value.__cause__).__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, KeyError | TypeError | ValueError)
+
+
+async def test_malformed_position_logs_the_adapter_cause_for_the_operator(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    long_position = load_alpaca_fixture("positions", "positions.json")[0]
+    broker = AlpacaBroker(client=_PositionsClient(_malformed_rows(long_position)["missing-field"]))  # type: ignore[arg-type]
+
+    with (
+        caplog.at_level(logging.WARNING, logger="app.broker.alpaca.broker"),
+        pytest.raises(BrokerEvidenceUnavailable),
+    ):
+        await broker.list_positions()
+
+    (record,) = [record for record in caplog.records if record.name == "app.broker.alpaca.broker"]
+    assert record.action == "alpaca_evidence_malformed"
+    assert record.evidence == "position"
+    assert record.cause == "KeyError: 'qty'"
+    # The traceback survives, so an adapter bug is not read only as a bad answer.
+    assert record.exc_info is not None and isinstance(record.exc_info[1], KeyError)
