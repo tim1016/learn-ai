@@ -52,6 +52,8 @@ is archived while the code it names still runs.
 - **Run history** — the append-only sequence of current and previous runs for
   one strategy instance. A historical run remains inspectable but cannot become
   a command target merely because an operator selects it for viewing.
+  Every bot's runs are listed in **History** (#2574); a bot's own page shows
+  only its current run.
 - **Run terminal receipt** — create-once evidence from the owning backend that
   a specific run stopped, crashed, or exited without verification. Repeating
   the same write preserves the original receipt; conflicting terminal evidence
@@ -2168,8 +2170,11 @@ Where one account's money is (PRD #2560). Python authors every figure and every 
 - **Account charges** — fees the account has paid that are not yet matched to a bot; their own slice, so no dollar is hidden.
 - **Finished** — a stopped bot that is flat with nothing still claimed; it moves by itself into Home's folded Finished list, with its result and Deploy again. A stopped, flat Dry Run is Finished too, worded "DRY RUN · simulated cash"; while a Dry Run runs or still holds simulated cash it keeps its own Dry Run group, off the bar (D5).
   _Avoid_: archived, retired (as a group).
-- **Clear (a finished bot)** — the owner's one way to take Finished bots out of day-to-day sight (owner decision 2026-09-28, #2567): tick rows in the Finished fold, or clear them all, and confirm once. Each bot is one **archive** leg under the batch shape of ADR 0052 §4: named explicitly, re-proved under its own lock, and answered one by one, so a bot that is running or holding is refused with its own reason while the rest clear. A cleared bot leaves Home, the Wall and the catalog poll; its runs, fills, fees, result and budget stay in custody, readable by id. Manual only, and one-way.
+- **Clear (a finished bot)** — the owner's one way to take Finished bots out of day-to-day sight (owner decision 2026-09-28, #2567): tick rows in the Finished fold, or clear them all, and confirm once. Each bot is one **archive** leg under the batch shape of ADR 0052 §4: named explicitly, re-proved under its own lock, and answered one by one, so a bot that is running or holding is refused with its own reason while the rest clear. A cleared bot leaves Home, the Wall and the catalog poll; its runs, fills, fees, result and budget stay in custody, readable by id and listed in **History**. Its page stays readable, read-only, with Deploy again. Manual only, and one-way.
   _Avoid_: delete, remove, hide (nothing is erased), archive (the mechanism, not the owner's word).
+- **History** — the workspace tab listing every bot across all accounts (owner decisions 2026-09-28, #2574): Live, Paper and Shadow, each account's Dry Runs, and cleared bots, newest first. One line per bot: its account (lane colour, mode worded), its world, when it started and stopped, how it ended, where it is now (running, still holding, finished or cleared), its transactions and orders, and its budget, result after fees and fees. The same list from every workspace, opened with no filter; Home's Finished fold opens it on the cleared bots. An account or Dry Run that could not be read is named above the list, never silently left out.
+  _Avoid_: bot log, archive list, cleared-bots list (the separate list PRD #2560 had agreed, which History replaced).
+- **Transactions (of a bot or run)** — its effective fills after broker corrections: the count `trade_count` reports. A run's are the fills whose orders its own operations placed; work done after a run ended counts toward the bot, never a run.
 
 ## Market-data readiness (resolved 2026-09-22)
 
