@@ -240,7 +240,7 @@ class FinalBarPolicyEngine(BacktestEngine):
     is how a live run's warmup treats historical candidates.
 
     It overrides a private engine hook, so it is research scaffolding, not a
-    model: delete it when #2467's backtest follow-up (FOLLOWUP-A) makes the
+    model: delete it when #2467's backtest follow-up (#2607) makes the
     engine settle final-bar decisions itself. ``settlement_calls`` lets every
     caller prove the override actually ran (``require_settlement_hook``).
     """

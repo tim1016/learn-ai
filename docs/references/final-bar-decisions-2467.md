@@ -23,7 +23,7 @@ Two other findings:
 1. **Bar grouping matches.** Given the same complete one-minute bars, the bot's decision seam and the backtest engine produce identical decision traces on every bar held, final bars included.
 2. **A broken parity check.** The check built to show that has compared nothing since March 2026, so no receipt ever showed the match.
 
-Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-C](#follow-ups) (the parity check), [#FOLLOWUP-D](#follow-ups) (dead machinery). The entry race is #2596.
+Follow-ups: [#2607](https://github.com/tim1016/learn-ai/issues/2607) (the backtest model), [#2608](https://github.com/tim1016/learn-ai/issues/2608) (the parity check), [#2609](https://github.com/tim1016/learn-ai/issues/2609) (dead machinery). The entry race is #2596.
 
 ## Which strategies run live, and how that was determined
 
@@ -166,7 +166,7 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 - `qualification_shadow_trace._reference_backtest_traces` runs the strategy over its built-in default window (`qualification_shadow_trace.py:202-216`). For EMA that window is 2024-03-28 to 2026-03-27 (`ema_crossover_signal.py:204-205`); for Deployment Validation it ends 2026-04-15.
 - `InMemoryDataReader` drops every bar outside that window (`app/services/spec_strategy_runner.py:65-71`).
 - So every run replay receipt after March 2026 fails its engine-parity leg. The saved receipt for `sh-ema-spy-0910` shows exactly this divergence. [Known gaps](../known-gaps.md) calls it "an uninvestigated engine-parity sequence-exhaustion failure".
-- With the window set to the bars' own dates, the same check passes on every held ledger (#FOLLOWUP-C).
+- With the window set to the bars' own dates, the same check passes on every held ledger (#2608).
 
 ## Recommendation, with the numbers behind it
 
@@ -180,7 +180,7 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 **2. A final-bar EXIT fills at the after-hours price.**
 
 - The limit is `marketable_limit_price` at the decision close with the run's exit allowance.
-- It fills on the first minute that starts after the decision and reaches the limit. The fill price is the better of the first such minute's open and the limit.
+- It fills on the first minute that starts after the decision and reaches the limit. The fill price is the better of the limit and the open of the first minute that starts after the decision.
 - If nothing reaches the limit before after-hours ends (20:00, or 17:00 on a half-day, per `order_session_state_at_ms`), the position stays open into the next session.
 - The proxy sits 3.74 bps from the close on average with no drift. At a 10 bps allowance or more the limit was reached on every session in the window.
 - Filling at the limit itself would overstate the cost by the whole allowance, up to 55.8 points on the variant at 50 bps. Filling at the next open is wrong by 42 bps on average.
@@ -229,11 +229,11 @@ Filed as #2596 (P1) after the first draft of this note; a fix is in progress. Th
 
 | What | Evidence | Proposed removal |
 |---|---|---|
-| `app/services/daily_session_schedule.py` and `tests/services/test_daily_session_schedule.py` | No production caller since `69bbeabe` (2026-08-07, "retire legacy execution paths") removed the last `start_boundary_verdict` call. It states a daily stop the live runner does not apply. | Delete both (#FOLLOWUP-D) |
-| `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. This settles #2602's `LiveConfig.sizing` criterion by removal: no code outside the dead module constructs a `LiveConfig`, so no run id hashes one today. (#FOLLOWUP-D) |
-| `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Decide inside #FOLLOWUP-A: derive them from the calendar, or remove them with the contract regenerated |
-| `FinalBarPolicyEngine` in this note's script | It overrides the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). The script checks the hook exists and ran, so a rename fails loudly. | Delete it inside #FOLLOWUP-A, once the engine models final bars itself |
-| The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replace it when #FOLLOWUP-C lands |
+| `app/services/daily_session_schedule.py` and `tests/services/test_daily_session_schedule.py` | No production caller since `69bbeabe` (2026-08-07, "retire legacy execution paths") removed the last `start_boundary_verdict` call. It states a daily stop the live runner does not apply. | Delete both (#2609) |
+| `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. This settles #2602's `LiveConfig.sizing` criterion by removal: no code outside the dead module constructs a `LiveConfig`, so no run id hashes one today. (#2609) |
+| `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Decide inside #2607: derive them from the calendar, or remove them with the contract regenerated |
+| `FinalBarPolicyEngine` in this note's script | It overrides the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). The script checks the hook exists and ran, so a rename fails loudly. | Delete it inside #2607, once the engine models final bars itself |
+| The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replace it when #2608 lands |
 
 ## Follow-ups
 
@@ -241,9 +241,9 @@ Filed as #2596 (P1) after the first draft of this note; a fix is in progress. Th
 
 Drafted, not filed; the orchestrator files them:
 
-- **#FOLLOWUP-A:** backtest models a final-bar decision the way live executes it.
-- **#FOLLOWUP-C:** run-replay engine parity compares against an empty backtest after March 2026.
-- **#FOLLOWUP-D:** remove the retired daily-stop schedule and the unused `LiveConfig`.
+- **#2607:** backtest models a final-bar decision the way live executes it.
+- **#2608:** run-replay engine parity compares against an empty backtest after March 2026.
+- **#2609:** remove the retired daily-stop schedule and the unused `LiveConfig`.
 
 ## Method and reproduction
 
