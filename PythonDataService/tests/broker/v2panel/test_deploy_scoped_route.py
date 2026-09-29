@@ -27,8 +27,8 @@ from app.config import settings
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
 from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
 from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.conftest import _BODY, _T0, account_snapshot
-from tests.broker.v2panel.fixtures import ACCT, SID
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, _T0, DEPLOYED_SID, account_snapshot
+from tests.broker.v2panel.fixtures import ACCT
 
 # ema_crossover_signal is a sealed Signal Program (#1730); most tests below
 # are about deploy routing, admission, or account-scoped gates, not the
@@ -66,14 +66,14 @@ async def test_deploy_scoped_correct_account_delegates(
     assert body["execution_mode"] == "paper"
     assert body["sizing"] == {"preset": "custom", "quantity": 2}
     assert body["evidence_override"] is None
-    assert body["bot"]["strategy_instance_id"] == SID
+    assert body["bot"]["strategy_instance_id"] == DEPLOYED_SID
     assert body["bot"]["mode"] == "trade"
     assert body["bot"]["quantity"] == 2
     assert body["admission"]["reason_code"] == "START_ADMITTED"
     assert body["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
     assert body["action_plan"]["on_exit"] == [{"kind": "close_leg", "entry_leg_id": "primary"}]
     assert body["next_action"]
-    assert body["panel_path"].endswith(f"/{SID}")
+    assert body["panel_path"].endswith(f"/{DEPLOYED_SID}")
     assert len(registry.deploy_calls) == 1
     call = registry.deploy_calls[0]
     assert call["broker"] == "alpaca"
@@ -135,12 +135,12 @@ async def test_start_admission_preview_uses_the_request_specific_policy(
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
-            json=_BODY,
+            json=_SETTINGS,
         )
 
     assert response.status_code == 200
     assert response.json()["reason_code"] == "START_ADMITTED"
-    assert response.json()["strategy_instance_id"] == SID
+    assert response.json()["strategy_instance_id"] == DEPLOYED_SID
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
-            json={**_BODY, "strategy_instance_id": "brk-b-validation", "symbol": " brk.b "},
+            json={**_BODY, "symbol": " brk.b "},
         )
 
     assert response.status_code == 201
@@ -181,7 +181,6 @@ async def test_deploy_submits_selected_validated_strategy(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json={
                 **_BODY,
-                "strategy_instance_id": "ema-paper-01",
                 "strategy_key": "ema_crossover_signal",
             },
         )
@@ -381,7 +380,6 @@ async def test_evidence_only_strategy_requires_the_durable_override_for_paper(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json={
                 **_BODY,
-                "strategy_instance_id": "sma-paper-no-override",
                 "strategy_key": "sma_crossover",
             },
         )
@@ -423,7 +421,6 @@ async def test_evidence_only_strategy_deploys_to_paper_with_the_durable_override
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json={
                 **_BODY,
-                "strategy_instance_id": "sma-paper-override",
                 "strategy_key": "sma_crossover",
                 "evidence_override": evidence_override,
             },
@@ -474,13 +471,16 @@ async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_ap
 
 
 @pytest.mark.asyncio
-async def test_deploy_refuses_instance_id_that_overflows_the_order_ref_cap(deploy_app) -> None:
+async def test_deploy_refuses_a_symbol_whose_bot_name_overflows_the_order_ref_cap(
+    deploy_app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Every order carries ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars)
-    # under the order_ref cap (60), so len(sid) > 25 must be a 422 at the
-    # deploy boundary. Before this guard, such a bot deployed and ran fine,
-    # then CRASHED with OrderRefTooLongError on its first order submission
-    # (ceremony-spy-strategy-c-0824, 2026-08-24).
+    # under the order_ref cap (60), so a bot name longer than 25 would deploy
+    # and then crash on its first order (ceremony-spy-strategy-c-0824,
+    # 2026-08-24). The backend authors names now (#2551), so a symbol too long
+    # to name within the cap is refused before anything is claimed or started.
     fast_app, registry = deploy_app
+    monkeypatch.setattr("app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS", _ALLOW_BODY_STRATEGY)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -488,12 +488,14 @@ async def test_deploy_refuses_instance_id_that_overflows_the_order_ref_cap(deplo
     ) as client:
         too_long = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
-            json={**_BODY, "strategy_instance_id": "x" * 26},
+            json={**_BODY, "symbol": "ABCDEFGHIJKL"},
         )
 
-    assert too_long.status_code == 422
-    assert "order_ref cap" in too_long.text
+    assert too_long.status_code == 409
+    assert "order-reference limit" in too_long.json()["detail"]["why"]
+    assert too_long.json()["detail"]["next_action"] == "Choose a shorter symbol; a bot name is never truncated."
     assert registry.deploy_calls == []
+    assert not (registry.artifacts_root / "deploy_submissions" / "keys").exists()
 
 
 @pytest.mark.asyncio
@@ -612,7 +614,7 @@ async def test_start_refusal_returns_the_execution_policy_decision(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         _ALLOW_BODY_STRATEGY,
     )
-    denied = registry._decision(_BODY).model_copy(
+    denied = registry._decision({"strategy_instance_id": DEPLOYED_SID}).model_copy(
         update={
             "allowed": False,
             "reason_code": "MARKET_DATA_STALE",

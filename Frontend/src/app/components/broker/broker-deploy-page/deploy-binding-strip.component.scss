@@ -1,15 +1,9 @@
-:host { display: block; min-width: 0; container-type: inline-size; }
+:host { display: block; min-width: 0; }
 
 .binding-strip {
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4);
-  background: linear-gradient(110deg, var(--bg-surface), var(--bg-elevated));
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
 }
-
-h2 { margin: 0; font-size: var(--fs-lg); }
 
 /* The strategy picker stays a native <select> (see component docstring); PrimeNG's
    Select widget requires ngModel/formControl for value binding, which this signal-only
@@ -32,19 +26,6 @@ select:focus {
   outline-offset: 1px;
 }
 
-em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
-
 .info-tip { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; padding: 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); cursor: help; background: transparent; border: 1px solid var(--border-strong); border-radius: 50%; }
 .info-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Component-relative breakpoint (this strip narrows independently of the viewport
-   inside the deploy layout's main column), so it needs a container query. Tailwind's
-   utility classes here are viewport-driven and have no established container-query
-   convention in this codebase yet, so the query stays hand-written. */
-@container (max-width: 650px) {
-  .binding-strip__fields { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 520px) {
-  .binding-strip { padding: var(--space-4); }
-}

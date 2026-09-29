@@ -1,21 +1,32 @@
-<section class="launch-receipt" role="status" aria-labelledby="launch-receipt-title">
+<section #panel class="launch-receipt" role="status" tabindex="-1" aria-labelledby="launch-receipt-title">
   <div class="launch-receipt__mark" aria-hidden="true">{{ receipt().status === 'deployed' ? '✓' : '…' }}</div>
   <div>
     <h2 id="launch-receipt-title">{{ receipt().message }}</h2>
     <p>{{ receipt().explanation }}</p>
   </div>
   <dl>
-    <div><dt>Receipt</dt><dd><code>{{ receipt().receipt_id }}</code></dd></div>
-    <div><dt>Recorded</dt><dd><app-timestamp-display [value]="receipt().recorded_at_ms" mode="local" /></dd></div>
-    <div><dt>Launch status</dt><dd>{{ receipt().status | receiptLabel }}</dd></div>
-    <div><dt>Committed budget</dt><dd>{{ receipt().committed_usd | authoredUsd }}</dd></div>
     <div><dt>Bot</dt><dd><code>{{ receipt().strategy_instance_id }}</code></dd></div>
+    @if (receipt().replaces_strategy_instance_id; as replaced) {
+      <div><dt>Replaces</dt><dd><code>{{ replaced }}</code></dd></div>
+    }
+    <div>
+      <dt>{{ dryRun() ? 'Simulated starting cash' : 'Set aside' }}</dt>
+      <dd>{{ receipt().committed_usd | authoredUsd }}</dd>
+    </div>
+    <div><dt>World</dt><dd>{{ worldWording() }}</dd></div>
+    <div><dt>Account</dt><dd>{{ dryRun() ? 'The bot’s own Dry Run account' : receipt().account_id }}</dd></div>
+    <div><dt>Launch status</dt><dd>{{ receipt().status | receiptLabel }}</dd></div>
+    @if (receipt().first_deployed_at_ms; as firstDeployed) {
+      <div><dt>First deployed</dt><dd><app-timestamp-display [value]="firstDeployed" mode="local" /></dd></div>
+    }
+    <div><dt>Recorded</dt><dd><app-timestamp-display [value]="receipt().recorded_at_ms" mode="local" /></dd></div>
     <div><dt>Run</dt><dd><code>{{ receipt().run_id }}</code></dd></div>
-    <div><dt>World</dt><dd>{{ worldLabels[receipt().world] }}</dd></div>
-    <div><dt>Account</dt><dd>{{ receipt().account_id }}</dd></div>
+    <div><dt>Receipt</dt><dd><code>{{ receipt().receipt_id }}</code></dd></div>
   </dl>
   <div class="launch-receipt__next">
     <p>{{ receipt().next_action }}</p>
-    <a [routerLink]="receipt().panel_path">Open bot control</a>
+    @if (botLink(); as link) {
+      <a [routerLink]="link.commands" [queryParams]="link.queryParams">Open {{ receipt().strategy_instance_id }}</a>
+    }
   </div>
 </section>

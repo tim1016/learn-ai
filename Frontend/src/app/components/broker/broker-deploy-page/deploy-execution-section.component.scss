@@ -3,13 +3,7 @@
 .execution-card {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
 }
-
-h2 { margin: 0; font-size: var(--fs-lg); }
 
 .mode-option--selected { border-color: var(--bull); box-shadow: inset 0 0 0 1px var(--bull); }
 .mode-option--selected label > span { color: var(--bull); }

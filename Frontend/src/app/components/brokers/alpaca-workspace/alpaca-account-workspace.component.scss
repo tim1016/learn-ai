@@ -113,6 +113,27 @@
   font-size: var(--fs-xs);
 }
 
+/* "Deploy a bot" (PRD #2560 D3): the account's one launch action, in the
+   header on every tab. */
+.account-workspace__deploy {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  margin-left: auto;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  text-decoration: none;
+
+  &:hover { background: var(--accent-hover); }
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  &[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--text-on-accent); }
+}
+
 .account-workspace__tabs {
   display: flex;
   flex: 0 0 auto;

@@ -31,6 +31,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.broker_v2_panel import bot_custody, budget_deploy
+from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
@@ -41,7 +42,12 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
     (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
         run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
-        explanation="Pending", next_action="Refresh", panel_path="/panel",
+        explanation="Pending", next_action="Refresh", first_deployed_at_ms=0,
+    )),
+    (BudgetDeployCommandReceipt, "first_deployed_at_ms", dict(
+        status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
+        run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
+        explanation="Pending", next_action="Refresh", recorded_at_ms=0,
     )),
 ])
 def test_budget_receipts_reject_out_of_domain_timestamps(model: type[BaseModel], field: str, payload: dict) -> None:
@@ -88,7 +94,7 @@ class _Sync:
 
 def _request(symbol: str = "SPY", **updates) -> AlpacaPaperDeployRequest:
     return AlpacaPaperDeployRequest(
-        strategy_instance_id="review-a", strategy_key="deployment_validation", symbol=symbol,
+        strategy_key="deployment_validation", symbol=symbol,
         exit_terms=ExitTermsInput(band_multiple=2, spread_cap_bps=100, exit_allowance_bps=5),
         **updates,
     )
@@ -148,24 +154,36 @@ def test_dry_run_never_copies_parent_cash_or_risk(authority) -> None:
     request = _request(execution_mode="dry_run", budget=DeploymentBudgetInput(amount_usd="2000", risk_revision=0))
     preview = budget_deploy.preview_budget("BUDGET-PAPER", request, resolved_parameters={})
     assert preview.state == "ready" and preview.world == "synthetic"
-    assert preview.custody_account_id == "sim:review-a" and preview.unreserved_usd is None
+    # H18: simulated cash is the bot's own; no real account's number or cash applies.
+    assert preview.custody_account_id is None and preview.unreserved_usd is None
     assert [item.key for item in preview.shortcuts] == ["position_headroom"]
+    assert preview.budget_usd == "2000.00"
+
+
+_CLAIMED_AT = 1
+
+
+def _submitted(sid: str) -> DeploySubmission:
+    """The ledger claim a Deploy of ``sid`` would hold."""
+    return DeploySubmission(submission_key="submission-0001", strategy_instance_id=sid, claimed_at_ms=_CLAIMED_AT, request_fingerprint="f")
 
 
 async def test_recovery_returns_committed_outcome_even_after_evidence_expires(authority) -> None:
     repo, _, snapshot = authority
     request = _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1))
     terms = request.exit_terms.seal()
-    repo.register_strategy_instance(strategy_instance_id=request.strategy_instance_id, symbol="SPY", config_hash="seal", exit_terms=terms)
+    repo.register_strategy_instance(strategy_instance_id="review-a", symbol="SPY", config_hash="seal", exit_terms=terms)
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     gate.publish(snapshot.observation)
-    submit_budgeted_deploy(repo, strategy_instance_id=request.strategy_instance_id, lifecycle_run_id="run", world="real_paper", committed_cents=50_000, configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")), risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal(100), request_fingerprint=budget_deploy.request_fingerprint(request, custody_account_id=repo.account_id, world="real_paper"))
+    submit_budgeted_deploy(repo, strategy_instance_id="review-a", lifecycle_run_id="run", world="real_paper", committed_cents=50_000, configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")), risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal(100), request_fingerprint=budget_deploy.request_fingerprint(request, custody_account_id=repo.account_id, world="real_paper"))
     snapshot.observation = None
-    receipt = await budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, request)
+    receipt = await budget_deploy.command_receipt(repo.account_id, _submitted("review-a"))
     assert receipt.status == "pending" and receipt.committed_usd == "500.00"
-    altered = request.model_copy(update={"symbol": "QQQ"})
-    with pytest.raises(BudgetUnavailable):
-        await budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, altered)
+    # The first-deploy instant is the custody commit's, never the name claim's.
+    assert receipt.first_deployed_at_ms == repo.deployment_budget("review-a")["committed_at_ms"] != _CLAIMED_AT
+    # H12: every read says what is recorded, never that a result is "returned unchanged".
+    assert receipt.message == "review-a is committed; its launch is not confirmed yet"
+    assert "unchanged" not in receipt.explanation and "$500.00 is set aside" in receipt.explanation
 
 
 def test_preview_asks_ibkr_for_an_unwatched_symbol_and_recovers_once_its_quote_lands(
@@ -318,7 +336,7 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: primary)
         monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: recovered)
 
-        receipt = await budget_deploy.command_receipt("PARENT", sid)
+        receipt = await budget_deploy.command_receipt("PARENT", _submitted(sid))
 
         assert receipt is not None
         assert receipt.status == "failed" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
@@ -327,7 +345,7 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         assert get_clerk_runtime(f"sim:{sid}") is None
         assert recovered.bindings_for_broker("alpaca") == []
         # An identity no private authority ever held still reads the primary.
-        assert await budget_deploy.command_receipt("PARENT", "never-deployed") is None
+        assert await budget_deploy.command_receipt("PARENT", _submitted("never-deployed")) is None
     finally:
         await close_synthetic_clerk_runtimes()
         primary_repo.close()

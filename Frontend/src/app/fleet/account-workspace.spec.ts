@@ -142,11 +142,14 @@ describe('the links Home hands out', () => {
     });
   });
 
-  it('starts Deploy again from an ended bot', () => {
-    expect(accountWorkspaceDeployAgainRoute(ACCOUNT, 'sid-1')).toEqual({
+  it('starts Deploy again from an ended bot, on the Deploy page', () => {
+    const link = accountWorkspaceDeployAgainRoute(ACCOUNT, 'sid-1');
+
+    expect(link).toEqual({
       commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy'],
       queryParams: { from: 'sid-1' },
     });
+    expect(accountWorkspaceLocation(`${link.commands.join('/')}?from=sid-1`)).toEqual({ ...LOCATION, tab: 'deploy' });
   });
 
   it.each([
@@ -246,7 +249,7 @@ describe('accountWorkspaceTitle', () => {
     ['home' as const, 'Home · Paper'],
     ['settings' as const, 'Settings · Paper'],
     ['activity' as const, 'Activity · Paper'],
-    ['deploy' as const, 'Deploy strategy · Paper'],
+    ['deploy' as const, 'Deploy a bot · Paper'],
   ])('titles the %s tab with the account name beside it', (tab, expected) => {
     expect(accountWorkspaceTitle(tab, 'Paper', null)).toBe(expected);
   });

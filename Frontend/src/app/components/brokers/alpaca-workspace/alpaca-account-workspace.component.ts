@@ -51,7 +51,8 @@ type WorkspaceAccountStatus =
 
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
- * Home, Configuration and Deploy tabs (PRD #2560).
+ * Home, Activity and Settings tabs, with "Deploy a bot" in the header
+ * (PRD #2560).
  *
  * The operator chooses an account once, in the account list, and the
  * workspace keeps it while they move between its pages — the tabs are
@@ -67,10 +68,11 @@ type WorkspaceAccountStatus =
  * than borrowing a sibling's fact. The sync verdict is not a header fact: an
  * out-of-sync account is an attention line on Home.
  *
- * Deploy is one of the tabs, not an overlay: `AlpacaDeployTabComponent`
- * reads this same `AlpacaDeskAccountDataService` instance for its target
- * (FR-094), so a bind command can never target an account the header itself
- * is not showing.
+ * Deploy is the header's "Deploy a bot" button (PRD #2560 D3), not a tab and
+ * not an overlay: its routed `deploy` page, `AlpacaDeployTabComponent`, reads
+ * this same `AlpacaDeskAccountDataService` instance for its target (FR-094),
+ * so a bind command can never target an account the header itself is not
+ * showing.
  */
 @Component({
   selector: 'app-alpaca-account-workspace',
@@ -135,7 +137,7 @@ export class AlpacaAccountWorkspaceComponent {
 
   protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
 
-  /** The tabs with the route each one links to, or `null` for a tab this
+  /** The strip's tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per
    * render, so a tab's `routerLink` is not handed a freshly allocated array on
    * every change-detection pass. */
@@ -146,8 +148,13 @@ export class AlpacaAccountWorkspaceComponent {
     })),
   );
 
-  /** Why a tab has no address here. Deploy targets the account itself, so a
-   * lane with no confirmed account has none to offer — and substituting
+  /** The header's "Deploy a bot" address, or `null` for a lane with no
+   * confirmed account — Deploy is the account's own action, so an accountless
+   * lane has nowhere to open it. */
+  protected readonly deployRoute = computed(() => accountWorkspaceTabRoute(this.location(), 'deploy'));
+
+  /** Why a tab has no address here. Activity is the account's own history,
+   * so a lane with no confirmed account has none to offer — and substituting
    * another lane's is exactly what FR-096 forbids. */
   protected readonly TAB_WITHOUT_ACCOUNT = TAB_WITHOUT_ACCOUNT;
 

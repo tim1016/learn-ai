@@ -36,7 +36,7 @@ from app.services.strategy_validation_manifest import (
     strategy_registry_seeds,
 )
 from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.fixtures import ACCT, SID
+from tests.broker.v2panel.fixtures import ACCT
 
 _T0 = 1_700_000_000_000
 
@@ -87,8 +87,10 @@ class _FakeReadPort:
 
 
 class _FakeDeployRegistry:
-    def __init__(self) -> None:
+    def __init__(self, artifacts_root: Path) -> None:
         self.deploy_calls: list[dict] = []
+        # The Deploy submission ledger lives beside the lane's bindings.
+        self.artifacts_root = artifacts_root
 
     def bindings_for_broker(self, _broker: str) -> list:
         """No durable runner bindings: this double only deploys.
@@ -186,7 +188,7 @@ def deploy_app(
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
-    registry = _FakeDeployRegistry()
+    registry = _FakeDeployRegistry(tmp_path / "artifacts")
     set_bot_task_registry(registry)  # type: ignore[arg-type]
 
     async def clerk_status(*, symbol: str | None = None) -> ClerkStatus:
@@ -231,9 +233,13 @@ def _deploy_clock_in_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: instant / 1000 + monotonic() - started))
 
 
+#: The bot the deploy route names for ``_BODY`` at the pinned clock below
+#: (09:31 ET on 2026-09-25): ``<symbol>-<strategy code>-<date>-<minute>`` (#2551).
+DEPLOYED_SID = "spy-ema-20260925-0931"
+
 _BODY = {
     "exit_terms": {"exit_allowance_bps": 20, "band_multiple": 2, "spread_cap_bps": 50},
-    "strategy_instance_id": SID,
+    "submission_key": "submission-0001",
     # ema_crossover_signal, not deployment_validation: #1672 deliberately
     # changed deployment_validation's session-boundary literals (see
     # docs/references/deployment-validation-consecutive-green.md), which
@@ -246,6 +252,10 @@ _BODY = {
     "symbol": "SPY",
     "sizing": {"preset": "custom", "quantity": 2},
 }
+
+#: The same settings as a preview or admission read takes them: previews judge
+#: a Deploy before it is sent, so they carry no submission key.
+_SETTINGS = {key: value for key, value in _BODY.items() if key != "submission_key"}
 
 
 def _accepted_deploy_entry() -> StrategyValidationEntry:

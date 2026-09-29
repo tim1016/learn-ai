@@ -149,7 +149,7 @@ async def shadow_app_and_broker(
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(broker)  # type: ignore[arg-type]
-    set_bot_task_registry(_FakeDeployRegistry())  # type: ignore[arg-type]
+    set_bot_task_registry(_FakeDeployRegistry(tmp_path / "deploy-artifacts"))  # type: ignore[arg-type]
     app = FastAPI()
     # Production-shaped: app.main registers this too. The control-secret
     # guard (app.security.data_plane_control) raises a FleetControlError
@@ -473,6 +473,7 @@ async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
 
 async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fills(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    tmp_path: Path,
 ) -> None:
     """(c) The panel's authority id is the facade's, and its fills say simulated.
 
@@ -487,7 +488,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
     _register_instance(facade)
     binding = _binding()
 
-    async with _panel_authority_for_binding(_FakeDeployRegistry(), binding) as selected:
+    async with _panel_authority_for_binding(_FakeDeployRegistry(tmp_path), binding) as selected:
         assert selected is not None
         assert selected.account_id == SHADOW_ACCT
         evidence = await read_sqlite_panel_evidence(

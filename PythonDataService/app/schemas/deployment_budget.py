@@ -208,7 +208,14 @@ class DeploymentBudgetPreview(BaseModel):
     state: Literal["ready", "unavailable", "awaiting_price"]
     detail: str
     world: AuthorityKind
-    custody_account_id: str
+    # The account whose money this budget comes from. ``None`` for Dry Run:
+    # its simulated cash lives in the bot's own ``sim:`` account, which is
+    # named from the bot at Deploy, so no real account number applies (H18).
+    custody_account_id: str | None = None
+    # How the bot will be named -- the backend names it at Deploy (#2551).
+    bot_name_note: str = "The bot is named at Deploy."
+    # The previewed amount as Python normalizes it: what Deploy sets aside.
+    budget_usd: str | None = None
     observed_at_ms: EpochMs | None = None
     minimum_budget_usd: str | None = None
     unreserved_usd: str | None = None
@@ -282,6 +289,7 @@ class BudgetDeployCommandReceipt(BaseModel):
     receipt_id: str
     recorded_at_ms: EpochMs
     command_id: str
+    # The backend-authored bot name (#2551); a pre-#2551 bot keeps its own.
     strategy_instance_id: str
     run_id: str
     account_id: str
@@ -290,7 +298,43 @@ class BudgetDeployCommandReceipt(BaseModel):
     message: str
     explanation: str
     next_action: str
-    panel_path: str
+    # The custody commit's own instant: when this bot was first deployed.
+    first_deployed_at_ms: EpochMs
+    # Deploy again's display-only lineage: the bot this one follows.
+    replaces_strategy_instance_id: str | None = None
+
+
+class DeploySubmissionUncommitted(BaseModel):
+    """The recovery read's answer for a key whose Deploy has not committed.
+
+    ``status`` is what this clerk knows, never a guess: ``in_flight`` while
+    this process is sending that Deploy now, whether or not it has named its
+    bot yet; ``not_committed`` when nothing is sending it and custody holds no
+    commit for the name it claimed -- nothing was set aside. A committed
+    Deploy answers with its ``BudgetDeployCommandReceipt`` instead, and a key
+    never claimed and not being sent is a 404.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["in_flight", "not_committed"]
+    submission_key: str
+    # The name the key holds now; ``None`` while its Deploy is being sent and
+    # has not named its bot yet. A not-committed name is never reused: the
+    # key's next Deploy is named from its own minute.
+    strategy_instance_id: str | None
+    # When that name was claimed; ``None`` exactly when there is no name.
+    claimed_at_ms: EpochMs | None
+    message: str
+    explanation: str
+    next_action: str
+
+    @model_validator(mode="after")
+    def _named_when_claimed(self) -> DeploySubmissionUncommitted:
+        if (self.strategy_instance_id is None) != (self.claimed_at_ms is None):
+            raise ValueError("strategy_instance_id and claimed_at_ms are both present or both absent")
+        if self.status == "not_committed" and self.strategy_instance_id is None:
+            raise ValueError("a not-committed Deploy names the bot it claimed")
+        return self
 
 
 class BudgetAuthorityState(BaseModel):

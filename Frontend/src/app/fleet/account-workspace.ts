@@ -1,11 +1,11 @@
 /** The account workspace's URL vocabulary (ADR 0064 Decision 1, PRD #2560).
  *
  * One broker account is one place: an account header over its Home,
- * Activity, Settings and Deploy tabs. Which account that is, which tab is
- * open, and which bot's page is open under Home is carried by the URL alone
- * (nothing remembers a last-used account, FR-091), so deciding all three is a
- * pure function of the URL and lives here rather than in a service every
- * surface would have to inject.
+ * Activity and Settings tabs, and the header's Deploy page. Which account
+ * that is, which tab is open, and which bot's page is open under Home is
+ * carried by the URL alone (nothing remembers a last-used account, FR-091),
+ * so deciding all three is a pure function of the URL and lives here rather
+ * than in a service every surface would have to inject.
  *
  * Three consumers share it: the workspace shell (which tab to mark current,
  * where each tab and the top-bar account pills lead), `app-menu`'s
@@ -34,14 +34,16 @@ const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>
   home: 'Home',
   activity: 'Activity',
   settings: 'Settings',
-  deploy: 'Deploy strategy',
+  deploy: 'Deploy a bot',
 };
 
 /** The presented tab order (ADR 0064 Decision 1). Activity — the account's
- * history and records (PRD #2560) — sits before Settings. Deploy sits
- * last: binding a new strategy to the account, not a fact about it. */
+ * history and records (PRD #2560) — sits before Settings. Deploy is not in
+ * the strip (PRD #2560 D3): it is the header's "Deploy a bot" button, and
+ * keeps its routed `deploy` URL, its title and its explain-in-place
+ * behaviour. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['home', 'activity', 'settings', 'deploy'] as const
+  ['home', 'activity', 'settings'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
 /** Home's query parameter for how its bots are shown: `wall` as chart tiles,
@@ -50,6 +52,11 @@ export const HOME_VIEW_QUERY_PARAM = 'view';
 
 /** The value of `HOME_VIEW_QUERY_PARAM` that shows the Wall. */
 export const HOME_WALL_VIEW = 'wall';
+
+/** Deploy again's query parameter (PRD #2560): `deploy?from=<sid>` opens
+ * Deploy pre-filled from that bot's sealed settings, never its money or
+ * consent. */
+export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
 
 /** One tab's operator-facing name. */
 export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
@@ -149,8 +156,8 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
  * unbound lane. Home always has an address: on a lane with no confirmed
  * account it is the page that explains why it cannot open (FR-096). Activity
  * and Deploy are the account's own history and its own action — each needs a
- * confirmed account to target — so they are the tabs an accountless workspace
- * cannot offer.
+ * confirmed account to target — so an accountless workspace offers neither:
+ * Activity's tab is inert and the header shows no "Deploy a bot" button.
  */
 export function accountWorkspaceTabRoute(
   address: AccountWorkspaceAddress,
@@ -198,12 +205,20 @@ export function accountWorkspaceFixRoute(
   }
 }
 
-/** Deploy, starting from one ended bot's settings ("Deploy again"). */
+/**
+ * Deploy again for one ended bot: the account's Deploy page, pre-filled from
+ * it. Home's Finished rows and a stopped bot's page offer it (PRD #2560);
+ * Deploy reads the query and asks the backend for that bot's sealed settings,
+ * never its money or consent.
+ */
 export function accountWorkspaceDeployAgainRoute(
   account: BoundAccountWorkspaceAddress,
   sid: string,
 ): AccountWorkspaceLink {
-  return { commands: [...workspaceRoute(account), 'deploy'], queryParams: { from: sid } };
+  return {
+    commands: [...workspaceRoute(account), 'deploy'],
+    queryParams: { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
+  };
 }
 
 /**

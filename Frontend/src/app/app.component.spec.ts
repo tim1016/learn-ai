@@ -193,7 +193,7 @@ describe('AppComponent', () => {
     it.each([
       [WORKSPACE, 'Home · Paper'],
       [`${WORKSPACE}?view=wall`, 'Home · Paper'],
-      [`${WORKSPACE}/deploy`, 'Deploy strategy · Paper'],
+      [`${WORKSPACE}/deploy`, 'Deploy a bot · Paper'],
       [`${LANE}/settings`, 'Settings · Paper'],
       [`${LANE}/home`, 'Home · Paper'],
     ])('names what is open and the account it is open on: %s', async (url, expected) => {

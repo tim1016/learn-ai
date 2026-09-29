@@ -1,4 +1,4 @@
-<section class="readiness" aria-label="Admission gates">
+<section class="readiness" aria-label="Deploy checks">
   <p-accordion class="readiness-gates" [multiple]="true" [value]="defaultOpenGateIds()">
     @for (check of checks(); track check.gate_id) {
       <p-accordion-panel [value]="check.gate_id" [class.readiness-gate--blocked]="!check.ready">

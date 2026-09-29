@@ -8,7 +8,8 @@ router symbols just to answer deploy/start safety questions.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
@@ -240,6 +241,12 @@ class StrategyRegistration:
     description: str
     param_schema: type[StrategyParamsBase]
     build: Callable[[StrategyParamsBase], Strategy]
+    # The short code a deployed bot's backend-authored name carries
+    # (``<symbol>-<code>-<YYYYMMDD>-<HHMM>``, #2551). Authored once per
+    # catalog strategy and never changed: it is part of every bot name
+    # already issued. ``validate_deploy_codes`` refuses a catalog strategy
+    # without one, or two sharing one, when this module loads.
+    deploy_code: str = ""
     # Product role, independent from validation progress. Production candidates
     # follow the external-reference promotion cycle. The operational harness is
     # deliberately useful in Dry Run/Paper while remaining permanently outside
@@ -382,6 +389,7 @@ def hidden_params_present(
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
+        deploy_code="ema",
         class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
@@ -611,6 +619,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
+        deploy_code="sma",
         class_name="SmaCrossoverAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SMA_SIGNAL_PROGRAM_VERSION,
@@ -781,6 +790,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
+        deploy_code="rsi",
         class_name="RsiMeanReversionAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
@@ -950,6 +960,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
+        deploy_code="dv",
         class_name="DeploymentValidationConsecutiveGreen",
         strategy_category="operational_validation_harness",
         signal_program_contract=SignalProgramContract(
@@ -1138,6 +1149,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
+        deploy_code="sa",
         class_name="SpyStrategyAAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
@@ -1357,6 +1369,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
+        deploy_code="sb",
         class_name="SpyStrategyBAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
@@ -1576,6 +1589,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
+        deploy_code="sc",
         class_name="SpyStrategyCAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
@@ -1759,6 +1773,38 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
 }
 
 
+#: A bot name is ``<symbol>-<code>-<YYYYMMDD>-<HHMM>`` and must fit the
+#: 25-character broker-owned instance-id cap, so a code stays short.
+DEPLOY_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,3}$")
+
+
+class StrategyCatalogError(ValueError):
+    """The strategy catalog is malformed. Raised when it loads, never at Deploy."""
+
+
+def validate_deploy_codes(registry: Mapping[str, StrategyRegistration]) -> None:
+    """Refuse a catalog strategy with no bot-name code, or two sharing one (#2551)."""
+    owners: dict[str, str] = {}
+    for strategy_key, registration in registry.items():
+        if not registration.catalog_visible:
+            continue
+        code = registration.deploy_code
+        if DEPLOY_CODE_PATTERN.fullmatch(code) is None:
+            raise StrategyCatalogError(
+                f"Catalog strategy {strategy_key!r} needs a bot-name code of 1-4 lowercase "
+                f"letters or digits, starting with a letter; it has {code!r}."
+            )
+        if code in owners:
+            raise StrategyCatalogError(
+                f"Catalog strategies {owners[code]!r} and {strategy_key!r} share the bot-name "
+                f"code {code!r}; each strategy needs its own."
+            )
+        owners[code] = strategy_key
+
+
+validate_deploy_codes(_STRATEGY_REGISTRY)
+
+
 def strategy_program_version(strategy_name: str) -> str | None:
     """Return the declared Signal Program version for a registered strategy."""
     registration = _STRATEGY_REGISTRY.get(strategy_name)
@@ -1776,12 +1822,15 @@ def lean_twin_program_version(template: str) -> str | None:
     return next(iter(versions)) if len(versions) == 1 else None
 
 __all__ = [
+    "DEPLOY_CODE_PATTERN",
     "_STRATEGY_REGISTRY",
     "ChartParamRef",
     "StrategyBarCadence",
+    "StrategyCatalogError",
     "StrategyChartIndicator",
     "StrategyParamsBase",
     "StrategyRegistration",
     "lean_twin_program_version",
     "strategy_program_version",
+    "validate_deploy_codes",
 ]

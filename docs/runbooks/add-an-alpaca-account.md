@@ -81,10 +81,10 @@ Open **Alpaca** in the top navigation bar and choose **Accounts** — the one
 Alpaca menu item (ADR 0064 Decision 2); it lists every registered account and
 does not automatically choose Paper or Live for you. Selecting an account card
 opens that account's workspace: one account header (free to deploy, cash,
-equity, today) over **Home**, **Activity** and **Settings** tabs, plus
-**Deploy** (PRD #2560). Deploy is the tab strip's last entry, **Deploy
-strategy**, until #2564 moves it into the account header as **Deploy a bot**;
-its URL does not change.
+equity, today) over **Home**, **Activity** and **Settings** tabs (PRD #2560).
+**Deploy a bot** is a button in the account header on every tab, not a tab; it
+opens the account's Deploy page, whose URL (`.../accounts/<account>/deploy`) is
+unchanged.
 
 | What you want to see | Click path |
 |---|---|
@@ -99,7 +99,7 @@ its URL does not change.
 | Bots as live chart tiles | **Home → Wall** (the former Gallery tab) |
 | Another account, from any page | The **Live** or **Paper** pill in the top bar: it opens that account on the tab you are on. A dot on a pill means something on that account needs you; a dot marked **?** means that is not known yet |
 | Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Settings tab → Broker connection** |
-| Deploy a bot | **Deploy strategy** tab (the header's **Deploy a bot** button once #2564 lands) |
+| Deploy a bot | The account header's **Deploy a bot** button, on any tab |
 
 The account workspace opens on **Home**: the money bar, one line for each
 thing that needs you with its fix, and the account's bots grouped as running,
@@ -429,16 +429,19 @@ previously refused, reissue it after fixing the stated cause. Never treat
 
 ## 5. Launch a bot
 
-1. Select the account card and open **Bots → Deploy strategy**.
+1. Select the account card and click **Deploy a bot** in the account header.
 2. Choose a strategy. **Accepted evidence** means its validation passed; it
    does not mean this account has permission to run it.
-3. If access is Off, use **Review & enable Paper** or **Review & enable Shadow**.
-   Review the exact strategy, account, and evidence, then confirm. This records
-   permission only; it does not launch anything. Repeat per strategy/account.
+3. If the strategy is not yet allowed on the account, click **Allow on Paper**
+   (or **Allow on Shadow**) below the strategy. Review the exact strategy, and
+   the account and evidence under **Details**, then click
+   **Yes, allow on Paper** (or **Yes, allow on Shadow**); the line then reads
+   "Allowed on this Paper account". This records permission only; it does not
+   launch anything. Repeat per strategy/account.
 4. Choose **Paper** on a Paper lane, **Shadow** before Live graduation, or
    **Live** afterward. Use the instrument picker and review the exact strategy
    parameters. An uncovered configuration offers **Use qualified configuration**
-   or **Try in Dry Run**; these choices remain explicit.
+   or **Try other settings in Dry Run**; these choices remain explicit.
 5. For an existing authority still using old grants, open Settings and use
    **Switch to budgets** (it asks you to confirm, because it cannot be undone).
    Apply a **Daily loss limit** there. This

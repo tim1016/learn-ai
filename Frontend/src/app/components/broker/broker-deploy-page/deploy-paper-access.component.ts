@@ -11,7 +11,6 @@ import {
 } from "@angular/core";
 import { Button } from "primeng/button";
 
-import { TimestampDisplayPipe } from "../../../shared/timestamp";
 import {
   BrokerV2PanelService,
   type DeployBotStrategy,
@@ -40,11 +39,20 @@ type PaperAccessFlow =
     retry: { plan: PaperAccessPlan; target: ResourceTarget; strategyKey: string } | null;
   };
 
-/** Two-step account approval for one sealed Signal Program. */
+/**
+ * The strategy permission (PRD #2560 D9): one line in Deploy's What step.
+ *
+ * "Allowed on this Paper account", or — the first time, and again whenever
+ * an earlier review has lapsed — "Allow on Paper": a one-time permission for
+ * this strategy on this account that never spends money. Allowing is still
+ * the backend's two calls (prepare the plan, confirm it), so the owner sees
+ * what they are allowing before it is recorded; the plan's audit facts sit
+ * behind Details and its review expiry is not shown.
+ */
 @Component({
   selector: "app-deploy-paper-access",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Button, TimestampDisplayPipe],
+  imports: [Button],
   host: { class: "block min-w-0" },
   templateUrl: "./deploy-paper-access.component.html",
 })
@@ -83,15 +91,10 @@ export class DeployPaperAccessComponent {
 
   // Assembled here rather than in the template: every control keeps an
   // accessible name, and one author decides how the world word reads.
-  protected readonly reviewLabel = computed(
-    () => `Review & enable ${this.modeLabel()}`,
-  );
-  protected readonly reviewRegionLabel = computed(
-    () => `Review ${this.modeLabel()} access`,
-  );
-  protected readonly enableLabel = computed(
-    () => `Enable ${this.modeLabel()} access`,
-  );
+  protected readonly allowLabel = computed(() => `Allow on ${this.modeLabel()}`);
+  protected readonly confirmLabel = computed(() => `Yes, allow on ${this.modeLabel()}`);
+  protected readonly allowedLabel = computed(() => `Allowed on this ${this.modeLabel()} account`);
+  protected readonly groupLabel = computed(() => `${this.modeLabel()} permission`);
 
   constructor() {
     effect(() => {
@@ -208,9 +211,9 @@ export class DeployPaperAccessComponent {
       }
     }
     return {
-      message: `${this.modeLabel()} access could not be reviewed.`,
-      explanation: "The data plane did not return a current approval plan.",
-      nextAction: "Check connectivity, then try the review again.",
+      message: `The ${this.modeLabel()} permission could not be checked.`,
+      explanation: "No answer came back, so nothing was allowed.",
+      nextAction: "Check your connection, then try again.",
     };
   }
 }

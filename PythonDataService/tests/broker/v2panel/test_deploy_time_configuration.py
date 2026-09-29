@@ -19,7 +19,7 @@ from httpx import ASGITransport
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.services.broker_v2_panel import panel_deploy
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
-from tests.broker.v2panel.conftest import _BODY
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS
 from tests.broker.v2panel.fixtures import ACCT
 
 # ema_crossover_signal is a sealed Signal Program (#1730); every test below
@@ -110,7 +110,7 @@ async def test_deploy_accepts_only_the_exact_current_golden_scope_for_broker_mod
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json={
                 **_BODY,
-                "strategy_instance_id": "golden-tsla-accepted",
+                "submission_key": "golden-tsla-accepted",
                 "symbol": "TSLA",
                 "parameters": exact_parameters,
             },
@@ -119,7 +119,7 @@ async def test_deploy_accepts_only_the_exact_current_golden_scope_for_broker_mod
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json={
                 **_BODY,
-                "strategy_instance_id": "golden-tsla-modified",
+                "submission_key": "golden-tsla-modified",
                 "symbol": "TSLA",
                 "parameters": {**exact_parameters, "gap": 0.2},
             },
@@ -158,7 +158,7 @@ async def test_admission_preview_resolves_the_same_parameters_as_deploy(
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
-            json={**_BODY, "parameters": {"gap": 5.0}},
+            json={**_SETTINGS, "parameters": {"gap": 5.0}},
         )
 
     assert response.status_code == 200

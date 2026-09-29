@@ -1488,7 +1488,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Deploy one Clerk-governed Alpaca paper bot (§5) */
+        /** Deploy one Clerk-governed Alpaca bot, named by the backend (§5, #2551) */
         post: operations["deploy_bot_scoped_api_brokers__broker__accounts__account_id__bots_post"];
         delete?: never;
         options?: never;
@@ -1692,15 +1692,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-prefill": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Deployment Command Scoped */
-        get: operations["read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get"];
+        /** Deploy again: one earlier bot's sealed settings, never its money or consent */
+        get: operations["read_deploy_prefill_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_prefill_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1809,6 +1809,27 @@ export interface paths {
          * @description Validate the durable account binding before reading run history.
          */
         get: operations["get_run_history_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/deploy-submissions/{submission_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recover what one Deploy submission recorded, by its key
+         * @description Committed: its receipt. Claimed but not committed: the claimed name,
+         *     ``in_flight`` or ``not_committed``. Never claimed: 404.
+         */
+        get: operations["read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2533,7 +2554,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-prefill": {
         parameters: {
             query?: never;
             header?: never;
@@ -2541,10 +2562,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Fleet Bot Deploy Command Read
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).
+         * Fleet Bot Deploy Prefill Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-prefill (deploy).
          */
-        get: operations["fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get"];
+        get: operations["fleet_bot_deploy_prefill_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_prefill_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3025,6 +3046,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/custody/transactions/{transaction_id} (custody_read).
          */
         get: operations["fleet_custody_transaction_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions__transaction_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/deploy-submissions/{submission_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Deploy Submission Read
+         * @description Fleet-routed GET /accounts/{account_id}/deploy-submissions/{submission_key} (bot_panel_read).
+         */
+        get: operations["fleet_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__deploy_submissions__submission_key__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8412,6 +8453,43 @@ export interface components {
             schema_version: "1.0";
             trader: components["schemas"]["TraderDiagnosticView"];
         };
+        /**
+         * AlpacaDeploySubmission
+         * @description One Deploy command: the settings plus the opaque key that makes it retry-safe.
+         *
+         *     ``submission_key`` is minted by the browser when the form opens. The same
+         *     key returns the same bot; a new key with identical settings is a second
+         *     bot. ``replaces_strategy_instance_id`` is Deploy again's display-only
+         *     lineage: it names the bot this one follows and grants it nothing.
+         */
+        AlpacaDeploySubmission: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
+            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
+            /**
+             * Execution Mode
+             * @default paper
+             * @enum {string}
+             */
+            execution_mode?: "paper" | "dry_run" | "shadow" | "live";
+            exit_terms: components["schemas"]["ExitTermsInput"];
+            /** Parameters */
+            parameters?: Record<string, never>;
+            /** Replaces Strategy Instance Id */
+            replaces_strategy_instance_id?: string | null;
+            sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
+            /** Strategy Key */
+            strategy_key: string;
+            /** Submission Key */
+            submission_key: string;
+            /** Symbol */
+            symbol: string;
+        };
         /** AlpacaDeskStateResponse */
         AlpacaDeskStateResponse: {
             action: components["schemas"]["DeskActionResponse"];
@@ -8596,7 +8674,11 @@ export interface components {
         };
         /**
          * AlpacaPaperDeployRequest
-         * @description Closed account-scoped command for the production Alpaca deploy page.
+         * @description What one Deploy asks for: the settings a preview judges and consent binds to.
+         *
+         *     The bot's name is not here. The backend authors it when the Deploy is
+         *     committed (#2551), so a client that still sends ``strategy_instance_id``
+         *     is refused with 422 rather than having its name silently ignored.
          */
         AlpacaPaperDeployRequest: {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
@@ -8617,8 +8699,6 @@ export interface components {
             /** Parameters */
             parameters?: Record<string, never>;
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
             /** Strategy Key */
             strategy_key: string;
             /** Symbol */
@@ -9871,6 +9951,24 @@ export interface components {
             source_line: number;
         };
         /**
+         * BotDeployPrefill
+         * @description Deploy again: the sealed settings of one earlier bot, never its money or consent.
+         */
+        BotDeployPrefill: {
+            exit_terms?: components["schemas"]["ExitTermsInput"] | null;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            sizing: components["schemas"]["AlpacaPaperSizingSelection"];
+            /** Source Strategy Instance Id */
+            source_strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * BotDutyOutcomeView
          * @description Durable terminal duty evidence rendered by the operator surface.
          */
@@ -10629,6 +10727,11 @@ export interface components {
             committed_usd: string;
             /** Explanation */
             explanation: string;
+            /**
+             * First Deployed At Ms
+             * Format: int64
+             */
+            first_deployed_at_ms: number;
             /** Message */
             message: string;
             /** Next Action */
@@ -10638,8 +10741,6 @@ export interface components {
              * @enum {string}
              */
             outcome: "pending" | "success" | "failure";
-            /** Panel Path */
-            panel_path: string;
             /** Receipt Id */
             receipt_id: string;
             /**
@@ -10647,6 +10748,8 @@ export interface components {
              * Format: int64
              */
             recorded_at_ms: number;
+            /** Replaces Strategy Instance Id */
+            replaces_strategy_instance_id?: string | null;
             /** Run Id */
             run_id: string;
             /**
@@ -13913,6 +14016,36 @@ export interface components {
              */
             valid?: boolean;
         };
+        /**
+         * DeploySubmissionUncommitted
+         * @description The recovery read's answer for a key whose Deploy has not committed.
+         *
+         *     ``status`` is what this clerk knows, never a guess: ``in_flight`` while
+         *     this process is sending that Deploy now, whether or not it has named its
+         *     bot yet; ``not_committed`` when nothing is sending it and custody holds no
+         *     commit for the name it claimed -- nothing was set aside. A committed
+         *     Deploy answers with its ``BudgetDeployCommandReceipt`` instead, and a key
+         *     never claimed and not being sent is a 404.
+         */
+        DeploySubmissionUncommitted: {
+            /** Claimed At Ms */
+            claimed_at_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_flight" | "not_committed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Submission Key */
+            submission_key: string;
+        };
         /** DeploymentBudgetInput */
         DeploymentBudgetInput: {
             /** Amount Usd */
@@ -13926,10 +14059,17 @@ export interface components {
         };
         /** DeploymentBudgetPreview */
         DeploymentBudgetPreview: {
+            /**
+             * Bot Name Note
+             * @default The bot is named at Deploy.
+             */
+            bot_name_note?: string;
+            /** Budget Usd */
+            budget_usd?: string | null;
             /** Confirmation Text */
             confirmation_text?: string | null;
             /** Custody Account Id */
-            custody_account_id: string;
+            custody_account_id?: string | null;
             /** Detail */
             detail: string;
             /** Estimated Price Usd */
@@ -31182,7 +31322,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlpacaPaperDeployRequest"];
+                "application/json": components["schemas"]["AlpacaDeploySubmission"];
             };
         };
         responses: {
@@ -31686,7 +31826,7 @@ export interface operations {
             };
         };
     };
-    read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get: {
+    read_deploy_prefill_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_prefill_get: {
         parameters: {
             query?: never;
             header?: {
@@ -31707,7 +31847,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
+                    "application/json": components["schemas"]["BotDeployPrefill"];
                 };
             };
             /** @description Validation Error */
@@ -31951,6 +32091,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotRunHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                submission_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"] | components["schemas"]["DeploySubmissionUncommitted"];
                 };
             };
             /** @description Validation Error */
@@ -33382,7 +33557,7 @@ export interface operations {
             };
         };
     };
-    fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get: {
+    fleet_bot_deploy_prefill_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_prefill_get: {
         parameters: {
             query?: never;
             header?: {
@@ -34290,6 +34465,42 @@ export interface operations {
                 clerk_id: string;
                 account_id: string;
                 transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__deploy_submissions__submission_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                submission_key: string;
             };
             cookie?: never;
         };

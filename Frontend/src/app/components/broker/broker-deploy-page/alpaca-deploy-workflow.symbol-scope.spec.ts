@@ -58,11 +58,11 @@ const LEGACY_EMA_STRATEGY: DeployBotView['strategies'][number] = {
   golden_validation_scope: false,
 };
 
-/** A view whose admission headline names it, so the DOM says which one landed. */
-function labelledView(headline: string): DeployBotView {
+/** A view whose one strategy's label names it, so the DOM says which one landed. */
+function labelledView(label: string): DeployBotView {
   return {
     ...DEPLOY_VIEW,
-    eligibility: { ...DEPLOY_VIEW.eligibility, headline },
+    strategies: [{ ...DEPLOY_VIEW.strategies[0], label }],
   };
 }
 
@@ -86,7 +86,8 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
     deployBudgetBot: vi.fn(),
     previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
       state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,
-      shortcuts: [], review_token: body.budget ? 'reviewed-money' : null,
+      minimum_budget_usd: '500.00', unreserved_usd: '1000.00',
+      shortcuts: [], review_token: body.budget ? 'reviewed-money' : null, budget_usd: body.budget?.amount_usd ?? null,
     })),
   };
 }
@@ -101,8 +102,20 @@ async function renderWorkflow(service = mockService()) {
     ],
     componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
   });
-  await screen.findByRole('heading', { name: 'Bot binding' });
+  await screen.findByRole('heading', { name: 'What' });
+  await rendered.fixture.whenStable();
+  // Scoping lives in What: open it, as the owner would to pick a symbol.
+  const edit = screen.queryByRole('button', { name: 'Edit step 1, What' });
+  if (edit !== null) fireEvent.click(edit);
+  await rendered.fixture.whenStable();
   return rendered;
+}
+
+/** The Crossover gap the page shows: its editor, or — for a Golden scope
+ * trading on the account, where other values are not typed — its value in use. */
+function gapShown(): string {
+  const editor = screen.queryByRole<HTMLInputElement>('textbox', { name: 'Crossover gap' });
+  return editor?.value ?? screen.getByLabelText('Settings in use').textContent ?? '';
 }
 
 /**
@@ -140,7 +153,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
   const SYMBOL_DEBOUNCE_MS = 400;
 
   function deployButton(): HTMLElement {
-    return screen.getByRole('button', { name: /^Deploy / });
+    return screen.getByRole('button', { name: /^Deploy/ });
   }
 
   it('re-fetches the deploy view scoped to a symbol the operator picks', async () => {
@@ -247,12 +260,12 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(ticketSymbol(view)).toBe('TSLA');
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+      expect(gapShown()).toContain('0.75');
 
       await typeSymbol(view, 'SPY');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.55');
+      expect(gapShown()).toContain('0.55');
       expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'SPY', DEPLOY_VIEW.default_exit_terms);
     } finally {
       vi.useRealTimers();
@@ -271,19 +284,19 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+      expect(gapShown()).toContain('0.2');
 
       await typeSymbol(view, 'TSLA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+      expect(gapShown()).toContain('0.75');
 
       await typeSymbol(view, 'SPY');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+      expect(gapShown()).toContain('0.2');
 
       await typeSymbol(view, 'TSLA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+      expect(gapShown()).toContain('0.75');
     } finally {
       vi.useRealTimers();
     }
@@ -319,8 +332,8 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect(screen.queryByLabelText('Loading deployment readiness')).toBeNull();
-      expect(screen.getByRole('heading', { name: 'Bot binding' })).toBeTruthy();
+      expect(screen.queryByLabelText('Loading Deploy')).toBeNull();
+      expect(screen.getByRole('heading', { name: 'What' })).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -342,14 +355,13 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     }
   });
 
-  it('reports the server-observed evaluation time in the footer', async () => {
+  it('reports the server-observed evaluation time with the checks', async () => {
     await renderWorkflow();
 
-    const footer = screen.getByTestId('deploy-footer-observed');
+    const observed = screen.getByText(/Checks observed/);
     // Server-authored `evaluated_at_ms`, rendered by the shared component —
     // never a client clock (temporal-rigor.md).
-    expect(footer.querySelector('app-timestamp-display')).toBeTruthy();
-    expect(footer.textContent).toContain('Readiness observed');
+    expect(observed.querySelector('app-timestamp-display')).toBeTruthy();
   });
 
   it('raises an explicit staleness banner when a scoped refresh stops landing', async () => {
@@ -363,7 +375,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      const banner = await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
+      const banner = await screen.findByRole('alert', { name: 'Deploy checks are stale' });
       expect(banner.textContent).toContain('QQQ');
     } finally {
       vi.useRealTimers();
@@ -387,7 +399,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      const banner = await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
+      const banner = await screen.findByRole('alert', { name: 'Deploy checks are stale' });
       // Keyed on `{accountId, symbol}`: an unidentified retained view let a
       // SPY-scoped set of gates silently back a QQQ ticket.
       expect(banner.textContent).toContain('QQQ');
@@ -405,11 +417,10 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     try {
       const service = mockService();
       const view = await renderWorkflow(service);
-      fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'spy-scope-01' } });
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
-      await screen.findByText(/Reviewed budget:/);
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      await screen.findByText(/would be set aside for this bot/);
       // Baseline: this ticket is otherwise deployable, so the assertion below
       // is about staleness and nothing else.
       expect(deployButton().hasAttribute('disabled')).toBe(false);
@@ -417,9 +428,9 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
       await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-      await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
-      fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
-      await screen.findByText(/Reviewed budget:/);
+      await screen.findByRole('alert', { name: 'Deploy checks are stale' });
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      await screen.findByText(/would be set aside for this bot/);
 
       expect(deployButton().hasAttribute('disabled')).toBe(true);
     } finally {
@@ -485,10 +496,10 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
       await typeSymbol(view, 'DIA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-      await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
+      await screen.findByRole('alert', { name: 'Deploy checks are stale' });
 
-      expect(screen.getByText('PA7 readiness')).toBeTruthy();
-      expect(screen.queryByText('PA9 readiness')).toBeNull();
+      expect(screen.getAllByText(/PA7 readiness/).length).toBeGreaterThan(0);
+      expect(screen.queryByText(/PA9 readiness/)).toBeNull();
     } finally {
       vi.useRealTimers();
     }

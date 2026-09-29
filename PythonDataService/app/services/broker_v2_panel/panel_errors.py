@@ -14,6 +14,11 @@ class PanelDataError(Exception):
     """Base typed panel-data error; the router translates to HTTP."""
 
     http_status: int = 500
+    #: A Deploy refusal that settles its submission key: nothing under the key
+    #: can have started, so a client may send its next Deploy under a new key.
+    #: Set only where the Deploy path proves it (``panel_deploy``); every other
+    #: failure leaves the key's outcome to the recovery read.
+    submission_settled: bool = False
 
     def __init__(
         self,

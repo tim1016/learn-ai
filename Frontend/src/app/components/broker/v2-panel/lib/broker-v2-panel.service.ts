@@ -71,9 +71,34 @@ function isUnroutedNotFound(error: unknown): boolean {
   return 'detail' in body && body.detail === 'Not Found';
 }
 
+/** The settings one Deploy asks for — what a preview judges and consent binds
+ * to. The bot's name is never here: the backend authors it (#2551). */
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
+/** One Deploy command: the settings plus the opaque submission key that makes
+ * a retry return the same bot, and Deploy again's display-only lineage. */
+export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission'];
+/** Deploy again: one earlier bot's sealed settings, never its money or consent. */
+export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
+/** The recovery read's answer for a key whose Deploy has not committed:
+ * `in_flight` while this clerk is still sending it, `not_committed` when
+ * nothing was set aside. Carries the name the key holds. */
+export type DeploySubmissionUncommitted = components['schemas']['DeploySubmissionUncommitted'];
+/** What the recovery read answers for a claimed key: the committed Deploy's
+ * receipt, or the uncommitted claim. A key never claimed is a 404. */
+export type DeploySubmissionStatus = BudgetDeployReceipt | DeploySubmissionUncommitted;
+
+/** The committed receipt inside a recovery answer, or `null` when the key's
+ * Deploy has not committed. */
+export function committedReceipt(status: DeploySubmissionStatus): BudgetDeployReceipt | null {
+  return 'receipt_id' in status ? status : null;
+}
+
+/** The uncommitted claim inside a recovery answer, or `null` once it committed. */
+export function uncommittedClaim(status: DeploySubmissionStatus): DeploySubmissionUncommitted | null {
+  return 'receipt_id' in status ? null : status;
+}
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
 export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
@@ -82,9 +107,6 @@ export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput
 export type AccountMoneyView = components['schemas']['AccountMoneyView'];
 export type MoneySegment = components['schemas']['MoneySegment'];
 export type MoneyParts = components['schemas']['MoneyParts'];
-export const DEPLOYMENT_WORLD_LABELS: Readonly<Record<BudgetDeployReceipt['world'], string>> = {
-  real_paper: 'Paper', real_live: 'Live', shadow: 'Shadow', synthetic: 'Dry Run',
-};
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type QualifiedDeployConfiguration = components['schemas']['QualifiedDeployConfiguration'];
@@ -144,7 +166,7 @@ export class BrokerV2PanelService {
     );
   }
 
-  deployBudgetBot(target: ResourceTarget, body: DeployBotBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
+  deployBudgetBot(target: ResourceTarget, body: DeploySubmissionBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
     return firstValueFrom(this.http.post<BudgetDeployReceipt>(
       operationUrl('bot_create', target), this.commandBody(target, 'bot_action', body),
     ));
@@ -164,8 +186,18 @@ export class BrokerV2PanelService {
     return this.polls.get<AccountMoneyView>(operationUrl('account_money_read', target));
   }
 
-  getDeployCommand(target: ResourceTarget, sid: string): Promise<BudgetDeployReceipt> {
-    return firstValueFrom(this.http.get<BudgetDeployReceipt>(operationUrl('bot_deploy_command_read', { ...target, sid })));
+  /** The recovery read: what one Deploy submission did, by its key. A 404
+   * means the key was never claimed — nothing set aside, nothing started;
+   * a 503 means the clerk cannot read its ledger right now. */
+  getDeploySubmission(target: ResourceTarget, submissionKey: string): Promise<DeploySubmissionStatus> {
+    return firstValueFrom(this.http.get<DeploySubmissionStatus>(
+      operationUrl('bot_deploy_submission_read', { ...target, submissionKey }),
+    ));
+  }
+
+  /** Deploy again: `sid`'s sealed strategy, symbol, size, parameters and exit terms. */
+  getDeployPrefill(target: ResourceTarget, sid: string): Promise<BotDeployPrefill> {
+    return firstValueFrom(this.http.get<BotDeployPrefill>(operationUrl('bot_deploy_prefill_read', { ...target, sid })));
   }
 
   previewStartAdmission(
