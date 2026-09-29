@@ -138,22 +138,30 @@ notional cap, no symbol allowlist, no session restriction.
   recorded fill names prices at the reservation's reference price (the
   decision price the ENTER was admitted against). A working *or filled*
   order reserves its unseen fills at cost plus its unrecorded remainder at
-  the reference price; a dead order (canceled/expired/rejected/replaced)
-  reserves only its unseen fills, because its unrecorded remainder is
-  cancelled quantity, never cash. Corrections fold at their restated size:
+  the reference price; an ended order reserves only its unseen fills, because
+  its unrecorded remainder is cancelled quantity, never cash. An order has
+  ended when the broker ended it (canceled/expired/rejected/replaced), or when
+  its ENTER effect is terminal while nothing says the broker ever knew it -- no
+  broker order id and no fill: refused before contact, failed outright, or
+  proven absent (#2553, the leak research #2469 found). An ENTER whose outcome
+  is unknown keeps its whole claim until it is resolved. Corrections fold at their restated size:
   only the head of each correction chain counts (resolved through
   `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
   *root* execution's `recorded_at_ms`, because the broker's cash at that
   instant already reflected the true quantity however late the Clerk recorded
-  the restatement. An unfilled remainder also claims its share of the fee
-  provision the ENTER recorded at admission, rounded up to the cent -- never a
-  re-quote from the fee model (#2553). `reserved_cash_decimal(seen_before_ms=...)`,
-  which admission hands `observation.fills_seen_before_ms`, sums this exactly
-  across every accepted ENTER, and `sqlite/envelope_admission.py` checks
-  `entry requirement + reserved <= cash_available`, the entry requirement
-  being `budgets.entry_requirement`: the notional plus the canonical BUY fee
-  provision. A reservation written before provisions were recorded refuses
-  with `ENTRY_FEE_PROVISION_UNRECORDED` while it has an unfilled remainder.
+  the restatement. While any of the order is unfilled, its remainder also
+  claims the whole fee provision the ENTER recorded at admission -- no share
+  is computed, and it is never a re-quote from the fee model (#2553; owner
+  decision 2026-09-29). `envelope_reservations.entry_cash_claims`, which the
+  money read hands `observation.fills_seen_before_ms`, prices every accepted
+  ENTER exactly, and `sqlite/envelope_admission.py` judges the ENTER with
+  `budgets.budget_entry_decision`: its entry requirement
+  (`budgets.entry_requirement`, the notional plus the canonical BUY fee
+  provision) against the deployment's free budget and the account's cash after
+  every other claim. An account not yet switched to budgets admits no ENTER
+  (`BUDGETS_NOT_SWITCHED_ON`); its owner switches it in Settings. A
+  reservation written before provisions were recorded refuses with
+  `ENTRY_FEE_PROVISION_UNRECORDED` while it has an unfilled remainder.
 - **The fill-visibility grace.** `FILL_VISIBILITY_GRACE_MS = 5_000`
   (`live_envelope.py`): a fill the Clerk recorded up to 5 s *before* the reads
   were issued stays reserved too, because nothing Alpaca publishes says its

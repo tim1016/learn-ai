@@ -96,8 +96,6 @@ startable. The live verdict's arming count reads the same rule: a
   `LIVE_ENVELOPE_MISSING`, `ACTIVATION_RECORD_INVALID`, `SQLITE_CLERK_STARTUP_FAILED`.
 - `app/broker/alpaca/clerk/live_arming_gate.py` — `ArmingSnapshot` and
   `ArmingGate`, the per-instance cache one ledger read fills.
-- `app/broker/alpaca/clerk/sqlite/arming_admission.py::require_arming_admission`
-  — the third ENTER admission.
 - `app/broker/alpaca/clerk/sqlite/live_envelope_sync.py` — every 15 s, one
   ledger read seals the envelope and publishes the snapshot; the runner's
   sealed bindings arrive through an injected callable (`instance_seals`).
@@ -108,27 +106,22 @@ startable. The live verdict's arming count reads the same rule: a
 `accept_enter` runs, inside the custody fence and before `ENTER_ACCEPTED`:
 
 1. `require_admission` — holds and uncertainties, the loss hold included;
-2. `require_arming_admission` — the instance must be `armed` **right now**
-   (the snapshot is at most 45 s old; the status is derived at the admission
-   instant, so a lapse at the ET-date boundary is enforced at the instant);
-3. `require_envelope_admission` — the cash bound.
+2. `require_envelope_admission` — an account not yet switched to budgets
+   refuses `BUDGETS_NOT_SWITCHED_ON` (#2553, owner decision 2026-09-29; never
+   switched automatically), then the deployment's budget and the account's
+   cash after every other claim bound the ENTER (`budgets.budget_entry_decision`).
 
-Arming runs before the envelope so an unarmed instance never reserves cash.
-EXIT is never subject to 2 or 3. Refusals from 2, each a rejected receipt on
-the decision:
-
-| Code | When |
-|---|---|
-| `LIVE_ARMING_LEDGER_INVALID` | the last refresh could not verify the ledger |
-| `LIVE_MODE_DISAGREEMENT` | the broker's mode stopped agreeing mid-session (R2) |
-| `LIVE_ARMING_UNOBSERVED` | no snapshot, or one older than 45 s |
-| `LIVE_ARMING_REQUIRED` | the ledger has never named this instance |
-| `LIVE_ARMING_LAPSED`, `LIVE_ARMING_REVOKED`, `LIVE_ARMING_SEAL_CHANGED`, `LIVE_ARMING_FUTURE_DATED`, `LIVE_ENVELOPE_DISAGREEMENT` | the instance's own state (slice 6) |
-
-All of them are transient (retry on the next decision clock); the reaction to
-a lost arming is below, never a fatal halt.
+EXIT is never subject to 2. Every refusal is transient (retry on the next
+decision clock), never a fatal halt. Until #2553 a third check,
+`require_arming_admission`, admitted a version-1 live ENTER only for an armed
+instance; it is deleted, and the `LIVE_ARMING_*` codes it refused with stay
+recognised only so receipts already recorded under them still read.
 
 ## Deploy, arm, trade
+
+*The version-1 ceremony, kept for history.* Since #2553 no ENTER is admitted
+on a version-1 account, armed or not: switch the account to budgets in
+Settings, then Deploy each bot with its own dollar budget (PRD #2540).
 
 A strategy instance is immutable per account and its account is inside its
 seal, so the instance that rehearsed as `shadow:<id>` cannot be the instance

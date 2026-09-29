@@ -23,13 +23,14 @@ after the revision's `arming_max_sessions` calendar NYSE trading sessions — a 
 "come back and look" fence, because an armed bot nobody has looked at in a
 month is the configuration accident this ADR was written to prevent.
 
-**Since ADR 0059 slice 7 an arming record is what admits a real-money ENTER**
-on the live authority: `require_arming_admission` reads it at every ENTER,
-between the holds and the envelope, through the `ArmingGate` the sync
-refreshes each tick. The CLI's `submission_admitted` field now reports
-whether a live authority exists for the account; its `note` says under which
-authority the record is read. See
-[alpaca-live-authority](alpaca-live-authority.md).
+**An arming record no longer admits any ENTER (#2553, owner decision
+2026-09-29).** From ADR 0059 slice 7 until then, `require_arming_admission`
+read it at every live ENTER; that check is deleted. Only an account switched
+to budgets admits an ENTER (PRD #2540): one still on authority version 1
+refuses every ENTER under `BUDGETS_NOT_SWITCHED_ON` until its owner switches
+it in Settings. The ledger is still read -- it seals a version-1 account's
+envelope and extended-hours allowances, and old `blocked` receipts under the
+arming codes stay readable. See [alpaca-live-authority](alpaca-live-authority.md).
 
 ## Where it runs
 
@@ -289,14 +290,12 @@ values was already declared in slice 1.
 
 ## Residuals
 
-- **Resolved by `arming_admission.py`.** An arming record admits a real-money
-  ENTER now — the third admission in the chain, on the live authority.
+- **Retired by #2553.** `arming_admission.py` (the arming check at ENTER)
+  is deleted: no arming record admits an ENTER, and a version-1 account admits
+  none at all.
 - **Resolved by the sync's `LIVE_MODE_DISAGREEMENT` path.** Mid-session
   broker-mode disagreement is caught there, not by the ceremony re-contacting
   the broker.
-- **Resolved by `require_arming_admission`.** Per-instance disagreement is
-  enforced per instance at ENTER admission on the live authority, not merely
-  reported by `status` and the verdict.
 - **One shadowed account per artifacts root — for arming, not for disarm.**
   `live_account_id_for` refuses rather than choosing when the activation fence
   names two, because an arming has no basis to pick one. `disarm` does **not**
