@@ -37,6 +37,9 @@
     } @else {
       <span class="home-row__caption">
         held {{ slice.amount_usd | authoredUsd }} · released {{ slice.released_usd | authoredUsd }}
+        @if (slice.released_estimated) {
+          (estimate)
+        }
       </span>
     }
   } @else {

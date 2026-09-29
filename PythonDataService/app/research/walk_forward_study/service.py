@@ -276,7 +276,7 @@ def execute(
         job_id=job_id,
         roots=list(roots) if roots is not None else lifecycle.roots_for(study),
         snapshot=DataSnapshot.from_dict(study.receipt["data_snapshot"]),
-        identity=CodeIdentity(**study.receipt["code_identity"]),
+        identity=CodeIdentity.from_dict(study.receipt["code_identity"]),
         combinations=int(study.receipt["walk_forward"]["combinations"]),
         cell_executor=cell_executor,
         cancel_check=cancel_check,
