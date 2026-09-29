@@ -44,8 +44,8 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
         headline="A broker order outcome is unknown",
         explanation=why,
         operator_impact=(
-            "New exposure and new reducing orders are paused for this custody subject until "
-            "the exact broker identities are recovered."
+            "New exposure and new reducing orders are on hold for the bot or ticket that "
+            "placed this order until its exact broker identities are recovered."
         ),
         next_step="Reconcile now; cancellation and exact-identity lookup remain available.",
         evidence_refs=[identity.order_ref for identity in cause.identities],
@@ -99,11 +99,11 @@ def account_hold_envelope(
         cause = UnexplainedOrderCause(broker_order_ids=tuple(evidence_refs)).to_mapping()
         headline = "An order this account did not submit is unreviewed"
         explanation = (
-            "One or more broker orders were seen that this account's journal cannot "
+            "One or more broker orders were seen that this account's records cannot "
             "explain. Until each is reviewed, the Clerk cannot prove that new exposure "
             "would be attributable."
         )
-        operator_impact = "New submits are paused account-wide."
+        operator_impact = "The account is on hold: new submits are refused until each order is reviewed."
         next_step = "Review each unexplained order, then acknowledge it to release the hold."
     elif reason_code == STREAM_HEALTH_HOLD_REASON_CODE:
         cause = StreamHealthHoldCause(channels=tuple(evidence_refs)).to_mapping()
@@ -113,7 +113,7 @@ def account_hold_envelope(
             "delivering. The Clerk cannot prove it would see the outcome of a new "
             "order, so it does not authorize one."
         )
-        operator_impact = "New submits are paused account-wide."
+        operator_impact = "The account is on hold: new submits are refused until the channel recovers."
         next_step = "Restore the named channel; the hold releases on its own once it recovers."
     elif reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE:
         if cause_facts is None:

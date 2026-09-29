@@ -187,7 +187,7 @@ def stream_health_refusal(
         f"{health.stream}: {health.reason} (observed_at_ms={health.observed_at_ms})"
         for health in broken
     )
-    return (f"Order submission is paused: unhealthy stream(s): {names}.", detail)
+    return (f"Order submission is on hold: unhealthy stream(s): {names}.", detail)
 
 
 def build_default_stream_health_gate() -> StreamHealthGate:

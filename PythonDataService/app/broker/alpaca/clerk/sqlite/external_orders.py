@@ -350,12 +350,12 @@ def _state_unfoldable_episode(
             "cannot prove new exposure would be attributable while one is unreviewed."
         ),
         operator_impact=(
-            "New entries are paused account-wide. Exits, stuck-exit re-drives and "
+            "The account is on hold for new entries. Exits, stuck-exit re-drives and "
             "cancels still run."
         ),
         next_step=(
             "Inspect each named order at Alpaca, then acknowledge it to release the "
-            "entry pause."
+            "entry hold."
         ),
         # Broker order ids only: each is exactly what the acknowledgement
         # route takes. Client order ids stay in the cause and explanation.

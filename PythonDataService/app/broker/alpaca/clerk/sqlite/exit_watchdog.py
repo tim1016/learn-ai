@@ -528,7 +528,7 @@ def _escalate_to_exit_stuck(
             headline=headline,
             explanation=f"{remaining_now:g} {cause.symbol} remains attributed {why}",
             operator_impact=(
-                "New exposure stays paused for this strategy and automatic "
+                "New exposure stays on hold for this strategy and automatic "
                 "re-drives stopped. Exact operator reduction remains available."
             ),
             next_step="Run Reconcile now, then execute the presented safe flatten.",

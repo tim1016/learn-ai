@@ -242,13 +242,13 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "UNEXPLAINED_ORDER_HOLD": OperatorCopy(
         "Unexplained-order hold",
-        "An order this account did not submit was seen in the journal. "
-        "New submits are paused account-wide.",
+        "An order this account did not submit was seen at Alpaca. "
+        "The account is on hold: new submits are refused until it is reviewed.",
     ),
     "STREAM_HEALTH_HOLD": OperatorCopy(
         "Stream-health hold",
         "A market-data or execution channel is unhealthy. "
-        "New submits are paused account-wide.",
+        "The account is on hold: new submits are refused until it recovers.",
     ),
     "LIVE_ENVELOPE_LOSS_HOLD": OperatorCopy(
         "Loss hold",
@@ -257,17 +257,17 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "UNKNOWN_HOLD": OperatorCopy(
         "Hold active; cause unrecognised",
-        "The Clerk holds this account against new entries under a cause this "
-        "build cannot name. New submits are paused account-wide until it "
-        "clears. Read the Clerk's own hold record for the cause.",
+        "This account is on hold against new entries for a cause this "
+        "version cannot name. New submits are refused account-wide until "
+        "the hold clears.",
     ),
     # Reconciliation verdicts
     "clean": OperatorCopy(
-        "Clean", "The last sweep found the journal and the broker in agreement."
+        "Clean", "The last sweep found this account's records and the broker in agreement."
     ),
     "unexplained_order": OperatorCopy(
         "Unexplained order",
-        "The last sweep found a broker order the journal cannot explain.",
+        "The last sweep found a broker order this account's records cannot explain.",
     ),
     "missing_intent": OperatorCopy(
         "Missing intent",
@@ -302,7 +302,7 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "FILL": OperatorCopy("Fill", "The order executed, in full or in part, at the broker."),
     "RECONCILED": OperatorCopy(
-        "Reconciled", "A sweep confirmed the journal and the broker agree on this order."
+        "Reconciled", "A sweep confirmed this account's records and the broker agree on this order."
     ),
     # Station states
     "satisfied": OperatorCopy(

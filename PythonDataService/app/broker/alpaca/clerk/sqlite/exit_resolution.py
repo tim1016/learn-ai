@@ -589,7 +589,7 @@ def _fold_exit_not_flat(
 
 
 _EXIT_NOT_FLAT_OPERATOR_IMPACT = (
-    "New exposure is paused for this strategy; exact risk reduction and "
+    "New exposure is on hold for this strategy; exact risk reduction and "
     "reconciliation remain available."
 )
 

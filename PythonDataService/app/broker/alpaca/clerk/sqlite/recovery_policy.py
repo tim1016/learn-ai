@@ -1068,7 +1068,7 @@ def build_projection_guidance(
     available = tuple(action.label for action in actions if action.available)
     if ctx.authority_health != "healthy":
         return ProjectionGuidance(
-            headline="Alpaca execution is paused",
+            headline="Alpaca execution is on hold",
             explanation=(
                 ctx.authority_health_reason
                 or "The Account Clerk authority is unavailable and cannot prove safe execution."

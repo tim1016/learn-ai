@@ -1,5 +1,5 @@
 {
-  "$comment": "Snapshot of the closed broker-v2 panel operator vocabulary (phases, desired states, duty-outcome kinds, hold reasons, reconciliation verdicts, channel states, station ids, station states, action ids). Deploy starts a fresh identity; Stop is terminal. Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. The Frontend Vitest surface (S5) reads the Frontend-tree copy. Adding a code requires (a) updating vocabulary.py, (b) re-running PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py, (c) adding the emergency-fallback copy on the Frontend map. Any missing step fails a parity test.",
+  "$comment": "Snapshot of the closed broker-v2 panel operator vocabulary (phases, desired states, duty-outcome kinds, hold reasons, reconciliation verdicts, channel states, station ids, station states, action ids). Deploy starts a fresh identity; Stop is terminal. Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. The Frontend Vitest surface reads the Frontend-tree copy. Adding a code requires (a) updating vocabulary.py and (b) re-running PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py. Either missing step fails a parity test.",
   "generated_by": "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py",
   "source_files": [
     "PythonDataService/app/broker/v2panel/vocabulary.py (ALL_VOCABULARY_CODES, OPERATOR_COPY)"
@@ -91,7 +91,7 @@
     },
     "RECONCILED": {
       "label": "Reconciled",
-      "explanation": "A sweep confirmed the journal and the broker agree on this order."
+      "explanation": "A sweep confirmed this account's records and the broker agree on this order."
     },
     "RETIRED": {
       "label": "Retired",
@@ -115,7 +115,7 @@
     },
     "STREAM_HEALTH_HOLD": {
       "label": "Stream-health hold",
-      "explanation": "A market-data or execution channel is unhealthy. New submits are paused account-wide."
+      "explanation": "A market-data or execution channel is unhealthy. The account is on hold: new submits are refused until it recovers."
     },
     "SUBMIT_GATE": {
       "label": "Submit gate",
@@ -123,11 +123,11 @@
     },
     "UNEXPLAINED_ORDER_HOLD": {
       "label": "Unexplained-order hold",
-      "explanation": "An order this account did not submit was seen in the journal. New submits are paused account-wide."
+      "explanation": "An order this account did not submit was seen at Alpaca. The account is on hold: new submits are refused until it is reviewed."
     },
     "UNKNOWN_HOLD": {
       "label": "Hold active; cause unrecognised",
-      "explanation": "The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause."
+      "explanation": "This account is on hold against new entries for a cause this version cannot name. New submits are refused account-wide until the hold clears."
     },
     "archive": {
       "label": "Archive",
@@ -147,7 +147,7 @@
     },
     "clean": {
       "label": "Clean",
-      "explanation": "The last sweep found the journal and the broker in agreement."
+      "explanation": "The last sweep found this account's records and the broker in agreement."
     },
     "deploy": {
       "label": "Deploy",
@@ -219,7 +219,7 @@
     },
     "unexplained_order": {
       "label": "Unexplained order",
-      "explanation": "The last sweep found a broker order the journal cannot explain."
+      "explanation": "The last sweep found a broker order this account's records cannot explain."
     },
     "unhealthy": {
       "label": "Unhealthy",

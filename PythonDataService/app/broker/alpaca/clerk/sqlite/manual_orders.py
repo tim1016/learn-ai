@@ -261,11 +261,11 @@ def next_manual_ticket_leg(
             cancellation = repo.manual_order_cancellation(order_ref=prior_leg.order_ref)
             if cancellation is not None and cancellation.state in {"ACCEPTED", "UNKNOWN"}:
                 raise ManualTicketContinuationError(
-                    "the ticket remains paused until the prior manual cancellation is terminal"
+                    "the ticket stays on hold until the prior manual cancellation is terminal"
                 )
         if "UNKNOWN" in prior_states:
             raise ManualTicketContinuationError(
-                "the ticket remains paused until the prior manual order outcome is reconciled"
+                "the ticket stays on hold until the prior manual order outcome is reconciled"
             )
         if prior_states & {"RESERVED", "ACCEPTED"}:
             raise ManualTicketContinuationError("the prior manual ticket leg has not reached broker acknowledgement")

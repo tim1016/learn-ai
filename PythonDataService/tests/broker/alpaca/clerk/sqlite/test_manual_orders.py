@@ -479,7 +479,7 @@ async def test_unknown_first_ticket_leg_refuses_later_broker_contact(
         trade=trade,
     )
 
-    with pytest.raises(ManualTicketContinuationError, match="remains paused"):
+    with pytest.raises(ManualTicketContinuationError, match="stays on hold"):
         await submit_manual_order(
             repo,
             account_id=ACCOUNT_ID,
