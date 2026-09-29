@@ -104,7 +104,7 @@ def current_risk_readiness(
         if not synthetic:
             limit = loss_limit_usd(values, last_equity_usd=observation.last_equity_usd)
             if loss_breached(day_pnl_usd=pnl.total_usd, loss_limit_usd=limit):
-                cause = LossHoldCause(pnl.day_start_ms, pnl.total_usd, limit, observation.last_equity_usd, observation.observed_at_ms, revision)
+                cause = LossHoldCause(pnl.day_start_ms, pnl.total_usd, limit, float(observation.last_equity_usd), observation.observed_at_ms, revision)
                 return RiskReadiness(reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
                     detail="The current account loss limit is breached. Review the loss hold in Settings.", breach_cause=cause)
         return RiskReadiness(observation=observation)

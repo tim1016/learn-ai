@@ -207,7 +207,9 @@ class AccountObservation:
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float | Decimal
-    last_equity_usd: float | None
+    # The broker's float under real custody; simulated custody's exact
+    # retained prior-close baseline (#2586). The loss rule reads it as a float.
+    last_equity_usd: float | Decimal | None
     position_count: int | None
     # The broker's float under real custody; simulated custody's exact
     # ``Decimal`` (FIFO's exact fields, #2556), shown to the owner unchanged.
@@ -268,8 +270,9 @@ def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_ag
     return 0 <= now_ms - observation.observed_at_ms <= max_age_ms
 
 
-def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:
-    return min(values.loss_fraction * last_equity_usd, values.loss_usd)
+def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float | Decimal) -> float:
+    """Float arithmetic in every custody world: an exact simulated baseline enters as its nearest float."""
+    return min(values.loss_fraction * float(last_equity_usd), values.loss_usd)
 
 
 def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:

@@ -8,6 +8,8 @@ Every stamp is fixed ``int64 ms UTC``; nothing reads the wall clock.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
@@ -21,7 +23,7 @@ PNL_RTOL = 0.0
 
 
 def _observation(
-    *, current_equity: float = 95_000.0, prior_close_equity: float | None = 100_000.0
+    *, current_equity: float | Decimal = 95_000.0, prior_close_equity: float | Decimal | None = 100_000.0
 ) -> AccountObservation:
     return AccountObservation(
         observed_at_ms=NOON,
@@ -168,3 +170,28 @@ def test_a_missing_prior_close_baseline_cannot_produce_day_pnl() -> None:
             cash_flows=[],
             now_ms=NOON,
         )
+
+
+def test_the_owner_reads_an_exact_day_only_when_both_equities_are_exact() -> None:
+    """#2586: simulated custody's exact equities give an exact figure to show.
+
+    A real broker's floats keep the loss rule's float difference, normalized
+    once, as before. Either way the loss rule's own figure is the same float.
+    """
+    real = day_pnl_at(
+        observation=_observation(current_equity=100_000.1, prior_close_equity=99_999.9),
+        cash_flows=[],
+        now_ms=NOON,
+    )
+    exact = day_pnl_at(
+        observation=_observation(
+            current_equity=Decimal("100000.1"), prior_close_equity=Decimal("99999.9")
+        ),
+        cash_flows=[],
+        now_ms=NOON,
+    )
+
+    assert real.display_total_usd == Decimal("0.20000000001164153")
+    assert exact.display_total_usd == Decimal("0.2")
+    assert exact.total_usd == real.total_usd == 0.20000000001164153
+    assert exact.known and real.known
