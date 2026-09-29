@@ -1617,11 +1617,9 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert panel.rail.transaction_ref is not None
     assert len(panel.rail.stations) == 6
     action_ids = {a.action_id for a in panel.actions}
-    assert action_ids == {
-        "archive",
-        "stop",
-        "reconcile_now",
-    }
+    # A bot's stop and reconcile are the SQLite Clerk's recovery catalog,
+    # presented by ``sqlite_panel_adapter``; the generic set keeps only archive.
+    assert action_ids == {"archive"}
     assert panel.mission_verdict.state == "working"
     assert panel.strategy_key == _UNSEALED_STRATEGY_KEY
     assert panel.exposure == {"SPY": 100.0}
@@ -1977,14 +1975,14 @@ def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
         _status(running=False),
         _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
         [],
-        exposure={},
+        exposure={"SPY": 1.0},
     )
 
-    stop = _action(panel, "stop")
-    assert stop.enabled is False
-    assert stop.blockers[0].condition.id == "BOT_NOT_RUNNING"
-    assert "Deploy again" in stop.blockers[0].detail
-    readiness = next(check for check in panel.readiness_checks if check.operation == "stop")
+    archive = _action(panel, "archive")
+    assert archive.enabled is False
+    assert archive.blockers[0].condition.id == "ARCHIVE_WOULD_STRAND_CUSTODY"
+    assert "Flatten" in archive.blockers[0].detail
+    readiness = next(check for check in panel.readiness_checks if check.operation == "archive")
     assert readiness.ready is False
     assert readiness.cure is not None
 
@@ -2162,14 +2160,6 @@ def test_refused_warmup_crash_carries_its_own_backend_copy() -> None:
     assert "logged in" in explanation
     assert "historical-data farm" in explanation
     assert "qualifies as a contract" in explanation
-
-
-def test_stop_enabled_only_when_running() -> None:
-    running_panel = _panel(_status(running=True), _clerk_status(), [])
-    stopped_panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
-    assert _action(running_panel, "stop").enabled is True
-    assert _action(stopped_panel, "stop").enabled is False
-    assert not {"pause", "continue", "resume"} & {a.action_id for a in stopped_panel.actions}
 
 
 def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
@@ -2489,17 +2479,14 @@ def _recovery_capability(action_id: str, *, primary: bool, available: bool = Tru
 def test_select_primary_action_stopped_bot_has_none() -> None:
     """A stopped bot's page offers Deploy again, which is navigation, not a
     panel command."""
-    assert select_primary_action([_stub_action("stop", enabled=False)], _health(running=False)) is None
-
-
-def test_select_primary_action_running_stoppable() -> None:
-    assert select_primary_action([_stub_action("stop")], _health(running=True)) == "stop"
+    assert select_primary_action(
+        [_stub_action("stop_bot_decisions", enabled=False)], _health(running=False),
+    ) is None
 
 
 def test_select_primary_action_running_sqlite_bot_stops_its_decisions() -> None:
-    """A SQLite-activated bot never gets a plain ``stop`` back while running:
-    its stop is the recovery executor's ``stop_bot_decisions``, and that is
-    the page's one primary command."""
+    """A running bot's stop is the recovery executor's ``stop_bot_decisions``,
+    and that is the page's one primary command."""
     selection = select_primary_action(
         [_stub_action("reconcile_now"), _stub_action("stop_bot_decisions")],
         _health(running=True),
@@ -2513,7 +2500,9 @@ def test_select_primary_action_blocked_action_still_referenced() -> None:
     gates the button, not whether the page may point at it (ADR 0027's
     ``wait`` disposition — a block is allowed to name its control without
     offering a fake, always-enabled button)."""
-    assert select_primary_action([_stub_action("stop", enabled=False)], _health(running=True)) == "stop"
+    assert select_primary_action(
+        [_stub_action("stop_bot_decisions", enabled=False)], _health(running=True),
+    ) == "stop_bot_decisions"
 
 
 def test_select_primary_action_missing_action_fails_closed() -> None:
@@ -2525,7 +2514,7 @@ def test_select_primary_action_recovery_cure_outranks_the_lifecycle_command() ->
     """The one precedence rule (#1665, ADR 0027): the bot's recovery cure
     outranks the routine lifecycle command."""
     selection = select_primary_action(
-        [_stub_action("stop"), _stub_action("resolve_execution_coverage")],
+        [_stub_action("stop_bot_decisions"), _stub_action("resolve_execution_coverage")],
         _health(running=True),
         recovery_primary_action_id="resolve_execution_coverage",
     )
@@ -2537,24 +2526,18 @@ def test_select_primary_action_dangling_recovery_primary_falls_back() -> None:
     """A recovery-primary id that is not presented (stale evidence, a caller
     bug) never leaks through as a dangling reference."""
     selection = select_primary_action(
-        [_stub_action("stop")],
+        [_stub_action("stop_bot_decisions")],
         _health(running=True),
         recovery_primary_action_id="resolve_execution_coverage",
     )
 
-    assert selection == "stop"
+    assert selection == "stop_bot_decisions"
 
 
 def test_build_panel_populates_no_primary_action_for_stopped_bot() -> None:
     panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
 
     assert panel.primary_action is None
-
-
-def test_build_panel_populates_primary_action_for_running_stoppable_bot() -> None:
-    panel = _panel(_status(running=True), _clerk_status(), [])
-
-    assert panel.primary_action == "stop"
 
 
 def test_build_panel_populates_no_primary_action_for_blocked_stopped_bot() -> None:

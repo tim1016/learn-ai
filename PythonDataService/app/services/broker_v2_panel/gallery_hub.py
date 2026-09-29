@@ -340,22 +340,10 @@ class GalleryHub:
             return GalleryPrimaryAction(
                 action_id="deploy_again", label="Deploy again", enabled=True,
             )
-        # The compact roster may carry a recovery action or no row action.
-        # Neither is a Stop verdict. Preserve the running tile's Stop entry
-        # point; the UI reads the current panel action before dispatching it.
-        action = row.row_action
-        if action is None or action.action_id != "stop":
-            return GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True)
-        return GalleryPrimaryAction(
-            action_id="stop",
-            label=action.label,
-            enabled=action.enabled,
-            disabled_reason=(
-                None if action.enabled
-                else action.blockers[0].detail if action.blockers
-                else action.explanation
-            ),
-        )
+        # A roster row carries a recovery cure or no row action, never a Stop
+        # verdict. The running tile keeps its Stop entry point; the UI reads
+        # the bot's current stop (``stop_bot_decisions``) before sending it.
+        return GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True)
 
     def _project_bot(
         self,

@@ -30,7 +30,6 @@ from app.schemas.broker_v2_gallery import (
     GalleryPrimaryAction,
     GallerySymbolBars,
 )
-from app.schemas.broker_v2_panel import PanelAction
 from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
@@ -76,11 +75,9 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
-        self.row_action = PanelAction(
-            action_id="stop", label="Stop", explanation="Stop this running bot.",
-            enabled=True, blockers=[], confirmation=None, revision=1,
-            concurrency_token="stop-token",
-        )
+        # A healthy roster row carries no row action: a row's action is only
+        # ever its own recovery cure (``sqlite_panel_adapter._catalog_row_action``).
+        self.row_action = None
 
     @property
     def status_label(self) -> str:

@@ -495,7 +495,7 @@ const PANEL_PROFILE = {
   fee_fidelity: 'per_fill',
   live_bars_supported: true,
   stations: [],
-  supported_action_ids: ['stop', 'reconcile_now', 'prepare_safe_flatten', 'execute_safe_flatten', 'archive'],
+  supported_action_ids: ['deploy', 'archive'],
 } satisfies PanelProfile;
 
 /** The flatten sequence's progress through the Clerk: reconcile mints the

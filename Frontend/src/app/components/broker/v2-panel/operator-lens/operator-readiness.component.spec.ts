@@ -12,7 +12,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
 import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
-import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakePanelAction, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import { OperatorReadinessComponent } from './operator-readiness.component';
 
 function check(action: PanelAction, overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckView {
@@ -21,7 +21,7 @@ function check(action: PanelAction, overrides: Partial<ReadinessCheckView> = {})
     label: action.label,
     ready: action.enabled,
     scope: 'bot',
-    authority: 'Bot lifecycle registry',
+    authority: 'SQLite Account Clerk recovery policy',
     explanation: action.explanation,
     evidence: {},
     evaluated_at_ms: 1_700_000_001_000,
@@ -61,7 +61,7 @@ describe('OperatorReadinessComponent', () => {
   });
 
   it('renders only the list: the fold summary is its heading', async () => {
-    const stop = fakePanelAction('stop');
+    const stop = fakeSqliteStopAction();
     await renderChecks(panelWith([stop], [check(stop)]));
 
     expect(screen.queryByRole('heading')).toBeNull();
@@ -69,12 +69,12 @@ describe('OperatorReadinessComponent', () => {
   });
 
   it('keeps the header action out of the list while its gate stays visible', async () => {
-    const stop = fakePanelAction('stop', { explanation: 'Stop this bot.' });
-    const { actionRequested } = await renderChecks(panelWith([stop], [check(stop)]), 'stop');
+    const stop = fakeSqliteStopAction();
+    const { actionRequested } = await renderChecks(panelWith([stop], [check(stop)]), 'stop_bot_decisions');
 
-    expand('Stop');
-    expect(screen.getByText('Stop this bot.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expand('Stop bot decisions');
+    expect(screen.getByText('Stop new strategy decisions while leaving exposure under Clerk custody.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop bot decisions' })).toBeNull();
     expect(actionRequested).not.toHaveBeenCalled();
   });
 

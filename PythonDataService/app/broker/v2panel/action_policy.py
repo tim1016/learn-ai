@@ -103,19 +103,6 @@ def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]
     return _disabled()
 
 
-def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    if ctx.running:
-        return True, []
-    return _disabled(
-        _blocker(
-            "BOT_NOT_RUNNING",
-            scope="bot",
-            headline="The bot is already off duty.",
-            detail="Open Deploy again to review a fresh deployment.",
-        )
-    )
-
-
 ArchiveBlockedCause = Literal[
     "BOT_STILL_RUNNING",
     "BOT_DUTY_NOT_SETTLED",
@@ -256,10 +243,6 @@ def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlo
     return _disabled()
 
 
-def _guard_reconcile_now(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return True, []
-
-
 ACTION_REGISTRY: dict[str, ActionPolicy] = {
     # deploy is a list-page action (broker/bots list), not a per-bot panel action.
     # The profile advertises it; the per-bot build skips it (list_page_only=True).
@@ -269,13 +252,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         list_page_only=True,
         guard=_guard_deploy,
         revision_inputs=lambda ctx: (),
-    ),
-    "stop": ActionPolicy(
-        action_id="stop",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_stop,
-        revision_inputs=lambda ctx: (ctx.running,),
     ),
     "archive": ActionPolicy(
         action_id="archive",
@@ -297,13 +273,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         list_page_only=False,
         guard=_guard_cancel_order,
         revision_inputs=lambda ctx: (ctx.phase,),
-    ),
-    "reconcile_now": ActionPolicy(
-        action_id="reconcile_now",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_reconcile_now,
-        revision_inputs=lambda ctx: (),
     ),
 }
 
@@ -386,9 +355,9 @@ def build_actions_from_registry(
             continue
         enabled, blockers = policy.guard(ctx)
         copy = copy_for(action_id)
-        # Each action owns its own compare-and-set domain.  In particular STOP
-        # depends only on whether this instance is still running; Clerk journal
-        # activity and other panel changes cannot manufacture a Stop-409.
+        # Each action owns its own compare-and-set domain: only the state its
+        # guard reads can change its token, so unrelated panel changes cannot
+        # manufacture a 409.
         token_payload = {
             "action_id": action_id,
             "inputs": policy.revision_inputs(ctx),

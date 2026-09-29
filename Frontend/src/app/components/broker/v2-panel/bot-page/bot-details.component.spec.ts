@@ -11,7 +11,7 @@ import type {
   ReadinessCheckView,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakePanelAction, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import { provideFleetDirectory, TEST_CLERK_ID } from '../../../../fleet/fleet-directory-testing';
 import { BotDetailsComponent } from './bot-details.component';
 
@@ -47,7 +47,7 @@ function check(action: PanelAction, overrides: Partial<ReadinessCheckView> = {})
     label: action.label,
     ready: action.enabled,
     scope: 'bot',
-    authority: 'Bot lifecycle registry',
+    authority: 'SQLite Account Clerk recovery policy',
     explanation: action.explanation,
     evidence: {},
     evaluated_at_ms: OBSERVED_AT_MS,
@@ -84,7 +84,7 @@ function evidencePage(): EvidencePage {
 /** A running bot with deployed exit terms, a seal, two checks and two channels. */
 function panelView(overrides: Partial<BotPanelView> = {}): BotPanelView {
   const base = fakeBotPanelView();
-  const stop = fakePanelAction('stop', { label: 'Stop', explanation: 'Stop this bot.' });
+  const stop = fakeSqliteStopAction();
   const reconcile = fakePanelAction('reconcile_now', {
     label: 'Reconcile now',
     explanation: 'Refresh the account’s order records.',
@@ -261,14 +261,14 @@ describe('BotDetailsComponent', () => {
   });
 
   it('lists every check with its state, and keeps the header action out of the list', async () => {
-    const { actionRequested } = await renderDetails(panelView({ primary_action: 'stop' }));
+    const { actionRequested } = await renderDetails(panelView({ primary_action: 'stop_bot_decisions' }));
     setFold('Checks', true);
 
     const checks = within(fold('Checks'));
-    const stopRow = checks.getByRole('button', { name: /Ready Stop/ });
+    const stopRow = checks.getByRole('button', { name: /Ready Stop bot decisions/ });
     fireEvent.click(stopRow);
-    expect(checks.getByText('Stop this bot.')).toBeTruthy();
-    expect(checks.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(checks.getByText('Stop new strategy decisions while leaving exposure under Clerk custody.')).toBeTruthy();
+    expect(checks.queryByRole('button', { name: 'Stop bot decisions' })).toBeNull();
     expect(checks.getByRole('button', { name: /Blocked Reconcile now/ })).toBeTruthy();
     expect(actionRequested).not.toHaveBeenCalled();
   });

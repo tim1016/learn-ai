@@ -76,7 +76,7 @@ async def _accept_account(broker: str, account_id: str) -> str:
 def _panel(sid: str, *, enabled: bool) -> SimpleNamespace:
     """A bot page's presentation: its archive action and that action's token."""
     return SimpleNamespace(actions=[
-        SimpleNamespace(action_id="stop", revision=3, concurrency_token=f"stop-{sid}", enabled=False),
+        SimpleNamespace(action_id="stop_bot_decisions", revision=3, concurrency_token=f"stop-{sid}", enabled=False),
         SimpleNamespace(action_id="archive", revision=5, concurrency_token=f"token-{sid}", enabled=enabled),
     ])
 

@@ -150,7 +150,7 @@ export function fakePanelAction(
 ): PanelAction {
   return {
     action_id: actionId,
-    label: actionId === 'stop' ? 'Stop' : actionId,
+    label: actionId,
     explanation: `${actionId} this bot.`,
     enabled: true,
     blockers: [],

@@ -71,7 +71,7 @@ const PROFILE: PanelProfile = {
   fee_fidelity: 'none',
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['stop'],
+  supported_action_ids: ['deploy', 'archive'],
 };
 
 const PANEL: BotPanelView = {

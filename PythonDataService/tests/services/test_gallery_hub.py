@@ -748,20 +748,6 @@ def _hub_with_rows(
 
 
 @pytest.mark.asyncio
-async def test_primary_action_uses_row_action_enabled_true_for_running_bot() -> None:
-    row = _Cat2(
-        "Aug11-02", "SPY", True, None, None, None,
-        row_action=_row_action("stop", enabled=True, explanation="Stop this bot."),
-    )
-    snap = await _hub_with_rows([row]).build_snapshot()
-
-    action = snap.bots[0].primary_action
-    assert action.action_id == "stop"
-    assert action.enabled is True
-    assert action.disabled_reason is None
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("row_action", [None, _row_action("reconcile_now", enabled=False)])
 async def test_running_tile_keeps_stop_entry_point_when_roster_only_has_recovery(row_action: PanelAction | None) -> None:
     row = _Cat2("Aug11-02", "SPY", True, None, None, None, row_action=row_action)

@@ -120,7 +120,6 @@ STATION_STATES: Final[frozenset[str]] = frozenset(
 # ── Action ids (§11, the closed presented-actions enum) ──────────────────────
 ActionId = Literal[
     "deploy",
-    "stop",
     "archive",
     "cancel_order",
     "reconcile_now",
@@ -135,7 +134,6 @@ ActionId = Literal[
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
-    "stop",
     "archive",
     "cancel_order",
     "reconcile_now",
@@ -149,18 +147,19 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "open_custody_timeline",
 )
 
-# Retired with Pause, Continue and Resume (#2540), Retire (#2578), and
-# Flatten & stop (#2595): no request, performer or presented action can name
-# them, but a bot's durable receipt ledger written before then still does, so
-# ledger reads widen to them and writes never do.
-RetiredActionId = Literal["resume", "pause", "continue", "retire", "flatten_stop"]
+# Retired with Pause, Continue and Resume (#2540), Retire (#2578), Flatten &
+# stop (#2595) and the runner's generic Stop (#2605; a bot's stop is the
+# Clerk's ``stop_bot_decisions``): no request, performer or presented action
+# can name them, but a bot's durable receipt ledger written before then still
+# does, so ledger reads widen to them and writes never do.
+RetiredActionId = Literal["resume", "pause", "continue", "retire", "flatten_stop", "stop"]
 RecordedActionId = Literal[ActionId, RetiredActionId]
 
 # The presented actions that only stop a bot, reduce its exposure or
 # reconcile (#2351) — the one closed set a draining lane still executes. They
 # travel on their own operation (``bot_panel_quiesce_action``, whose request
-# schema is this Literal) while the rest of the action set refuses: new deployment would start decisions again. ``stop``
-# is the runner's lifecycle stop; the other five are the SQLite recovery
+# schema is this Literal) while the rest of the action set refuses: new
+# deployment would start decisions again. All five are the SQLite recovery
 # executor's (``recovery_execution.execute_recovery_action``), which for these
 # ids stops decisions, cancels owned verified working orders, submits a
 # reducing order, reconciles against the broker, or discharges a residue the
@@ -172,7 +171,6 @@ RecordedActionId = Literal[ActionId, RetiredActionId]
 # preparation ids (``prepare_safe_flatten``, ``open_custody_timeline``,
 # ``recover_exact_execution_evidence``) mutate nothing and never ran here.
 QuiesceActionId = Literal[
-    "stop",
     "stop_bot_decisions",
     "cancel_verified_working_orders",
     "execute_safe_flatten",
@@ -325,11 +323,6 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
 
 
-    "stop": OperatorCopy(
-        "Stop",
-        "Stop evaluating bars and cancel this bot's working entry orders. "
-        "Exposure is left untouched.",
-    ),
     "archive": OperatorCopy(
         "Clear",
         "Take a finished bot off Home. It must be stopped and flat, with nothing "

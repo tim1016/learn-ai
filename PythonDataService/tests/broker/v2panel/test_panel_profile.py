@@ -36,14 +36,14 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
     profile = alpaca_panel_profile()
     assert profile.supported_action_ids == [
         "deploy",
-        "stop",
         "archive",
-        "reconcile_now",
     ]
     # archive joined the advertised set when it gained a production performer
     # (ADR 0052), and retire left it with its performer (#2578) -- the
     # invariant this test guards is unchanged. So did flatten_stop, whose
-    # performer no SQLite panel could reach (#2595).
+    # performer no SQLite panel could reach (#2595), and the generic stop and
+    # reconcile_now, whose performers went with it: a bot's stop and reconcile
+    # are the SQLite Clerk's recovery actions (#2605).
     assert "cancel_order" not in profile.supported_action_ids
 
 

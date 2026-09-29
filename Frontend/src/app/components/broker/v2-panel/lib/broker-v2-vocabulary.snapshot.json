@@ -42,7 +42,6 @@
     "resolve_execution_coverage",
     "satisfied",
     "stale",
-    "stop",
     "stop_bot_decisions",
     "unexplained_order",
     "unhealthy",
@@ -198,10 +197,6 @@
     "stale": {
       "label": "Stale",
       "explanation": "The last sweep could not reach the broker; the verdict is out of date."
-    },
-    "stop": {
-      "label": "Stop",
-      "explanation": "Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched."
     },
     "stop_bot_decisions": {
       "label": "Stop bot decisions",

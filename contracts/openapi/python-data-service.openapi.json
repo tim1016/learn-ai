@@ -5006,7 +5006,6 @@
               {
                 "enum": [
                   "deploy",
-                  "stop",
                   "archive",
                   "cancel_order",
                   "reconcile_now",
@@ -29583,7 +29582,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29663,7 +29661,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29749,7 +29746,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29810,7 +29806,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29899,7 +29894,6 @@
             "items": {
               "enum": [
                 "deploy",
-                "stop",
                 "archive",
                 "cancel_order",
                 "reconcile_now",
@@ -29934,7 +29928,6 @@
         "properties": {
           "action_id": {
             "enum": [
-              "stop",
               "stop_bot_decisions",
               "cancel_verified_working_orders",
               "execute_safe_flatten",
@@ -32221,7 +32214,6 @@
           "operation": {
             "enum": [
               "deploy",
-              "stop",
               "archive",
               "cancel_order",
               "reconcile_now",

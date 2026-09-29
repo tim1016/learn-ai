@@ -1074,7 +1074,7 @@ async def test_action_refuses_malformed_sid_before_touching_receipt_path(
 
     monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
     request = {
-        "action_id": "stop",
+        "action_id": "stop_bot_decisions",
         "revision": 1,
         "concurrency_token": "token",
         "idempotency_key": "malformed-sid",

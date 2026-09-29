@@ -10,7 +10,7 @@ import { PanelActionButtonComponent } from './panel-action-button.component';
 
 function action(overrides: Partial<PanelAction> = {}): PanelAction {
   return {
-    action_id: 'stop',
+    action_id: 'stop_bot_decisions',
     label: 'Stop',
     explanation: 'Stop after the current bar.',
     enabled: true,

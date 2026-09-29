@@ -8,11 +8,12 @@ stale POST is a 409.
 
 Lifecycle semantics (§12) drive the enablement:
 
-- ``stop``   — running bot; stops signals + cancels working entries, exposure
-               untouched.
 - ``archive`` — stopped, settled, flat bot; terminal (Clear on Home, ADR 0052).
 - ``cancel_order`` — a working order exists.
-- ``reconcile_now`` — always available (triggers a sweep).
+
+A bot's stop, reconcile and flatten are the SQLite Clerk's recovery catalog
+(``recovery_policy``), which ``sqlite_panel_adapter`` presents in place of this
+set; only ``archive`` survives from it (#2605).
 
 Enablement logic lives in ``app.broker.v2panel.action_policy.ACTION_REGISTRY``
 (the single canonical location per decision #18). This module is the stable
