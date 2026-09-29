@@ -26,8 +26,8 @@ install.
 ./setup-macos.sh
 ```
 
-It refuses to run on a machine that already runs the fleet posture (section 4). On a
-fresh Mac it does everything a first run needs, in this order:
+It refuses to run on a machine that already runs the fleet posture (section 4).
+On a fresh Mac it does everything a first run needs, in this order:
 
 1. Sizes and starts the Podman VM.
 2. Copies any missing environment file from its template: the root `.env`,
@@ -41,20 +41,34 @@ fresh Mac it does everything a first run needs, in this order:
    `PythonDataService/artifacts/alpaca_clerk/`.
 4. Builds the images (5–10 minutes the first time).
 5. Creates the Alpaca Clerk volume and marks it ready, then claims the
-   data-lake root with a new UUID and records it as `DATA_LAKE_ROOT_ID` in
-   `PythonDataService/.env`. The data plane refuses to start without these two
-   (it exits 78 and 3). [`windows-onboarding.md`](windows-onboarding.md) §4a
-   and §4b describe them.
+   data-lake root under a newly minted UUID and records it as
+   `DATA_LAKE_ROOT_ID` in `PythonDataService/.env`. The data plane refuses to
+   start without these two (it exits 78 and 3).
+   [`windows-onboarding.md`](windows-onboarding.md) §4a and §4b describe
+   them. Both act only on a first install (below).
 6. Starts the stack and waits for the data plane, the backend, and the
    frontend.
 
-Every step checks before it acts, so a re-run is safe. The two first-install
-steps only act on a first install: if the Clerk volume or the older
-`PythonDataService/artifacts/alpaca_clerk` tree already holds data, the script
-stops and points you at
-[`alpaca-sqlite-clerk-recovery-and-cutover.md`](alpaca-sqlite-clerk-recovery-and-cutover.md).
-A data-lake root that already holds data is stamped on purpose with
-`manage_data_root stamp` (Windows runbook §4b), never by the script.
+Re-running is safe, but not free: it restarts the Podman VM to re-apply its
+resources, which restarts every container. The two ceremonies act only on a
+first install, and otherwise stop with the next step rather than adopt
+something the script did not create:
+
+- **Clerk volume.** If the volume or the older
+  `PythonDataService/artifacts/alpaca_clerk` tree already holds data, the
+  volume is not marked and the script points you at
+  [`alpaca-sqlite-clerk-recovery-and-cutover.md`](alpaca-sqlite-clerk-recovery-and-cutover.md).
+- **Data-lake root.** An id is minted only when both the lake's identity
+  marker and `DATA_LAKE_ROOT_ID` are absent. An id with no marker (a
+  re-cloned or emptied `data-lake-volume/`), a marker with no id, and an id
+  that differs from the marker all stop the run: claiming would either adopt
+  a directory that is not the root that id named, or mislabel a real one. To
+  look at the marker, run `podman compose run --rm --no-deps python-service
+  python -m scripts.manage_data_root inspect`; a lake stamped before ids
+  existed shows the all-zero id, and that goes in `DATA_LAKE_ROOT_ID`.
+  `manage_data_root init` claims an empty root and `stamp` one that already
+  holds data (`--help` explains both). The script never runs either one for
+  you.
 
 The script warns while `POLYGON_API_KEY` in `.env` is still the placeholder.
 Put your key in the root `.env` and in `PythonDataService/.env` (the running

@@ -101,29 +101,28 @@ project_path() {
 # ---------------------------------------------------------------------------
 # 0b. A fleet machine belongs to restart.sh.
 #     restart.sh layers compose.fleet.dev.yaml onto compose.yaml; that overlay
-#     needs the gitignored lane env files (FLEET_LIVE_ENV_FILE and
-#     FLEET_PAPER_ENV_FILE, defaulting under deploy/fleet/env/). Where they
-#     exist the machine runs the fleet posture. This script stops the Podman VM
-#     and then brings the stack up from compose.yaml alone: the data plane
-#     would come back in the combined posture on the Live account's volume,
-#     with no clerks. Refuse before anything is touched.
+#     needs the gitignored lane env files, whose paths it interpolates from
+#     FLEET_LIVE_ENV_FILE and FLEET_PAPER_ENV_FILE. The defaults below are the
+#     overlay's own (a contract test extracts them from it and fails on drift).
+#     Where a lane file exists the machine runs the fleet posture. This script
+#     stops the Podman VM and then brings the stack up from compose.yaml alone:
+#     the data plane would come back in the combined posture on the Live
+#     account's volume, with no clerks. Refuse before anything is touched.
 # ---------------------------------------------------------------------------
-if [[ -f "$ROOT_DIR/compose.fleet.dev.yaml" ]]; then
-  for lane_env_file in \
-    "$(project_path "$(compose_setting FLEET_LIVE_ENV_FILE deploy/fleet/env/live.env)")" \
-    "$(project_path "$(compose_setting FLEET_PAPER_ENV_FILE deploy/fleet/env/paper.env)")"
-  do
-    if [[ -f "$lane_env_file" ]]; then
-      echo "ERROR: this machine runs the fleet posture — found $lane_env_file." >&2
-      echo "       setup-macos.sh would stop the Podman VM and bring the stack back" >&2
-      echo "       without the broker clerks (compose.yaml alone), leaving the data" >&2
-      echo "       plane running in the combined posture on the Live account's volume." >&2
-      echo "       Nothing has been changed. To rebuild and restart the stack, run:" >&2
-      echo "         ./restart.sh              (add --no-cache for a from-scratch rebuild)" >&2
-      exit 1
-    fi
-  done
-fi
+for lane_env_file in \
+  "$(project_path "$(compose_setting FLEET_LIVE_ENV_FILE deploy/fleet/env/live.env)")" \
+  "$(project_path "$(compose_setting FLEET_PAPER_ENV_FILE deploy/fleet/env/paper.env)")"
+do
+  if [[ -f "$lane_env_file" ]]; then
+    echo "ERROR: this machine runs the fleet posture — found $lane_env_file." >&2
+    echo "       setup-macos.sh would stop the Podman VM and bring the stack back" >&2
+    echo "       without the broker clerks (compose.yaml alone), leaving the data" >&2
+    echo "       plane running in the combined posture on the Live account's volume." >&2
+    echo "       Nothing has been changed. To rebuild and restart the stack, run:" >&2
+    echo "         ./restart.sh              (add --no-cache for a from-scratch rebuild)" >&2
+    exit 1
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # 1. Homebrew + host toolchain.
@@ -289,32 +288,36 @@ podman compose build
 
 # First-run ceremonies (windows-onboarding §4a, §4b). The data plane refuses to
 # start without them (exit 78 and exit 3), which is what a first run used to
-# time out on. They run as one-shot python-service containers, after the build
-# (they need the image) and before `up`.
+# time out on. Each acts only on a provably first install and otherwise stops
+# with the next step, so a re-run never adopts data it did not create.
 #
 # (a) The Alpaca Clerk volume. compose.yaml declares it external, so it must be
 #     created explicitly, and the data plane needs a `_compose_volume_ready`
 #     marker inside it. The marker is written only for a provably first install:
 #     already marked is a no-op, and anything in the volume or in the legacy host
-#     tree (mounted read-only at /app/alpaca_clerk_legacy) is an existing
-#     authority set that only the cutover runbook may adopt (exit 3). A tree
-#     that cannot be inspected is not an empty one (exit 4).
+#     tree is an existing authority set that only the cutover runbook may adopt
+#     (exit 3). A tree that cannot be inspected is not an empty one (exit 4).
+#     The check runs in a bare container with the volume at /volume: podman
+#     copies an image's content into a new named volume on its first mount, and
+#     the python-service image creates directories under
+#     /app/artifacts/alpaca_clerk, so mounting the volume there would make every
+#     fresh volume look populated (runbook §4a mounts it in a bare image too).
 CLERK_VOLUME="learn-ai-alpaca-clerk-data"
+LEGACY_CLERK_TREE="$ROOT_DIR/PythonDataService/artifacts/alpaca_clerk"
+BARE_IMAGE="docker.io/library/alpine:3"
 if ! podman volume exists "$CLERK_VOLUME"; then
   echo "==> Creating the Alpaca Clerk volume ($CLERK_VOLUME)..."
   podman volume create "$CLERK_VOLUME" >/dev/null
 fi
 SEAL_CLERK_VOLUME='
-  dir=/app/artifacts/alpaca_clerk
-  legacy=/app/alpaca_clerk_legacy
-  [ -d "$dir" ] && [ -d "$legacy" ] || exit 4
-  if [ -f "$dir/_compose_volume_ready" ] && [ ! -L "$dir/_compose_volume_ready" ]; then exit 0; fi
-  if [ -n "$(ls -A "$dir")" ] || [ -n "$(ls -A "$legacy")" ]; then exit 3; fi
-  : > "$dir/_compose_volume_ready"
+  [ -d /volume ] && [ -d /legacy ] || exit 4
+  if [ -f /volume/_compose_volume_ready ] && [ ! -L /volume/_compose_volume_ready ]; then exit 0; fi
+  if [ -n "$(ls -A /volume)" ] || [ -n "$(ls -A /legacy)" ]; then exit 3; fi
+  : > /volume/_compose_volume_ready
 '
 seal_status=0
-podman compose run --rm --no-deps -T --entrypoint /bin/sh python-service -c "$SEAL_CLERK_VOLUME" \
-  || seal_status=$?
+podman run --rm -v "$CLERK_VOLUME:/volume" -v "$LEGACY_CLERK_TREE:/legacy:ro,z" \
+  "$BARE_IMAGE" /bin/sh -c "$SEAL_CLERK_VOLUME" || seal_status=$?
 case "$seal_status" in
   0) echo "==> Alpaca Clerk volume is marked ready" ;;
   3)
@@ -326,37 +329,70 @@ case "$seal_status" in
     exit 1
     ;;
   *)
-    echo "ERROR: could not check the Alpaca Clerk volume (podman compose run exited $seal_status)." >&2
+    echo "ERROR: could not check the Alpaca Clerk volume (podman run exited $seal_status)." >&2
     exit 1
     ;;
 esac
 
-# (b) The data-lake root identity (#1876). The root claims a UUID once; an id
-#     already in PythonDataService/.env is the one to claim, else a new one is
-#     minted and recorded there after the claim succeeds. init refuses a
-#     populated root (that is `manage_data_root stamp`, a deliberate step).
-LAKE_MARKER="$LAKE_HOST_DIR/lake/.data-root.json"
-if [[ -f "$LAKE_MARKER" ]]; then
-  echo "==> Data-lake root identity already set ($LAKE_MARKER)"
-else
-  LAKE_ROOT_ID="$(env_file_value "$ROOT_DIR/PythonDataService/.env" DATA_LAKE_ROOT_ID)"
-  RECORD_LAKE_ROOT_ID=false
-  if [[ -z "$LAKE_ROOT_ID" ]]; then
-    LAKE_ROOT_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    RECORD_LAKE_ROOT_ID=true
-  fi
-  echo "==> Claiming the data-lake root as $LAKE_ROOT_ID..."
-  if ! podman compose run --rm --no-deps -T python-service \
-       python -m scripts.manage_data_root init --root-id "$LAKE_ROOT_ID"; then
-    echo "ERROR: could not claim the data-lake root at $LAKE_HOST_DIR." >&2
-    echo "       See docs/runbooks/windows-onboarding.md section 4b; a root that already" >&2
-    echo "       holds data is stamped deliberately with manage_data_root stamp." >&2
+# (b) The data-lake root identity (#1876). A root's UUID is claimed once, and the
+#     data plane fails closed on a root whose marker is missing or is not the id
+#     it is configured with. This step keeps that property: it mints, claims and
+#     records an id only when BOTH the root's marker and DATA_LAKE_ROOT_ID in
+#     PythonDataService/.env are absent. Anything else (an id with no marker, a
+#     marker with no or a different id) means the root or the env file came from
+#     somewhere else, and claiming an empty directory under the old id would
+#     leave a catalog that believes the lake is full. Those stop with the next
+#     step. The marker is read through `manage_data_root inspect` and claimed
+#     through `init`, which refuses a populated root.
+LAKE_TOOL=(podman compose run --rm --no-deps -T python-service python -m scripts.manage_data_root)
+ENV_LAKE_ROOT_ID="$(env_file_value "$ROOT_DIR/PythonDataService/.env" DATA_LAKE_ROOT_ID | tr '[:upper:]' '[:lower:]')"
+if ! lake_inspection="$("${LAKE_TOOL[@]}" inspect 2>&1)"; then
+  echo "ERROR: could not read the data-lake root identity:" >&2
+  printf '%s\n' "$lake_inspection" >&2
+  exit 1
+fi
+MARKER_LAKE_ROOT_ID="$(printf '%s\n' "$lake_inspection" \
+  | sed -n 's/.*data_root_id=\([0-9A-Fa-f-]*\).*/\1/p' | tail -n1 | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$MARKER_LAKE_ROOT_ID" ]]; then
+  if [[ "$MARKER_LAKE_ROOT_ID" == "$ENV_LAKE_ROOT_ID" ]]; then
+    echo "==> Data-lake root identity already set ($MARKER_LAKE_ROOT_ID)"
+  else
+    env_says="no DATA_LAKE_ROOT_ID"
+    if [[ -n "$ENV_LAKE_ROOT_ID" ]]; then env_says="DATA_LAKE_ROOT_ID=$ENV_LAKE_ROOT_ID"; fi
+    echo "ERROR: the data lake at $LAKE_HOST_DIR is stamped $MARKER_LAKE_ROOT_ID," >&2
+    echo "       but PythonDataService/.env has $env_says." >&2
+    echo "       The data plane will not start on a root that is not the one it is" >&2
+    echo "       told to use. If that lake is the one you mean, set" >&2
+    echo "       DATA_LAKE_ROOT_ID=$MARKER_LAKE_ROOT_ID in PythonDataService/.env and re-run; to look" >&2
+    echo "       again: podman compose run --rm --no-deps python-service \\" >&2
+    echo "                python -m scripts.manage_data_root inspect" >&2
     exit 1
   fi
-  if [[ "$RECORD_LAKE_ROOT_ID" == "true" ]]; then
-    printf '\nDATA_LAKE_ROOT_ID=%s\n' "$LAKE_ROOT_ID" >> "$ROOT_DIR/PythonDataService/.env"
-    echo "==> Recorded DATA_LAKE_ROOT_ID in PythonDataService/.env"
+elif ! printf '%s\n' "$lake_inspection" | grep -q 'no root-identity marker'; then
+  echo "ERROR: unrecognised output from manage_data_root inspect:" >&2
+  printf '%s\n' "$lake_inspection" >&2
+  exit 1
+elif [[ -n "$ENV_LAKE_ROOT_ID" ]]; then
+  echo "ERROR: PythonDataService/.env names the data-lake root $ENV_LAKE_ROOT_ID, but" >&2
+  echo "       $LAKE_HOST_DIR carries no identity marker: it is a new or replaced" >&2
+  echo "       directory, not that root. Restore or mount the root that was stamped" >&2
+  echo "       with that id. To claim this directory under that id on purpose:" >&2
+  echo "         podman compose run --rm --no-deps python-service \\" >&2
+  echo "           python -m scripts.manage_data_root init --root-id $ENV_LAKE_ROOT_ID" >&2
+  echo "       (a root that already holds data is claimed with stamp instead; see" >&2
+  echo "       manage_data_root --help), then re-run this script." >&2
+  exit 1
+else
+  LAKE_ROOT_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  echo "==> Claiming the data-lake root as $LAKE_ROOT_ID..."
+  if ! "${LAKE_TOOL[@]}" init --root-id "$LAKE_ROOT_ID"; then
+    echo "ERROR: could not claim the data-lake root at $LAKE_HOST_DIR (see above). A root" >&2
+    echo "       that already holds data is claimed on purpose with stamp; see" >&2
+    echo "       manage_data_root --help." >&2
+    exit 1
   fi
+  printf '\nDATA_LAKE_ROOT_ID=%s\n' "$LAKE_ROOT_ID" >> "$ROOT_DIR/PythonDataService/.env"
+  echo "==> Recorded DATA_LAKE_ROOT_ID in PythonDataService/.env"
 fi
 
 echo "==> Starting containers..."
