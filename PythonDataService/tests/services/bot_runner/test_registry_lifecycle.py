@@ -983,6 +983,49 @@ async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
 
 
 @pytest.mark.asyncio
+async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0052 §1's named window: the task died before its stop transition
+    committed, so the process is not running while the duty record still
+    holds an active run. Archive refuses with the guard's own typed reason --
+    ``BOT_DUTY_NOT_SETTLED``, in its own words -- and the panel reports that
+    as a typed refusal, never a lookup failure or an unknown outcome."""
+    from app.services.broker_v2_panel import panel_data_source
+    from app.services.broker_v2_panel.action_execution_service import ActionNotAvailableError
+
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    def _terminal_commit_fails(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("terminal duty record did not commit")
+
+    monkeypatch.setattr(registry._run_evidence, "record_terminal", _terminal_commit_fails)
+    managed_task = registry._bots[_SID].task
+    managed_task.cancel()
+    await asyncio.wait({managed_task})
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    assert registry.status("alpaca", _SID).phase == "ON_DUTY"
+
+    with pytest.raises(BotRunnerError) as refused:
+        await registry.archive("alpaca", _SID, updated_by="operator")
+
+    assert refused.value.reason_code == "BOT_DUTY_NOT_SETTLED"
+    assert (str(refused.value), refused.value.detail) == (
+        "This bot's last run has not finished settling.",
+        "Wait for recovery to record how that run ended, then clear the bot.",
+    )
+    assert registry.status("alpaca", _SID).phase != "RETIRED"
+
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: registry)
+    archive = panel_data_source._action_performers("alpaca", _SID, idempotency_key="clear-1:x")["archive"]
+    with pytest.raises(ActionNotAvailableError) as typed:
+        await archive("owner", "Cleared from Home")
+    assert typed.value.reason_code == "BOT_DUTY_NOT_SETTLED"
+
+
+@pytest.mark.asyncio
 async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
     tmp_path: Path,
 ) -> None:
