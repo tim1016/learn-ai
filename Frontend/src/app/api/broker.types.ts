@@ -11488,6 +11488,8 @@ export interface components {
             estimated_bars_per_timeframe: {
                 [key: string]: number;
             };
+            /** @description Warm-up history the indicators had; present only when indicators were requested */
+            indicator_warmup?: components["schemas"]["ChartIndicatorWarmup"] | null;
             /** Indicators */
             indicators?: components["schemas"]["ChartIndicatorResult"][];
             /** Meta */
@@ -11704,6 +11706,41 @@ export interface components {
         ChartIndicatorSupportResponse: {
             /** Names */
             names: string[];
+        };
+        /**
+         * ChartIndicatorWarmup
+         * @description How much warm-up history the chart's indicators actually had (#2458).
+         *
+         *     The chart sizes its warm-up lead-in for the timeframe's own bars; when the
+         *     provider holds less history than that, the shortfall is stated here
+         *     rather than shown as a silent blank or a dropped series.
+         */
+        ChartIndicatorWarmup: {
+            /**
+             * Cold Bars
+             * @description Leading visible bars whose indicator values are computed on less than required_bars of history
+             */
+            cold_bars: number;
+            /**
+             * Lead In Bars
+             * @description Bars actually available before the first visible bar
+             */
+            lead_in_bars: number;
+            /**
+             * Note
+             * @description Operator-facing explanation of the shortfall; null when every visible value is warmed up
+             */
+            note?: string | null;
+            /**
+             * Required Bars
+             * @description Bars of earlier history the chart warms its indicators up on
+             */
+            required_bars: number;
+            /**
+             * Uncomputed
+             * @description Requested indicators that could not be computed at all
+             */
+            uncomputed?: components["schemas"]["ChartIndicatorEntry"][];
         };
         /**
          * ChartLiveResponse

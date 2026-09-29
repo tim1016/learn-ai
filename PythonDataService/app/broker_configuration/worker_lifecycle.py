@@ -109,7 +109,14 @@ async def acknowledge_runtime_binding(
     runtime: ActiveClerkRuntime,
     service_factory: ServiceFactory = get_broker_configuration_service,
 ) -> ActiveClerkRuntime:
-    """Confirm the runtime before exposing its writer or starting any taps."""
+    """Confirm the runtime before exposing its writer or starting any taps.
+
+    A runtime still reconnecting to Alpaca (#2582) is neither acknowledged nor
+    refused: its pending Apply is decided by what the reconnect ends in, and
+    that outcome comes back through here.
+    """
+    if runtime.reconnecting:
+        return runtime
     if runtime.clerk is None:
         if runtime.startup_failure is not None:
             record_worker_startup_refusal(

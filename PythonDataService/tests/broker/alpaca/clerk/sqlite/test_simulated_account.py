@@ -1,6 +1,7 @@
 """Shared simulated cash/risk is custody-owned, exact and isolated (#2546)."""
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from dataclasses import replace
 from decimal import Decimal
@@ -11,13 +12,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
@@ -29,9 +30,11 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import (
     SimulationEvidenceUnavailable,
     private_dry_run_cash,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.marketdata.feed import MarketDataBar
+from app.schemas.deployment_budget import AccountMoneyView
 from app.services.broker_v2_panel.budget_deploy import _money_view
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -132,7 +135,10 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     assert observed_day_pnl(observation=current, now_ms=clock()).total_usd == pytest.approx(49.97, abs=1e-9, rel=0)
     assert current.unrealized_pl_usd == pytest.approx(30, abs=1e-9, rel=0)
     assert current.fills_seen_before_ms == clock() + 1
-    assert repo.reserved_cash_decimal(seen_before_ms=current.fills_seen_before_ms) == 0
+    assert repo.account_budget(
+        cash=current.cash_available_usd, seen_before_ms=current.fills_seen_before_ms,
+        modelled_fees_seen_before_ms=current.modelled_fees_seen_before_ms,
+    ).order_claims == 0
     assert current.modelled_fees_seen_before_ms == clock() + 1
     close = previous_completed_session_close_ms(NOON + 86_400_000)
     _mark(tmp_path, evidence, at_ms=close, price=130)
@@ -142,7 +148,7 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     tomorrow = projection.observe(reference_cash=1500, observed_at_ms=clock(), now_ms=clock())
     # SEC ceil(120*.0000206)=.01; TAF ceil(1*.000195)=.01; CAT ceil(3*.000003)=.01.
     assert tomorrow.cash_available_usd == Decimal("1419.97")
-    assert tomorrow.last_equity_usd == pytest.approx(1049.97, abs=1e-9, rel=0)
+    assert tomorrow.last_equity_usd == Decimal("1049.97")
     assert tomorrow.equity_usd == Decimal("1050.97")
     assert observed_day_pnl(observation=tomorrow, now_ms=clock()).total_usd == pytest.approx(1, abs=1e-9, rel=0)
 
@@ -168,9 +174,9 @@ def test_prior_close_baseline_uses_matching_fill_mark_and_fee_cutoffs(
     next_day = projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
     assert next_day.cash_available_usd == Decimal("899.99")
     assert next_day.equity_usd == Decimal("1019.99")
-    expected_baseline = 1009.99 if entry_at_close else 1000
+    expected_baseline = Decimal("1009.99") if entry_at_close else Decimal(1000)
     expected_pnl = 10 if entry_at_close else 19.99
-    assert next_day.last_equity_usd == pytest.approx(expected_baseline, abs=1e-9, rel=0)
+    assert next_day.last_equity_usd == expected_baseline
     assert observed_day_pnl(observation=next_day, now_ms=clock()).total_usd == pytest.approx(expected_pnl, abs=1e-9, rel=0)
 
 
@@ -192,9 +198,44 @@ def test_after_close_sale_keeps_realized_change_and_fee_out_of_baseline(
     # Close: open gain $10 less the buy's $.01 CAT accrual. Next day: realized
     # gain $20 less $.03 total fees. Cash and equity each include fees once.
     assert next_day.cash_available_usd == Decimal("1019.97")
-    assert next_day.last_equity_usd == pytest.approx(1009.99, abs=1e-9, rel=0)
+    assert next_day.last_equity_usd == Decimal("1009.99")
     assert next_day.equity_usd == Decimal("1019.97")
     assert observed_day_pnl(observation=next_day, now_ms=clock()).total_usd == pytest.approx(9.98, abs=1e-9, rel=0)
+
+
+def _next_day_with_a_boundary_lot(
+    tmp_path: Path, world: str, *, cash: Decimal, close_mark: Decimal, today_mark: Decimal,
+) -> tuple[ClerkSqliteRepository, SimulatedAccountProjection]:
+    """A Dry Run or Shadow that bought 0.048360857 SPY at $100 yesterday.
+
+    The lot is marked at ``close_mark`` at yesterday's close and at
+    ``today_mark`` now; the clock stands on the next day. The caller closes
+    the returned repository.
+    """
+    clock = _TestClock(NOON)
+    if world == "dry_run":
+        repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=clock)
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=cash)
+        evidence, provider = repo.account_id, "fixture"
+    else:
+        repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+        append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON), expected_revision=0)
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+        projection.observe(reference_cash=cash, observed_at_ms=clock(), now_ms=clock())
+        evidence, provider = shadow_evidence_account_id_for_strategy(DAY_PNL_SID), "ibkr"
+    accepted = _enter(repo, _deploy(repo, projection, cents=int(cash * 100), reference=cash), quantity=1)
+    _fill(repo, accepted, key="boundary-buy", side="BUY", quantity=0.048360857, price=100)
+    _mark(tmp_path, evidence, at_ms=previous_completed_session_close_ms(NOON + 86_400_000), price=close_mark, provider=provider)
+    clock.advance(86_400_000)
+    repo.revive_execution_lease()
+    _mark(tmp_path, evidence, at_ms=clock(), price=today_mark, provider=provider)
+    return repo, projection
+
+
+def _shown(repo: ClerkSqliteRepository, observation: AccountObservation, world: str) -> AccountMoneyView:
+    """The money view Deploy and Home draw from this observation."""
+    with repo.write_fence():
+        return _money_view(repo, observation, world="synthetic" if world == "dry_run" else "shadow", account_id="LIVE")
 
 
 @pytest.mark.parametrize("world", ["dry_run", "shadow"])
@@ -210,30 +251,12 @@ def test_simulated_equity_and_open_pnl_are_exact_fifo_at_a_whole_cent_boundary(t
     and Home draw (equity and the open P&L note), not only in the retained
     baseline. The oracle is an independent ``Fraction``.
     """
-    clock = _TestClock(NOON)
-    cash = Decimal("1000.01")
-    if world == "dry_run":
-        repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=clock)
-        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=cash)
-        evidence, provider = repo.account_id, "fixture"
-    else:
-        repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
-        append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON), expected_revision=0)
-        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
-        projection.observe(reference_cash=cash, observed_at_ms=clock(), now_ms=clock())
-        evidence, provider = shadow_evidence_account_id_for_strategy(DAY_PNL_SID), "ibkr"
+    cash, mark = Decimal("1000.01"), Decimal("100.3101682007")
+    repo, projection = _next_day_with_a_boundary_lot(tmp_path, world, cash=cash, close_mark=mark, today_mark=mark)
     try:
-        accepted = _enter(repo, _deploy(repo, projection, cents=100_001, reference=cash), quantity=1)
-        _fill(repo, accepted, key="boundary-buy", side="BUY", quantity=0.048360857, price=100)
-        mark = Decimal("100.3101682007")
-        _mark(tmp_path, evidence, at_ms=previous_completed_session_close_ms(NOON + 86_400_000), price=mark, provider=provider)
-        clock.advance(86_400_000)
-        repo.revive_execution_lease()
-        _mark(tmp_path, evidence, at_ms=clock(), price=mark, provider=provider)
-        observation = projection.observe(reference_cash=cash, observed_at_ms=clock(), now_ms=clock())
-        retained = projection.establish_session_baseline(reference_cash=cash, now_ms=clock())
-        with repo.write_fence():
-            shown = _money_view(repo, observation, world="synthetic" if world == "dry_run" else "shadow", account_id="LIVE")
+        observation = projection.observe(reference_cash=cash, observed_at_ms=repo.clock(), now_ms=repo.clock())
+        retained = projection.establish_session_baseline(reference_cash=cash, now_ms=repo.clock())
+        shown = _shown(repo, observation, world)
     finally:
         repo.close()
     f = Fraction
@@ -248,6 +271,36 @@ def test_simulated_equity_and_open_pnl_are_exact_fifo_at_a_whole_cent_boundary(t
     # The retained baseline behind today's P&L is exact too.
     assert f(retained.equity_usd) == equity
     assert dollars(display_cents(retained.equity_usd)) == "1000.01"
+
+
+@pytest.mark.parametrize("world", ["dry_run", "shadow"])
+def test_simulated_today_pnl_is_the_exact_equity_change_at_a_whole_cent_boundary(tmp_path: Path, world: str) -> None:
+    """#2586: today's P&L is exact equity less the exact retained baseline, rounded once.
+
+    $2,000 of starting cash buys 0.048360857 shares at $100 yesterday; marked
+    at $100 at the close, the retained baseline is exactly $1,999.99 (the
+    buy's $0.01 modelled fee). Marked at $100.3101682007 today, equity is
+    exactly $2,000.0049999999999999999, so today's P&L is exactly
+    $0.0149999999999999999 -- 1 cent. The float difference of the two
+    equities is 0.015000000000100044, which rounds to 2 cents. The oracle
+    is an independent ``Fraction``.
+    """
+    cash = Decimal(2000)
+    repo, projection = _next_day_with_a_boundary_lot(
+        tmp_path, world, cash=cash, close_mark=Decimal(100), today_mark=Decimal("100.3101682007"))
+    try:
+        observation = projection.observe(reference_cash=cash, observed_at_ms=repo.clock(), now_ms=repo.clock())
+        shown = _shown(repo, observation, world)
+    finally:
+        repo.close()
+    f = Fraction
+    baseline = f(2000) - f("0.01")
+    equity = baseline + f("0.048360857") * (f("100.3101682007") - 100)
+    assert equity - baseline == f("0.0149999999999999999")
+    # What the owner reads on Deploy.
+    assert (shown.equity_usd, shown.today_pnl_usd) == ("2000.00", "0.01")
+    # Both sides of the day reach the observation exactly.
+    assert (f(observation.equity_usd), f(observation.last_equity_usd)) == (equity, baseline)
 
 
 def test_simulated_open_pnl_values_the_retained_close_itself(tmp_path: Path) -> None:
@@ -298,6 +351,49 @@ async def test_real_unrealized_is_never_shadow_profit_or_loss(shadow: ShadowCont
         assert reading.breached
     finally:
         await sync.stop()
+
+
+@pytest.mark.parametrize("judge", ["cadence", "admission"])
+async def test_shadow_loss_hold_still_judges_and_seals_the_float_figures(
+    shadow: ShadowContext, tmp_path: Path, judge: str,
+) -> None:
+    """#2586: Shadow's exact baseline reaches the owner, never the loss rule.
+
+    The hold compares and seals the floats it always did -- float(equity) -
+    float(baseline), a limit from float(baseline), and float(baseline) --
+    the figures a real broker's floats would give, so no loss-hold record's
+    bytes and no loss decision change. Two shares bought at $100, marked at
+    $100.3101682007 at the close and $40.1 today, lose exactly
+    $120.4203364014; the sealed float difference is not that number's float.
+    """
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection))
+    _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+    evidence = shadow_evidence_account_id_for_strategy(DAY_PNL_SID)
+    _mark(tmp_path, evidence, at_ms=previous_completed_session_close_ms(NOON + 86_400_000), price=Decimal("100.3101682007"))
+    clock.advance(86_400_000)
+    repo.revive_execution_lease()
+    _mark(tmp_path, evidence, at_ms=clock(), price=Decimal("40.1"))
+    observation = projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    if judge == "cadence":
+        sync = LiveEnvelopeSync(repo=repo, read=_Read(cash=1000), envelope=LiveEnvelopeGate(values=None, custody_is_simulated=True), simulation=projection)
+        try:
+            assert await sync.tick() == "hold_raised"
+        finally:
+            await sync.stop()
+    else:
+        gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
+        gate.publish(replace(observation, risk_revision=1))
+        with pytest.raises(AdmissionBlockedError):
+            require_current_risk_admission(repo, envelope=gate, now_ms=clock())
+    equity, baseline = float(observation.equity_usd), float(observation.last_equity_usd)
+    assert json.loads(_hold(repo)["facts_json"])["cause_facts"] == {
+        "day_start_ms": observation.simulation_session_start_ms, "day_pnl_usd": equity - baseline,
+        "loss_limit_usd": min(.1 * baseline, 100), "last_equity_usd": baseline,
+        "observed_at_ms": clock(), "policy_revision": 1,
+    }
+    assert observation.equity_usd - observation.last_equity_usd == Decimal("-120.4203364014")
+    assert equity - baseline != float(Decimal("-120.4203364014"))
 
 
 def test_two_shadow_deployments_share_one_pool(shadow: ShadowContext) -> None:
@@ -376,7 +472,7 @@ def test_private_budget_proves_initial_baseline_if_crash_preceded_first_projecti
         restored = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
         observation = restored.observe(reference_cash=0, observed_at_ms=clock(), now_ms=clock())
         assert observation.cash_available_usd == Decimal("800.01")
-        assert observation.last_equity_usd == pytest.approx(1000.01, abs=1e-9, rel=0)
+        assert observation.last_equity_usd == Decimal("1000.01")
         assert observation.unrealized_pl_usd == pytest.approx(2, abs=1e-9, rel=0)
         assert sum(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions()) == 1
     finally:

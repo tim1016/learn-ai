@@ -63,6 +63,14 @@
     </div>
   }
 
+  <!-- Warm-up notice: the held history could not warm every indicator value up -->
+  @if (warmupNote(); as note) {
+    <div class="warmup-notice" role="status">
+      <i class="pi pi-history" aria-hidden="true"></i>
+      <span>{{ note }}</span>
+    </div>
+  }
+
   <!-- Error display -->
   @if (error()) {
     <div class="chart-error">

@@ -36,6 +36,10 @@ from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
 )
+from app.broker.alpaca.clerk.sqlite.account_eligibility import (
+    AUTHORITY_RECONNECTING_HEADLINE as _AUTHORITY_RECONNECTING_HEADLINE,
+)
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
@@ -147,7 +151,7 @@ async def lane_attention_read() -> LaneAttentionRead:
     items.extend(await asyncio.to_thread(_bot_items, repository, world=world, already_named=named))
     if repository.budget_authority_version() < 2:
         items.append(LaneAttentionItem(
-            condition_id="legacy-budget", reason_code="BUDGETS_NOT_SWITCHED_ON", kind="legacy_budget",
+            condition_id="legacy-budget", reason_code=BUDGETS_NOT_SWITCHED_ON, kind="legacy_budget",
             severity="warning", headline=LEGACY_BUDGET_DETAIL,
             action=LaneAttentionAction(label="Open Settings", destination="settings"),
         ))
@@ -161,6 +165,14 @@ def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
     custody authority left Home quiet. Recovery is an offline step the
     account's order records and recovery explain.
     """
+    if failure.reconnecting:
+        # Not a failure (#2582): the authority installs on its own once Alpaca
+        # answers, and this line clears with it.
+        return LaneAttentionItem(
+            condition_id="account:authority-reconnecting", reason_code=failure.reason_code,
+            kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE,
+            action=_ORDER_RECORDS,
+        )
     return LaneAttentionItem(
         condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
         kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,

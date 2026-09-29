@@ -17,9 +17,9 @@ import pandas as pd
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc, valid_session_minutes_ms_utc
 from app.services.dataset_service import (
     calculate_dynamic_indicators,
-    compute_warmup_start_date,
     estimate_max_lookback,
     fetch_bars_chunked,
+    resolve_indicator_window,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -319,7 +319,7 @@ def step7_recompute_indicators(
     if indicator_entries:
         # Fetch warmup bars
         max_lookback = estimate_max_lookback(indicator_entries)
-        warmup_start = compute_warmup_start_date(from_date, max_lookback)
+        warmup_start = resolve_indicator_window(from_date, max_lookback=max_lookback, bar_minutes=1).fetch_from
         trim_ts = int(df["timestamp"].iloc[0])
 
         warmup_bars_raw = fetch_bars_chunked(polygon, ticker, warmup_start, from_date)

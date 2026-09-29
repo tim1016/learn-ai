@@ -9,8 +9,9 @@ The mapping is asserted by tests:
 - 409, everywhere else → :class:`BrokerUnavailable` (``BrokerOrderRejected`` is a
   write-only error per its own contract docstring; a 409 from a read endpoint
   is unexpected, not a rejected order)
-- 5xx       → :class:`BrokerUnavailable`
-- network / unknown → :class:`BrokerUnavailable`
+- 5xx       → :class:`BrokerUnreachable` (the transient kind of ``BrokerUnavailable``)
+- network / timeout → :class:`BrokerUnreachable` (raised by the client itself)
+- unknown   → :class:`BrokerUnavailable` (an answer a retry cannot fix)
 
 No alpaca-py exception type crosses the router boundary; only contract errors
 do. Alpaca's error message is surfaced (it carries no secret), never our keys.
@@ -29,6 +30,7 @@ from app.broker.contract.errors import (
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
+    BrokerUnreachable,
 )
 
 
@@ -104,7 +106,7 @@ def map_api_error(exc: APIError, *, broker: str, is_order_mutation: bool = False
             detail=detail,
         )
     if status is not None and 500 <= status < 600:
-        return BrokerUnavailable(
+        return BrokerUnreachable(
             f"Alpaca returned a server error: {message}",
             broker=broker,
             detail=detail,

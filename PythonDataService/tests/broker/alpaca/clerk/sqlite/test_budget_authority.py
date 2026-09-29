@@ -6,16 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, SchemaVersionMismatch
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
-from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
 
 
 def test_cutover_requires_stop_and_retains_unresolved_order(tmp_path: Path) -> None:
@@ -81,15 +79,3 @@ def test_older_schema_writer_cannot_acquire_upgraded_authority(tmp_path: Path, m
         ClerkSqliteRepository.open(account_id="upgrade", artifacts_root=tmp_path, clock=_TestClock(NOON))
 
 
-def test_new_budget_permission_does_not_consult_an_old_arming_gate(tmp_path: Path) -> None:
-    repo = _new_budget_repo(tmp_path)
-    try:
-        _deploy(repo)
-        # Empty legacy gate would refuse every Live entry. Version 2 uses
-        # its committed deployment and canonical money/risk facts instead.
-        result = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a",
-            decision_id="new-budget", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
-            reference_price=100, envelope=_gate(), arming=ArmingGate())
-        assert result.created
-    finally:
-        repo.close()

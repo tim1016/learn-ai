@@ -8441,6 +8441,17 @@
             "title": "Estimated Bars Per Timeframe",
             "type": "object"
           },
+          "indicator_warmup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartIndicatorWarmup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Warm-up history the indicators had; present only when indicators were requested"
+          },
           "indicators": {
             "items": {
               "$ref": "#/components/schemas/ChartIndicatorResult"
@@ -8954,6 +8965,56 @@
           "names"
         ],
         "title": "ChartIndicatorSupportResponse",
+        "type": "object"
+      },
+      "ChartIndicatorWarmup": {
+        "description": "How much warm-up history the chart's indicators actually had (#2458).\n\nThe chart sizes its warm-up lead-in for the timeframe's own bars; when the\nprovider holds less history than that, the shortfall is stated here\nrather than shown as a silent blank or a dropped series.",
+        "properties": {
+          "cold_bars": {
+            "description": "Leading visible bars whose indicator values are computed on less than required_bars of history",
+            "minimum": 0.0,
+            "title": "Cold Bars",
+            "type": "integer"
+          },
+          "lead_in_bars": {
+            "description": "Bars actually available before the first visible bar",
+            "minimum": 0.0,
+            "title": "Lead In Bars",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Operator-facing explanation of the shortfall; null when every visible value is warmed up",
+            "title": "Note"
+          },
+          "required_bars": {
+            "description": "Bars of earlier history the chart warms its indicators up on",
+            "minimum": 0.0,
+            "title": "Required Bars",
+            "type": "integer"
+          },
+          "uncomputed": {
+            "description": "Requested indicators that could not be computed at all",
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorEntry"
+            },
+            "title": "Uncomputed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "required_bars",
+          "lead_in_bars",
+          "cold_bars"
+        ],
+        "title": "ChartIndicatorWarmup",
         "type": "object"
       },
       "ChartLiveResponse": {

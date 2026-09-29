@@ -36,6 +36,9 @@ export interface DataLabSessionChartSnapshot {
    *  notice it was showing. Optional: snapshots saved before this field existed
    *  simply have no receipt, and restore with none. */
   barSources?: BarSources | null;
+  /** The backend's note on indicator values the held history could not warm
+   *  up, so a restored chart keeps saying it. Optional for the same reason. */
+  warmupNote?: string | null;
 }
 
 export interface DataLabSession {

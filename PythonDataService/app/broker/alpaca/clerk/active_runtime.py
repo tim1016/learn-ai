@@ -50,7 +50,10 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
 )
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import (
+    SqliteAlpacaClerkFacade,
+    StartupBrokerTruthUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -59,6 +62,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
     IsolatedActivationStore,
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerError, BrokerRateLimited, BrokerUnreachable
 from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -99,6 +103,30 @@ _ACCOUNT_KIND_BY_AUTHORITY: dict[str, AccountAuthorityKind] = {
 DEFAULT_STARTUP_RECOVERY_TIMEOUT_S = 60.0
 DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_LEASE_TTL_MS / 1000 + 5.0
 DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
+BROKER_UNREACHABLE_RECONNECTING: Final = "BROKER_UNREACHABLE_RECONNECTING"
+"""The one startup failure that is not terminal (#2582).
+
+Alpaca did not answer while the authority was selected or booted -- a network
+failure, a timeout, its own server error or a rate limit
+(:func:`transient_startup_failure`). Nothing about the account is wrong; the
+composition root re-selects on a bounded backoff until Alpaca answers
+(``authority_reconnect``). Every other startup failure stays terminal.
+"""
+
+
+class StartupRecoveryTimedOut(TimeoutError):
+    """Startup recovery did not finish inside its deadline (#2582).
+
+    Recovery is paced by Alpaca's answers to the account's orders and
+    positions, so running out of time is Alpaca answering too slowly -- the
+    same transient failure as a single read timing out, and retried the same
+    way.
+    """
+
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__(
+            f"Startup recovery did not finish within {timeout_s:g} seconds while reading Alpaca."
+        )
 
 
 class BackgroundSweep(Protocol):
@@ -139,6 +167,14 @@ class ClerkStartupFailure:
     activation_detected: bool = False
     authority_generation: int | None = None
     db_identity_token: str | None = None
+    # How long Alpaca asked this Clerk to wait, when it rate-limited the
+    # selection (HTTP 429 Retry-After); the reconnect waits at least this.
+    retry_after_ms: int | None = None
+
+    @property
+    def reconnecting(self) -> bool:
+        """Whether this failure is only Alpaca not answering yet, which startup retries."""
+        return self.reason_code == BROKER_UNREACHABLE_RECONNECTING
 
 
 @dataclass
@@ -156,6 +192,11 @@ class ActiveClerkRuntime:
     _sqlite_repository: ClerkSqliteRepository | None = None
     account_id: str | None = None
     account_authority_kind: AccountAuthorityKind | None = None
+
+    @property
+    def reconnecting(self) -> bool:
+        """No authority yet, only because Alpaca was unreachable at selection."""
+        return self.clerk is None and self.startup_failure is not None and self.startup_failure.reconnecting
 
     @property
     def sqlite_repository(self) -> ClerkSqliteRepository | None:
@@ -227,7 +268,7 @@ def open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteReposit
     )
 
 
-async def _open_repository_after_lease_expiry(
+async def open_repository_after_lease_expiry(
     opener: Callable[[str, Path], ClerkSqliteRepository],
     *,
     account_id: str,
@@ -235,7 +276,12 @@ async def _open_repository_after_lease_expiry(
     wait_timeout_s: float,
     retry_interval_s: float,
 ) -> ClerkSqliteRepository:
-    """Retry only the expected crashed-process lease handoff condition."""
+    """Retry only the expected crashed-process lease handoff condition.
+
+    A restarted process meets its dead predecessor's lease on every account it
+    reopens: that process renewed it and then died without releasing it, so it
+    lapses within one lease lifetime. ``wait_timeout_s=0`` is a single attempt.
+    """
     if wait_timeout_s < 0 or retry_interval_s <= 0:
         raise ValueError("execution lease wait must be non-negative with a positive retry interval")
     deadline = asyncio.get_running_loop().time() + wait_timeout_s
@@ -307,7 +353,7 @@ async def compose_repository_runtime(
     envelope_sync: LiveEnvelopeSync | None = None
     fee_sync: FeeEvidenceSync | None = None
     try:
-        repository = await _open_repository_after_lease_expiry(
+        repository = await open_repository_after_lease_expiry(
             repository_opener,
             account_id=ports.account_id,
             artifacts_root=artifacts_root,
@@ -413,10 +459,13 @@ async def compose_repository_runtime(
         if envelope_sync is not None:
             await asyncio.to_thread(envelope_sync.refresh_arming)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
-        await asyncio.wait_for(
-            facade.recover(),
-            timeout=startup_recovery_timeout_s,
-        )
+        try:
+            await asyncio.wait_for(
+                facade.recover(),
+                timeout=startup_recovery_timeout_s,
+            )
+        except TimeoutError as exc:
+            raise StartupRecoveryTimedOut(startup_recovery_timeout_s) from exc
         return _ComposedAuthority(
             repository=repository,
             facade=facade,
@@ -425,10 +474,12 @@ async def compose_repository_runtime(
             envelope_sync=envelope_sync,
             fee_sync=fee_sync,
         )
-    except Exception:
+    except BaseException:
         # Whatever was built before the failure, stopped in the same declared
         # order the runtime's own ``close()`` uses -- a tap left running here
-        # would outlive the repository closed on the next line.
+        # would outlive the repository closed on the next line. A cancelled
+        # composition -- a reconnect interrupted by shutdown (#2582) --
+        # releases its execution lease the same way.
         for tap in _ordered_taps(
             envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync
         ):
@@ -446,6 +497,7 @@ def unavailable_runtime(
     activation_detected: bool = False,
     authority_generation: int | None = None,
     db_identity_token: str | None = None,
+    retry_after_ms: int | None = None,
 ) -> ActiveClerkRuntime:
     return ActiveClerkRuntime(
         authority_kind="unavailable",
@@ -459,6 +511,7 @@ def unavailable_runtime(
             activation_detected=activation_detected,
             authority_generation=authority_generation,
             db_identity_token=db_identity_token,
+            retry_after_ms=retry_after_ms,
         ),
     )
 
@@ -501,6 +554,62 @@ def developer_reset_refusal(
     )
 
 
+TransientStartupCause = BrokerUnreachable | BrokerRateLimited | StartupRecoveryTimedOut
+
+
+def transient_startup_failure(exc: BaseException) -> TransientStartupCause | None:
+    """The cause behind a failed startup, when Alpaca not answering yet is all it was.
+
+    Transient -- retried by the reconnect: Alpaca unreachable, timing out or
+    failing on its own side (``BrokerUnreachable``, which the Alpaca client
+    raises for a network failure, a timeout and a 5xx), rate-limiting us
+    (``BrokerRateLimited``), or startup recovery running out of time
+    (``StartupRecoveryTimedOut``). Everything else is terminal: a refused
+    credential, an answer no mapping recognized (the ``BrokerUnavailable``
+    catch-all for an unexpected 404 or 409), evidence that cannot support a
+    verdict, a broken repository.
+
+    The failure may arrive wrapped -- startup recovery's own error, or boot
+    recovery's preparation error raised from it -- so the explicit cause chain
+    is followed to the first broker error, and that one decides.
+    """
+    link: BaseException | None = exc
+    while link is not None:
+        if isinstance(link, StartupRecoveryTimedOut):
+            return link
+        if isinstance(link, StartupBrokerTruthUnavailable):
+            link = link.broker_error
+            continue
+        if isinstance(link, BrokerError):
+            return link if isinstance(link, BrokerUnreachable | BrokerRateLimited) else None
+        link = link.__cause__
+    return None
+
+
+def reconnecting_refusal(
+    cause: TransientStartupCause,
+    *,
+    account_id: str | None,
+    activation_detected: bool = False,
+    authority_generation: int | None = None,
+    db_identity_token: str | None = None,
+) -> ActiveClerkRuntime:
+    """The refusal a startup Alpaca did not answer installs while it reconnects."""
+    return unavailable_runtime(
+        BROKER_UNREACHABLE_RECONNECTING,
+        account_id=account_id,
+        recovery=(
+            f"This Clerk could not read its account from Alpaca when it started: "
+            f"{_sentence(cause)} It is reconnecting and will take over this account on its own "
+            "once Alpaca answers; no restart is needed."
+        ),
+        activation_detected=activation_detected,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
+        retry_after_ms=cause.retry_after_ms if isinstance(cause, BrokerRateLimited) else None,
+    )
+
+
 def compose_failure_refusal(
     exc: BaseException,
     *,
@@ -510,11 +619,21 @@ def compose_failure_refusal(
 ) -> ActiveClerkRuntime:
     """The one refusal for a composition that raised, on either side of the live fork.
 
-    An ``ActivationRecordInvalid`` is the cutover record's fault and names
-    itself; every other failure is the startup's. Both sides carried the same
-    six-keyword call with the same ternary, which is how the two sentences
-    would have drifted.
+    Alpaca not answering yet reconnects (``reconnecting_refusal``). An
+    ``ActivationRecordInvalid`` is the cutover record's fault and names
+    itself; every other failure is the startup's, and its copy says it is
+    final and what ends it. Both sides carried the same six-keyword call with
+    the same ternary, which is how the two sentences would have drifted.
     """
+    transient = transient_startup_failure(exc)
+    if transient is not None:
+        return reconnecting_refusal(
+            transient,
+            account_id=account_id,
+            activation_detected=True,
+            authority_generation=authority_generation,
+            db_identity_token=db_identity_token,
+        )
     return unavailable_runtime(
         (
             "ACTIVATION_RECORD_INVALID"
@@ -522,11 +641,24 @@ def compose_failure_refusal(
             else "SQLITE_CLERK_STARTUP_FAILED"
         ),
         account_id=account_id,
-        recovery=str(exc),
+        recovery=terminal_startup_recovery(exc),
         activation_detected=True,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,
     )
+
+
+def terminal_startup_recovery(cause: object) -> str:
+    """The copy of a startup failure nothing will retry: its cause, and that a restart ends it."""
+    return (
+        f"This Clerk did not start: {_sentence(cause)} It will not retry on its own; "
+        "restart the Clerk once that is fixed."
+    )
+
+
+def _sentence(cause: object) -> str:
+    """A cause's own text as one sentence of the copy around it."""
+    return f"{str(cause).rstrip('.')}."
 
 
 async def activate_isolated_authority(
@@ -535,8 +667,14 @@ async def activate_isolated_authority(
     artifacts_root: Path,
     store: IsolatedActivationStore,
     clock: Clock = now_ms_utc,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
 ) -> IsolatedActivationRecord:
-    """Initialize (or reopen) one isolated repository and durably activate it exactly once."""
+    """Initialize (or reopen) one isolated repository and durably activate it exactly once.
+
+    The lease wait applies to the reopen, as it does to every authority's
+    opening (:func:`open_repository_after_lease_expiry`).
+    """
     try:
         repository = ClerkSqliteRepository.initialize(
             account_id=account_id,
@@ -547,10 +685,14 @@ async def activate_isolated_authority(
         # A process can crash after durable repository initialization but before
         # activation-record append. A later explicit activation must complete
         # that same repository fence rather than silently selecting it at boot.
-        repository = ClerkSqliteRepository.open(
+        repository = await open_repository_after_lease_expiry(
+            lambda reopened_id, root: ClerkSqliteRepository.open(
+                account_id=reopened_id, artifacts_root=root, clock=clock
+            ),
             account_id=account_id,
             artifacts_root=artifacts_root,
-            clock=clock,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
         )
     try:
         meta = repository.control_meta_snapshot()
@@ -581,6 +723,7 @@ async def activate_isolated_authority(
 
 
 __all__ = [
+    "BROKER_UNREACHABLE_RECONNECTING",
     "DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S",
     "DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S",
     "DEFAULT_STARTUP_RECOVERY_TIMEOUT_S",
@@ -589,10 +732,16 @@ __all__ = [
     "AuthorityKind",
     "BackgroundSweep",
     "ClerkStartupFailure",
+    "StartupRecoveryTimedOut",
+    "TransientStartupCause",
     "activate_isolated_authority",
     "compose_failure_refusal",
     "compose_repository_runtime",
     "developer_reset_refusal",
     "open_repository",
+    "open_repository_after_lease_expiry",
+    "reconnecting_refusal",
+    "terminal_startup_recovery",
+    "transient_startup_failure",
     "unavailable_runtime",
 ]

@@ -138,18 +138,30 @@ notional cap, no symbol allowlist, no session restriction.
   recorded fill names prices at the reservation's reference price (the
   decision price the ENTER was admitted against). A working *or filled*
   order reserves its unseen fills at cost plus its unrecorded remainder at
-  the reference price; a dead order (canceled/expired/rejected/replaced)
-  reserves only its unseen fills, because its unrecorded remainder is
-  cancelled quantity, never cash. Corrections fold at their restated size:
+  the reference price; an ended order reserves only its unseen fills, because
+  its unrecorded remainder is cancelled quantity, never cash. An order has
+  ended when the broker ended it (canceled/expired/rejected/replaced), or when
+  its ENTER effect is terminal while nothing says the broker ever knew it -- no
+  broker order id and no fill: refused before contact, failed outright, or
+  proven absent (#2553, the leak research #2469 found). An ENTER whose outcome
+  is unknown keeps its whole claim until it is resolved. Corrections fold at their restated size:
   only the head of each correction chain counts (resolved through
   `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
   *root* execution's `recorded_at_ms`, because the broker's cash at that
   instant already reflected the true quantity however late the Clerk recorded
-  the restatement. `reserved_cash_usd(seen_before_ms=...)`, which admission
-  hands `observation.fills_seen_before_ms`,
-  sums this across every accepted ENTER, and `cash_bound_admits`
-  (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) checks
-  `notional + reserved <= cash_available`.
+  the restatement. While any of the order is unfilled, its remainder also
+  claims the whole fee provision the ENTER recorded at admission -- no share
+  is computed, and it is never a re-quote from the fee model (#2553; owner
+  decision 2026-09-29). `envelope_reservations.entry_cash_claims`, which the
+  money read hands `observation.fills_seen_before_ms`, prices every accepted
+  ENTER exactly, and `sqlite/envelope_admission.py` judges the ENTER with
+  `budgets.budget_entry_decision`: its entry requirement
+  (`budgets.entry_requirement`, the notional plus the canonical BUY fee
+  provision) against the deployment's free budget and the account's cash after
+  every other claim. An account not yet switched to budgets admits no ENTER
+  (`BUDGETS_NOT_SWITCHED_ON`); its owner switches it in Settings. A
+  reservation written before provisions were recorded refuses with
+  `ENTRY_FEE_PROVISION_UNRECORDED` while it has an unfilled remainder.
 - **The fill-visibility grace.** `FILL_VISIBILITY_GRACE_MS = 5_000`
   (`live_envelope.py`): a fill the Clerk recorded up to 5 s *before* the reads
   were issued stays reserved too, because nothing Alpaca publishes says its
@@ -424,17 +436,17 @@ it to every facade authority.
   `last_equity`, transfer activities, and cash describe the live account.
   Simulated fills affect the shadow rehearsal's available-cash
   subtraction but do not invent broker equity.
-- **A mirror rebuild loses the reservations of still-working ENTERs.** The
-  `envelope_reservations` side table is product evidence *outside* the custody
-  hash chain (plan R9), which is what makes it safe to write inside
-  `ENTER_ACCEPTED`'s transaction — and also means the mirror does not carry it
-  and a rebuild ceremony does not restore it. After a rebuild, `reserved` reads
-  0 while accepted-but-unfilled ENTERs are still working, so the cash bound
-  briefly admits against cash those ENTERs have already claimed. The window is
-  bounded by one sync cadence plus the life of those working orders: the next
-  15 s tick re-observes cash, and any fill recorded by then is already
-  subtracted through `account_net_cash_spent_usd`. An operator running a
-  rebuild while entries are working should expect it rather than discover it.
+- **A mirror rebuild loses only the oldest reservations.** Every reservation
+  is now folded from `ENTER_ACCEPTED`'s facts -- its exact price and recorded
+  fee provision (#2553) -- so a rebuild restores it. A reservation written
+  before that, as product evidence *outside* the custody hash chain (plan R9),
+  is not carried by the mirror and a rebuild ceremony does not restore it.
+  After a rebuild, such an accepted-but-unfilled ENTER reserves nothing, so
+  the pre-cutover cash bound briefly admits against cash it has already
+  claimed. The window is bounded by one sync cadence plus the life of that
+  working order: the next 15 s tick re-observes cash, and any fill recorded
+  by then is already subtracted through `account_net_cash_spent_usd`. (The
+  budget read refuses outright while an entry order has no reservation.)
 - **No Frontend button yet.** `Frontend/src/app/shell/alpaca-live-banner.component.ts`
   (Task 10) renders a `· loss hold` chip on the banner when
   `loss_hold === 'held'`; it carries no clear action. Clearing the hold is
@@ -455,7 +467,10 @@ missing baseline or incomplete transfer evidence.
 The independently hand-computed golden fixture `PNL-001` applies the cited
 Alpaca field semantics to no-flow, deposit, withdrawal, and mixed-flow cases.
 It pins the canonical result with `atol=1e-9, rtol=0`, so the accepted dollar
-error stays far below one cent and never grows with account magnitude.
+error stays far below one cent and never grows with account magnitude. The
+owner's figure, `DayPnl.display_total_usd`, is pinned bit-exact against the
+same Decimal outputs (#2586): the mixed-flow case is exactly -3904.33, where
+the float formula gives -3904.3300000000017.
 
 ## Immediate risk edits and retained loss holds (#2543, 2026-09-27)
 
@@ -507,9 +522,27 @@ pins it for both a Dry Run and Shadow: $1,000.01 of starting cash, BUY
 0.048360857 at $100 marked at $100.3101682007 (open P&L exactly
 $0.0149999999999999999) and the buy's $0.01 modelled fee give equity of
 exactly $1,000.0149999999999999999, shown as $1,000.01 with open P&L $0.01,
-where the float views showed $1,000.02 and $0.02. `last_equity_usd` and the
-day P&L stay binary floats -- the loss hold compares and seals them -- so
-`day_pnl_at` rounds the exact equity once, there.
+where the float views showed $1,000.02 and $0.02.
+
+The observation's `last_equity_usd` carries the exact retained baseline too
+(#2586). Deploy's today P&L is `DayPnl.display_total_usd` for every account
+(owner decision 2026-09-29, "exact for all accounts"): each recorded figure --
+current equity, the prior-close baseline, each transfer amount, whether a
+broker float or an exact `Decimal` -- is normalized on its own, the formula
+runs in exact `Decimal`, and the result is rounded once. No type test chooses
+the path, so the loss-hold clearance path's mix of exact equity and a sealed
+float baseline reads the same figure. $2,000 of starting cash, the same
+0.048360857-share BUY marked at $100 at the close (baseline exactly
+$1,999.99) and at $100.3101682007 today shows $0.01 today -- exactly
+$0.0149999999999999999 -- where the float difference of the two equities
+(0.015000000000100044) showed $0.02. A real account moves only at a half-cent
+tie, by at most one cent: equity 10004.015 over a 10000.70 close with
+deposits of 1.10 and 2.20 is exactly $0.015, shown $0.02, where the float
+formula (0.014999999998690061) showed $0.01. The loss rule is unchanged:
+`total_usd`, `loss_limit_usd` and the sealed `LossHoldCause` take each figure
+as its nearest float, exactly the floats the observation carried before, so
+no loss decision and no sealed hold's bytes change. A regression pins the
+Shadow hold's sealed facts on both the cadence and the admission path.
 
 Cash assertions use exact Decimal equality. Existing canonical FIFO outputs
 use absolute tolerance `1e-9`, relative tolerance zero; this is composition of

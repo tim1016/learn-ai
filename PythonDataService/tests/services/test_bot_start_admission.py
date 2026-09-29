@@ -915,6 +915,29 @@ async def test_degraded_boot_report_replaces_the_wait_remedy() -> None:
     assert "Wait" not in fact.next_step
 
 
+async def test_a_degraded_boot_report_while_the_account_reconnects_says_wait_not_restart() -> None:
+    """#2582: the Clerk-less sweep a reconnecting boot ran is degraded only until
+    Alpaca answers -- the reconnect reruns it -- so Start must not send the
+    owner to restart a service that is already recovering on its own."""
+    fact = await resolve_start_runtime_fact(
+        strategy_instance_id=_SID,
+        observed_at_ms=_ANCHOR_MS,
+        boot_recovery_required=True,
+        boot_recovery_report=_boot_report("alpaca-drill-bot"),
+        unresolved_intents_probe=None,
+        account_reconnecting=True,
+    )
+
+    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
+    assert fact.explanation == (
+        "This account's Clerk could not reach Alpaca when it started, so it has "
+        "not checked this bot's last run yet."
+    )
+    assert fact.next_step is not None
+    assert "No restart is needed." in fact.next_step
+    assert "restart the service" not in fact.next_step
+
+
 async def test_degraded_boot_report_names_a_few_bots_and_counts_the_rest() -> None:
     """The refusal an operator reads must stay legible for a large roster."""
     fact = await _boot_gate_fact(_boot_report(*(f"bot-{index}" for index in range(7))))

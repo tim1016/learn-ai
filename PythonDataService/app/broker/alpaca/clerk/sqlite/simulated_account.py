@@ -266,7 +266,7 @@ class SimulatedAccountProjection:
             cash = _cash_after_fills(capital, records, fees)
             return AccountObservation(
                 observed_at_ms=observed_at_ms, broker_cash_usd=float(capital), cash_available_usd=cash,
-                last_equity_usd=float(baseline.equity_usd), unrealized_pl_usd=open_pnl,
+                last_equity_usd=baseline.equity_usd, unrealized_pl_usd=open_pnl,
                 equity_usd=baseline.initial_capital_usd + fifo.exact_realized_pnl + open_pnl - accrued,
                 risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=0, risk_equity_window_start_ms=baseline.session_start_ms,
                 position_count=len(fifo.open_lots), risk_fill_sequence=risk_fill_sequence(self.repo),

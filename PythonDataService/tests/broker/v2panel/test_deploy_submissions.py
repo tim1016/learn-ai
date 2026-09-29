@@ -16,7 +16,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,

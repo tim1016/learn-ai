@@ -28,8 +28,6 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.live_arming import (
-    LIVE_ARMING_REQUIRED,
-    LIVE_ARMING_SEAL_CHANGED,
     LIVE_MODE_DISAGREEMENT,
     LiveArmingRecord,
 )
@@ -40,12 +38,12 @@ from app.broker.alpaca.clerk.live_authority import (
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_MISSING
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateReset,
     DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.contract.models import OrderSide
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
@@ -411,7 +409,12 @@ def test_a_composition_that_raised_is_named_by_which_thing_failed(
     failure = runtime.startup_failure
     assert failure is not None
     assert failure.reason_code == expected
-    assert failure.recovery == str(exc)
+    # Terminal, and it says so: the cause, that nothing retries, and what ends it (#2582).
+    assert failure.recovery == (
+        f"This Clerk did not start: {exc}. It will not retry on its own; "
+        "restart the Clerk once that is fixed."
+    )
+    assert runtime.reconnecting is False
     assert failure.activation_detected is True
     assert failure.authority_generation == 7
     assert failure.db_identity_token == "live-db"
@@ -467,55 +470,40 @@ async def test_an_unreadable_activation_record_refuses_the_live_boot(
     assert broker.submissions == []
 
 
-async def test_boot_refreshes_arming_before_recovery_and_refuses_unarmed_enter(
-    live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
-    registered_live_bot: tuple[RetainedSourceBar, str],
-) -> None:
-    runtime, broker = live_runtime
-    bar, _seal = registered_live_bot
-    receipt = await _enter(runtime, bar)
-    assert receipt.state == "rejected"
-    assert receipt.explanation.startswith("LIVE_ARMING_REQUIRED:"), receipt.explanation
-    assert broker.submissions == []
-
-
-async def test_an_unarmed_live_instance_is_refused_required_after_the_tick(
-    live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
-    registered_live_bot: tuple[RetainedSourceBar, str],
-) -> None:
-    runtime, broker = live_runtime
-    bar, _seal = registered_live_bot
-    assert runtime.envelope_sync is not None
-    await runtime.envelope_sync.tick()
-    receipt = await _enter(runtime, bar)
-    assert receipt.state == "rejected"
-    assert receipt.explanation.startswith(f"{LIVE_ARMING_REQUIRED}:"), receipt.explanation
-    assert broker.submissions == []
-
-
-async def test_an_armed_live_instances_enter_passes_all_three_gates_and_reaches_the_real_trade_port(
+@pytest.mark.parametrize("arming", ["unarmed", "armed", "seal-changed"])
+async def test_a_live_account_not_switched_to_budgets_refuses_every_enter_armed_or_not(
     live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
     registered_live_bot: tuple[RetainedSourceBar, str],
     tmp_path: Path,
+    arming: str,
 ) -> None:
-    """Consequence 7: the slice after which a real order is possible — and this is that order."""
-    runtime, broker = live_runtime
-    bar, seal_hash = registered_live_bot
+    """Owner decision 2026-09-29 (#2553): arming no longer admits a live ENTER.
+
+    An account still on version 1 opens no position whatever its arming
+    ledger says -- every other fact is ready here, so before #2553 the armed
+    ENTER reached the broker -- and is never switched for the owner: the
+    refusal names the switch in Settings, and nothing reaches the real trade
+    port.
+    """
     from tests.broker.alpaca.clerk.sqlite.conftest import complete_fee_evidence
 
-    complete_fee_evidence(runtime.sqlite_repository)
-    _arm(tmp_path, seal_hash)
+    runtime, broker = live_runtime
+    bar, seal_hash = registered_live_bot
+    if arming == "armed":
+        _arm(tmp_path, seal_hash)
+    elif arming == "seal-changed":
+        _arm(tmp_path, "f" * 64)
     assert runtime.envelope_sync is not None and runtime.sqlite_repository is not None
+    complete_fee_evidence(runtime.sqlite_repository)
     await runtime.envelope_sync.tick()
 
     receipt = await _enter(runtime, bar)
 
-    assert receipt.state != "rejected", receipt.explanation
-    assert runtime.sqlite_repository.reserved_cash_usd(seen_before_ms=NOW_MS) > 0
-    assert len(broker.submissions) == 1
-    (leg, client_order_id) = broker.submissions[0]
-    assert (leg.symbol, leg.side, leg.quantity) == ("SPY", OrderSide.BUY, 1)
-    assert isinstance(client_order_id, str) and client_order_id
+    assert receipt.state == "rejected"
+    assert receipt.explanation.startswith(f"{BUDGETS_NOT_SWITCHED_ON}:"), receipt.explanation
+    assert "Switch this account to budgets in Settings" in receipt.explanation
+    assert broker.submissions == []
+    assert runtime.sqlite_repository.budget_authority_version() == 1
 
 
 async def test_the_gates_snapshot_seals_only_the_live_sealed_instance(
@@ -556,19 +544,3 @@ async def test_the_gates_snapshot_seals_only_the_live_sealed_instance(
     assert snapshot is not None
     assert snapshot.armed_instance_ids(NOW_MS) == frozenset({LIVE_SID})
     assert SHADOW_SID not in snapshot.seals
-
-
-async def test_a_changed_seal_disarms_the_live_instance_at_admission(
-    live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
-    registered_live_bot: tuple[RetainedSourceBar, str],
-    tmp_path: Path,
-) -> None:
-    runtime, broker = live_runtime
-    bar, _seal = registered_live_bot
-    _arm(tmp_path, "f" * 64)
-    assert runtime.envelope_sync is not None
-    await runtime.envelope_sync.tick()
-    receipt = await _enter(runtime, bar)
-    assert receipt.state == "rejected"
-    assert receipt.explanation.startswith(f"{LIVE_ARMING_SEAL_CHANGED}:"), receipt.explanation
-    assert broker.submissions == []

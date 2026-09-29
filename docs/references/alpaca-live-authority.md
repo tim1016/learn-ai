@@ -67,6 +67,29 @@ flat-and-order-free evidence and `recover()`'s reconciliation of open orders
 at every boot. The shadow namespace scan is not applied — after the first real
 order it would refuse every boot.
 
+A boot Alpaca did not answer is not a failed boot (#2582). When the only
+failure behind a selection is Alpaca not answering yet — a network failure,
+a timeout or a 5xx (`BrokerUnreachable`), a rate limit (`BrokerRateLimited`,
+whose Retry-After is waited out), or startup recovery outrunning its 60 s
+deadline (`StartupRecoveryTimedOut`) — the selection ends in
+`BROKER_UNREACHABLE_RECONNECTING`, whose copy says it is reconnecting and
+needs no restart. The `BrokerUnavailable` catch-all for an answer no mapping
+recognized (an unexpected 404 or 409) is not transient. The lane serves with
+the refusal installed while `authority_reconnect.py` retries on a capped
+backoff (2 s doubling to 60 s, forever: owner decision 2026-09-29), logging
+and counting every attempt (`RECONNECT_COUNTERS`). One attempt is the boot's
+own steps — select, acknowledge, install, boot recovery — and an installed
+authority whose boot recovery fails is retired and replaced by the refusal a
+failed boot composition installs (`compose_failure_refusal`): reconnecting
+when Alpaca was the cause, final with copy that says restart otherwise, and
+naming the same activation either way, so Home's account line and the account
+panels keep naming it. A reconnect that breaks on an unexpected error installs
+a final refusal that keeps that activation too, and boot recovery reruns for
+every refusal so Start reads a finished report. Every other startup failure
+stays final, and its copy says so and names the fix. Routed reads tell the same truth from the lane's beat:
+its summary reports `authority_state=reconnecting`, and the coordinator
+authors the 503's copy from the session it routed through.
+
 ### After graduation: the rehearsal's bindings are foreign, not corrupt (R15)
 
 A binding sealed on a custody account the installed primary authority does
@@ -93,11 +116,13 @@ startable. The live verdict's arming count reads the same rule: a
   — the boot story. Refuses, as a typed `unavailable` runtime and never an
   aborted data plane: `LIVE_CONTROL_UNAUTHENTICATED`
   (`DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true`, R14), `LIVE_MODE_DISAGREEMENT`,
-  `LIVE_ENVELOPE_MISSING`, `ACTIVATION_RECORD_INVALID`, `SQLITE_CLERK_STARTUP_FAILED`.
+  `LIVE_ENVELOPE_MISSING`, `ACTIVATION_RECORD_INVALID`, `SQLITE_CLERK_STARTUP_FAILED`,
+  and — the one refusal that is not final — `BROKER_UNREACHABLE_RECONNECTING`.
+- `app/broker/alpaca/clerk/authority_reconnect.py::run_authority_reconnect` —
+  the capped-backoff retry of the boot's own steps a reconnecting boot runs
+  while the lane serves.
 - `app/broker/alpaca/clerk/live_arming_gate.py` — `ArmingSnapshot` and
   `ArmingGate`, the per-instance cache one ledger read fills.
-- `app/broker/alpaca/clerk/sqlite/arming_admission.py::require_arming_admission`
-  — the third ENTER admission.
 - `app/broker/alpaca/clerk/sqlite/live_envelope_sync.py` — every 15 s, one
   ledger read seals the envelope and publishes the snapshot; the runner's
   sealed bindings arrive through an injected callable (`instance_seals`).
@@ -108,27 +133,22 @@ startable. The live verdict's arming count reads the same rule: a
 `accept_enter` runs, inside the custody fence and before `ENTER_ACCEPTED`:
 
 1. `require_admission` — holds and uncertainties, the loss hold included;
-2. `require_arming_admission` — the instance must be `armed` **right now**
-   (the snapshot is at most 45 s old; the status is derived at the admission
-   instant, so a lapse at the ET-date boundary is enforced at the instant);
-3. `require_envelope_admission` — the cash bound.
+2. `require_envelope_admission` — an account not yet switched to budgets
+   refuses `BUDGETS_NOT_SWITCHED_ON` (#2553, owner decision 2026-09-29; never
+   switched automatically), then the deployment's budget and the account's
+   cash after every other claim bound the ENTER (`budgets.budget_entry_decision`).
 
-Arming runs before the envelope so an unarmed instance never reserves cash.
-EXIT is never subject to 2 or 3. Refusals from 2, each a rejected receipt on
-the decision:
-
-| Code | When |
-|---|---|
-| `LIVE_ARMING_LEDGER_INVALID` | the last refresh could not verify the ledger |
-| `LIVE_MODE_DISAGREEMENT` | the broker's mode stopped agreeing mid-session (R2) |
-| `LIVE_ARMING_UNOBSERVED` | no snapshot, or one older than 45 s |
-| `LIVE_ARMING_REQUIRED` | the ledger has never named this instance |
-| `LIVE_ARMING_LAPSED`, `LIVE_ARMING_REVOKED`, `LIVE_ARMING_SEAL_CHANGED`, `LIVE_ARMING_FUTURE_DATED`, `LIVE_ENVELOPE_DISAGREEMENT` | the instance's own state (slice 6) |
-
-All of them are transient (retry on the next decision clock); the reaction to
-a lost arming is below, never a fatal halt.
+EXIT is never subject to 2. Every refusal is transient (retry on the next
+decision clock), never a fatal halt. Until #2553 a third check,
+`require_arming_admission`, admitted a version-1 live ENTER only for an armed
+instance; it is deleted, and the `LIVE_ARMING_*` codes it refused with stay
+recognised only so receipts already recorded under them still read.
 
 ## Deploy, arm, trade
+
+*The version-1 ceremony, kept for history.* Since #2553 no ENTER is admitted
+on a version-1 account, armed or not: switch the account to budgets in
+Settings, then Deploy each bot with its own dollar budget (PRD #2540).
 
 A strategy instance is immutable per account and its account is inside its
 seal, so the instance that rehearsed as `shadow:<id>` cannot be the instance
