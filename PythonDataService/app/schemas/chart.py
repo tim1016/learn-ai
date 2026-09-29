@@ -224,6 +224,32 @@ class ChartQualityReport(BaseModel):
     out_of_order_fixed: int
 
 
+class ChartIndicatorWarmup(BaseModel):
+    """How much warm-up history the chart's indicators actually had (#2458).
+
+    The chart sizes its warm-up lead-in for the timeframe's own bars; when the
+    provider holds less history than that, the shortfall is stated here
+    rather than shown as a silent blank or a dropped series.
+    """
+
+    required_bars: int = Field(
+        ..., ge=0, description="Bars of earlier history the chart warms its indicators up on"
+    )
+    lead_in_bars: int = Field(..., ge=0, description="Bars actually available before the first visible bar")
+    cold_bars: int = Field(
+        ...,
+        ge=0,
+        description="Leading visible bars whose indicator values are computed on less than required_bars of history",
+    )
+    uncomputed: list[ChartIndicatorEntry] = Field(
+        default_factory=list, description="Requested indicators that could not be computed at all"
+    )
+    note: str | None = Field(
+        default=None,
+        description="Operator-facing explanation of the shortfall; null when every visible value is warmed up",
+    )
+
+
 class ChartDataResponse(BaseModel):
     """Success payload of POST /api/chart/data.
 
@@ -245,4 +271,8 @@ class ChartDataResponse(BaseModel):
     bar_sources: dict[str, Any] | None = Field(
         default=None,
         description="Per-source ingest receipts; present only when the lake is in the read path",
+    )
+    indicator_warmup: ChartIndicatorWarmup | None = Field(
+        default=None,
+        description="Warm-up history the indicators had; present only when indicators were requested",
     )
