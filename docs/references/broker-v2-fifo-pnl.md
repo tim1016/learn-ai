@@ -35,11 +35,14 @@ implementation (#2550).  Each recorded fill quantity and price is normalized
 once through `money.normalize_money`; lots, closures, open valuation and totals
 accumulate in `Decimal` under `money.money_context`, where inexact arithmetic
 raises.  The `exact_*` fields (`PnLResult.exact_realized_pnl`,
+`PnLResult.exact_open_pnl` / `OpenPnLResult.exact_value`,
 `ClosedLot.exact_realized_pnl`, `OpenLot.exact_qty` / `exact_cost`) are the
-money authority that custody budgets read.  The float attributes (`qty`,
-`cost`, `realized_pnl`, `open_pnl`) are those values rounded once for display,
-so their only error is that single rounding — well inside the historical
-`1e-9` fixtures.  The lot-closing threshold (a lot at or below `1e-9` shares
+money authority that custody budgets and the simulated (Dry Run and Shadow)
+account equity read (#2556).  The float attributes (`qty`, `cost`,
+`realized_pnl`, `open_pnl`, `value`) are those values rounded once for
+display, so their only error is that single rounding — well inside the
+historical `1e-9` fixtures — but it can still cross a whole cent, so money
+never normalizes a float view back into `Decimal`.  The lot-closing threshold (a lot at or below `1e-9` shares
 closes) is the unchanged FIFO matching rule, now applied to exact quantities.
 
 ## Test file
@@ -53,6 +56,13 @@ realized_pnl_today session filter, multi-symbol, and duplicate event_key
 idempotency.  `test_multi_lot_partial_closes_match_exact_fraction_oracle`
 pins the exact fields (fractional multi-lot partial closes and a reversal)
 against an independent `Fraction` oracle and the float views bit-exactly.
+`test_open_pnl_is_exact_and_its_float_view_is_rounded_once` does the same for
+open valuation (long remainder and short lot, missing mark, flat), and
+`test_open_pnl_money_is_exact_at_a_whole_cent_boundary` pins why money reads
+the exact field: 0.048360857 shares from $100 to $100.3101682007 gain exactly
+$0.0149999999999999999 (1 cent), while the 17-digit float view 0.015 rounds
+half-even to 2 cents.  `test_no_money_normalizes_a_float_fifo_view` is the grep
+guard that no `normalize_money(...)` in the service takes a float view.
 
 ## Golden fixture location
 

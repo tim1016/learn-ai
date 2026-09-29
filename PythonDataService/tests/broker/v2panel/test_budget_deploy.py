@@ -553,8 +553,8 @@ async def test_open_pnl_is_canonical_fifo_or_withheld_with_its_reason(authority:
     assert real.state == "ready" and real.total_usd == "1000.00" and real.equity_usd == "1005.00"
     assert real.open_pnl_usd is None and real.open_pnl_detail == budget_deploy._OPEN_PNL_UNPRICED
 
-    # A simulated reading values its own lots with its own marks (fifo.open_pnl).
-    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, simulation_session_start_ms=NOON - 1, unrealized_pl_usd=4.2)
+    # A simulated reading values its own lots with its own marks (fifo.exact_open_pnl).
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, simulation_session_start_ms=NOON - 1, unrealized_pl_usd=Decimal("4.2"))
     simulated = await budget_deploy.account_money_view(repo.account_id)
     assert (simulated.open_pnl_usd, simulated.open_pnl_detail) == ("4.20", None)
 

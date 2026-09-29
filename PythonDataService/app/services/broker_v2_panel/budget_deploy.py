@@ -642,7 +642,7 @@ def _open_pnl(money: AccountMoney, observation: AccountObservation) -> tuple[str
 
     Flat, it is zero (FIFO values no lot). Simulated custody values its own
     lots with its own marks (``SimulatedAccountProjection.observe`` ->
-    ``fifo.open_pnl``) on the observation. Real custody has no mark in this
+    the exact ``fifo.exact_open_pnl``) on the observation. Real custody has no mark in this
     read, so the figure is withheld with its reason -- never equity less cost.
     """
     if not money.holds_positions:

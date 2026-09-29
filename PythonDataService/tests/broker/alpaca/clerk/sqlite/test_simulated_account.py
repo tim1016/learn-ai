@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.money import display_cents, dollars, normalize_money
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
@@ -80,7 +82,7 @@ def test_establish_session_baseline_persists_once_and_is_idempotent(tmp_path: Pa
         repo.close()
 
 
-def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int = 1000) -> LiveEnvelopeGate:
+def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int | Decimal = 1000) -> LiveEnvelopeGate:
     if repo.budget_authority_version() < 2:
         commit_budget_authority_cutover(repo, actor="owner", reviewed_token="fresh-simulation", stop_receipt="no-old-runs")
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS)
@@ -100,11 +102,11 @@ def _enter(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, quantity: int = 
         reference_price=100, envelope=gate)
 
 
-def _fill(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key: str, side: str, quantity: int, price: int) -> None:
+def _fill(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key: str, side: str, quantity: float, price: float) -> None:
     _append_day_pnl_slice(repo, accepted, execution_id=key, side=side, quantity=quantity, price=price, occurred_at_ms=repo.clock())
 
 
-def _mark(root: Path, account: str, *, at_ms: int, price: int, provider: str = "ibkr") -> None:
+def _mark(root: Path, account: str, *, at_ms: int, price: int | Decimal, provider: str = "ibkr") -> None:
     bars = SourceBarLedger(artifacts_root=root, account_id=account)
     try:
         bars.append(MarketDataBar(feed_id=provider, symbol="SPY", start_ms=at_ms-60_000, end_ms=at_ms,
@@ -192,6 +194,53 @@ def test_after_close_sale_keeps_realized_change_and_fee_out_of_baseline(
     assert next_day.last_equity_usd == pytest.approx(1009.99, abs=1e-9, rel=0)
     assert next_day.equity_usd == pytest.approx(1019.97, abs=1e-9, rel=0)
     assert observed_day_pnl(observation=next_day, now_ms=clock()).total_usd == pytest.approx(9.98, abs=1e-9, rel=0)
+
+
+@pytest.mark.parametrize("world", ["dry_run", "shadow"])
+def test_simulated_equity_and_open_pnl_are_exact_fifo_at_a_whole_cent_boundary(tmp_path: Path, world: str) -> None:
+    """#2556: equity and open P&L read FIFO's exact fields, never its float views.
+
+    0.048360857 shares bought at $100 and marked at $100.3101682007 gain
+    exactly $0.0149999999999999999 -- 18 significant digits, more than a
+    binary float keeps. Its float view is 0.015, which half-even rounds to
+    2 cents; retained equity built from that view ($1000.01 starting cash
+    + 0.015 - the buy's $0.01 modelled fee) is 1000.015, which rounds to
+    $1000.02. The exact values show 1 cent and $1000.01. The oracle is an
+    independent ``Fraction``.
+    """
+    clock = _TestClock(NOON)
+    cash = Decimal("1000.01")
+    if world == "dry_run":
+        repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=clock)
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=cash)
+        evidence, provider = repo.account_id, "fixture"
+    else:
+        repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+        append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON), expected_revision=0)
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+        projection.observe(reference_cash=cash, observed_at_ms=clock(), now_ms=clock())
+        evidence, provider = shadow_evidence_account_id_for_strategy(DAY_PNL_SID), "ibkr"
+    try:
+        accepted = _enter(repo, _deploy(repo, projection, cents=100_001, reference=cash), quantity=1)
+        _fill(repo, accepted, key="boundary-buy", side="BUY", quantity=0.048360857, price=100)
+        mark = Decimal("100.3101682007")
+        _mark(tmp_path, evidence, at_ms=previous_completed_session_close_ms(NOON + 86_400_000), price=mark, provider=provider)
+        clock.advance(86_400_000)
+        repo.revive_execution_lease()
+        _mark(tmp_path, evidence, at_ms=clock(), price=mark, provider=provider)
+        observation = projection.observe(reference_cash=cash, observed_at_ms=clock(), now_ms=clock())
+        retained = projection.establish_session_baseline(reference_cash=cash, now_ms=clock())
+    finally:
+        repo.close()
+    f = Fraction
+    open_pnl = f("0.048360857") * (f("100.3101682007") - 100)
+    assert open_pnl == f("0.0149999999999999999")
+    equity = f("1000.01") + open_pnl - f("0.01")
+    # What the owner reads: the retained equity and the Deploy page's open P&L note.
+    assert dollars(display_cents(retained.equity_usd)) == "1000.01"
+    assert dollars(display_cents(normalize_money(observation.unrealized_pl_usd))) == "0.01"
+    assert f(retained.equity_usd) == equity
+    assert f(observation.unrealized_pl_usd) == open_pnl
 
 
 def test_future_simulated_fill_cannot_enter_a_current_valuation(shadow: ShadowContext) -> None:
