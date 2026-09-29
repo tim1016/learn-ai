@@ -617,6 +617,42 @@ describe('AlpacaHomeComponent', () => {
     expect(outcome.getAttribute('role')).toBe('alert');
   });
 
+  it('never asks a Stop on another account when its read answers after the owner switched', async () => {
+    let answer: (panel: BotPanelView) => void = () => undefined;
+    const { view, router, panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((resolve) => { answer = resolve; }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    answer(fakeBotPanelView({ actions: fakeSqliteBotActions(), primary_action: 'stop_bot_decisions' }));
+    // Let the late answer reach Home, then let Home render what it made of it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(panel.runBotAction).not.toHaveBeenCalled();
+  });
+
+  it('never says a Stop refusal on another account when its read fails after the owner switched', async () => {
+    let refuse: (error: Error) => void = () => undefined;
+    const { view, router, panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((_resolve, reject) => { refuse = reject; }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    refuse(new Error('The lane refused the read.'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByText('The lane refused the read.')).toBeNull();
+  });
+
   it('keeps cohort Flatten reachable from the Bots section’s menu', async () => {
     await renderHome();
 

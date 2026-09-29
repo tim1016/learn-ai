@@ -198,7 +198,8 @@ export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): Pane
 
 /**
  * A bot's actions as the SQLite panel really presents them
- * (`sqlite_panel_adapter.adapt_sqlite_panel`): the Clerk's recovery catalog
+ * (`sqlite_panel_adapter.adapt_sqlite_panel`): a stopped bot's `archive`
+ * (Clear) first, then the Clerk's recovery catalog
  * (`recovery_policy._DESCRIPTORS`) in its order, with its labels and
  * blockers — never a generic `stop`. A bot's stop is `stop_bot_decisions`,
  * allowed only while the bot runs.
@@ -209,7 +210,24 @@ export function fakeSqliteBotActions({ running = true }: { running?: boolean } =
     headline: 'No attributed exposure requires a flatten plan.',
     detail: 'Run Reconcile now and refresh the custody snapshot.',
   };
+  // `action_policy`'s archive for a stopped, flat bot: the one generic
+  // lifecycle action the SQLite panel keeps, and only once the bot stops.
+  const archive = fakePanelAction('archive', {
+    label: 'Clear',
+    explanation: 'Take a finished bot off Home. It must be stopped and flat, with nothing claimed. '
+      + 'Its fills, fees and result stay in Activity. There is no undo.',
+    confirmation: {
+      title: 'Archive this bot?',
+      body: 'This takes spy-momentum-01 on account PA9 off the roster. It is stopped, with no attributed '
+        + 'exposure and 0 working orders.',
+      consequence: 'The registration can start no further runs and its id is never reused. Its history and '
+        + 'receipts are kept. This cannot be undone.',
+      confirm_label: 'Archive bot',
+      required_token: 'ARCHIVE',
+    },
+  });
   return [
+    ...(running ? [] : [archive]),
     unavailableSqliteAction('recover_exact_execution_evidence', 'Recover exact execution evidence', {
       id: 'NO_EXECUTION_COVERAGE_CONFLICT',
       headline: 'No active execution-coverage conflict requires historical evidence recovery.',

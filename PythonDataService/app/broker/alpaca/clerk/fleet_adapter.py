@@ -504,9 +504,9 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             idempotency=_DURABLE,
             account=True,
         ),
-        # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: stop
-        # and the SQLite recovery stop/cancel/flatten/
-        # reconcile), split from bot_panel_action because that one operation
+        # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: the
+        # SQLite recovery stop/cancel/flatten/reconcile/discharge), split
+        # from bot_panel_action because that one operation
         # also carries actions a draining lane must refuse -- a deployment
         # would start decisions again, and resolve_execution_coverage can lift
         # a hold: a route layer that cannot read the body cannot tell them

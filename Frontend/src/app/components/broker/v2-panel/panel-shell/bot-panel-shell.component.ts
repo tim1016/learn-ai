@@ -558,8 +558,9 @@ export class BotPanelShellComponent {
     this.actionReceipt.set(null);
     const ownership = this.beginActionOwnership();
     try {
-      // runBotAction is resilient: a Stop-409 (transient token flip) is retried
-      // once with a fresh token instead of dead-ending the operator (defect #10).
+      // runBotAction retries a 409 once with a fresh token only for an action
+      // without a confirmation; a confirmed action (the Clerk's stop, a safe
+      // flatten) is never resubmitted, so its 409 surfaces as a receipt.
       const result = await this.panelSvc.runBotAction(
         this.commandTarget(target),
         sid,

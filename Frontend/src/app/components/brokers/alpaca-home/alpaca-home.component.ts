@@ -345,13 +345,20 @@ export class AlpacaHomeComponent {
       return null;
     }
     const target = withCommand(withEntity(lane.target, sid), 'bot_action', crypto.randomUUID());
-    try {
-      const panel = await this.panelService.getPanel(target, sid);
-      const action = panel.actions.find((candidate) => candidate.action_id === STOP_ACTION_ID);
+    const account = this.key();
+    const read = await this.panelService.getPanel(target, sid).then(
+      (panel) => ({ panel, error: null }),
+      (error: unknown) => ({ panel: null, error }),
+    );
+    // The owner moved to another account while this was read: its answer
+    // belongs to the account they left, so it is neither asked nor said here.
+    if (this.key() !== account) return null;
+    if (read.panel === null) {
+      this.announceStopRefusal(sid, read.error);
+    } else {
+      const action = read.panel.actions.find((candidate) => candidate.action_id === STOP_ACTION_ID);
       if (action !== undefined && action.enabled) return { sid, target, action };
       this.announce({ tone: 'danger', message: `${sid} can no longer be stopped from here. Its current state is shown below.` });
-    } catch (error) {
-      this.announceStopRefusal(sid, error);
     }
     this.refresh();
     return null;
