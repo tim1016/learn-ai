@@ -443,6 +443,12 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
         assert (
             await registry.archive("alpaca", "paper-archive", updated_by="operator")
         ).phase == "RETIRED"
+        # A cleared bot's page stays readable from History (#2574): its status
+        # and current run still read, and Deploy again reads its sealed binding.
+        assert registry.status("alpaca", "paper-archive").phase == "RETIRED"
+        sealed = registry.binding_for_control("alpaca", "paper-archive")
+        assert (sealed.strategy_instance_id, sealed.symbol) == ("paper-archive", "SPY")
+        assert registry.current_run("alpaca", "paper-archive").run_id == sealed.run_id
     finally:
         await registry.stop_all()
         set_alpaca_clerk(None)
