@@ -82,7 +82,7 @@ test.describe('Shell menubar', () => {
     await expect(panel.getByRole('menuitem', { name: 'Regimes' })).toBeVisible();
   });
 
-  test('keeps navigation, brand, and quick actions in one header row', async ({ page }) => {
+  test('keeps navigation, brand, and the account pills in one header row', async ({ page }) => {
     await page.setViewportSize(NARROW);
     await page.goto('/data-lab');
 
@@ -90,10 +90,19 @@ test.describe('Shell menubar', () => {
     const headerBox = await requiredBox(header);
     expect(headerBox.height).toBeLessThanOrEqual(60);
 
+    // The account pills (PRD #2560 D4) are the part of the row that grows:
+    // one per lane, or — as here, with no fleet behind the page — the one
+    // loud roster-unknown pill. The row scrolls sideways rather than wrapping,
+    // so each pill still sits inside the header's single row.
+    const accounts = page.getByRole('navigation', { name: 'Accounts', exact: true });
+    const pills = accounts.getByRole('status');
+    await expect(pills.first()).toBeVisible();
+
     for (const region of [
       page.getByRole('navigation', { name: 'Primary' }),
       page.getByRole('link', { name: 'Botasur home' }),
-      page.getByRole('navigation', { name: 'Quick links and account status' }),
+      accounts,
+      ...(await pills.all()),
     ]) {
       const box = await requiredBox(region);
       expect(box.y).toBeGreaterThanOrEqual(headerBox.y);
