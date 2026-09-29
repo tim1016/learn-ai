@@ -982,6 +982,64 @@ async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
     assert registry.status("alpaca", _SID).phase != "RETIRED"
 
 
+class _CustodyWhenAlpacaCannotBeRead:
+    """Custody as the Clerk answers it once Alpaca stops answering.
+
+    A stale pass trusts nothing it could not read: exposure and every count
+    are ``unknown`` -- no number at all -- and the account is frozen.
+    """
+
+    def __init__(self) -> None:
+        self.unreadable = False
+
+    @asynccontextmanager
+    async def __call__(self, sid: str) -> AsyncIterator[tuple[ClerkCustodySnapshot, ProgramLegPolicy]]:
+        flat = _flat_custody_snapshot(sid)
+        if not self.unreadable:
+            yield flat, ProgramLegPolicy.regular_only(), DEPLOY_EXIT_TERMS
+            return
+        unknown = CustodyCountFact(state="unknown")
+        yield flat.model_copy(
+            update={
+                "reconciliation_state": "stale",
+                "reconciliation_fresh": False,
+                "exposure": CustodyExposureFact(state="unknown"),
+                "working_orders": unknown,
+                "pending_orders": unknown,
+                "terminal_orders": unknown,
+                "unresolved_effects": unknown,
+                "freeze": AccountFreezeState(
+                    active=True,
+                    category="ACCOUNT_STATE_UNPROVABLE",
+                    explanation="The SQLite Account Clerk could not obtain fresh broker proof.",
+                    next_step="Reconcile the account before allowing new exposure.",
+                    observed_at_ms=_RTH_MS,
+                ),
+                "reason_code": "CLERK_CUSTODY_UNPROVABLE",
+            }
+        ), ProgramLegPolicy.regular_only(), DEPLOY_EXIT_TERMS
+
+
+@pytest.mark.asyncio
+async def test_archive_refuses_as_unprovable_when_alpaca_cannot_be_read(tmp_path: Path) -> None:
+    """Unknown counts carry no number. Archive once added them up and raised a
+    TypeError, which the panel reported as an unknown outcome and burned the
+    idempotency key; it is the guard's own unprovable refusal."""
+    feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
+    custody = _CustodyWhenAlpacaCannotBeRead()
+    registry = _registry(tmp_path, feed, start_custody_guard=custody)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    custody.unreadable = True
+
+    with pytest.raises(BotRunnerError) as refused:
+        await registry.archive("alpaca", _SID, updated_by="operator")
+
+    assert refused.value.reason_code == "ARCHIVE_CUSTODY_UNPROVABLE"
+    assert registry.status("alpaca", _SID).phase != "RETIRED"
+
+
 @pytest.mark.asyncio
 async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
     tmp_path: Path,

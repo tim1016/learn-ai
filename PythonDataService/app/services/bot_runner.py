@@ -964,18 +964,24 @@ class BotTaskRegistry:
             status = self.status(broker, strategy_instance_id)
             try:
                 async with self._start_custody_guard(binding) as (custody, _policy, _terms):
+                    # A count the Clerk could not take carries no number and is
+                    # no proof of zero: with Alpaca unreadable, "nothing
+                    # working" is the Clerk's ignorance, not the bot's state.
+                    counts = (custody.working_orders, custody.unresolved_effects, custody.pending_orders)
                     verdict = evaluate_archive(
                         running=status.running,
                         phase=status.phase,
                         has_exposure=custody.exposure.state != "zero",
-                        working_order_count=custody.working_orders.count,
+                        working_order_count=custody.working_orders.count or 0,
                         # Bot-scoped, and only the commit can see it: an effect
                         # accepted before its broker order becomes working would
                         # otherwise create custody for a terminal registration.
                         outstanding_effect_count=(
-                            custody.unresolved_effects.count + custody.pending_orders.count
+                            (custody.unresolved_effects.count or 0) + (custody.pending_orders.count or 0)
                         ),
-                        custody_provable=not custody.freeze.active,
+                        custody_provable=(
+                            not custody.freeze.active and all(fact.count is not None for fact in counts)
+                        ),
                     )
                 if verdict.already_retired:
                     return status
