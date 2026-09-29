@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite import dry_run_close
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
@@ -162,9 +163,10 @@ def run_ending() -> str:
 
     ``supervised`` -- the run stopped and the runner released its authority,
     as after a FEED_DEATH. ``hard_death`` -- the process died: the run is still
-    ACTIVE on disk and no run-end pass ran. ``close_disabled`` -- supervised,
-    but the simulation's run-end close could not run, so the operator's
-    flatten is the way back to flat.
+    ACTIVE on disk and no run-end pass ran. ``died_mid_exit`` -- a hard death
+    just after the strategy's own EXIT was accepted, before it sent anything.
+    ``close_disabled`` -- supervised, but the simulation's run-end close could
+    not run, so the operator's flatten is the way back to flat.
     """
     return "supervised"
 
@@ -223,7 +225,12 @@ async def crashed_dry_run(
             action_plan=binding.action_plan, quantity=1, retained_source_bar=decision_bar,
         )
         assert bought.child_order_refs, bought.explanation
-        if run_ending == "hard_death":
+        if run_ending in ("hard_death", "died_mid_exit"):
+            if run_ending == "died_mid_exit":
+                accept_exit(
+                    runtime.sqlite_repository, account_id=SIM_ACCOUNT, strategy_instance_id=SID, decision_id="exit-1",
+                    lifecycle_run_id=binding.run_id, entry_order_ref=bought.child_order_refs[0],
+                )
             # The process died mid-run: nothing stopped the run or ran a pass.
             await authority.release_if_unused()
         else:
@@ -601,3 +608,36 @@ async def test_a_failed_run_end_pass_never_fails_the_stop_and_still_releases(
     assert any(
         getattr(record, "action", None) == "dry_run_run_end_reconcile_failed" for record in caplog.records
     )
+
+
+@pytest.mark.parametrize("run_ending", ["died_mid_exit"])
+async def test_a_dry_runs_own_exit_left_waiting_by_its_death_is_superseded_by_the_run_end_close(
+    crashed_dry_run: _World,
+) -> None:
+    """Owner decision 2026-09-29: the run-end close supersedes the bot's own waiting EXIT.
+
+    Reopened overnight, that EXIT cannot go out, so it ends not flat; the same
+    pass then closes the position at the last price the run saw, and the
+    close's flat proof clears the not-flat notice -- nothing is left for the
+    owner.
+    """
+    crashed_dry_run.clock.value = OVERNIGHT
+
+    panel = await _panel()
+
+    assert panel.exposure == {}
+    assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
+        ("sell", 1.0, 600.0, OVERNIGHT),
+    ]
+    assert panel.health.duty_outcome is None or panel.health.duty_outcome.exposure_notices == []
+    assert panel.clerk.freeze_active is False and panel.clerk.hold_active is False
+    repo = ClerkSqliteRepository.open(
+        account_id=SIM_ACCOUNT, artifacts_root=crashed_dry_run.artifacts_root, clock=crashed_dry_run.clock,
+    )
+    try:
+        own_exit = repo.effect_operation(f"effect:{SID}:exit-1")
+        assert own_exit is not None and own_exit.state == "failed"
+        assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID) is None
+    finally:
+        repo.close()
+    assert crashed_dry_run.alpaca.calls == []

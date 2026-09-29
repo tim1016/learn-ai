@@ -145,3 +145,21 @@ def test_a_port_that_is_not_a_simulation_refuses_a_run_end_close() -> None:
     guarded = GuardedBrokerTradePort(_VendorPort(), intake=ReentrantAsyncLock())  # type: ignore[arg-type]
 
     assert guarded.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is False
+
+
+async def test_an_exit_with_no_bound_bar_fills_at_the_last_market_bar_never_at_fill_evidence(tmp_path: Path) -> None:
+    """An EXIT re-driven after its process died has no decision bar bound; its
+    fallback is the last price the market delivered, not a recovery quote or a
+    run-end close this simulation retained for its own fills."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
+    _retain(ledger, end_ms=NOON, close="600.00")
+    ledger.retain_recovery_quote(MarketDataBar(
+        symbol="SPY", start_ms=NOON + 59_999, end_ms=NOON + 60_000, open=Decimal("601.25"), high=Decimal("601.25"),
+        low=Decimal("601.25"), close=Decimal("601.25"), volume=0, fetched_at_ms=NOON + 60_000,
+        feed_id=RECOVERY_QUOTE_PROVIDER,
+    ))
+    broker = _broker(ledger, now_ms=NOON + 120_000, quote=None)
+
+    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:exit")
+
+    assert (order.status, order.filled_avg_price) == ("filled", 600.0)

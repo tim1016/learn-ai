@@ -163,9 +163,12 @@ above. A close that cannot be sent folds like any EXIT (`EXIT_NOT_FLAT`); the
 stuck-EXIT watchdog's bounded re-drive and the operator's Flatten, both at the
 live IBKR quote, remain the fallback. The fill-evidence streams
 (`FILL_EVIDENCE_PROVIDERS`: the recovery quote and the run-end close) are never
-any run's replay evidence. Not covered: an exposure whose own EXIT is still
-working when the run ends (a program EXIT held for the next session) -- that
-EXIT owns the position.
+any run's replay evidence. The close also supersedes the bot's own EXIT when
+one is still waiting as the run ends: a simulation reads no market holds, so
+the pass first resolves that EXIT -- it fills at its decision bar, or cannot go
+out and ends `EXIT_NOT_FLAT` -- and the close then sells what is left and
+clears that notice in the same pass. An EXIT whose order was already sent is
+never raced.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing

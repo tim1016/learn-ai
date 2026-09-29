@@ -27,9 +27,15 @@ stuck-EXIT watchdog's bounded re-drive and the operator's safe flatten, both
 at the live IBKR quote, take over. This step never mints a second close for
 the same exposure.
 
-Not covered: an exposure whose own EXIT is still working when the run ends
-(a program EXIT held for the next session) -- that EXIT owns the position,
-and a second one would race it.
+The close supersedes the bot's own EXIT when one is still waiting as the run
+ends (owner decision 2026-09-29) without a second custodian: a simulation
+reads no market holds, so the pass's operation recovery, which runs before
+this step, resolves every such EXIT -- it fills at its decision bar, or it
+cannot go out and ends ``EXIT_NOT_FLAT``. Either way the entry is free when
+this step runs, the close sells what is left, and its flat proof clears that
+notice in the same pass. An exposure an EXIT still owns here (a claim another
+owner holds) is left to that EXIT and owed again next pass: a second EXIT
+would race it, and one already sent may have filled.
 """
 
 from __future__ import annotations

@@ -393,7 +393,9 @@ class SyntheticBroker:
         candidate = retained_bar if retained_bar is not None else bound
         if candidate is not None:
             return self._ledger.verified_retained_bar(candidate, symbol=symbol)
-        latest = self._source_bars.latest_for_symbol(symbol)
+        # The last price the market delivered: a no-submit world's own fill
+        # evidence (a recovery quote, a run-end close) is never a fill price.
+        latest = self._source_bars.latest_for_symbol(symbol, market_only=True)
         if latest is None:
             raise SimulatedPriceUnavailableError(
                 f"No retained source bar exists for {symbol!r}; refusing a synthetic fill."
