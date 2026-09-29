@@ -16,7 +16,7 @@ owning them would put the shared shape downstream of one of its two callers.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -62,7 +62,6 @@ from app.broker.alpaca.clerk.synthetic_activation import (
     IsolatedActivationStore,
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
-from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
 from app.broker.contract.errors import BrokerError, BrokerRateLimited, BrokerUnreachable
 from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import Clock, now_ms_utc
@@ -318,7 +317,6 @@ async def compose_repository_runtime(
     execution_lease_wait_timeout_s: float,
     execution_lease_retry_interval_s: float,
     stream_health_gate: StreamHealthGate | None,
-    roster_symbols: Callable[[], Sequence[str]] | None,
     sweep_listener: ReconciliationListener | None = None,
     live_envelope: LiveEnvelopeGate | None = None,
     envelope_read: BrokerReadPort | None = None,
@@ -346,8 +344,8 @@ async def compose_repository_runtime(
     ``arming_gate`` and ``instance_seals`` exist only on the live authority
     (ADR 0059 D11, slice 7): the gate the facade admits ENTERs against, and
     the runner's sealed bindings the sync reads beside the ledger every tick
-    — injected as a callable, the ``roster_symbols`` pattern, so the clerk
-    layer never learns the runner's root.
+    — injected as a callable, so the clerk layer never learns the runner's
+    root.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -416,18 +414,6 @@ async def compose_repository_runtime(
             # pass so a re-arm is picked up) and its live top-of-book quote
             # (#2229).
             pricing=facade.recovery_pricing,
-            # Custody first, evidence second: the symbol-validity probe runs
-            # only after a succeeded pass, through the same guarded read port,
-            # and records durably what the read path may then consume (#1795).
-            after_pass=(
-                SymbolValidityProbe(
-                    store=SymbolValidityStore(artifacts_root),
-                    read=guarded_read,
-                    roster_symbols=roster_symbols,
-                ).run_due
-                if roster_symbols is not None
-                else None
-            ),
         )
         sweep.start_lease_heartbeat()
         # #1777 WP4: the stream-health hold runs on its own fixed cadence,

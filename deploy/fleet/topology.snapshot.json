@@ -258,8 +258,6 @@
         "PythonDataService/artifacts->/app/artifacts:bind",
         "PythonDataService/cache->/app/cache:bind",
         "PythonDataService/lean-cache->/lean-cache:bind",
-        "PythonDataService/pytest.ini->/app/pytest.ini:bind",
-        "PythonDataService/ruff.toml->/app/ruff.toml:bind",
         "PythonDataService/scripts->/app/scripts:bind",
         "PythonDataService/tests/fixtures/golden/manifest.json->/app/tests/fixtures/golden/manifest.json:bind",
         "alpaca-fleet-control->/app/artifacts/fleet:volume",

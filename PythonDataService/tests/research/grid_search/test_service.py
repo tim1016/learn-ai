@@ -9,6 +9,7 @@ identical requests is the engine's own contract.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from app.research.grid_search import repository as repo
 from app.research.grid_search.models import CellResult
 from app.research.persistence import lifecycle
 from app.research.sweep.grid import RunSpec, ValueListRange
-from app.research.sweep.identity import CodeIdentity
+from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity
 from tests._helpers.lean_store import seed_store_day
 
 START, END = date(2025, 1, 6), date(2025, 1, 24)
@@ -252,7 +253,7 @@ async def test_a_running_record_with_no_live_job_reads_back_as_interrupted(conn,
 
 
 async def test_resume_refusals(conn, lake: Path, monkeypatch) -> None:
-    clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64)
+    clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64, digest_scheme=DIGEST_SCHEME)
     monkeypatch.setattr(service, "resolve_code_identity", lambda: clean)  # what the receipt records
     monkeypatch.setattr(lifecycle, "resolve_code_identity", lambda: clean)  # what Finish compares against
     created = await service.create(service.prepare_launch(_spec(), job_id="job-1", roots=[lake]))
@@ -260,13 +261,13 @@ async def test_resume_refusals(conn, lake: Path, monkeypatch) -> None:
     row = await repo.get_search(conn, created.id)
     assert row is not None
     monkeypatch.setattr(lifecycle, "roots_for", lambda row_: [lake])
-    identity = CodeIdentity(**row.receipt["code_identity"])
+    identity = CodeIdentity.from_dict(row.receipt["code_identity"])
 
     assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=True, identity=identity) == "the search is still running"
     assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity) is None
     assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity, verify_data=True) is None
 
-    moved = CodeIdentity(git_revision=identity.git_revision, tree_state=identity.tree_state, source_digest="0" * 64, environment_digest=identity.environment_digest)
+    moved = replace(identity, source_digest="0" * 64)
     assert "code changed" in (lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=moved) or "")
 
     seed_store_day(lake, "SPY", SESSIONS[3], count=100)
@@ -275,7 +276,7 @@ async def test_resume_refusals(conn, lake: Path, monkeypatch) -> None:
 
 
 async def test_a_search_from_a_dirty_tree_is_labelled_and_not_resumable(conn, lake: Path, monkeypatch) -> None:
-    monkeypatch.setattr(service, "resolve_code_identity", lambda: CodeIdentity(git_revision="h", tree_state="dirty", source_digest="s" * 64, environment_digest="e" * 64))
+    monkeypatch.setattr(service, "resolve_code_identity", lambda: CodeIdentity(git_revision="h", tree_state="dirty", source_digest="s" * 64, environment_digest="e" * 64, digest_scheme=DIGEST_SCHEME))
     created = await service.create(service.prepare_launch(_spec(), job_id="job-1", roots=[lake]))
     await repo.claim_attempt(conn, created.id, job_id="job-1")
     row = await repo.get_search(conn, created.id)

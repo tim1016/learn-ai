@@ -26,7 +26,6 @@ ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
 ACCOUNT_RECOVERY_CLEARANCE_FILENAME = "account_recovery_clearance.json"
-ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME = "account_restart_intensity_clearance.json"
 ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
     {
         "account_recovery_proof_recorded",
@@ -34,8 +33,6 @@ ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
         "account_freeze_cleared",
     }
 )
-RESTART_INTENSITY_REASON = "restart_intensity.threshold_breached"
-RESTART_INTENSITY_SOURCE = "account_restart_intensity"
 ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
     "recorded_at_ms",
     "created_at_ms",
@@ -51,8 +48,6 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
         "ts_ms",
         "placed_at_ms",
         "valid_until_ms",
-        "window_start_ms",
-        "window_end_ms",
         "evidence_at_ms",
         "event_at_ms",
         "arrived_at_ms",
@@ -119,7 +114,14 @@ class AccountEventRecord(BaseModel):
 
 
 class AccountFreezeEvidence(BaseModel):
-    """Persisted account-level freeze evidence."""
+    """Persisted account-level freeze evidence.
+
+    ``reason`` and ``source`` are free text, so a freeze recorded by the retired
+    account-level restart throttle (#2558) still loads and still blocks until an
+    operator clears it with the usual recovery proof. The throttle's separate
+    clearance-cutoff file, and its breach rows in the event history, are
+    history: nothing reads the file and the history is display-only.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -133,21 +135,6 @@ class AccountFreezeEvidence(BaseModel):
     cleared_at_ms: int | None = Field(default=None, ge=0)
     cleared_reason: str | None = None
     cleared_source: str | None = None
-
-    @property
-    def pauses_healthy_runs(self) -> bool:
-        """Whether this active freeze pauses submits without halting a healthy run.
-
-        Restart-intensity evidence stays active until the authoritative provider
-        records a clear. Its distinct lifecycle treatment relies on its complete
-        typed provenance, rather than a reason string that another freeze could
-        reuse.
-        """
-        return (
-            self.freeze_kind == "account"
-            and self.source == RESTART_INTENSITY_SOURCE
-            and self.reason.startswith(RESTART_INTENSITY_REASON)
-        )
 
     def to_gate_result(self) -> GateResult:
         return GateResult(
@@ -258,17 +245,6 @@ class AccountRecoveryClearance(BaseModel):
     source: Literal["account_recovery_proof", "account_audited_override"]
     evidence_id: str = Field(min_length=1, max_length=128)
     cleared_at_ms: int = Field(ge=0)
-
-
-class RestartIntensityPolicy(BaseModel):
-    """Durable account restart-intensity threshold."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    threshold: int = Field(default=3, ge=1)
-    window_ms: int = Field(default=300_000, ge=1)
-    scope: Literal["account"] = "account"
-    source: str = RESTART_INTENSITY_SOURCE
 
 
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
@@ -521,17 +497,6 @@ def clear_account_freeze(
             # it must not turn a committed unfreeze into a false failure.
             logger.exception(
                 "account freeze cleared but recovery clearance could not be recorded",
-                extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
-            )
-    if evidence.pauses_healthy_runs:
-        try:
-            _record_restart_intensity_clearance(artifacts_root, account_id, cleared_at_ms)
-        except Exception:
-            # A retained cutoff only prevents a false re-freeze; a failed write
-            # keeps the account conservatively subject to restart-intensity, never
-            # a false unblock.
-            logger.exception(
-                "account freeze cleared but restart-intensity cutoff could not be retained",
                 extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
             )
     cleared_event = {
@@ -1047,273 +1012,6 @@ def read_active_accepting_account_clerk_generation(
     return clerk
 
 
-def evaluate_restart_intensity(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    now_ms: int,
-    policy: RestartIntensityPolicy | None = None,
-    record_freeze: bool = True,
-) -> GateResult:
-    policy = policy or RestartIntensityPolicy()
-    window_start_ms = max(
-        now_ms - policy.window_ms,
-        _latest_restart_intensity_clear_ms(artifacts_root, account_id) or 0,
-    )
-    restart_events = _restart_intensity_binding_events(
-        artifacts_root,
-        account_id=account_id,
-        window_start_ms=window_start_ms,
-        now_ms=now_ms,
-    )
-    restart_groups = _restart_intensity_groups(restart_events)
-    observed_count = _restart_intensity_count(restart_groups)
-    reason = _restart_intensity_reason(
-        observed_count=observed_count,
-        threshold=policy.threshold,
-        window_ms=policy.window_ms,
-        window_start_ms=window_start_ms,
-        window_end_ms=now_ms,
-    )
-    if observed_count < policy.threshold:
-        return GateResult(
-            gate_id="account.restart_intensity",
-            status="pass",
-            source=policy.source,
-            operator_reason=reason,
-            operator_next_step="GATE_PASSING",
-            evidence_at_ms=now_ms,
-        )
-
-    gate = GateResult(
-        gate_id="account.restart_intensity",
-        status="freeze",
-        source=policy.source,
-        operator_reason=reason,
-        operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
-        evidence_at_ms=now_ms,
-    )
-    if record_freeze and read_account_freeze(artifacts_root, account_id) is None:
-        affected_instances = tuple(
-            sorted(
-                {
-                    str(event.get("strategy_instance_id"))
-                    for events_in_group in restart_groups.values()
-                    for event in events_in_group
-                    if event.get("strategy_instance_id")
-                }
-            )
-        )
-        _append_account_event(
-            artifacts_root,
-            account_id,
-            {
-                "event_type": "account_restart_intensity_breached",
-                "account_id": account_id,
-                "observed_count": observed_count,
-                "threshold": policy.threshold,
-                "window_ms": policy.window_ms,
-                "window_start_ms": window_start_ms,
-                "window_end_ms": now_ms,
-                "affected_instance_ids": list(affected_instances),
-                "operator_next_step": gate.operator_next_step,
-            },
-        )
-        write_account_freeze(
-            artifacts_root,
-            AccountFreezeEvidence(
-                account_id=account_id,
-                freeze_kind="account",
-                reason=reason,
-                source=policy.source,
-                recorded_at_ms=now_ms,
-                operator_next_step=gate.operator_next_step or "STOP_RESTARTING_AND_RECOVER_ACCOUNT",
-            ),
-        )
-    return gate
-
-
-def project_restart_intensity_gate(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    now_ms: int,
-    additional_start_groups: int = 1,
-    policy: RestartIntensityPolicy | None = None,
-) -> GateResult:
-    """Project whether a proposed authorized start would breach the restart gate.
-
-    Admission paths use this before persisting an authorization or attempting a
-    start.  The projection is deliberately read-only: only an actual accepted
-    activation may create the durable account freeze.
-    """
-    if additional_start_groups < 1:
-        raise ValueError("additional_start_groups must be at least one")
-    policy = policy or RestartIntensityPolicy()
-    window_start_ms = max(
-        now_ms - policy.window_ms,
-        _latest_restart_intensity_clear_ms(artifacts_root, account_id) or 0,
-    )
-    restart_events = _restart_intensity_binding_events(
-        artifacts_root,
-        account_id=account_id,
-        window_start_ms=window_start_ms,
-        now_ms=now_ms,
-    )
-    # Dead pre-start projection retained for parity with ``evaluate``: it treats
-    # the proposed start(s) as repeat activations of the busiest bot, a
-    # conservative upper bound that never under-reports intensity.
-    projected_count = _restart_intensity_count(_restart_intensity_groups(restart_events)) + additional_start_groups
-    reason = _restart_intensity_reason(
-        observed_count=projected_count,
-        threshold=policy.threshold,
-        window_ms=policy.window_ms,
-        window_start_ms=window_start_ms,
-        window_end_ms=now_ms,
-    )
-    if projected_count < policy.threshold:
-        return GateResult(
-            gate_id="account.restart_intensity",
-            status="pass",
-            source=policy.source,
-            operator_reason=reason,
-            operator_next_step="GATE_PASSING",
-            evidence_at_ms=now_ms,
-        )
-    return GateResult(
-        gate_id="account.restart_intensity",
-        status="freeze",
-        source=policy.source,
-        operator_reason=reason,
-        operator_next_step="WAIT_OR_RECOVER_ACCOUNT_BEFORE_STARTING_ANOTHER_BOT",
-        evidence_at_ms=now_ms,
-    )
-
-
-def _restart_intensity_reason(
-    *,
-    observed_count: int,
-    threshold: int,
-    window_ms: int,
-    window_start_ms: int,
-    window_end_ms: int,
-) -> str:
-    return (
-        f"{RESTART_INTENSITY_REASON}:observed={observed_count}:threshold={threshold}:"
-        f"window_ms={window_ms}:window_start_ms={window_start_ms}:window_end_ms={window_end_ms}"
-    )
-
-
-def _restart_intensity_groups(restart_events: list[dict]) -> dict[str, list[dict]]:
-    """Group ACTIVE activations by bot identity.
-
-    Restart intensity is one bot restarted repeatedly (crash-churn), not a batch
-    of distinct freshly-deployed bots each starting once.  Grouping by
-    ``strategy_instance_id`` lets the caller measure the busiest bot's activation
-    count (:func:`_restart_intensity_count`), so deploying N distinct bots does
-    not read as N restarts of one account.
-    """
-
-    groups: dict[str, list[dict]] = {}
-    for event in restart_events:
-        instance = str(event.get("strategy_instance_id") or f"seq:{event.get('seq')}")
-        groups.setdefault(instance, []).append(event)
-    return groups
-
-
-def _restart_intensity_count(groups: dict[str, list[dict]]) -> int:
-    """Intensity = the most activations any single bot accrued in the window."""
-
-    return max((len(events) for events in groups.values()), default=0)
-
-
-def _restart_intensity_binding_events(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    window_start_ms: int,
-    now_ms: int,
-) -> list[dict]:
-    """Project restart evidence from the typed binding registry, not history."""
-
-    # Runtime import avoids the legacy compatibility import cycle: the registry
-    # owns activation state, while this module owns the restart policy.
-    from app.engine.live.account_registry import read_account_instance_registry
-
-    return [
-        {
-            "strategy_instance_id": binding.strategy_instance_id,
-            "run_id": binding.run_id,
-            "bot_order_namespace": binding.bot_order_namespace,
-            "recorded_at_ms": binding.recorded_at_ms,
-        }
-        for binding in read_account_instance_registry(artifacts_root, account_id)
-        if binding.lifecycle_state == "ACTIVE" and window_start_ms <= binding.recorded_at_ms <= now_ms
-    ]
-
-
-def _record_restart_intensity_clearance(
-    artifacts_root: Path,
-    account_id: str,
-    cleared_at_ms: int,
-) -> None:
-    """Retain the restart-intensity clear cutoff independently of the freeze slot.
-
-    The active-freeze artifact holds one freeze at a time, so a later unrelated
-    freeze would otherwise erase the cutoff that starts a fresh restart-intensity
-    window. This dedicated record keeps the latest cutoff monotonically.
-    """
-
-    path = _account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
-    )
-    with _file_lock(path):
-        existing = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
-        if existing is not None and existing >= cleared_at_ms:
-            return
-        _atomic_write_json_locked(path, {"account_id": account_id, "cleared_at_ms": cleared_at_ms})
-
-
-def _read_restart_intensity_clearance_ms(artifacts_root: Path, account_id: str) -> int | None:
-    """Read the retained restart-intensity clear cutoff, if any."""
-
-    path = _existing_account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
-    )
-    if path is None:
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise AccountArtifactError("account restart-intensity clearance is unreadable") from exc
-    if not isinstance(payload, dict) or payload.get("account_id") != account_id:
-        raise AccountArtifactError("account restart-intensity clearance belongs to another account")
-    cleared_at_ms = payload.get("cleared_at_ms")
-    if not isinstance(cleared_at_ms, int) or isinstance(cleared_at_ms, bool) or cleared_at_ms < 0:
-        raise AccountArtifactError("account restart-intensity clearance has an invalid timestamp")
-    return cleared_at_ms
-
-
-def _latest_restart_intensity_clear_ms(artifacts_root: Path, account_id: str) -> int | None:
-    candidates: list[int] = []
-    dedicated = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
-    if dedicated is not None:
-        candidates.append(dedicated)
-    evidence = read_account_freeze_evidence(artifacts_root, account_id)
-    if (
-        evidence is not None
-        and evidence.cleared_at_ms is not None
-        and evidence.source == RESTART_INTENSITY_SOURCE
-        and evidence.reason.startswith(RESTART_INTENSITY_REASON)
-    ):
-        candidates.append(evidence.cleared_at_ms)
-    return max(candidates) if candidates else None
-
-
 def _atomic_write_json(path: Path, payload: dict) -> None:
     with _file_lock(path):
         _atomic_write_json_locked(path, payload)
@@ -1644,9 +1342,6 @@ _LOCAL_EXPORTS = [
     "ACCOUNT_FREEZE_FILENAME",
     "ACCOUNT_OWNER_GENERATION_FILENAME",
     "ACCOUNT_RECOVERY_CLEARANCE_FILENAME",
-    "ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME",
-    "RESTART_INTENSITY_REASON",
-    "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
     "AccountEventSequenceRepair",
     "AccountClerkLeaseUnavailableError",
@@ -1658,13 +1353,10 @@ _LOCAL_EXPORTS = [
     "AccountOwnerGeneration",
     "AccountRecoveryProof",
     "AccountRecoveryClearance",
-    "RestartIntensityPolicy",
     "account_artifacts_root",
     "list_account_artifact_ids",
     "append_account_event",
     "clear_account_freeze",
-    "evaluate_restart_intensity",
-    "project_restart_intensity_gate",
     "read_account_events",
     "read_legacy_account_events",
     "repair_account_event_sequence",

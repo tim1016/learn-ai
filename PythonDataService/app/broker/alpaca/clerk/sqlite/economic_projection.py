@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.money import ZERO, money_context
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     AccountPnlAttribution,
@@ -563,10 +564,12 @@ class SqliteEconomicProjectionReader:
     ) -> AccountPnlAttribution:
         """Return account-wide FIFO attribution for inclusive UTC-ms bounds.
 
-        Formula: window realized P&L = ``Σ closed_lot.realized_pnl`` for
-        ``from_ms <= closed_at_ms <= to_ms``; open P&L delegates to the
-        canonical FIFO mark valuation.  The lifetime fill scan is intentional:
-        an in-window sell can close a lot opened before ``from_ms``.
+        Formula: window realized P&L = ``Σ closed_lot.exact_realized_pnl``
+        for ``from_ms <= closed_at_ms <= to_ms``, summed exactly; open P&L
+        delegates to the canonical FIFO mark valuation's exact value.  The
+        float totals are display views of those exact totals (#2556).  The
+        lifetime fill scan is intentional: an in-window sell can close a lot
+        opened before ``from_ms``.
         Reference: GAAP/IFRS FIFO; Kieso, Weygandt & Warfield, *Intermediate
           Accounting* (17e), Chapter 8.
         Canonical implementation: ``app.broker.alpaca.clerk.fifo_pnl``; this
@@ -618,9 +621,9 @@ class SqliteEconomicProjectionReader:
             end_records,
             mark_prices={symbol: mark.price for symbol, mark in marks_by_symbol.items()},
         )
-        attribution_rows = tuple(
-            _to_fifo_attribution_row(lot) for lot in fifo_result.closed_lots if from_ms <= lot.closed_at_ms <= to_ms
-        )
+        window_lots = tuple(lot for lot in fifo_result.closed_lots if from_ms <= lot.closed_at_ms <= to_ms)
+        with money_context():
+            exact_realized_total = sum((lot.exact_realized_pnl for lot in window_lots), ZERO)
         all_fees_reported = all(record.fee is not None for record in window_records)
         local_quantities: dict[str, float] = {}
         for lot in fifo_result.open_lots:
@@ -640,10 +643,10 @@ class SqliteEconomicProjectionReader:
             control_revision=meta.control_revision,
             from_ms=from_ms,
             to_ms=to_ms,
-            attribution_rows=attribution_rows,
-            realized_pnl_total=sum(row.realized_pnl for row in attribution_rows),
-            start_open_pnl_total=start_fifo_result.open_pnl,
-            open_pnl_total=fifo_result.open_pnl,
+            attribution_rows=tuple(_to_fifo_attribution_row(lot) for lot in window_lots),
+            exact_realized_pnl_total=exact_realized_total,
+            exact_start_open_pnl_total=start_fifo_result.exact_open_pnl,
+            exact_open_pnl_total=fifo_result.exact_open_pnl,
             fee_total=(
                 sum(record.fee or 0.0 for record in window_records)
                 if all_fees_reported
@@ -889,7 +892,7 @@ class SqliteEconomicProjectionReader:
                     session_close_ms=session_window.close_ms_utc,
                 )
             ),
-            open_pnl=open_result.value,
+            exact_open_pnl=open_result.exact_value,
             marks_complete=open_result.marks_complete,
             mark_observed_at_ms=relevant_mark_times,
             fee_fidelity=fee_fidelity,
@@ -1000,7 +1003,7 @@ class SqliteEconomicProjectionReader:
                             session_close_ms=session_window.close_ms_utc,
                         )
                     ),
-                    open_pnl=open_result.value,
+                    exact_open_pnl=open_result.exact_value,
                     marks_complete=open_result.marks_complete,
                     mark_observed_at_ms=mark_times,
                     fee_fidelity=fee_fidelity,

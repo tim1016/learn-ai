@@ -1181,10 +1181,10 @@ on Indicator Reliability. The sub-nav remembers no state between page loads
 ### 7.1 Statistical verification (Python)
 
 ```
-podman exec polygon-data-service python -m pytest \
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
     tests/research/test_indicator_reliability.py \
     tests/research/test_ic.py \
-    -v
+    -v)
 ```
 
 Expected: 53 + 15 = 68 passing tests, zero failures. Covers:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -119,18 +119,12 @@ async def select_active_clerk_runtime(
     execution_lease_wait_timeout_s: float = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     stream_health_gate: StreamHealthGate | None = None,
-    roster_symbols: Callable[[], Sequence[str]] | None = None,
     live_envelope_values: LiveEnvelopeValues | None = None,
     instance_seals: InstanceSealsForAccount | None = None,
     control_unauthenticated: bool = False,
     expected_account_id: str | None = None,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
-
-    ``roster_symbols`` opts the sweep into the post-pass symbol-validity probe
-    (#1795): a callable returning the fleet's bound symbols, injected here so
-    the clerk layer never imports the bot-registration services. ``None`` (the
-    default, and every test/synthetic path) constructs no probe.
 
     ``live_envelope_values`` reach only the live world's shadow authority
     (ADR 0059 D4). The paper authority below never composes an envelope, so a
@@ -202,7 +196,6 @@ async def select_active_clerk_runtime(
                 execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
                 execution_lease_retry_interval_s=execution_lease_retry_interval_s,
                 stream_health_gate=stream_health_gate,
-                roster_symbols=roster_symbols,
                 live_envelope_values=live_envelope_values,
             )
         return await select_live_clerk_runtime(
@@ -217,7 +210,6 @@ async def select_active_clerk_runtime(
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
-            roster_symbols=roster_symbols,
             live_envelope_values=live_envelope_values,
             instance_seals=instance_seals,
             control_unauthenticated=control_unauthenticated,
@@ -287,7 +279,6 @@ async def select_active_clerk_runtime(
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
-            roster_symbols=roster_symbols,
         )
     except Exception as exc:
         logger.warning(

@@ -41,21 +41,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY ./app ./app
 COPY ./scripts ./scripts
 
-# Pytest config — the runtime image does not ship pytest, but operators
-# install it ad-hoc into the running container (`podman exec ... pytest
-# tests/`) and pytest needs ``asyncio_mode = auto`` from this file.
-# Without it, pytest defaults to strict mode and any un-decorated async
-# test errors out at collection.
-COPY ./pytest.ini ./pytest.ini
-
-# Ruff config — ad-hoc ``podman exec polygon-data-service ruff check
-# app/ tests/`` must run under the same ruleset as CI. Without this file
-# in the container, ruff falls back to its default ruleset (only
-# pyflakes), silently passing on errors that CI flags (SIM/UP/I) and
-# leaving local devs surprised when CI fails on Yoda conditions, import
-# ordering, or contextlib.suppress idioms that local runs allowed.
-COPY ./ruff.toml ./ruff.toml
-
 # Golden-fixture manifest — read at runtime by ``GET /api/golden-fixtures``
 # (see app/routers/golden_fixtures.py). Lives under tests/ for historical
 # reasons (the fixtures themselves are test inputs) but the catalog endpoint
@@ -75,10 +60,26 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeou
 # Keep pytest and developer tooling out of the always-on data-plane image. This
 # target is selected only by the Compose ``qualification`` profile, where the
 # test tree and authenticated fixture are mounted read-only.
+#
+# This is the LAST stage, which is what a build that names no ``--target``
+# produces. Every Compose service built from this context therefore names its
+# ``target:`` explicitly -- ``runtime`` for everything always-on -- and
+# tests/contracts/test_data_plane_image_stage.py fails the contract test for a
+# service that forgets (#2576).
 FROM runtime AS qualification
 
+# requirements-dev.txt pulls in the heavy and light pins with ``-r``, so all
+# three go in together; the runtime stage ships none of them (nothing there
+# reads a requirement file). tests/contracts/test_data_plane_image_stage.py
+# pins this COPY to the ``-r`` lines of requirements-dev.txt.
 COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
+# Pytest and ruff config: pytest needs ``asyncio_mode = auto`` from its file, or
+# it defaults to strict mode and any un-decorated async test errors out at
+# collection; ruff needs its file to run under the same ruleset as CI. Only
+# this stage is used to run either, so only this stage ships their config.
+COPY ./pytest.ini ./pytest.ini
+COPY ./ruff.toml ./ruff.toml
 RUN mkdir -p \
     /app/contracts \
     /app/evidence \

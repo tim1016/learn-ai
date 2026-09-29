@@ -47,8 +47,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseHeld
-from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
-from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
+from app.broker.v2panel.action_policy import evaluate_archive
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
@@ -61,7 +60,6 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.marketdata.feed import (
     FEED_REFUSAL_REASON_CODES,
     MarketDataFeed,
@@ -282,36 +280,9 @@ def _lane_stop_refusal(
     )
 
 
-# Commit-time refusals, keyed by the shared retirement rule's cause. The
+# Commit-time refusals, keyed by the archive rule's cause (ADR 0052). The
 # panel renders its own operator copy from the same causes; this is what an
 # operator sees when the world changed between presentation and click.
-_RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
-    "BOT_STILL_RUNNING": (
-        "The bot is still running.",
-        "Stop the bot before retiring its registration.",
-    ),
-    "STRATEGY_STILL_RUNNABLE": (
-        "No proof this bot can never run again.",
-        "Retire clears a registration that is provably dead: its strategy "
-        "program is gone from the runtime, or the broker has durably answered "
-        "that its symbol is not a listed asset.",
-    ),
-    "RETIRE_WOULD_STRAND_CUSTODY": (
-        "The bot still holds custody.",
-        "Retiring now would strand attributed exposure or a working order. "
-        "Flatten and let working orders reach a terminal state first.",
-    ),
-    None: (
-        "This registration cannot be retired.",
-        "Retirement preconditions are no longer satisfied.",
-    ),
-}
-
-# The same shape for the archive rule (ADR 0052). Kept separate from the
-# retirement map rather than merged on the shared cause names: the two rules
-# refuse for different reasons and an operator reading "provably dead" copy
-# after clicking Archive would be told about a contract that does not govern
-# their command.
 _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
     "BOT_STILL_RUNNING": (
         "The bot is still running.",
@@ -448,7 +419,6 @@ class BotTaskRegistry:
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
-        symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
         validation_fact: ValidationFactResolver | None = None,
         lane_start_gates: tuple[LaneStartGate, ...] = (),
@@ -456,7 +426,6 @@ class BotTaskRegistry:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
         self._now_ms = now_ms
-        self._symbol_unresolvable = symbol_unresolvable
         self._market_liveness = market_liveness or market_liveness_fact
         self._registry_generation = uuid4().hex
         self._bots: dict[str, ManagedBot] = {}
@@ -891,61 +860,6 @@ class BotTaskRegistry:
             account_reconnecting=primary is not None and primary.reconnecting,
         )
 
-    async def retire(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-        *,
-        updated_by: str = "operator",
-        reason: str | None = None,
-    ) -> BotStatusView:
-        """Clear a registration the runtime can no longer honour (#1778, S5).
-
-        Retiring takes the bot off the roster, so it stops re-issuing the
-        doomed feed subscriptions that made a dead legacy registration
-        impossible to silence.
-
-        The panel guard authored an enabled Retire against a *projected*
-        custody snapshot, and the operator clicked later. Retirement is
-        irreversible, so this re-answers the same shared rule against a
-        freshly reconciled snapshot before writing: a fill that landed in
-        between must refuse the command, not be stranded by it.
-        """
-        async with self._operation_lock(strategy_instance_id):
-            binding = self._bindings.read(strategy_instance_id)
-            if binding is None:
-                raise BotRunnerError(
-                    f"Bot '{strategy_instance_id}' has no registration to retire.",
-                    detail="The roster has no binding for this instance.",
-                )
-            status = self.status(broker, strategy_instance_id)
-            async with self._start_custody_guard(binding) as (custody, _policy, _terms):
-                verdict = evaluate_retirement(
-                    running=status.running,
-                    phase=status.phase,
-                    strategy_runtime_missing=(
-                        binding.strategy_key not in _STRATEGY_REGISTRY
-                    ),
-                    # The same durable sweep-produced fact the panel guard
-                    # read (#1795), through the same mode-scoped predicate, so
-                    # commit and presentation answer one rule against one store.
-                    symbol_unresolvable=self._symbol_unresolvable(binding.symbol, binding.mode),
-                    has_exposure=custody.exposure.state != "zero",
-                    working_order_count=custody.working_orders.count,
-                )
-            if verdict.already_retired:
-                return status
-            if not verdict.eligible:
-                headline, detail = _RETIRE_REFUSAL[verdict.cause]
-                raise BotRunnerError(headline, detail=detail)
-            self._lifecycle_projector_for_instance(strategy_instance_id).retire(
-                strategy_instance_id=strategy_instance_id,
-                now_ms=self._now_ms(),
-                updated_by=updated_by,
-                reason=reason or f"Panel retire by {updated_by}",
-            )
-            return self.status(broker, strategy_instance_id)
-
     async def archive(
         self,
         broker: str,
@@ -957,17 +871,15 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         """Take a finished bot off the roster (ADR 0052).
 
-        The sanctioned exit for a registration the operator is *done with*,
-        as distinct from ``retire``'s provably-dead contract (#1795), which
-        this does not touch. Both land in the same terminal phase, so both
-        are refused admission by ``run_admission``'s ``BOT_RETIRED`` and both
-        leave the catalog's per-row cost curve (#1911); ``updated_by`` and
-        ``reason`` are what keep the two apart in the audit trail.
+        The one exit for a registration the operator is *done with* -- Clear
+        on Home's Finished fold (#2567, #2578). It lands in the terminal
+        phase, so ``run_admission`` refuses the registration ``BOT_RETIRED``
+        and it leaves the catalog's per-row cost curve (#1911).
 
-        Archive's enabling proof *is* custody, so like ``retire`` it
-        re-answers the shared rule against a freshly reconciled snapshot
-        rather than the projected one the operator clicked on: a fill that
-        landed in between must refuse the command, not be stranded by it.
+        Archive's enabling proof *is* custody, so it re-answers the shared
+        rule against a freshly reconciled snapshot rather than the projected
+        one the operator clicked on: a fill that landed in between must
+        refuse the command, not be stranded by it.
         ``reconciled`` is a batch's one reconciliation pass
         (:meth:`_archive_custody` says when it stands in for this one's).
         """
