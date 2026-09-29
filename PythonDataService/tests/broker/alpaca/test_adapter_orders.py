@@ -72,6 +72,41 @@ def test_open_order_has_no_events_and_nullable_prices(
     assert order.events == []
 
 
+@pytest.mark.parametrize("filled_qty", [None, "", "0", 0, "0.0"], ids=repr)
+def test_an_order_with_no_fill_count_reads_as_zero_filled(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    filled_qty: object,
+) -> None:
+    payload = {**load_alpaca_fixture("orders", "orders.json")[1], "filled_qty": filled_qty}
+
+    assert from_alpaca_order(payload, observed_at_ms=_OBSERVED).filled_quantity == 0.0
+
+
+def test_an_order_missing_its_fill_count_reads_as_zero_filled(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = {
+        key: value
+        for key, value in load_alpaca_fixture("orders", "orders.json")[1].items()
+        if key != "filled_qty"
+    }
+
+    assert from_alpaca_order(payload, observed_at_ms=_OBSERVED).filled_quantity == 0.0
+
+
+@pytest.mark.parametrize("filled_qty", [True, False])
+def test_a_boolean_fill_count_is_refused_not_read_as_a_quantity(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    filled_qty: bool,
+) -> None:
+    # ``payload.get("filled_qty") or 0`` once turned ``false`` into a quiet 0.0
+    # while ``true`` became one filled share (#2606).
+    payload = {**load_alpaca_fixture("orders", "orders.json")[1], "filled_qty": filled_qty}
+
+    with pytest.raises(TypeError, match="not a boolean"):
+        from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+
 def test_fill_latency_is_unknown_until_both_broker_clocks_exist(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:

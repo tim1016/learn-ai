@@ -151,9 +151,9 @@ def _non_finite_risk_fields(
 ) -> tuple[str, ...]:
     """Which risk inputs the broker reported as NaN or infinity.
 
-    ``adapter.opt_float`` is a bare ``float(value)``, so an Alpaca string like
-    ``"NaN"`` arrives here as a genuine non-finite float. A NaN makes every
-    loss comparison ``False``, which is indistinguishable from "nothing
+    ``adapter.opt_float`` refuses only booleans before ``float(value)``, so an
+    Alpaca string like ``"NaN"`` arrives here as a genuine non-finite float.
+    A NaN makes every loss comparison ``False``, which is indistinguishable from "nothing
     breached" — so a non-finite input is unjudgeable in exactly the way a
     missing ``last_equity`` is, and rides the same withdrawal.
     """
@@ -192,6 +192,16 @@ def _cash_flow_snapshots_match(
         and len(by_id(after)) == len(after)
         and before_by_id == by_id(after)
     )
+
+
+def _cause_text(exc: BaseException) -> str | None:
+    """What the broker adapter choked on, for the log only.
+
+    The exception's own text is owner copy (a router returns it), so the
+    technical reason rides on the ``raise ... from`` chain instead.
+    """
+    cause = exc.__cause__
+    return None if cause is None else f"{type(cause).__name__}: {cause}"
 
 
 def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
@@ -270,8 +280,9 @@ class LiveEnvelopeSync:
                 account_id=repo.account_id,
             )
         )
-        # The previous tick's verdict, so an unchanged one is not re-logged.
-        self._last_action: EnvelopeSyncAction | None = None
+        # The previous tick's verdict and the adapter fault behind it, so an
+        # unchanged one is not re-logged but a new cause is.
+        self._last_logged: tuple[EnvelopeSyncAction, str | None] | None = None
         self._account_mode_disagreed = False
         # The previous tick's non-finite risk fields, deduplicated the same way.
         self._last_non_finite: tuple[str, ...] = ()
@@ -629,7 +640,7 @@ class LiveEnvelopeSync:
             # of the invalid evidence under the same fence as policy Apply.
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
         except BrokerEvidenceUnavailable as exc:
-            return self._acted("unknown", {"why": str(exc)})
+            return self._acted("unknown", {"why": str(exc), "cause": _cause_text(exc)})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.
@@ -680,13 +691,16 @@ class LiveEnvelopeSync:
         )
 
     def _acted(self, action: EnvelopeSyncAction, detail: dict[str, Any]) -> EnvelopeSyncAction:
-        """Record the verdict, logging only when it differs from the last one.
+        """Record the verdict, logging only when it or its cause differs from the last one.
 
         At a 15 s cadence an unchanged verdict — a persisting outage as much
         as a healthy account — would write four lines a minute and bury the
-        transition that actually changed what the account accepts.
+        transition that actually changed what the account accepts. A new
+        adapter fault behind the same ``unknown`` is a new diagnosis, so it
+        is logged.
         """
-        if action != self._last_action:
+        logged = (action, detail.get("cause"))
+        if logged != self._last_logged:
             emit = logger.warning if action in _WARNING_ACTIONS else logger.info
             emit(
                 _ACTION_MESSAGES[action],
@@ -702,7 +716,7 @@ class LiveEnvelopeSync:
                     **detail,
                 },
             )
-        self._last_action = action
+        self._last_logged = logged
         return action
 
     async def run(self) -> None:

@@ -266,6 +266,17 @@ notional cap, no symbol allowlist, no session restriction.
   Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
+- **A malformed account response is rejected evidence.** The adapter's
+  `to_float`/`opt_float`, which parse every Alpaca money and quantity field,
+  refuse a JSON boolean, because `float(True)` is `1.0`: a boolean
+  `last_equity` would otherwise be a $1 prior close. An account response the
+  adapter cannot map (a boolean, null, non-numeric or missing `cash` or
+  `equity`, or a boolean or non-numeric `last_equity`) makes
+  `AlpacaBroker.get_account` raise `BrokerEvidenceUnavailable`, with the
+  underlying error chained as its cause. That withdraws the prior envelope
+  observation immediately, like rejected transfer evidence above. The sync's
+  warning line logs the chained cause; the exception's own message and
+  `detail` stay plain owner copy.
 - **Positions are not a loss input.** Current equity already includes every
   open position. The sync therefore does not call the positions endpoint for
   this verdict; `AccountObservation.position_count` remains `None` rather
