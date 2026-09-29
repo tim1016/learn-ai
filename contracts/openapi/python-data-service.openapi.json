@@ -6202,7 +6202,7 @@
       },
       "BrokerClockEvidence": {
         "additionalProperties": false,
-        "description": "Market-wide broker-clock evidence \u2014 not scheduled-session authority.\n\nThe canonical calendar module (``.claude/rules/temporal-rigor.md``) remains\nthe sole source of scheduled session structure. This narrow live input may\nprove that the broker currently says the market is open or closed, but it\ncannot establish that any particular symbol is tradable or not halted. The\nliveness composition therefore pairs it with symbol-scoped vendor status\nevidence; no session/calendar logic may treat these fields as authority.",
+        "description": "Market-wide broker-clock evidence \u2014 not scheduled-session authority.\n\nThe canonical calendar module (``.claude/rules/temporal-rigor.md``) remains\nthe sole source of scheduled session structure. This narrow live input may\nprove that the broker currently says the market is open or closed, but it\ncannot establish that any particular symbol is tradable or not halted. The\nliveness composition therefore pairs it with symbol-scoped vendor status\nevidence; no session/calendar logic may treat these fields as authority.\nThe one liveness use of them: an open answer's ``next_close_ms`` is when\nthat answer stops proving the market open (#2596). It bounds the answer,\nnever the scheduled session, which stays the calendar's.",
         "properties": {
           "broker": {
             "title": "Broker",

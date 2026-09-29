@@ -10513,6 +10513,9 @@ export interface components {
          *     cannot establish that any particular symbol is tradable or not halted. The
          *     liveness composition therefore pairs it with symbol-scoped vendor status
          *     evidence; no session/calendar logic may treat these fields as authority.
+         *     The one liveness use of them: an open answer's ``next_close_ms`` is when
+         *     that answer stops proving the market open (#2596). It bounds the answer,
+         *     never the scheduled session, which stays the calendar's.
          */
         BrokerClockEvidence: {
             /** Broker */

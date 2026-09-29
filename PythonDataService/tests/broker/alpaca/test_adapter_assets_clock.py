@@ -86,3 +86,21 @@ def test_from_alpaca_clock_is_vendor_evidence(
     assert clock.next_open_ms == rfc3339_to_ms("2026-07-27T09:30:00-04:00")
     assert clock.next_close_ms == rfc3339_to_ms("2026-07-24T16:00:00-04:00")
     assert clock.observed_at_ms == _OBSERVED
+
+
+def test_from_alpaca_clock_refuses_an_open_answer_that_names_no_close() -> None:
+    """#2596: liveness bounds an open answer by the close it names; one with no close fails loud."""
+    with pytest.raises(ValueError, match="names no next close"):
+        from_alpaca_clock(
+            {"is_open": True, "timestamp": "2026-07-24T10:42:48-04:00", "next_open": None},
+            observed_at_ms=_OBSERVED,
+        )
+
+
+def test_from_alpaca_clock_accepts_a_closed_answer_without_a_close() -> None:
+    clock = from_alpaca_clock(
+        {"is_open": False, "timestamp": "2026-07-24T17:00:00-04:00", "next_open": None, "next_close": None},
+        observed_at_ms=_OBSERVED,
+    )
+
+    assert (clock.is_open, clock.next_close_ms) == (False, None)
