@@ -23,6 +23,7 @@ from app.services.run_replay_proof import (
 )
 from app.services.source_bar_ledger import (
     RECOVERY_QUOTE_PROVIDER,
+    RUN_END_CLOSE_PROVIDER,
     RetainedContinuityEvent,
     RetainedSourceBar,
     SourceBarLedger,
@@ -164,6 +165,24 @@ def test_a_retained_recovery_quote_is_no_runs_replay_evidence(tmp_path: Path) ->
         assert replay_provider_for(ledger, "SPY") == "ibkr"
         with pytest.raises(ValueError, match="recovery quote"):
             ledger.retain_recovery_quote(_market_bar(4, feed_id="ibkr"))
+    finally:
+        ledger.close(checkpoint=False)
+
+
+def test_a_retained_run_end_close_is_no_runs_replay_evidence(tmp_path: Path) -> None:
+    """A Dry Run's run-end close re-states the last price its run saw on its
+    own stream (owner decision 2026-09-29); that run and the bot's next run
+    must still replay."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:bot-a")
+    try:
+        ledger.append(_market_bar(0, feed_id="ibkr"), run_id="run-a")
+        retained = ledger.retain_run_end_close(_market_bar(3, feed_id=RUN_END_CLOSE_PROVIDER))
+
+        assert (retained.provider, retained.run_id) == (RUN_END_CLOSE_PROVIDER, None)
+        assert replay_provider_for(ledger, "SPY") == "ibkr"
+        assert ledger.latest_for_symbol("SPY", market_only=True).provider == "ibkr"
+        with pytest.raises(ValueError, match="run-end close"):
+            ledger.retain_run_end_close(_market_bar(4, feed_id="ibkr"))
     finally:
         ledger.close(checkpoint=False)
 

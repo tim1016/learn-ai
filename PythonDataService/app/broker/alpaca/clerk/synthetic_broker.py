@@ -270,7 +270,7 @@ class SyntheticBroker:
         """
         if self._ledger is None or self._source_bars is None:
             return False
-        last_seen = self._source_bars.latest_market_bar(symbol)
+        last_seen = self._source_bars.latest_for_symbol(symbol, market_only=True)
         if last_seen is None:
             return False
         now_ms = self._clock()

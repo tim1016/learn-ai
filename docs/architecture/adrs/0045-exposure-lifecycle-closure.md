@@ -159,8 +159,13 @@ runner releases the ended run's authority, when boot restores a Dry Run whose
 process died, and on every read that reopens a stopped Dry Run; its worklist
 is derived from durable facts, one close per exposure. Only a `sim:`
 authority is exempt: real accounts and a live account's shadow keep the rule
-above. A close that cannot run folds for the operator, whose Flatten (at the
-live IBKR quote, below) remains the fallback.
+above. A close that cannot be sent folds like any EXIT (`EXIT_NOT_FLAT`); the
+stuck-EXIT watchdog's bounded re-drive and the operator's Flatten, both at the
+live IBKR quote, remain the fallback. The fill-evidence streams
+(`FILL_EVIDENCE_PROVIDERS`: the recovery quote and the run-end close) are never
+any run's replay evidence. Not covered: an exposure whose own EXIT is still
+working when the run ends (a program EXIT held for the next session) -- that
+EXIT owns the position.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing

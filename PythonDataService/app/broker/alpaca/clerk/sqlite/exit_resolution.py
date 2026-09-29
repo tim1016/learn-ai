@@ -41,7 +41,7 @@ import base64
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import ClassVar, NamedTuple
+from typing import ClassVar, Literal, NamedTuple
 
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -856,7 +856,7 @@ def _send_verdict(
     That close fills at a price its run already saw, never at the market, so
     no session, halt or missing quote can hold it (owner decision 2026-09-29).
     """
-    if facts.decision_id.startswith(DRY_RUN_CLOSE_DECISION_PREFIX):
+    if _exit_intent(facts) == "run_end_close":
         return "send"
     return reducing_send_verdict(
         extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms, liveness=liveness,
@@ -1028,7 +1028,7 @@ def _fold_unsendable_leg(
             next_step=next_step,
         )
 
-    if not _is_recovery_exit(repo, effect_operation_id):
+    if _exit_intent(_accepted_facts(repo, effect_operation_id)) != "recovery":
         leg = "market order" if verdict == "wait" else "limit"
         fold(
             summary_code=PROGRAM_EXIT_SESSION_ENDED.reason_code,
@@ -1626,26 +1626,21 @@ async def _submit_reducing_order(
              liveness=liveness,
         ):
             return None
-        if _is_dry_run_close(repo, effect_operation_id):
-            if not broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol):
-                _fold_submit_refused(
-                    repo,
-                    effect_operation_id=effect_operation_id,
-                    reducing=reducing,
-                    why="The simulation has no price its run saw to close this position at; no order was sent.",
+        # An EXIT with no decision bar is priced by the port before it is sent:
+        # a no-submit world binds the price it fills at, or nothing goes out.
+        match _exit_intent(_accepted_facts(repo, effect_operation_id)):
+            case "run_end_close":
+                bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
+                why = "The simulation has no price its run saw to close this position at; no order was sent."
+            case "recovery":
+                bound = broker.bind_latest_recovery_bar(
+                    reducing.client_order_id, symbol=facts.symbol, side=leg.side,
                 )
-                return None
-        elif _is_recovery_exit(repo, effect_operation_id) and not broker.bind_latest_recovery_bar(
-            reducing.client_order_id,
-            symbol=facts.symbol,
-            side=leg.side,
-        ):
-            _fold_submit_refused(
-                repo,
-                effect_operation_id=effect_operation_id,
-                reducing=reducing,
-                why="The simulation had no current price to fill this recovery at; no order was sent.",
-            )
+                why = "The simulation had no current price to fill this recovery at; no order was sent."
+            case "decision":
+                bound, why = True, ""
+        if not bound:
+            _fold_submit_refused(repo, effect_operation_id=effect_operation_id, reducing=reducing, why=why)
             return None
         _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
         return leg
@@ -1800,13 +1795,23 @@ def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str
     return reduction_touch(confirmed.side, bid=facts.reference_bid, ask=facts.reference_ask)
 
 
-def _is_recovery_exit(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:
-    decision_id = _accepted_facts(repo, effect_operation_id).decision_id
-    return decision_id.startswith(_RECOVERY_DECISION_PREFIXES)
+type _ExitIntent = Literal["decision", "recovery", "run_end_close"]
 
 
-def _is_dry_run_close(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:
-    return _accepted_facts(repo, effect_operation_id).decision_id.startswith(DRY_RUN_CLOSE_DECISION_PREFIX)
+def _exit_intent(facts: ExitAcceptedFacts) -> _ExitIntent:
+    """What an EXIT is, read once from the decision id it was accepted under.
+
+    ``decision`` -- a deciding program's or the panel's own EXIT, bound to its
+    decision bar. ``recovery`` -- the operator's safe flatten or the
+    watchdog's re-drive, priced from the live quote. ``run_end_close`` -- a
+    Dry Run's simulation closing what an ended run left, at the last price it
+    saw. Both of the latter are recovery EXITs (``accept_recovery_exit``).
+    """
+    if facts.decision_id.startswith(DRY_RUN_CLOSE_DECISION_PREFIX):
+        return "run_end_close"
+    if facts.decision_id.startswith(_RECOVERY_DECISION_PREFIXES):
+        return "recovery"
+    return "decision"
 
 
 def _append_order_phase(

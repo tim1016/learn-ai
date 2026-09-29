@@ -51,9 +51,9 @@ RECOVERY_QUOTE_PROVIDER = "ibkr.recovery_quote"
 # A Dry Run's run-end close (owner decision 2026-09-29): the last price the
 # run saw, re-stated at the instant the simulation sold, on its own stream.
 RUN_END_CLOSE_PROVIDER = "sim.run_end_close"
-# The streams a no-submit world writes for its own fills; neither is a price
-# the market delivered to a run.
-_FILL_EVIDENCE_PROVIDERS = (RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER)
+# The streams a no-submit world writes for its own fills. Neither is a price
+# the market delivered, so neither is any run's evidence.
+FILL_EVIDENCE_PROVIDERS = (RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER)
 """Indexed durable authority store for retained source observations."""
 
 SOURCE_BAR_STREAM_CAPACITY = 200_000
@@ -946,8 +946,14 @@ class SourceBarLedger:
 
     def latest_for_symbol(
         self, symbol: str, *, provider: str | None = None, at_or_before_ms: int | None = None,
+        market_only: bool = False,
     ) -> RetainedSourceBar | None:
-        """Newest retained mark, optionally at a proven historical cutoff/provider."""
+        """Newest retained mark, optionally at a proven historical cutoff/provider.
+
+        ``market_only`` leaves out the fill-evidence streams
+        (:data:`FILL_EVIDENCE_PROVIDERS`): the answer is the last price the
+        market delivered, which a run saw.
+        """
         predicates, values = ["b.symbol = ?"], [symbol]
         if provider is not None:
             predicates.append("b.provider = ?")
@@ -955,25 +961,14 @@ class SourceBarLedger:
         if at_or_before_ms is not None:
             predicates.append("b.end_ms <= ?")
             values.append(at_or_before_ms)
-        order = "b.seq DESC" if provider is None and at_or_before_ms is None else "b.end_ms DESC, b.seq DESC"
+        if market_only:
+            predicates.append(f"b.provider NOT IN ({', '.join('?' for _ in FILL_EVIDENCE_PROVIDERS)})")
+            values.extend(FILL_EVIDENCE_PROVIDERS)
+        unfiltered = provider is None and at_or_before_ms is None and not market_only
+        order = "b.seq DESC" if unfiltered else "b.end_ms DESC, b.seq DESC"
         with self._lock:
             row = self._conn.execute(
                 f"{_BARS_WITH_JOURNAL} WHERE {' AND '.join(predicates)} ORDER BY {order} LIMIT 1", values,
-            ).fetchone()
-        return None if row is None else _retained_row(row)
-
-    def latest_market_bar(self, symbol: str) -> RetainedSourceBar | None:
-        """The newest bar the market delivered for ``symbol``: the last price a run saw.
-
-        A no-submit world's own fill-evidence streams are excluded -- they
-        restate a price, they never deliver one.
-        """
-        placeholders = ", ".join("?" for _ in _FILL_EVIDENCE_PROVIDERS)
-        with self._lock:
-            row = self._conn.execute(
-                f"{_BARS_WITH_JOURNAL} WHERE b.symbol = ? AND b.provider NOT IN ({placeholders}) "
-                "ORDER BY b.end_ms DESC, b.seq DESC LIMIT 1",
-                (symbol, *_FILL_EVIDENCE_PROVIDERS),
             ).fetchone()
         return None if row is None else _retained_row(row)
 
@@ -985,6 +980,10 @@ class SourceBarLedger:
                 (symbol,),
             ).fetchall()
         return [str(row["provider"]) for row in rows]
+
+    def market_providers_for(self, symbol: str) -> list[str]:
+        """The providers whose streams the market delivered for ``symbol``, without fill evidence."""
+        return [provider for provider in self.providers_for(symbol) if provider not in FILL_EVIDENCE_PROVIDERS]
 
     def checkpoint_wal(self) -> None:
         """Checkpoint and truncate durable evidence after controlled shutdown or backup.
@@ -1215,6 +1214,7 @@ def _same_market_payload(existing: RetainedSourceBar, candidate: RetainedSourceB
 
 
 __all__ = [
+    "FILL_EVIDENCE_PROVIDERS",
     "RECOVERY_QUOTE_PROVIDER",
     "RUN_END_CLOSE_PROVIDER",
     "SOURCE_BAR_LEDGER_FILENAME",

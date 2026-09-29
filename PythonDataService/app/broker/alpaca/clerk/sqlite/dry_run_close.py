@@ -22,8 +22,14 @@ Each close is one recovery EXIT under ``DRY_RUN_CLOSE_DECISION_PREFIX``,
 keyed on the exposure's newest entry, so a re-run of the pass drives the same
 EXIT and never sells twice. The EXIT machine sends it regardless of the
 session and binds it to the last delivered bar (``exit_resolution``). A close
-that fails is not retried under a new identity: its EXIT folds for the
-operator, whose safe flatten stays the fallback.
+that cannot be sent folds like any EXIT (``EXIT_NOT_FLAT``); from there the
+stuck-EXIT watchdog's bounded re-drive and the operator's safe flatten, both
+at the live IBKR quote, take over. This step never mints a second close for
+the same exposure.
+
+Not covered: an exposure whose own EXIT is still working when the run ends
+(a program EXIT held for the next session) -- that EXIT owns the position,
+and a second one would race it.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from functools import partial
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
@@ -75,14 +82,16 @@ def closes_owed(repo: ClerkSqliteRepository) -> list[OwedClose]:
         strategy_instance_id = instance["strategy_instance_id"]
         if repo.active_run(strategy_instance_id) is not None:
             continue
-        for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items():
-            if not position_quantity_is_nonzero(quantity):
-                continue
-            entries = [
-                order
-                for order in repo.entry_orders_for_strategy(strategy_instance_id)
-                if entry_order_symbol(repo, order.order_ref).upper() == symbol
-            ]
+        held = [
+            symbol
+            for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items()
+            if position_quantity_is_nonzero(quantity)
+        ]
+        if not held:
+            continue
+        owned_entries = repo.entry_orders_for_strategy(strategy_instance_id)
+        for symbol in held:
+            entries = [order for order in owned_entries if entry_order_symbol(repo, order.order_ref).upper() == symbol]
             if not entries or any(repo.active_exit_for_order(order.order_ref) is not None for order in entries):
                 continue
             entry_order_ref = entries[-1].order_ref
@@ -142,14 +151,21 @@ async def close_exposure_of_ended_dry_runs(
                 extra={"action": "dry_run_close_deferred", **extra},
             )
             continue
+        extra |= {"effect_operation_id": resolved.effect_operation_id, "reducing_order_ref": resolved.reducing_order_ref}
+        effect_operation_id = exit_effect_operation_id(
+            strategy_instance_id=close.strategy_instance_id, decision_id=close.decision_id
+        )
+        effect = await run(partial(repo.effect_operation, effect_operation_id))
+        if effect is None or effect.state != "succeeded":
+            logger.warning(
+                "a Dry Run's run-end close did not leave it flat; the EXIT stays with custody recovery",
+                extra={"action": "dry_run_close_not_flat", "effect_state": None if effect is None else effect.state,
+                       **extra},
+            )
+            continue
         logger.warning(
             "closed an ended Dry Run's simulated position at the last price its run saw",
-            extra={
-                "action": "dry_run_run_end_close",
-                "effect_operation_id": resolved.effect_operation_id,
-                "reducing_order_ref": resolved.reducing_order_ref,
-                **extra,
-            },
+            extra={"action": "dry_run_run_end_close", **extra},
         )
 
 

@@ -12,8 +12,10 @@ account's real authority wired to an Alpaca double that fails on any call.
 
 Since 2026-09-29 a Dry Run never ends holding: its simulation closes what the
 ended run left at the last price the run saw (``dry_run_close``). The
-operator's flatten stays the fallback for a close that could not run; the
-tests of that flatten disable the close (``run_ending="close_disabled"``).
+operator's flatten stays the fallback for a close that could not be sent
+(``test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the_way_back``);
+the tests of that flatten's own mechanics disable the close
+(``run_ending="close_disabled"``).
 """
 
 from __future__ import annotations
@@ -58,6 +60,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.sqlite_panel_source import SqlitePanelBotNotFound, read_sqlite_panel_evidence
 from app.services.session_authority import et_minute_of_day_ms
+from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.v2panel.conftest import account_snapshot
@@ -546,3 +549,30 @@ async def test_the_run_end_close_sells_once_however_often_the_bot_is_opened(
 
     assert [fill.side for fill in panel.recent_fills] == ["sell", "buy"]
     assert panel.exposure == {}
+
+
+@pytest.mark.parametrize("run_ending", ["hard_death"])
+async def test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the_way_back(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close the simulation cannot price folds like any EXIT, never silently:
+    the position stays attributed and the operator's flatten, at IBKR's live
+    bid, is the way back to flat."""
+    latest_for_symbol = SourceBarLedger.latest_for_symbol
+
+    def no_market_bar(self: SourceBarLedger, symbol: str, **kwargs: object):
+        return None if kwargs.get("market_only") else latest_for_symbol(self, symbol, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(SourceBarLedger, "latest_for_symbol", no_market_bar)
+    panel = await _panel()
+    assert panel.exposure == {"SPY": 1.0}
+
+    await _run(panel, "reconcile_now", "reconcile-after-unpriced-close")
+    panel = await _panel()
+    flattened = await _run(panel, "execute_safe_flatten", "flatten-after-unpriced-close")
+
+    assert flattened.applied
+    panel = await _panel()
+    assert panel.exposure == {}
+    assert [(fill.side, fill.price) for fill in panel.recent_fills][:1] == [("sell", 601.25)]
+    assert crashed_dry_run.alpaca.calls == []
