@@ -134,13 +134,14 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy`);
     await expect(page.getByRole('heading', { level: 2 })).toHaveText(['What', 'How', 'Money', 'Confirm']);
 
-    // What and How are complete from the server's offer, so each folds to one line.
-    await expect(step(page, 'What').getByRole('button', { name: 'Edit step 1, What' })).toHaveAttribute('aria-expanded', 'false');
-    await expect(step(page, 'What')).toContainText('Deployment Validation on SPY · Allowed on this Paper account');
-    await expect(step(page, 'How').getByRole('button', { name: 'Edit step 2, How' })).toHaveAttribute('aria-expanded', 'false');
-    await expect(step(page, 'How')).toContainText(
-      'Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life',
-    );
+    // The steps stand side by side, every one open. What and How are
+    // complete from the server's offer, so each is headed Ready.
+    await expect(step(page, 'What').getByText('Ready', { exact: true })).toBeVisible();
+    await expect(step(page, 'What')).toContainText('Allowed on this Paper account');
+    await expect(step(page, 'What').getByRole('button', { name: /^(Edit|Done with) step/ })).toHaveCount(0);
+    await expect(step(page, 'How').getByText('Ready', { exact: true })).toBeVisible();
+    await expect(step(page, 'How').getByRole('radio', { name: /Paper/ })).toBeChecked();
+    await expect(step(page, 'How').getByRole('spinbutton', { name: 'Exit allowance (bps)' })).toHaveValue('20');
 
     // Money: the account's bar as it stands, then a NEW slice carved from
     // free to deploy once the server has previewed the typed amount.
@@ -309,6 +310,38 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // Nothing the Paper walk did reached the Live account (FR-096).
     expect(world.sent.filter((command) => !command.path.startsWith(PAPER_API))).toEqual([]);
+    expect(world.unexpected()).toEqual([]);
+  });
+
+  test('Deploy fits one screen: every step, every field and the button in view, nothing to scroll', async ({ page }) => {
+    const world = new OwnerWalkWorld();
+    await world.install(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.goto(`${PAPER_WORKSPACE}/deploy`);
+    await step(page, 'Money').getByLabel('Dollar budget (USD)').fill(PAPER_BUDGET);
+    const deploy = step(page, 'Confirm').getByRole('button', { name: 'Deploy paper bot · set aside $1,000.00' });
+    await expect(deploy).toBeEnabled();
+
+    await expect(deploy).toBeInViewport({ ratio: 1 });
+    const fit = await page.evaluate(() => ({
+      height: document.documentElement.scrollHeight,
+      viewport: window.innerHeight,
+    }));
+    expect(fit.height).toBeLessThanOrEqual(fit.viewport);
+
+    // Every field wears its own fill: the exit terms and the budget were once
+    // drawn with no box at all, a label over nothing.
+    const how = step(page, 'How');
+    const column = await how.evaluate((el) => getComputedStyle(el).backgroundColor);
+    for (const name of ['Exit allowance (bps)', 'Band multiple', 'Spread cap (bps)']) {
+      const fill = await how.getByRole('spinbutton', { name }).evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(fill, name).not.toBe('rgba(0, 0, 0, 0)');
+      expect(fill, name).not.toBe(column);
+    }
+    const budgetFill = await step(page, 'Money').getByLabel('Dollar budget (USD)')
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(budgetFill).not.toBe('rgba(0, 0, 0, 0)');
     expect(world.unexpected()).toEqual([]);
   });
 
