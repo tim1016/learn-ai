@@ -6,7 +6,7 @@
 
 For the EMA crossover program that runs on the clerk lanes, **7.2% of backtest trades on SPY are decided on the session's final bar** (6 of 83 over 590 sessions: 5 entries, 1 exit). The paper-only 30–70 RSI variant has 9.7% (54 of 559: 36 entries, 18 exits). Deployment Validation has none, because it stops deciding 15 minutes before the close.
 
-Live cannot trade those decisions the way the backtest does. The backtest fills them at the final minute's close. Live decides that bar just after the close. Its gate then refuses an ENTER, and it sends an EXIT as an after-hours limit (#2440).
+Live cannot trade those decisions the way the backtest does. The backtest fills them at the final minute's close. Live decides that bar just after the close. Its gate then normally refuses an ENTER, and it sends an EXIT as an after-hours limit (#2440).
 
 The entries matter most. Skipping the five final-bar entries removes **17.56 of the backtest's 50.03 points per share (35%)** for the sealed EMA settings, and 49% for the variant. The exits barely matter. On all 589 sessions, the first after-hours print sits **0.42 bps** from the close on average. The next open sits **42 bps** away.
 
@@ -14,11 +14,11 @@ The entries matter most. Skipping the five final-bar entries removes **17.56 of 
 
 - **ENTER on the final bar: skip it.** That is what live does when its gate works.
 - **EXIT on the final bar: fill at the after-hours price.** Use the first after-hours minute that reaches the limit live would send.
-- **Do not fill at the next open.** It is 100× further from what live gets for an exit. It also credits entries that live never takes.
+- **Do not fill at the next open.** It is 10–100× further from what live gets for an exit. It also credits entries that live never takes.
 
 Two live findings sharpen this:
 
-1. The ENTER refusal is a race against the broker clock's once-a-second poll, not a rule.
+1. The ENTER refusal hangs on the broker clock's once-a-second poll, so at 16:00 it can lose a race.
 2. The check built to prove that live and backtest group bars the same way has compared nothing since March 2026. With its date window corrected, the two groupings match on every bar held.
 
 Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-B](#follow-ups) (the ENTER race), [#FOLLOWUP-C](#follow-ups) (the parity check), [#FOLLOWUP-D](#follow-ups) (dead machinery).
@@ -97,7 +97,7 @@ None of the 60 final-bar trades fell on a half-day. The classifier would still c
 
 589 sessions; the last session has no next open inside the window.
 
-| Price, against the final minute's close | Mean |Δ| | Median |Δ| | p95 |Δ| | Max |Δ| |
+| Price, against the final minute's close | Mean abs. diff. | Median abs. diff. | p95 abs. diff. | Max abs. diff. |
 |---|---:|---:|---:|---:|
 | First after-hours minute's **open** | 0.42 bps | 0.30 bps | 1.04 bps | 27.98 bps |
 | First after-hours minute's **close** | 3.64 bps | 2.72 bps | 10.41 bps | 33.74 bps |
@@ -109,9 +109,9 @@ None of the 60 final-bar trades fell on a half-day. The classifier would still c
 
 ### 4. The final minute: the lake against what live saw
 
-The comparison uses held IBKR one-minute bars from 12 clerk source ledgers (copies) plus the recorder's `live_bars/*/1m` files. Both cover 2026-08-25 to 2026-09-10. The lake side is the raw root, because live bars are unadjusted. When a live-observed copy of a minute is held, it is preferred over IBKR history.
+The comparison uses held IBKR one-minute bars from 246 source-ledger copies (234 of them from the fleet-stress run) plus 17 recorder files, `live_bars/*/1m`. Together they cover 2026-08-25 to 2026-09-10. The lake side is the raw root, because live bars are unadjusted. When a live-observed copy of a minute is held, it is preferred over IBKR history.
 
-| SPY | Compared | Equal | Mean |Δ| | Max |Δ| |
+| SPY | Compared | Equal | Mean abs. diff. | Max abs. diff. |
 |---|---:|---:|---:|---:|
 | Every regular-session minute close | 4,768 | 3,635 (76%) | 0.014 bps | 0.79 bps |
 | Every 15-minute bucket close | 317 | 241 (76%) | — | — |
@@ -140,7 +140,7 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 - **Backtest seam:** the production `BacktestEngine`.
 - **Judge:** `compare_canonical_traces`.
 
-**The result.** 12 ledgers held AAPL, QQQ, SPY and TSLA from 2026-08-25 to 09-10; overlapping sessions were recorded independently. Across 24 runs, the two seams produced **1,688 EMA traces and 25,278 Deployment Validation traces, identical field for field, with no divergence.** That includes 63 final-bar traces for each program. It also includes one ledger with an incomplete bucket, which both seams quarantined the same way.
+**The result.** 12 ledgers held AAPL, QQQ, SPY and TSLA from 2026-08-25 to 09-10; overlapping sessions were recorded independently. Across 24 runs, the two seams produced **1,688 EMA traces and 25,278 Deployment Validation traces, identical field for field, with no divergence.** That includes 63 final-bar traces for each program. It also includes one ledger with an incomplete bucket: neither seam decided it, and both produced the same trace sequence around it.
 
 **Why the receipts never showed this.** The production version of this very check compared **zero traces in all 24 runs**. It stopped at index 0 with "reference sequence exhausted". The cause:
 
@@ -164,7 +164,7 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 - It fills on the first extended-hours minute that reaches the limit, at the better of that minute's open and the limit.
 - If nothing reaches the limit before after-hours ends (20:00, or 17:00 on a half-day, per `order_session_state_at_ms`), the position stays open into the next session.
 - This sits within 0.42 bps of today's close fill on average, and was reached on 589 of 589 sessions.
-- It is the only model that is also right when after-hours is thin. Filling at the limit itself would overstate the cost by the whole allowance, up to 55.8 points on the variant at 50 bps. Filling at the next open is wrong by 42 bps on average.
+- Unlike a close fill, it still behaves correctly when after-hours is thin or the limit is out of reach. Filling at the limit itself would overstate the cost by the whole allowance, up to 55.8 points on the variant at 50 bps. Filling at the next open is wrong by 42 bps on average.
 
 **3. The next-open path stays LEAN-only.** It reproduces LEAN's equity fill model for parity runs, and only there.
 
