@@ -144,6 +144,11 @@ never re-priced at all."""
 RECOVERY_FLATTEN_DECISION_PREFIX = "recovery-flatten-"
 EXIT_REDRIVE_DECISION_PREFIX = "exit-redrive-"
 _RECOVERY_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, EXIT_REDRIVE_DECISION_PREFIX)
+# The panel's flatten-and-stop decides its EXIT under this namespace (it is
+# colon-bearing, so the facade stores it encoded). With the safe flatten's,
+# the two namespaces an owner's own flatten is recorded under (#2574).
+PANEL_FLATTEN_DECISION_PREFIX = "panel-flatten:"
+OWNER_FLATTEN_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, PANEL_FLATTEN_DECISION_PREFIX)
 
 
 async def resolve_exit(

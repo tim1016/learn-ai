@@ -8,12 +8,14 @@ it came from -- and never combines a value across accounts (ADR 0062
 Decision 1): no row's money is added to another's.
 
 What could not be read is named, never dropped: a lane with no confirmed
-account, a lane whose read failed or answered something unreadable, and
-each Dry Run or world a lane itself could not read.
+account, a lane whose read failed or answered something unreadable, a lane
+that answered with its own refusal (named in the Clerk's own words), and each
+Dry Run, world or bot a lane itself could not read.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -32,9 +34,36 @@ from app.schemas.bot_history import (
 NO_ACCOUNT_REASON_CODE = "no_confirmed_account"
 #: A lane answered, but not with a bot history this build can read.
 UNREADABLE_ANSWER_REASON_CODE = "unreadable_answer"
+#: A lane answered the read with its own refusal (a 4xx or 5xx): it is
+#: reachable, it could not serve the read, and it said why.
+LANE_REFUSED_REASON_CODE = "lane_refused_read"
 
-_NO_ACCOUNT_COPY = "This account is not set up yet, so it has no bots to list."
+_NO_ACCOUNT_COPY = "This account is not set up yet, so its bots cannot be listed."
 _LANE_FAILED_COPY = "This account's bots could not be read right now. Refresh to try again."
+
+
+class LaneRefusedRead(Exception):
+    """A lane answered its bot-history read with a refusal, in the Clerk's own words."""
+
+    reason = LANE_REFUSED_REASON_CODE
+
+
+def lane_refusal(status_code: int, body: bytes) -> LaneRefusedRead:
+    """The lane's refusal, worded by its Clerk: the panel error's message and why.
+
+    A body that carries no words of its own (a validation list, or no JSON
+    at all) still names the refusal, by its status.
+    """
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    detail = payload.get("detail") if isinstance(payload, Mapping) else None
+    if isinstance(detail, Mapping):
+        words = " ".join(str(part) for part in (detail.get("message"), detail.get("why")) if part)
+    else:
+        words = detail if isinstance(detail, str) else ""
+    return LaneRefusedRead(words or f"This account's Clerk refused the read ({status_code}).")
 
 
 @dataclass(frozen=True)
@@ -44,12 +73,15 @@ class BotHistoryFilters:
     status: BotHistoryStatus | None = None
     world: BotHistoryWorld | None = None
     symbol: str | None = None
+    #: One bot, with all of its runs (its own page links here).
+    strategy_instance_id: str | None = None
 
     def admits(self, row: FleetBotHistoryRow) -> bool:
         return (
             (self.status is None or row.status == self.status)
             and (self.world is None or row.world == self.world)
             and (self.symbol is None or row.symbol == self.symbol)
+            and (self.strategy_instance_id is None or row.strategy_instance_id == self.strategy_instance_id)
         )
 
 
@@ -87,7 +119,12 @@ def merge_bot_history(
         if history is None:
             gaps.append(FleetBotHistoryGap(
                 broker=broker, clerk_id=clerk_id, account_id=account_id, strategy_instance_id=None,
-                reason=_LANE_FAILED_COPY, reason_code=failure,
+                reason=(
+                    str(lane.get("error_message"))
+                    if failure == LANE_REFUSED_REASON_CODE and lane.get("error_message")
+                    else _LANE_FAILED_COPY
+                ),
+                reason_code=failure,
             ))
             continue
         rows += (

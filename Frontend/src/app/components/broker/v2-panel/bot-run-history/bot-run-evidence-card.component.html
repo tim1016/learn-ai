@@ -14,18 +14,15 @@
   <div class="run-card__evidence">
     <div>
       <span>Process evidence</span>
-      @if (run().process; as process) {
-        <strong>{{ process.state | receiptLabel }}</strong>
-        @if (process.process_identity) {
-          <small>Process ID <code>{{ process.process_identity }}</code></small>
-        } @else {
-          <small>Process identity unavailable</small>
-        }
-        <small>Registry <code>{{ process.registry_generation }}</code></small>
-        <small>Observed <app-timestamp-display [value]="process.observed_at_ms" mode="local" /></small>
+      @let process = run().process;
+      <strong>{{ process.state | receiptLabel }}</strong>
+      @if (process.process_identity) {
+        <small>Process ID <code>{{ process.process_identity }}</code></small>
       } @else {
-        <strong>No process evidence recorded</strong>
+        <small>Process identity unavailable</small>
       }
+      <small>Registry <code>{{ process.registry_generation }}</code></small>
+      <small>Observed <app-timestamp-display [value]="process.observed_at_ms" mode="local" /></small>
     </div>
     <div>
       <span>Terminal evidence</span>

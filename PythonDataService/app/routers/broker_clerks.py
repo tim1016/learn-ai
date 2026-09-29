@@ -44,7 +44,12 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
-from app.services.fleet_bot_history import BotHistoryFilters, account_less_gap, merge_bot_history
+from app.services.fleet_bot_history import (
+    BotHistoryFilters,
+    account_less_gap,
+    lane_refusal,
+    merge_bot_history,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api", tags=["broker-clerks"])
@@ -268,6 +273,9 @@ async def aggregate_broker_clerks_bot_history(
     status: BotHistoryStatus | None = Query(None),
     world: BotHistoryWorld | None = Query(None),
     symbol: str | None = Query(None, pattern=US_EQUITY_SYMBOL_PATTERN),
+    strategy_instance_id: str | None = Query(
+        None, min_length=1, max_length=128, description="Only this bot, with all of its runs.",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
 ) -> Response:
@@ -275,10 +283,12 @@ async def aggregate_broker_clerks_bot_history(
 
     Each alpaca lane with a confirmed account is read through the lane
     router and folded by ``aggregate_lane_reads_async`` (one lane's failure
-    or timeout is that lane's own ``ok: false``); ``merge_bot_history`` then
+    or timeout is that lane's own ``ok: false``; a lane that answers with a
+    refusal is named in its Clerk's own words); ``merge_bot_history`` then
     concatenates the rows with their provenance -- combining no value across
     accounts -- and names every account it could not read. A lane with no
-    confirmed account is named too. Read on demand; the page never polls.
+    confirmed account is named too. A bot filter is asked of each lane and
+    held here as well. Read on demand; the page never polls.
     """
     service = _fleet_service(request)
     lane = _lane_router(request)
@@ -296,19 +306,18 @@ async def aggregate_broker_clerks_bot_history(
             FleetControlError("The Alpaca adapter declares no bot_history_read operation.")
         )
 
+    lane_query = {} if strategy_instance_id is None else {"strategy_instance_id": strategy_instance_id}
+
     async def read_lane(lane_clerk_id: str, account_id: str) -> dict[str, object]:
         delivered = await lane.deliver_read(
             broker="alpaca",
             clerk_id=lane_clerk_id,
             operation=operation,
             path_params={"account_id": account_id},
-            query={},
+            query=lane_query,
         )
         if delivered.status_code >= 400:
-            raise ClerkUnreachable(
-                f"The lane refused its bot-history read with {delivered.status_code}.",
-                next_step="Refresh History to ask this account again.",
-            )
+            raise lane_refusal(delivered.status_code, delivered.body)
         return dict(json.loads(delivered.body))
 
     accounts: dict[str, str] = {}
@@ -334,7 +343,9 @@ async def aggregate_broker_clerks_bot_history(
         aggregate,
         accounts=accounts,
         extra_gaps=account_less,
-        filters=BotHistoryFilters(status=status, world=world, symbol=symbol),
+        filters=BotHistoryFilters(
+            status=status, world=world, symbol=symbol, strategy_instance_id=strategy_instance_id,
+        ),
         page=page,
         page_size=page_size,
     )

@@ -5484,6 +5484,16 @@
               }
             ]
           },
+          "status": {
+            "enum": [
+              "running",
+              "holding",
+              "finished",
+              "cleared"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
@@ -5545,6 +5555,7 @@
           "journal_tail_seq",
           "actions",
           "primary_action",
+          "status",
           "readiness_checks",
           "readiness_ready_count",
           "readiness_blocked_count",
@@ -5791,16 +5802,12 @@
       },
       "BotRunView": {
         "additionalProperties": false,
-        "description": "Read-only launch and terminal evidence for one strategy run.",
+        "description": "Read-only launch, process and terminal evidence for a bot's current run.",
         "properties": {
           "configuration_hash": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Configuration Hash",
             "type": "string"
-          },
-          "is_current": {
-            "title": "Is Current",
-            "type": "boolean"
           },
           "launch_reason": {
             "enum": [
@@ -5812,14 +5819,7 @@
             "type": "string"
           },
           "process": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BotProcessFact"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/BotProcessFact"
           },
           "run_id": {
             "title": "Run Id",
@@ -5851,7 +5851,6 @@
           "configuration_hash",
           "launch_reason",
           "started_at_ms",
-          "is_current",
           "process",
           "terminal_outcome"
         ],
@@ -50060,7 +50059,7 @@
     },
     "/api/broker-clerks/aggregate/bot-history": {
       "get": {
-        "description": "One page of the History tab: each account's ``bot_history_read``, merged.\n\nEach alpaca lane with a confirmed account is read through the lane\nrouter and folded by ``aggregate_lane_reads_async`` (one lane's failure\nor timeout is that lane's own ``ok: false``); ``merge_bot_history`` then\nconcatenates the rows with their provenance -- combining no value across\naccounts -- and names every account it could not read. A lane with no\nconfirmed account is named too. Read on demand; the page never polls.",
+        "description": "One page of the History tab: each account's ``bot_history_read``, merged.\n\nEach alpaca lane with a confirmed account is read through the lane\nrouter and folded by ``aggregate_lane_reads_async`` (one lane's failure\nor timeout is that lane's own ``ok: false``; a lane that answers with a\nrefusal is named in its Clerk's own words); ``merge_bot_history`` then\nconcatenates the rows with their provenance -- combining no value across\naccounts -- and names every account it could not read. A lane with no\nconfirmed account is named too. A bot filter is asked of each lane and\nheld here as well. Read on demand; the page never polls.",
         "operationId": "aggregate_broker_clerks_bot_history_api_broker_clerks_aggregate_bot_history_get",
         "parameters": [
           {
@@ -50141,6 +50140,26 @@
                 }
               ],
               "title": "Symbol"
+            }
+          },
+          {
+            "description": "Only this bot, with all of its runs.",
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this bot, with all of its runs.",
+              "title": "Strategy Instance Id"
             }
           },
           {
@@ -53888,6 +53907,26 @@
             "schema": {
               "title": "Account Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Only this bot, with all of its runs.",
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this bot, with all of its runs.",
+              "title": "Strategy Instance Id"
             }
           },
           {

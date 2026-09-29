@@ -58,7 +58,6 @@ const CURRENT_RUN: BotRunView = {
   configuration_hash: 'a'.repeat(64),
   launch_reason: 'deploy',
   started_at_ms: 1_753_800_000_000,
-  is_current: true,
   process: {
     strategy_instance_id: 'sid-001',
     run_id: 'run-current',

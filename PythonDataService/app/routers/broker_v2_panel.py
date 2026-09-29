@@ -410,11 +410,17 @@ async def preview_deployment_budget_scoped(broker: str, account_id: str, request
     response_model=AccountBotHistory,
     summary="Every bot this account ran, with its Dry Runs: runs, outcomes, trades and money (#2574)",
 )
-async def read_account_bot_history(broker: str, account_id: str) -> AccountBotHistory:
+async def read_account_bot_history(
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str | None = Query(
+        default=None, min_length=1, max_length=128, description="Only this bot, with all of its runs.",
+    ),
+) -> AccountBotHistory:
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Bot history is available on Alpaca accounts.")
     try:
-        return await bot_history.account_bot_history(broker, account_id)
+        return await bot_history.account_bot_history(broker, account_id, strategy_instance_id=strategy_instance_id)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 

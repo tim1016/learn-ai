@@ -10,23 +10,31 @@ could be -- never a missing row.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.engine.live.bot_lifecycle_state import stable_bot_lifecycle_state_path
+from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.services.bot_binding_repository import (
     BotRunOutcomeRecord,
     BotRunRecord,
     live_state_binding_repository,
 )
+from app.services.bot_lifecycle_projection import SqliteAlpacaLifecycleAuthority
 from app.services.broker_v2_panel import bot_history, sqlite_roster_status
 from app.services.broker_v2_panel.bot_history import outcome_headline
+from app.services.broker_v2_panel.catalog_projection_service import custody_bot_status
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_bot_history import _ack, _enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
@@ -141,6 +149,91 @@ async def test_an_unreadable_dry_run_is_a_named_gap_never_a_missing_row(lane: Cl
     assert [gap.strategy_instance_id for gap in history.gaps] == ["dry-lost"]
     assert "could not be read" in history.gaps[0].reason
     assert "dry-1" in {bot.strategy_instance_id for bot in history.bots}
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_bot_is_a_named_gap_beside_its_readable_siblings(lane: ClerkSqliteRepository) -> None:
+    """A corrupt lifecycle file is that bot's gap, never the whole account's."""
+    lifecycle = stable_bot_lifecycle_state_path(bot_history.live_artifacts_root(), "done")
+    lifecycle.parent.mkdir(parents=True, exist_ok=True)
+    lifecycle.write_text("{not json", encoding="utf-8")
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    assert {"live", "dry-1"} <= {bot.strategy_instance_id for bot in history.bots}
+    assert "done" not in {bot.strategy_instance_id for bot in history.bots}
+    gaps = {gap.strategy_instance_id: gap.reason for gap in history.gaps}
+    assert gaps["done"] == "This bot's records could not be read, so it is not listed."
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_account_database_is_the_accounts_own_gap_and_its_dry_runs_still_list(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The account's own file failing is named in the Clerk's own words, in
+    the answer -- a refused read's body would stay in the lane's log."""
+    def unreadable(_only: object) -> None:
+        raise sqlite3.DatabaseError("file is not a database")
+
+    monkeypatch.setattr(lane, "bot_history", unreadable)
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    assert [(gap.strategy_instance_id, gap.reason) for gap in history.gaps if gap.strategy_instance_id is None] == [
+        (None, "This account's PAPER · practice money bots could not be read, so they are not listed."),
+    ]
+    assert {bot.strategy_instance_id for bot in history.bots} == {"dry-1"}
+
+
+@pytest.mark.asyncio
+async def test_one_bot_is_read_with_all_of_its_runs(lane: ClerkSqliteRepository) -> None:
+    """The bot's own page opens History on that bot alone: no other bot,
+    and no gap for a Dry Run it is not."""
+    own = await bot_history.account_bot_history("alpaca", _ACCOUNT, strategy_instance_id="done")
+    dry = await bot_history.account_bot_history("alpaca", _ACCOUNT, strategy_instance_id="dry-1")
+
+    assert [bot.strategy_instance_id for bot in own.bots] == ["done"] and own.gaps == ()
+    assert [bot.strategy_instance_id for bot in dry.bots] == ["dry-1"] and dry.gaps == ()
+
+
+def _read_after_fills(repo: ClerkSqliteRepository) -> LiveEnvelopeGate:
+    """An account reading taken after the fixture's fills, so a new entry is admitted."""
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(AccountObservation(
+        observed_at_ms=NOON, broker_cash_usd=1000, cash_available_usd=1000,
+        last_equity_usd=1000, unrealized_pl_usd=0, position_count=0, risk_revision=1,
+        equity_usd=1000, risk_cash_flow_evidence_complete=True,
+        risk_cash_flow_window_start_ms=day_pnl_window_start_ms(NOON),
+        risk_equity_window_start_ms=day_pnl_window_start_ms(NOON),
+        risk_fill_sequence=risk_fill_sequence(repo),
+    ))
+    return gate
+
+
+@pytest.mark.asyncio
+async def test_the_bot_page_reads_the_same_status_as_its_history_row(lane: ClerkSqliteRepository) -> None:
+    """Cleared once retired with nothing outstanding; a retired bot still
+    holding shares is holding, not cleared -- one answer for both surfaces."""
+    _register(lane, "idle")
+    held = _enter(lane, "live", "run-live", "enter-live", envelope=_read_after_fills(lane))
+    _ack(lane, held, "filled")
+    _append_slice(lane, held, execution_id="live-buy", quantity=1, source_event_at_ms=NOON - 3, fee=0)
+    submit_stop_run(lane, account_id=lane.account_id, strategy_instance_id="live", lifecycle_run_id="run-live", clock=lane.clock)
+    for sid in ("idle", "live"):
+        SqliteAlpacaLifecycleAuthority(lane).retire(sid, NOON + 5, "Cleared from Home")
+
+    rows = {bot.strategy_instance_id: bot.status for bot in (await bot_history.account_bot_history("alpaca", _ACCOUNT)).bots}
+    pages = {sid: custody_bot_status(lane, sid, running=False) for sid in ("idle", "live")}
+
+    assert rows["idle"] == pages["idle"] == "cleared"
+    assert rows["live"] == pages["live"] == "holding"
+
+
+def test_every_outcome_kind_has_its_own_words_and_an_unknown_one_still_reads() -> None:
+    worded = {kind: outcome_headline(kind, "UNWORDED_REASON", flattened=False) for kind in get_args(BotDutyOutcomeKind)}
+
+    assert "Ended" not in worded.values()
+    assert outcome_headline("A_KIND_FROM_A_NEWER_BUILD", "UNWORDED_REASON", flattened=False) == "Ended"
 
 
 @pytest.mark.parametrize(

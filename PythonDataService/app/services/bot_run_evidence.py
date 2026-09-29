@@ -171,19 +171,6 @@ class BotRunEvidenceService:
                 f"Current run '{binding.run_id}' has no launch evidence.",
                 detail="Recover the bot run artifacts before requesting current-run state.",
             )
-        return self._compose(
-            record,
-            is_current=True,
-            process=process,
-        )
-
-    def _compose(
-        self,
-        record: BotRunRecord,
-        *,
-        is_current: bool,
-        process: BotProcessFact | None,
-    ) -> BotRunView:
         outcome = self._repository.read_outcome(
             record.strategy_instance_id,
             record.run_id,
@@ -198,7 +185,7 @@ class BotRunEvidenceService:
                 canary_rollback=outcome.canary_rollback,
             )
             if outcome is not None
-            else self._current_lifecycle_outcome(record, is_current=is_current)
+            else self._current_lifecycle_outcome(record)
         )
         return BotRunView(
             strategy_instance_id=record.strategy_instance_id,
@@ -206,19 +193,11 @@ class BotRunEvidenceService:
             configuration_hash=record.configuration_hash,
             launch_reason=record.launch_reason,
             started_at_ms=record.started_at_ms,
-            is_current=is_current,
             process=process,
             terminal_outcome=terminal,
         )
 
-    def _current_lifecycle_outcome(
-        self,
-        record: BotRunRecord,
-        *,
-        is_current: bool,
-    ) -> BotRunTerminalOutcomeView | None:
-        if not is_current:
-            return None
+    def _current_lifecycle_outcome(self, record: BotRunRecord) -> BotRunTerminalOutcomeView | None:
         lifecycle = self._lifecycle_repo_for(record.strategy_instance_id).read()
         if (
             lifecycle is None

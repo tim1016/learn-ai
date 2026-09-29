@@ -180,6 +180,7 @@ export function panelAtRevision(revision: number): BotPanelView {
     actions: [],
     primary_action: null,
     exit_terms: null,
+    status: 'finished',
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,

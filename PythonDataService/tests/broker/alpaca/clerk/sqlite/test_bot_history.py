@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.bot_history import OrderCounts, read_custody_history
+from app.broker.alpaca.clerk.sqlite.bot_history import OrderCounts, is_owner_flatten_decision, read_custody_history
 from app.broker.alpaca.clerk.sqlite.budget_projection import project_bot_results
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
@@ -21,11 +21,16 @@ from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _durable_decision_id
 from app.broker.contract.models import BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
+    crashed_with_exposure,  # noqa: F401 — the held-and-stopped repository the flatten test reuses
+)
 
 
 def _enter(repo: ClerkSqliteRepository, sid: str, run: str, key: str, **gate: object) -> EnterSubmission:
@@ -135,3 +140,44 @@ def test_unvouched_fees_leave_result_and_fees_unknown_never_zero(old_bot: ClerkS
     assert bot.result is None and bot.fees is None
     # The counts need no fee evidence.
     assert bot.transactions == 3
+
+
+async def test_a_run_the_owner_flattened_after_its_stop_reads_as_flattened(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """The owner stops a bot holding 10 SPY, then flattens it through the
+    Clerk's own safe flatten: the reducing EXIT it records is the evidence,
+    so the run reads as flattened only once that EXIT exists."""
+    repo, _clock = crashed_with_exposure
+    await safe_flatten._held_position(repo)
+    submit_stop_run(
+        repo, account_id=safe_flatten.ACCOUNT_ID, strategy_instance_id=safe_flatten.SID,
+        lifecycle_run_id=safe_flatten.RUN_ID, operator_reason="operator_stop",
+    )
+    (stopped,) = repo.bot_history().bots[0].runs
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=safe_flatten._FakeRead(positions=[safe_flatten._position("SPY", quantity=10.0)]),
+        trade=safe_flatten._FakeTrade(), account_mode="paper",
+    )
+
+    await facade.execute_safe_flatten(plan=await safe_flatten._reconciled_flatten_plan(repo), reason="owner flatten")
+
+    (flattened,) = repo.bot_history().bots[0].runs
+    assert not stopped.flattened
+    assert flattened.flattened
+
+
+@pytest.mark.parametrize(
+    ("decision_id", "owner_flatten"),
+    [
+        ("recovery-flatten-0123456789abcdef", True),
+        (_durable_decision_id("panel-flatten:key-1"), True),
+        ("exit-redrive-0123456789ab-1", False),
+        ("evaluation-42", False),
+        (_durable_decision_id("strategy:exit"), False),
+    ],
+)
+def test_only_the_owners_flattens_count_as_a_flatten(decision_id: str, owner_flatten: bool) -> None:
+    """The safe flatten and the panel's flatten-and-stop are the owner's; a
+    watchdog re-drive or a strategy's own EXIT is not."""
+    assert is_owner_flatten_decision(decision_id) is owner_flatten

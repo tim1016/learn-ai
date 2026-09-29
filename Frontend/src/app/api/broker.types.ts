@@ -473,10 +473,12 @@ export interface paths {
          *
          *     Each alpaca lane with a confirmed account is read through the lane
          *     router and folded by ``aggregate_lane_reads_async`` (one lane's failure
-         *     or timeout is that lane's own ``ok: false``); ``merge_bot_history`` then
+         *     or timeout is that lane's own ``ok: false``; a lane that answers with a
+         *     refusal is named in its Clerk's own words); ``merge_bot_history`` then
          *     concatenates the rows with their provenance -- combining no value across
          *     accounts -- and names every account it could not read. A lane with no
-         *     confirmed account is named too. Read on demand; the page never polls.
+         *     confirmed account is named too. A bot filter is asked of each lane and
+         *     held here as well. Read on demand; the page never polls.
          */
         get: operations["aggregate_broker_clerks_bot_history_api_broker_clerks_aggregate_bot_history_get"];
         put?: never;
@@ -10283,6 +10285,11 @@ export interface components {
             revision: number;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "holding" | "finished" | "cleared";
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Strategy Key */
@@ -10380,19 +10387,17 @@ export interface components {
         };
         /**
          * BotRunView
-         * @description Read-only launch and terminal evidence for one strategy run.
+         * @description Read-only launch, process and terminal evidence for a bot's current run.
          */
         BotRunView: {
             /** Configuration Hash */
             configuration_hash: string;
-            /** Is Current */
-            is_current: boolean;
             /**
              * Launch Reason
              * @enum {string}
              */
             launch_reason: "deploy" | "resume" | "legacy";
-            process: components["schemas"]["BotProcessFact"] | null;
+            process: components["schemas"]["BotProcessFact"];
             /** Run Id */
             run_id: string;
             /** Started At Ms */
@@ -29637,6 +29642,8 @@ export interface operations {
                 status?: ("running" | "holding" | "finished" | "cleared") | null;
                 world?: ("live" | "paper" | "shadow" | "dry_run") | null;
                 symbol?: string | null;
+                /** @description Only this bot, with all of its runs. */
+                strategy_instance_id?: string | null;
                 page?: number;
                 page_size?: number;
             };
@@ -31586,7 +31593,10 @@ export interface operations {
     };
     read_account_bot_history_api_brokers__broker__accounts__account_id__bot_history_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only this bot, with all of its runs. */
+                strategy_instance_id?: string | null;
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };

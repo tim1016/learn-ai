@@ -177,6 +177,7 @@ const PANEL: BotPanelView = {
   actions: [],
   primary_action: null,
   exit_terms: null,
+  status: 'running',
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,
@@ -487,7 +488,6 @@ function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
     configuration_hash: 'a'.repeat(64),
     launch_reason: 'deploy',
     started_at_ms: 1_753_800_000_000,
-    is_current: true,
     process: {
       strategy_instance_id: 'sid-001',
       run_id: 'run-current',
@@ -1805,7 +1805,7 @@ describe('BotPanelShellComponent', () => {
       .mockResolvedValueOnce(makeRun())
       .mockResolvedValueOnce(
         makeRun({
-          process: null,
+          process: { ...makeRun().process, state: 'EXITED', observed_at_ms: 1_753_805_000_000 },
           terminal_outcome: {
             kind: 'STOPPED',
             reason_code: 'OPERATOR_STOP',

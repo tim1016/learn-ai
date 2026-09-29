@@ -96,8 +96,14 @@ describe('BrokerV2PanelService run evidence', () => {
       configuration_hash: 'a'.repeat(64),
       launch_reason: 'deploy',
       started_at_ms: 1_753_800_000_000,
-      is_current: true,
-      process: null,
+      process: {
+        strategy_instance_id: 'sid/001',
+        run_id: 'run-current',
+        process_identity: null,
+        state: 'UNKNOWN',
+        registry_generation: 'registry-1',
+        observed_at_ms: 1_753_800_000_000,
+      },
       terminal_outcome: null,
     });
 

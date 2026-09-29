@@ -24,6 +24,12 @@ A fill or order whose effect operation names no run (work done for a bot
 after its run ended, such as a later flatten) counts toward the bot, never
 toward a run, so a run's counts are exact and the bot's totals stay equal to
 its ``trade_count``.
+
+A run was **flattened** when the owner's own flatten -- the Clerk's safe
+flatten or the panel's flatten-and-stop, each a reducing EXIT under its own
+decision namespace -- was accepted at or after the run's stop and before the
+bot's next run began. The EXIT is the evidence; nothing records a flatten
+any other way.
 """
 
 from __future__ import annotations
@@ -45,7 +51,9 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.exit_resolution import OWNER_FLATTEN_DECISION_PREFIXES
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
+from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
 
 #: The broker's order states each order count reads. Lower-cased: Alpaca's
 #: own spelling ("canceled") is the stored one.
@@ -87,7 +95,7 @@ class RunFacts:
     stopped_at_ms: int | None
     transactions: int
     orders: OrderCounts
-    #: The run was stopped with a flatten (a STOP_AND_FLATTEN operation).
+    #: The owner flattened what the run held after stopping it (module doc).
     flattened: bool
 
 
@@ -180,27 +188,29 @@ def project_custody_history(
         if run_id is not None:
             fills_by_run[run_id] = fills_by_run.get(run_id, 0) + 1
 
-    flattened_runs = {
-        str(row[0]) for row in conn.execute(
-            "SELECT DISTINCT run_id FROM effect_operations "
-            "WHERE kind = 'STOP_AND_FLATTEN' AND run_id IS NOT NULL"
-        )
-    }
+    flattens = _owner_flatten_instants(conn)
     runs_by_bot: dict[str, list[RunFacts]] = {}
     for row in conn.execute(
         "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, stopped_at_ms "
         "FROM runs ORDER BY started_at_ms DESC, run_id DESC"
     ):
-        run_id = str(row["run_id"])
-        runs_by_bot.setdefault(str(row["strategy_instance_id"]), []).append(RunFacts(
+        run_id, sid = str(row["run_id"]), str(row["strategy_instance_id"])
+        bot_runs = runs_by_bot.setdefault(sid, [])
+        stopped_at_ms = None if row["stopped_at_ms"] is None else int(row["stopped_at_ms"])
+        # Newest first, so the run appended last is the one that began after this one.
+        next_started_at_ms = bot_runs[-1].started_at_ms if bot_runs else None
+        bot_runs.append(RunFacts(
             run_id=run_id,
             lifecycle_run_id=str(row["lifecycle_run_id"]),
             active=row["state"] == "ACTIVE",
             started_at_ms=int(row["started_at_ms"]),
-            stopped_at_ms=None if row["stopped_at_ms"] is None else int(row["stopped_at_ms"]),
+            stopped_at_ms=stopped_at_ms,
             transactions=fills_by_run.get(run_id, 0),
             orders=orders_by_run.get(run_id, OrderCounts()),
-            flattened=run_id in flattened_runs,
+            flattened=stopped_at_ms is not None and any(
+                stopped_at_ms <= at_ms and (next_started_at_ms is None or at_ms < next_started_at_ms)
+                for at_ms in flattens.get(sid, ())
+            ),
         ))
 
     budgets = {
@@ -240,6 +250,29 @@ def project_custody_history(
                 fees=None if known is None else known.total_for(bot_subject_id(sid)),
             ))
     return CustodyHistory(account_id=account_id, bots=tuple(bots), money_unavailable=money_unavailable)
+
+
+def is_owner_flatten_decision(durable_decision_id: str) -> bool:
+    """Whether an EXIT's recorded decision is one of the owner's own flattens.
+
+    The Clerk's safe flatten and the panel's flatten-and-stop are; a
+    watchdog re-drive or a strategy's own EXIT is not.
+    """
+    return decision_id_from_durable(durable_decision_id).startswith(OWNER_FLATTEN_DECISION_PREFIXES)
+
+
+def _owner_flatten_instants(conn: sqlite3.Connection) -> dict[str, tuple[int, ...]]:
+    """When each bot's owner-flatten EXITs were accepted, from their own acceptance facts."""
+    flattens: dict[str, list[int]] = {}
+    for row in conn.execute(
+        "SELECT e.strategy_instance_id, e.created_at_ms, json_extract(t.facts_json, '$.decision_id') AS decision_id "
+        "FROM effect_operations e JOIN custody_transitions t "
+        "ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = 'EXIT_ACCEPTED' "
+        "WHERE e.kind = 'EXIT' AND e.strategy_instance_id IS NOT NULL"
+    ):
+        if is_owner_flatten_decision(str(row["decision_id"])):
+            flattens.setdefault(str(row["strategy_instance_id"]), []).append(int(row["created_at_ms"]))
+    return {sid: tuple(instants) for sid, instants in flattens.items()}
 
 
 def read_custody_history(

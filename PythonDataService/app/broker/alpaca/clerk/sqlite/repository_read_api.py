@@ -886,8 +886,10 @@ class ClerkSqliteRepositoryReadApi:
 
         return writes.confined_account_file(self._account_dir.parents[2], account_id, DB_FILENAME)
 
-    def bot_history(self: ClerkSqliteRepository) -> CustodyHistory:
-        """Every bot this custody holds, run by run, on a query-only snapshot (#2574).
+    def bot_history(
+        self: ClerkSqliteRepository, strategy_instance_ids: Sequence[str] | None = None,
+    ) -> CustodyHistory:
+        """Every bot this custody holds (or the named ones), run by run, on a query-only snapshot (#2574).
 
         Never under the writer's lock, like ``bot_results``, and with this
         process's own fee-evidence freshness. Blocking: an async caller runs
@@ -897,4 +899,5 @@ class ClerkSqliteRepositoryReadApi:
 
         return read_custody_history(
             self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
+            strategy_instance_ids=strategy_instance_ids,
         )

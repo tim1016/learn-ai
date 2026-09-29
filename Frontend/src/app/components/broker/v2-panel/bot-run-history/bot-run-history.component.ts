@@ -30,8 +30,6 @@ export class BotRunHistoryComponent {
   protected readonly evidenceUpdatedAtMs = computed<number | null>(() => {
     const run = this.state().run;
     if (!run) return null;
-    return run.terminal_outcome?.recorded_at_ms
-      ?? run.process?.observed_at_ms
-      ?? run.started_at_ms;
+    return run.terminal_outcome?.recorded_at_ms ?? run.process.observed_at_ms;
   });
 }

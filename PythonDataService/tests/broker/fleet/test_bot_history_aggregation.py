@@ -34,16 +34,21 @@ _TEST_SECRET = "test-aggregate-bot-history-secret"
 class _ScriptedDelivery:
     """One lane's agent answering a canned history read (or failing)."""
 
-    def __init__(self, *, answer: dict | None = None, fail_with: Exception | None = None) -> None:
+    def __init__(
+        self, *, answer: dict | None = None, fail_with: Exception | None = None, status_code: int = 200,
+    ) -> None:
         self._answer = answer
         self._fail_with = fail_with
+        self._status_code = status_code
         self.requests: list[DeliveryRequest] = []
 
     async def deliver(self, request: DeliveryRequest) -> RoutedDelivery:
         self.requests.append(request)
         if self._fail_with is not None:
             raise self._fail_with
-        return RoutedDelivery(status_code=200, headers={}, body=json.dumps(self._answer).encode("utf-8"))
+        return RoutedDelivery(
+            status_code=self._status_code, headers={}, body=json.dumps(self._answer).encode("utf-8"),
+        )
 
 
 def _bot(sid: str, *, account: str, started_at_ms: int, status: str = "finished", symbol: str = "SPY") -> BotHistoryBot:
@@ -158,6 +163,66 @@ async def test_one_account_filter_reads_only_that_account(fleet, secret) -> None
     assert deliveries[live.clerk_id].requests == []
     assert {gap["clerk_id"] for gap in body["gaps"]} == {paper.clerk_id}
     assert body["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_one_bot_is_asked_of_each_lane_and_held_here_too(fleet, secret) -> None:
+    """A bot's own page opens History on that bot: each lane is asked for it
+    alone, and a lane that answers with more (an older build) is narrowed here."""
+    service, deliveries, paper, _live, _unbound = fleet
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        body = (await client.get(_ROUTE, params={"strategy_instance_id": "older"}, headers=secret)).json()
+
+    (request,) = deliveries[paper.clerk_id].requests
+    assert dict(request.query) == {"strategy_instance_id": "older"}
+    assert [row["strategy_instance_id"] for row in body["rows"]] == ["older"]
+    assert body["total"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "body", "reason"),
+    [
+        (
+            404,
+            {"detail": {"message": "Account 'acct-live' is not this Clerk's account.", "why": "It serves another.",
+                        "next_action": None}},
+            "Account 'acct-live' is not this Clerk's account. It serves another.",
+        ),
+        (404, {"detail": "Bot history is available on Alpaca accounts."}, "Bot history is available on Alpaca accounts."),
+        (422, {"detail": [{"loc": ["query", "strategy_instance_id"], "msg": "too long"}]},
+         "This account's Clerk refused the read (422)."),
+    ],
+)
+async def test_a_lane_that_refuses_its_read_is_named_in_its_clerks_own_words(
+    fleet, secret, status_code: int, body: dict, reason: str,
+) -> None:
+    """The lane answered, so it is not unreachable: its gap carries the
+    Clerk's own words and a code of its own."""
+    service, deliveries, _paper, live, _unbound = fleet
+    deliveries[live.clerk_id] = _ScriptedDelivery(answer=body, status_code=status_code)
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        page = (await client.get(_ROUTE, headers=secret)).json()
+
+    (gap,) = (gap for gap in page["gaps"] if gap["clerk_id"] == live.clerk_id)
+    assert (gap["reason_code"], gap["reason"], gap["account_id"]) == ("lane_refused_read", reason, "acct-live")
+
+
+@pytest.mark.asyncio
+async def test_a_lane_server_error_keeps_its_body_in_the_log_and_is_named_unreachable(fleet, secret) -> None:
+    """A lane's 5xx body may carry internal detail, so the lane router keeps
+    it in the coordinator log (#2164); the account is still named."""
+    service, deliveries, _paper, live, _unbound = fleet
+    deliveries[live.clerk_id] = _ScriptedDelivery(answer={"detail": {"message": "/srv/secret/path"}}, status_code=503)
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        page = (await client.get(_ROUTE, headers=secret)).json()
+
+    (gap,) = (gap for gap in page["gaps"] if gap["clerk_id"] == live.clerk_id)
+    assert gap["reason_code"] == "clerk_unreachable"
+    assert "/srv/secret/path" not in gap["reason"]
 
 
 def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it() -> None:

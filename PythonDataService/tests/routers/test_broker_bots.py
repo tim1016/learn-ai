@@ -224,7 +224,6 @@ async def test_the_current_run_is_a_lazy_read_only_view(api) -> None:
 
     assert current.status_code == 200
     assert current.json()["run_id"] == historical.run_id
-    assert current.json()["is_current"] is True
     assert current.json()["process"]["state"] == "UNKNOWN"
     assert current.json()["terminal_outcome"] is None
     assert scoped_current.status_code == 200
