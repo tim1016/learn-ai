@@ -55,11 +55,11 @@
       </section>
     }
 
-    <ol class="deploy-steps">
+    <ol class="deploy-steps" [class.deploy-steps--columns]="columnsLayout()">
       <li>
         <app-deploy-step
-          [number]="1" heading="What" [foldable]="stepsFold()" [open]="whatOpen()" [summary]="whatSummary()"
-          [status]="whatStatus()" [canFold]="whatComplete()" [foldHint]="whatFoldHint()"
+          [number]="1" heading="What" [foldable]="!columnsLayout()" [open]="whatOpen()" [summary]="whatSummary()"
+          [status]="whatStatus()"
           (edit)="editStep('what')" (done)="foldStep('what')"
         >
           <app-deploy-binding-strip
@@ -101,8 +101,8 @@
 
       <li>
         <app-deploy-step
-          [number]="2" heading="How" [foldable]="stepsFold()" [open]="howOpen()" [summary]="howSummary()"
-          [status]="howStatus()" [canFold]="howComplete()" foldHint="Choose where it trades, a size and exit terms first."
+          [number]="2" heading="How" [foldable]="!columnsLayout()" [open]="howOpen()" [summary]="howSummary()"
+          [status]="howStatus()"
           (edit)="editStep('how')" (done)="foldStep('how')"
         >
           <app-deploy-execution-section
@@ -151,11 +151,12 @@
       </li>
 
       <li>
-        <app-deploy-step [number]="3" heading="Money" [open]="true" [status]="moneyStatus()">
+        <app-deploy-step [number]="3" heading="Money" [status]="moneyStatus()">
           <app-deploy-money-step
             [target]="budgetTarget()"
             [body]="budgetBody()"
             [disabled]="submitting()"
+            [compact]="columnsLayout()"
             [(amount)]="amount"
             (reviewed)="moneyReview.set($event)"
           />
@@ -163,7 +164,7 @@
       </li>
 
       <li>
-        <app-deploy-step [number]="4" heading="Confirm" [open]="true">
+        <app-deploy-step [number]="4" heading="Confirm">
           @let review = currentMoneyReview()?.preview ?? null;
           <app-deploy-confirm-step
             [world]="ticket().executionMode"

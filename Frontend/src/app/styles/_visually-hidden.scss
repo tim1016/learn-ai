@@ -1,0 +1,14 @@
+// Text a screen reader announces and a sighted reader never sees: a unit
+// already drawn beside its field, or an explanation shown elsewhere as a
+// tooltip. Apply to the element's own selector.
+@mixin visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

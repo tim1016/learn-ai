@@ -2,67 +2,72 @@
 // control has focus. First used by Deploy (one screen, four columns), where
 // bordered boxes inside bordered steps read as clutter.
 //
+// The fill follows two custom properties, so a panel already drawn in the
+// default fill re-tints every control inside it once:
+//   .panel-on-elevated { --field-fill: var(--bg-hover); --field-fill-hover: var(--border-light); }
+//
 // Apply each mixin to the control's own selector, under the component's
 // emulated encapsulation:
 //   input { @include filled-field; }
 //   .soft { @include soft-button; }
 
+// The fill, with no sizing: for a control drawn by another component (the
+// instrument card's ticker box) as much as for a native one.
+@mixin filled-surface {
+  border: 0;
+  border-radius: var(--radius-md);
+  background-color: var(--field-fill, var(--bg-elevated));
+  transition:
+    background-color var(--t-ui),
+    box-shadow var(--t-ui);
+}
+
+@mixin filled-surface-hover {
+  background-color: var(--field-fill-hover, var(--bg-hover));
+}
+
+// The one focus ring, for whichever state means "this control is in use".
+@mixin filled-surface-active {
+  outline: none;
+  background-color: var(--field-fill-hover, var(--bg-hover));
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
 // Text, number and select controls.
 @mixin filled-field {
+  @include filled-surface;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
   min-height: 2.5rem;
   padding: 0.5rem 0.75rem;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-variant-numeric: tabular-nums;
-  transition:
-    background-color var(--t-ui),
-    box-shadow var(--t-ui);
 
   &::placeholder { color: var(--text-muted); }
-  &:hover:not(:disabled, [readonly]) { background: var(--bg-hover); }
-
-  &:focus {
-    outline: none;
-    background: var(--bg-hover);
-    box-shadow: 0 0 0 2px var(--accent);
-  }
-
+  &:hover:not(:disabled, [readonly]) { @include filled-surface-hover; }
+  &:focus { @include filled-surface-active; }
   &[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
-  &:disabled,
-  &[readonly] { color: var(--text-muted); cursor: not-allowed; }
+  // Read-only is not inactive: the value stays readable, only the pointer says so.
+  &[readonly] { cursor: default; }
+  &:disabled { color: var(--text-muted); cursor: not-allowed; }
 }
 
-// A native <select> drawn as a filled field. The host wraps it in an element
-// carrying `select-chevron`, which draws the arrow the reset removes.
+// A native <select> drawn as a filled field, its arrow painted on the fill.
 @mixin filled-select {
   @include filled-field;
   appearance: none;
   padding-right: 2.25rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-subtle) 50%),
+    linear-gradient(135deg, var(--text-subtle) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.1rem) 52%,
+    calc(100% - 0.8rem) 52%;
+  background-size: 0.3rem 0.3rem;
+  background-repeat: no-repeat;
   cursor: pointer;
-}
-
-@mixin select-chevron {
-  position: relative;
-  display: block;
-
-  &::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    right: 0.95rem;
-    width: 0.4rem;
-    height: 0.4rem;
-    border-right: 1.5px solid var(--text-subtle);
-    border-bottom: 1.5px solid var(--text-subtle);
-    transform: translateY(-70%) rotate(45deg);
-    pointer-events: none;
-  }
 }
 
 // The small label above a field.
@@ -74,19 +79,16 @@
 
 // A secondary action: filled, borderless, quieter than the primary button.
 @mixin soft-button {
+  @include filled-surface;
   min-height: 2rem;
   padding: 0.35rem 0.8rem;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   cursor: pointer;
-  transition: background-color var(--t-ui);
 
-  &:hover:not(:disabled) { background: var(--bg-hover); }
+  &:hover:not(:disabled) { @include filled-surface-hover; }
   &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   &:disabled { color: var(--text-muted); cursor: not-allowed; }
 }

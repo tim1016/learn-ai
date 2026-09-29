@@ -1,3 +1,5 @@
+@use '../../../styles/filled-controls' as *;
+
 // Shared card frame — duplicated across the three parts so each component
 // is independently styled under Angular's emulated view encapsulation.
 .group {
@@ -94,19 +96,13 @@
   }
 
   .group--field & {
+    @include filled-surface;
     height: 2.5rem;
-    border-color: transparent;
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
 
-    &:hover { background: var(--bg-hover); }
+    &:hover { @include filled-surface-hover; }
   }
 
-  .group--field &--open {
-    border-color: transparent;
-    background: var(--bg-hover);
-    box-shadow: 0 0 0 2px var(--accent);
-  }
+  .group--field &--open { @include filled-surface-active; }
 
   &__icon {
     font-size: 11px;

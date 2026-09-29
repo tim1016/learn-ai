@@ -9,29 +9,29 @@
     <p class="money-step__note" role="status">Reading this account’s money…</p>
   }
 
-  @if (factsView(); as view) {
-    @if (view.state === 'ready') {
-      @if (bar(); as money) {
-        @if (money.state === 'ready') {
-          <app-money-bar
-            [segments]="money.segments ?? []"
-            size="detail"
-            [caption]="barShowsNew() ? 'Account money after this Deploy' : 'Where the money is now'"
-          />
-        } @else {
-          <p class="money-step__note">{{ money.detail }}</p>
-        }
+  @if (readyFacts(); as view) {
+    @if (bar(); as money) {
+      @if (money.state === 'ready') {
+        <app-money-bar
+          [segments]="money.segments ?? []"
+          size="detail"
+          [caption]="barShowsNew() ? 'Account money after this Deploy' : 'Where the money is now'"
+        />
+      } @else {
+        <p class="money-step__note">{{ money.detail }}</p>
       }
-      <dl class="money-step__facts">
-        @if (!dryRun()) {
-          <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | authoredUsd }}</dd></div>
-        }
-        <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
-        @if (view.estimated_price_usd) {
-          <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
-        }
-      </dl>
-    } @else if (view.state === 'awaiting_price') {
+    }
+    <dl class="money-step__facts">
+      @if (!dryRun()) {
+        <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | authoredUsd }}</dd></div>
+      }
+      <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
+      @if (view.estimated_price_usd) {
+        <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
+      }
+    </dl>
+  } @else if (factsView(); as view) {
+    @if (view.state === 'awaiting_price') {
       <p class="money-step__note" role="status">{{ view.detail }}</p>
     } @else {
       <p class="money-step__refusal" role="alert">{{ view.detail }}</p>
@@ -77,15 +77,18 @@
   @if (readyFacts(); as view) {
     <div class="money-step__shortcuts" role="group" aria-label="Budget shortcuts">
       @for (shortcut of view.shortcuts; track shortcut.key) {
-        <button
-          type="button"
-          [disabled]="disabled()"
-          [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
-          [pTooltip]="shortcut.explanation"
-          tooltipPosition="top"
-          (click)="choose(shortcut.amount_usd)"
-        ><span>{{ shortcut.label }}</span><span class="sr-only"> · </span><strong>{{ shortcut.amount_usd | authoredUsd }}</strong></button>
-        <small class="sr-only" [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
+        <div class="money-step__shortcut">
+          <button
+            type="button"
+            [disabled]="disabled()"
+            [attr.aria-describedby]="shortcutHelpId(shortcut.key)"
+            [pTooltip]="compact() ? shortcut.explanation : ''"
+            tooltipPosition="top"
+            tooltipEvent="both"
+            (click)="choose(shortcut.amount_usd)"
+          ><span>{{ shortcut.label }}</span><span class="sr-only"> · </span><strong>{{ shortcut.amount_usd | authoredUsd }}</strong></button>
+          <small [class.sr-only]="compact()" [id]="shortcutHelpId(shortcut.key)">{{ shortcut.explanation }}</small>
+        </div>
       }
     </div>
   }

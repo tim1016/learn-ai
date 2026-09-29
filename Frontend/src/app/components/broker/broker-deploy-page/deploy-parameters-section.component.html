@@ -2,16 +2,8 @@
   <h3 id="deploy-parameters-title">Settings</h3>
   @if (qualifiedConfiguration(); as qualified) {
     <aside class="qualified-configuration" aria-label="Qualified configuration">
-      <h3>
-        Qualified configuration · <app-asset-identity [symbol]="qualified.symbol" size="xs" />
-        <button
-          type="button"
-          class="info-tip"
-          [pTooltip]="qualified.explanation"
-          tooltipPosition="top"
-          [attr.aria-label]="'About the qualified configuration: ' + qualified.explanation"
-        >i</button>
-      </h3>
+      <h3>Qualified configuration · <app-asset-identity [symbol]="qualified.symbol" size="xs" /></h3>
+      <p class="qualified-configuration__explanation">{{ qualified.explanation }}</p>
       <dl>
         @for (parameter of qualifiedParameters(); track parameter[0]) {
           <div><dt>{{ paramsSchema().properties?.[parameter[0]]?.title ?? parameter[0] }}</dt><dd>{{ parameter[1] }}</dd></div>

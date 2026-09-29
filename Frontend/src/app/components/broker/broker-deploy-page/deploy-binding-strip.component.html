@@ -4,16 +4,14 @@
     <strong class="binding-strip__only">{{ selectedStrategy()?.label }}</strong>
   } @else {
     <label for="deploy-strategy" class="binding-strip__label">Deployment strategy</label>
-    <span class="binding-strip__select">
-      <select id="deploy-strategy" (change)="changeStrategy($event)">
-        @for (strategy of strategies(); track strategy.strategy_key) {
-          <option
-            [value]="strategy.strategy_key"
-            [selected]="strategy.strategy_key === strategyKey()"
-          >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
-        }
-      </select>
-    </span>
+    <select id="deploy-strategy" (change)="changeStrategy($event)">
+      @for (strategy of strategies(); track strategy.strategy_key) {
+        <option
+          [value]="strategy.strategy_key"
+          [selected]="strategy.strategy_key === strategyKey()"
+        >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
+      }
+    </select>
   }
   <div class="binding-strip__status">
     @switch (selectedStrategy()?.evidence_status) {

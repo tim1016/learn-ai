@@ -104,6 +104,23 @@ describe('Deploy step 3, Money', () => {
     expect(await screen.findByText(/would be set aside for this bot/)).toBeTruthy();
   });
 
+  it('keeps each shortcut’s explanation in view where the steps stack, and as its description where they stand as columns', async () => {
+    const explanation = '50% of $1234.56 currently unreserved cash.';
+    const helpOf = () => {
+      const shortcut = screen.getByRole('button', { name: '50% · $617.28' });
+      return document.getElementById(shortcut.getAttribute('aria-describedby') ?? '');
+    };
+
+    const { fixture } = await setup();
+    expect(helpOf()?.textContent).toBe(explanation);
+    expect(helpOf()?.classList.contains('sr-only')).toBe(false);
+
+    fixture.componentRef.setInput('compact', true);
+    await fixture.whenStable();
+    expect(helpOf()?.textContent).toBe(explanation);
+    expect(helpOf()?.classList.contains('sr-only')).toBe(true);
+  });
+
   it('shows a refused amount’s own sentence, with the backend’s exact amounts, and emits no review', async () => {
     const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
       body.budget

@@ -99,6 +99,11 @@
   }
 }
 
+// Forced colors drop backgrounds: the chosen side keeps an outline.
+@media (forced-colors: active) {
+  .segment--selected { outline: 2px solid CanvasText; }
+}
+
 .segment--unavailable {
   opacity: 0.55;
 

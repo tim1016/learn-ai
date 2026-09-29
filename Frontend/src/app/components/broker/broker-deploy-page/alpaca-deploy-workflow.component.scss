@@ -1,10 +1,12 @@
 @use '../../../styles/eyebrow-heading' as *;
 @use '../../../styles/filled-controls' as *;
+@use '../../../styles/visually-hidden' as *;
 
 // Deploy (PRD #2560 D8): What → How → Money → Confirm. Four columns where the
 // page has room, so the whole flow fits one screen; two by two on a narrow
-// laptop; one stacked column on a phone, where finished steps fold. The
-// 48rem breakpoint is `DEPLOY_COLUMNS_QUERY` in the component: keep them equal.
+// laptop; one stacked column on a phone, where finished steps fold. Whether
+// the steps stand as columns is the component's `DEPLOY_COLUMNS_QUERY`,
+// applied here as `deploy-steps--columns`.
 
 :host {
   display: block;
@@ -35,13 +37,13 @@
   > li > app-deploy-step { flex: 1; }
 }
 
-@media (min-width: 48rem) {
-  .deploy-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+.deploy-steps--columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 @media (min-width: 75rem) {
-  .deploy-steps { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.15fr); }
+  .deploy-steps--columns { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.15fr); }
 }
+
+.sr-only { @include visually-hidden; }
 
 .deploy-symbol {
   display: grid;

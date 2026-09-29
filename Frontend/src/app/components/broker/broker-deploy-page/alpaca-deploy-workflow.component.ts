@@ -102,8 +102,9 @@ const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export const SUBMISSION_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 
-/** Where the steps stand side by side (the stylesheet's 48rem breakpoint):
- * every step stays open there. Narrower, they stack, and finished steps fold. */
+/** Where the steps stand side by side, every one open. Narrower, they stack
+ * and finished steps fold. The stylesheet keys its columns off the class
+ * this query sets, so the breakpoint is stated only here. */
 const DEPLOY_COLUMNS_QUERY = '(min-width: 48rem)';
 
 /** A step's header state: what it still needs, or Ready. */
@@ -634,10 +635,6 @@ export class AlpacaDeployWorkflowComponent {
   });
   protected readonly whatComplete = computed(() => this.whatMissing() === null);
 
-  protected readonly whatFoldHint = computed(() => this.permissionPending()
-    ? `Allow it on ${this.brokerModeLabel()} first, or choose Dry Run in How.`
-    : 'Choose a strategy and a valid symbol first.');
-
   /** What How still needs, or `null` once it has an offered world this
    * strategy admits, a size and exit terms. */
   private readonly howMissing = computed<string | null>(() => {
@@ -655,11 +652,9 @@ export class AlpacaDeployWorkflowComponent {
   });
   protected readonly howComplete = computed(() => this.howMissing() === null);
 
-  private readonly columnsLayout = mediaQuerySignal(DEPLOY_COLUMNS_QUERY);
-  /** Finished steps fold only where the steps stack. */
-  protected readonly stepsFold = computed(() => !this.columnsLayout());
-  protected readonly whatOpen = computed(() => !this.stepsFold() || this.editing().what || !this.whatComplete());
-  protected readonly howOpen = computed(() => !this.stepsFold() || this.editing().how || !this.howComplete());
+  protected readonly columnsLayout = mediaQuerySignal(DEPLOY_COLUMNS_QUERY);
+  protected readonly whatOpen = computed(() => this.editing().what || !this.whatComplete());
+  protected readonly howOpen = computed(() => this.editing().how || !this.howComplete());
 
   protected readonly whatStatus = computed(() => stepStatus(this.whatMissing()));
   protected readonly howStatus = computed(() => stepStatus(this.howMissing()));

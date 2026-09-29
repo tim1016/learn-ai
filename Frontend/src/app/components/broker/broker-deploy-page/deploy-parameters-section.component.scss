@@ -68,6 +68,10 @@ h3 {
 .parameter-error { color: var(--bear); font-size: var(--fs-xs); }
 
 .qualified-configuration {
+  // A panel in the default fill: the controls inside take the next shade up.
+  --field-fill: var(--bg-hover);
+  --field-fill-hover: var(--border-light);
+
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -88,10 +92,14 @@ h3 {
   gap: var(--space-2) var(--space-3);
 }
 
-.soft {
-  @include soft-button;
-  background: var(--bg-hover);
+.qualified-configuration__explanation {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
 }
+
+.soft { @include soft-button; }
 
 .link { @include link-button; justify-self: start; }
 .info-tip { @include info-tip; }

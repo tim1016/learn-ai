@@ -14,7 +14,6 @@
    PrimeNG's Select needs ngModel/formControl for its value, which this
    signal-only family of components does not use, and the spec drives it as
    a native element. The fill and the arrow are drawn here. */
-.binding-strip__select { @include select-chevron; }
 select {
   @include filled-select;
   font-weight: var(--fw-semi);

@@ -495,7 +495,9 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(what).getByRole('button', { name: 'Allow on Paper' })).toBeTruthy();
     const done = within(what).getByRole<HTMLButtonElement>('button', { name: 'Done with step 1, What' });
     expect(done.disabled).toBe(true);
-    expect(within(what).getByText('Allow it on Paper first, or choose Dry Run in How.')).toBeTruthy();
+    // The chip beside the heading says what What still needs, and Done is described by it.
+    const chip = within(what).getByText('Needs permission');
+    expect(done.getAttribute('aria-describedby')).toBe(chip.id);
     expect(screen.getByText('Allow this strategy on Paper in What, or choose Dry Run in How.')).toBeTruthy();
 
     // Dry Run needs no permission, so What may fold once it is chosen.
