@@ -585,14 +585,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path="/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/current",
         ),
         _op(
-            "bot_run_history_read",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/runs/history",
-            capability=Capability.BOT_PANEL_READ,
-            account=True,
-            agent_path="/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history",
-        ),
-        _op(
             "paper_access_plan",
             "POST",
             "/accounts/{account_id}/strategies/{program_key}/paper-access/plan",

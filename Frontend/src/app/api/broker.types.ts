@@ -1858,26 +1858,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Account-scoped alias of the bot run history
-         * @description Validate the durable account binding before reading run history.
-         */
-        get: operations["get_run_history_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/accounts/{account_id}/deploy-submissions/{submission_key}": {
         parameters: {
             query?: never;
@@ -2199,23 +2179,6 @@ export interface paths {
         };
         /** Read the current run without inferring process or terminal state */
         get: operations["get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read one bounded page of previous runs */
-        get: operations["get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2767,26 +2730,6 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/runs/current (bot_panel_read).
          */
         get: operations["fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/runs/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Run History Read
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/runs/history (bot_panel_read).
-         */
-        get: operations["fleet_bot_run_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10379,24 +10322,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * BotRunHistoryPage
-         * @description One bounded page of previous runs; current run has its own endpoint.
-         */
-        BotRunHistoryPage: {
-            /** Next Cursor */
-            next_cursor: string | null;
-            /** Runs */
-            runs: components["schemas"]["BotRunView"][];
-        };
-        /**
-         * BotRunHistoryUnprocessableResponse
-         * @description 422 envelope for a runner error or an invalid history query.
-         */
-        BotRunHistoryUnprocessableResponse: {
-            /** Detail */
-            detail: components["schemas"]["BotRunReadRunnerErrorDetail"] | components["schemas"]["BotRunReadValidationIssue"][];
-        };
-        /**
          * BotRunReadBrokerErrorDetail
          * @description Broker-registry failure detail returned by a bot-run read.
          */
@@ -10433,18 +10358,6 @@ export interface components {
          */
         BotRunReadRunnerErrorResponse: {
             detail: components["schemas"]["BotRunReadRunnerErrorDetail"];
-        };
-        /**
-         * BotRunReadValidationIssue
-         * @description One FastAPI request-validation issue for a run-history query.
-         */
-        BotRunReadValidationIssue: {
-            /** Loc */
-            loc: (string | number)[];
-            /** Msg */
-            msg: string;
-            /** Type */
-            type: string;
         };
         /**
          * BotRunTerminalOutcomeView
@@ -32501,44 +32414,6 @@ export interface operations {
             };
         };
     };
-    get_run_history_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_history_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunHistoryPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_deploy_submission_scoped_api_brokers__broker__accounts__account_id__deploy_submissions__submission_key__get: {
         parameters: {
             query?: never;
@@ -33184,52 +33059,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotRunReadRunnerErrorResponse"];
-                };
-            };
-        };
-    };
-    get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunHistoryPage"];
-                };
-            };
-            /** @description The broker or strategy-instance run is unknown. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
-                };
-            };
-            /** @description The history cursor, limit, or strategy-instance identifier is invalid. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunHistoryUnprocessableResponse"];
                 };
             };
         };
@@ -34247,42 +34076,6 @@ export interface operations {
         };
     };
     fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_run_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_history_get: {
         parameters: {
             query?: never;
             header?: {

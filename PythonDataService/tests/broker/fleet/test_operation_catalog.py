@@ -136,10 +136,7 @@ def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
             "GET",
             "/accounts/{account_id}/bots/{sid}/runs/current",
         ),
-        "bot_run_history_read": (
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/runs/history",
-        ),
+        "bot_history_read": ("GET", "/accounts/{account_id}/bot-history"),
     }
     assert {
         operation_id: (operations[operation_id].method, operations[operation_id].path_template)

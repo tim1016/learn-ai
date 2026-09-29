@@ -132,11 +132,6 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/runs/current",
       "requires_account": true
     },
-    "bot_run_history_read": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/runs/history",
-      "requires_account": true
-    },
     "bots_catalog_read": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/catalog",

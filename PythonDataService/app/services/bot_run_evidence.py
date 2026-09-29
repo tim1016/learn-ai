@@ -1,4 +1,8 @@
-"""Durable terminal evidence plus current and previous bot-run projections."""
+"""Durable terminal evidence plus the current bot-run projection.
+
+Earlier runs are listed by Bot history (#2574), which reads every run from
+the Clerk's own run records.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,6 @@ from app.engine.live.bot_lifecycle_state import (
 from app.schemas.bot_run_evidence import BotCrashDiagnostic, BotRunTerminalOutcomeView
 from app.schemas.broker_bots import (
     BotProcessFact,
-    BotRunHistoryPage,
     BotRunView,
 )
 from app.services.bot_binding_repository import (
@@ -26,10 +29,7 @@ from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjectionResult,
     AlpacaLifecycleProjector,
 )
-from app.services.bot_runner_errors import (
-    InvalidRunHistoryCursorError,
-    UnknownBotError,
-)
+from app.services.bot_runner_errors import UnknownBotError
 
 PROVISIONAL_STOP_REASON_CODE = "STOPPED_PENDING_CUSTODY_PROOF"
 
@@ -176,55 +176,6 @@ class BotRunEvidenceService:
             is_current=True,
             process=process,
         )
-
-    def history(
-        self,
-        binding: BrokerBotBinding,
-        *,
-        cursor: str | None,
-        limit: int,
-    ) -> BotRunHistoryPage:
-        """Return one bounded newest-first page of non-current runs."""
-        if limit < 1 or limit > 25:
-            raise InvalidRunHistoryCursorError(
-                "Run-history limit must be between 1 and 25.",
-                detail="Request a bounded page of previous runs.",
-            )
-        previous = [
-            run
-            for run in self._repository.list_runs(binding.strategy_instance_id)
-            if run.run_id != binding.run_id
-        ]
-        start = self._page_start(previous, cursor)
-        selected = previous[start : start + limit]
-        next_cursor = (
-            selected[-1].run_id
-            if selected and start + len(selected) < len(previous)
-            else None
-        )
-        return BotRunHistoryPage(
-            runs=tuple(
-                self._compose(run, is_current=False, process=None)
-                for run in selected
-            ),
-            next_cursor=next_cursor,
-        )
-
-    @staticmethod
-    def _page_start(records: list[BotRunRecord], cursor: str | None) -> int:
-        if cursor is None:
-            return 0
-        try:
-            return next(
-                index + 1
-                for index, run in enumerate(records)
-                if run.run_id == cursor
-            )
-        except StopIteration as exc:
-            raise InvalidRunHistoryCursorError(
-                "Run-history cursor is not part of this strategy instance.",
-                detail="Restart history navigation from the first page.",
-            ) from exc
 
     def _compose(
         self,

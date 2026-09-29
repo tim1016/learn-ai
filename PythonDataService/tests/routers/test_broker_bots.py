@@ -202,10 +202,10 @@ async def test_registry_not_installed_is_503(api) -> None:
 
 
 @pytest.mark.asyncio
-async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
+async def test_the_current_run_is_a_lazy_read_only_view(api) -> None:
+    """Earlier runs are Bot history's (#2574); this read is the current run's."""
     app, registry = api
-    deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    first_run_id = deployed.active_run_id
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.stop("alpaca", _SID)
     # Seed a retained pre-cutover second run as evidence, without starting it.
     historical = registry.binding_for_control("alpaca", _SID).model_copy(update={"run_id": "historical-second-run"})
@@ -215,23 +215,11 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
         current = await client.get(
             f"/api/brokers/alpaca/bots/{_SID}/runs/current"
         )
-        history = await client.get(
-            f"/api/brokers/alpaca/bots/{_SID}/runs/history",
-            params={"limit": 1},
-        )
         scoped_current = await client.get(
             f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/current"
         )
-        scoped_history = await client.get(
-            f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/history",
-            params={"limit": 1},
-        )
         wrong_account_current = await client.get(
             f"/api/brokers/alpaca/accounts/account-1/bots/{_SID}/runs/current"
-        )
-        wrong_account_history = await client.get(
-            f"/api/brokers/alpaca/accounts/account-1/bots/{_SID}/runs/history",
-            params={"limit": 1},
         )
 
     assert current.status_code == 200
@@ -239,18 +227,10 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     assert current.json()["is_current"] is True
     assert current.json()["process"]["state"] == "UNKNOWN"
     assert current.json()["terminal_outcome"] is None
-    assert history.status_code == 200
-    assert [run["run_id"] for run in history.json()["runs"]] == [first_run_id]
-    assert history.json()["runs"][0]["terminal_outcome"]["kind"] == "STOPPED"
-    assert history.json()["next_cursor"] is None
     assert scoped_current.status_code == 200
     assert scoped_current.json()["run_id"] == historical.run_id
-    assert scoped_history.status_code == 200
-    assert [run["run_id"] for run in scoped_history.json()["runs"]] == [first_run_id]
     assert wrong_account_current.status_code == 404
-    assert wrong_account_history.status_code == 404
     assert "account-1" in wrong_account_current.json()["detail"]["message"]
-    assert "account-1" in wrong_account_history.json()["detail"]["message"]
 
 
 @pytest.mark.asyncio
@@ -297,25 +277,14 @@ async def test_scoped_run_reads_match_the_canonical_account_identity(
         current = await client.get(
             f"/api/brokers/alpaca/accounts/{routed}/bots/{_SID}/runs/current"
         )
-        history = await client.get(
-            f"/api/brokers/alpaca/accounts/{routed}/bots/{_SID}/runs/history",
-            params={"limit": 1},
-        )
         foreign_current = await client.get(
             f"/api/brokers/alpaca/accounts/pa9other0000/bots/{_SID}/runs/current"
-        )
-        foreign_history = await client.get(
-            f"/api/brokers/alpaca/accounts/pa9other0000/bots/{_SID}/runs/history",
-            params={"limit": 1},
         )
 
     assert current.status_code == 200, current.text
     assert current.json()["run_id"] == deployed.active_run_id
-    assert history.status_code == 200, history.text
     assert foreign_current.status_code == 404
-    assert foreign_history.status_code == 404
     assert "pa9other0000" in foreign_current.json()["detail"]["message"]
-    assert "pa9other0000" in foreign_history.json()["detail"]["message"]
     await registry.stop("alpaca", _SID)
 
 
@@ -367,21 +336,15 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
 
 
 @pytest.mark.asyncio
-async def test_run_reads_reject_unknown_bot_and_foreign_cursor(api) -> None:
+async def test_run_reads_reject_an_unknown_bot(api) -> None:
     app, registry = api
     await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     async with _client(app) as client:
         missing = await client.get(
             "/api/brokers/alpaca/bots/missing/runs/current"
         )
-        foreign_cursor = await client.get(
-            f"/api/brokers/alpaca/bots/{_SID}/runs/history",
-            params={"cursor": "another-bot-run"},
-        )
 
     assert missing.status_code == 404
-    assert foreign_cursor.status_code == 422
-    assert "cursor" in foreign_cursor.json()["detail"]["message"].lower()
     await registry.stop("alpaca", _SID)
 
 
@@ -391,9 +354,6 @@ def test_run_read_openapi_documents_error_envelopes(api) -> None:
     current_responses = paths[
         "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current"
     ]["get"]["responses"]
-    history_responses = paths[
-        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history"
-    ]["get"]["responses"]
 
     assert current_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/BotRunReadNotFoundResponse"
@@ -401,9 +361,5 @@ def test_run_read_openapi_documents_error_envelopes(api) -> None:
     assert current_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/BotRunReadRunnerErrorResponse"
     )
-    assert history_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/BotRunReadNotFoundResponse"
-    )
-    assert history_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/BotRunHistoryUnprocessableResponse"
-    )
+    # The one-run-at-a-time pager is gone: Bot history lists every run (#2574).
+    assert "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history" not in paths

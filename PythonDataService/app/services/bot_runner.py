@@ -68,7 +68,6 @@ from app.marketdata.feed import (
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
     BotProcessFact,
-    BotRunHistoryPage,
     BotRunView,
     BotStatusView,
 )
@@ -1597,22 +1596,6 @@ class BotTaskRegistry:
             if outcome is None:
                 continue  # not terminal; its own Stop/terminal path will schedule
             self._schedule_run_replay_receipt(binding)
-
-    def run_history(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-        *,
-        cursor: str | None,
-        limit: int,
-    ) -> BotRunHistoryPage:
-        """Return a bounded page of previous-run projections."""
-        binding = self.binding_for_control(broker, strategy_instance_id)
-        return self._run_evidence.history(
-            binding,
-            cursor=cursor,
-            limit=limit,
-        )
 
     def dry_run_activity(
         self,
