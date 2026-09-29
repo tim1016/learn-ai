@@ -641,7 +641,18 @@ re-arms the server-authored timeframe auto-correct, and numeric
   distinguish pre-launch history from the crash-recovery window when used
   retrospectively by `run_replay_proof.py`. Correct the retrospective
   eligibility boundary without enabling historical orders or weakening real
-  crash recovery. The same saved receipt also reports an uninvestigated
-  engine-parity sequence-exhaustion failure; resolving the false missing-row
-  classification alone does not establish an overall parity pass. Evidence:
-  [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md).
+  crash recovery. The same saved receipt's engine-parity leg also failed at
+  index 0 ("reference sequence exhausted"). That was a separate defect, fixed
+  2026-09-29 (#2608): the reference backtest in
+  `qualification_shadow_trace._reference_backtest_traces` ran each strategy
+  over its built-in default window (EMA, SMA, RSI and the SPY strategies end
+  2026-03-27, Deployment Validation 2026-04-15), and `InMemoryDataReader`
+  drops every bar outside that window, so every run after it was compared
+  with an empty reference. The reference now runs over the New York dates of
+  the first and last bar it is handed, and raises
+  `IncompleteReferenceReplayError` (a `replay_failed` receipt) if the engine
+  still reads fewer bars than it was handed. A regenerated receipt therefore
+  carries a real engine-parity comparison; the missing-row misclassification
+  above is what remains open. Evidence:
+  [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md),
+  [final-bar decisions note, section 5](./references/final-bar-decisions-2467.md).

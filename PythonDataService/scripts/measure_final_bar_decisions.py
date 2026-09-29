@@ -66,14 +66,13 @@ from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
     ShadowTraceDivergenceError,
-    _live_adapter_traces,
-    compare_canonical_traces,
+    run_shadow_trace_evaluation,
 )
 from app.broker.alpaca.marketable_limit import marketable_limit_price
 from app.broker.contract.models import OrderSide
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine, BacktestResult
+from app.engine.engine import BacktestEngine, BacktestResult, pin_strategy_window
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
@@ -90,9 +89,7 @@ from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
 )
 from app.marketdata.feed import warmup_window_start_ms
-from app.services.run_replay_proof import engine_parity_over_bars
 from app.services.session_authority import order_session_state_at_ms
-from app.services.spec_strategy_runner import InMemoryDataReader
 from app.utils.timestamps import ny_datetime
 
 logger = logging.getLogger(__name__)
@@ -286,14 +283,7 @@ class FinalBarPolicyEngine(BacktestEngine):
 def build_strategy(live: LiveStrategy, start: date, end: date) -> Strategy:
     registration = _STRATEGY_REGISTRY[live.strategy_key]
     strategy = registration.build(registration.param_schema.model_validate(live.params))
-    original_initialize = strategy.initialize
-
-    def initialize() -> None:
-        original_initialize()
-        strategy.set_start_date(start.year, start.month, start.day)
-        strategy.set_end_date(end.year, end.month, end.day)
-
-    strategy.initialize = initialize  # type: ignore[method-assign]
+    pin_strategy_window(strategy, start, end)
     return strategy
 
 
@@ -666,11 +656,10 @@ class GroupingParity:
     rth_minutes: int
     first_session: str
     last_session: str
-    production_check_compared: int
-    production_check_divergence: str | None
-    windowed_compared: int
-    windowed_final_bar_traces: int
-    windowed_divergence: str | None
+    compared: int
+    #: ``None`` when the seams diverged: the check stops at the first divergence.
+    final_bar_traces: int | None
+    divergence: str | None
 
 
 def _held_rth_bars(ledger: Path, symbol: str) -> list[TradeBar]:
@@ -727,29 +716,27 @@ def _symbols_with_a_full_session(ledger: Path) -> list[str]:
 def grouping_parity(ledger: Path, live: LiveStrategy) -> GroupingParity:
     """Run the two decision seams over the RTH minutes one live ledger holds.
 
-    *Production check*: ``run_replay_proof.engine_parity_over_bars``, exactly as
-    a run's replay receipt calls it. *Windowed*: the same comparison with the
-    backtest reference reading the bars' own dates instead of the strategy's
-    built-in default window -- the live seam is
-    ``qualification_shadow_trace._live_adapter_traces`` (``strategy_evaluations``
-    over the bars, ``_drain_bar`` included), the reference is the production
-    ``BacktestEngine``, and ``compare_canonical_traces`` judges them.
+    This is the check a run's replay receipt makes: ``run_shadow_trace_evaluation``
+    runs the live seam (``strategy_evaluations`` over the bars, ``_drain_bar``
+    included) and the production ``BacktestEngine`` over the same bars, and
+    ``compare_canonical_traces`` judges them. It is called directly rather than
+    through the receipt's ``run_replay_proof.engine_parity_over_bars`` wrapper
+    only because that wrapper keeps no traces to count final bars from.
     """
     symbol = live.params["symbol"]
     bars = _held_rth_bars(ledger, symbol)
     first, last = session_date_of(bars[0].start_ms), session_date_of(bars[-1].start_ms)
     params = {k: v for k, v in live.params.items() if k != "symbol"}
-    production = engine_parity_over_bars(live.strategy_key, symbol, params, bars)
-    reference = build_strategy(live, first, last)
-    BacktestEngine(InMemoryDataReader(list(bars))).run(reference, retain_bars=False)
-    assert reference.signal_program is not None
-    expected = tuple(reference.signal_program.session.traces)
-    observed = asyncio.run(_live_adapter_traces(live.strategy_key, symbol, params, bars))
-    windowed_divergence: ShadowTraceDivergence | None = None
+    final_bar_traces: int | None = None
+    divergence: ShadowTraceDivergence | None = None
     try:
-        compare_canonical_traces(expected, observed)
+        evaluation = asyncio.run(run_shadow_trace_evaluation(live.strategy_key, symbol, params, bars))
     except ShadowTraceDivergenceError as error:
-        windowed_divergence = error.divergence
+        divergence = error.divergence
+        compared = divergence.index
+    else:
+        compared = evaluation.compared_count
+        final_bar_traces = sum(is_final_bar_close(t.bar_close_ms) for t in evaluation.traces)
     return GroupingParity(
         ledger=ledger.parent.name,
         strategy_key=live.strategy_key,
@@ -757,11 +744,9 @@ def grouping_parity(ledger: Path, live: LiveStrategy) -> GroupingParity:
         rth_minutes=len(bars),
         first_session=first.isoformat(),
         last_session=last.isoformat(),
-        production_check_compared=production.compared_count,
-        production_check_divergence=_divergence_text(production.divergence),
-        windowed_compared=len(observed),
-        windowed_final_bar_traces=sum(is_final_bar_close(t.bar_close_ms) for t in observed),
-        windowed_divergence=_divergence_text(windowed_divergence),
+        compared=compared,
+        final_bar_traces=final_bar_traces,
+        divergence=_divergence_text(divergence),
     )
 
 

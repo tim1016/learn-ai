@@ -146,7 +146,7 @@ def _engine_trades_from_strategy(algo: _RecordingAlgorithm) -> list[dict]:
 )
 @pytest.mark.asyncio
 async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
-    from app.engine.engine import BacktestEngine
+    from app.engine.engine import BacktestEngine, pin_strategy_window
     from app.lean_sidecar import polygon_canonical
     from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
     from app.routers.lean_sidecar import TrustedRunRequestModel
@@ -252,15 +252,7 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
     algo = _RecordingAlgorithm(symbol=symbol, entry_quantities=entry_quantities)
 
     # Pin the engine's window and cash to match the LEAN run.
-    orig_init = algo.initialize
-
-    def pinned_init() -> None:
-        orig_init()
-        algo.set_start_date(from_date.year, from_date.month, from_date.day)
-        algo.set_end_date(to_date.year, to_date.month, to_date.day)
-        algo.set_cash(100_000.0)
-
-    algo.initialize = pinned_init  # type: ignore[method-assign]
+    pin_strategy_window(algo, from_date, to_date, cash=100_000.0)
 
     reader = LeanMinuteDataReader(result.workspace_root / "data")
     engine = BacktestEngine(

@@ -14,7 +14,9 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite import qualification_shadow_trace
 from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.engine.data.trade_bar import TradeBar
 from app.services.bot_binding_repository import BotRunOutcomeRecord, BotRunRecord
 from app.services.decision_session import RunDecisionSession
 from app.services.run_replay_proof import (
@@ -23,6 +25,7 @@ from app.services.run_replay_proof import (
     RunReplayUnavailableError,
 )
 from app.services.source_bar_ledger import SourceBarLedger
+from app.services.spec_strategy_runner import InMemoryDataReader
 from tests._helpers.bot_runner.custody import _SID
 from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import _binding
@@ -239,6 +242,47 @@ async def test_generate_with_truncated_evidence_is_indeterminate_never_parity(tm
 
     assert receipt.status == "indeterminate"
     assert receipt.records_truncated is True
+
+
+class _ReaderMissingTheLastBar(InMemoryDataReader):
+    """A reference reader that never yields the final bar it was built over."""
+
+    def __init__(self, bars: list[TradeBar]) -> None:
+        super().__init__(bars[:-1])
+
+
+@pytest.mark.asyncio
+async def test_generate_records_replay_failed_when_the_reference_backtest_reads_fewer_bars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2608: a reference backtest that skips bars must never yield a partial
+    engine-parity comparison; the receipt records ``replay_failed`` instead."""
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=False)
+    evidence = LiveRunDecisionEvidence(
+        records=tuple(records), crash_records=(), captured_decisions={}, truncated=False
+    )
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path / "artifacts",
+        account_id=paper_evidence_account_id_for_strategy(_SID),
+    )
+    for bar in bars:
+        ledger.append(bar, run_id="run-a")
+    ledger.close()
+    service = _service(
+        tmp_path, evidence,
+        record=_run_record(bars[0].start_ms - 1),
+        outcome=_outcome(bars[-1].end_ms),
+    )
+    monkeypatch.setattr(qualification_shadow_trace, "InMemoryDataReader", _ReaderMissingTheLastBar)
+
+    receipt = await service.generate("alpaca", _SID, "run-1")
+
+    assert receipt.status == "replay_failed"
+    assert receipt.error is not None
+    assert f"processed {len(bars) - 1} of the {len(bars)} bars" in receipt.error
+    assert receipt.engine_parity_compared_count == 0
+    assert service.read(_SID, "run-1") == receipt  # durably persisted
 
 
 @pytest.mark.asyncio

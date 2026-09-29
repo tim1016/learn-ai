@@ -12,7 +12,7 @@ in the loop at all.
 Two authorities compute the trace for the identical qualified bars:
 
 * **reference** -- the already-qualified path. `registration.build(params)`
-  driven by `BacktestEngine`, exactly as
+  driven by `BacktestEngine` over exactly those bars, exactly as
   ``tests/engine/strategy/test_ema_signal_program.py``
   ::test_validated_ema_settings_corpus_has_a_pinned_trace_root`` already
   proves equals the registry's sealed ``golden_trace_root``.
@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
@@ -56,6 +56,7 @@ from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.spec_strategy_runner import InMemoryDataReader
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 SHADOW_TRACE_FEED_ID = "qualification_shadow_trace"
@@ -65,9 +66,18 @@ _SHADOW_RUN_ID = "shadow-trace-run"
 class UnsupportedShadowProgramError(ValueError):
     """``strategy_key`` names no registered Signal Program to shadow-evaluate.
 
-    Only a strategy with a ``signal_program_factory`` produces the canonical
-    `EvaluationTrace` this comparison needs; compatibility-mode strategies
-    (e.g. ``deployment_validation``) have no SignalSession to trace.
+    Only a registration with a ``signal_program_factory`` produces the
+    canonical `EvaluationTrace` this comparison needs. The key may be one this
+    build no longer registers (a durable binding outlives the build that
+    created it), or a registration may carry no Signal Program at all.
+    """
+
+
+class IncompleteReferenceReplayError(RuntimeError):
+    """The reference backtest did not process every bar it was handed.
+
+    Its traces would then cover only part of the bars the live seam decided
+    on, and a comparison over them proves nothing about the rest (#2608).
     """
 
 
@@ -204,10 +214,29 @@ def _reference_backtest_traces(
     params: StrategyParamsBase,
     bars: Sequence[TradeBar],
 ) -> tuple[EvaluationTrace, ...]:
-    """Recompute the already-qualified trace via the sole Backtest seam."""
+    """Recompute the already-qualified trace via the sole Backtest seam.
+
+    The backtest runs over exactly ``bars``: its window is the New York dates
+    of the first and last bar, never the strategy's built-in default. The
+    reader drops every bar outside the window, so a run dated after that
+    default used to be compared with an empty reference (#2608). Raises
+    ``IncompleteReferenceReplayError`` when the engine still processed fewer
+    bars than it was handed.
+    """
     registration = _registered_signal_program(strategy_key)
     strategy = registration.build(params)
-    BacktestEngine(InMemoryDataReader(list(bars))).run(strategy)
+    # No bars, no dates to pin: the engine reads nothing whatever its window.
+    if bars:
+        pin_strategy_window(strategy, et_date_at_ms(bars[0].start_ms), et_date_at_ms(bars[-1].start_ms))
+    result = BacktestEngine(InMemoryDataReader(list(bars))).run(strategy)
+    # Every bar the engine processes appends exactly one equity point
+    # (``BacktestResult``), so this is the count it read.
+    if len(result.equity_curve) != len(bars):
+        raise IncompleteReferenceReplayError(
+            f"The reference backtest for {strategy_key!r} processed {len(result.equity_curve)} "
+            f"of the {len(bars)} bars it was handed, so its traces cannot be compared with the "
+            "live seam's over the same bars."
+        )
     program = strategy.signal_program
     if program is None:
         raise UnsupportedShadowProgramError(
@@ -334,6 +363,7 @@ async def run_shadow_trace_evaluation(
 
 __all__ = [
     "SHADOW_TRACE_FEED_ID",
+    "IncompleteReferenceReplayError",
     "ShadowTraceDivergence",
     "ShadowTraceDivergenceError",
     "ShadowTraceEvaluation",

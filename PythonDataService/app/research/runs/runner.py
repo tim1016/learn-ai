@@ -25,7 +25,13 @@ from zoneinfo import ZoneInfo
 
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
-from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult, EquitySnapshot
+from app.engine.engine import (
+    ZERO_BARS_EVALUATED,
+    BacktestEngine,
+    BacktestResult,
+    EquitySnapshot,
+    pin_strategy_window,
+)
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import EquityPoint, summarize
@@ -480,17 +486,8 @@ def run_strategy_spec(
         except NotImplementedError as exc:
             return _failed(ledger, f"spec uses unsupported feature: {exc}")
 
-        # Patch the strategy's initialize to honor the request's date window
-        # and cash override. Same trick as spec_strategy.py's router.
-        orig_init = strategy.initialize
-
-        def _patched_init() -> None:
-            orig_init()
-            strategy.set_start_date(data_start_date.year, data_start_date.month, data_start_date.day)
-            strategy.set_end_date(end_date.year, end_date.month, end_date.day)
-            strategy.set_cash(request.initial_cash)
-
-        strategy.initialize = _patched_init  # type: ignore[assignment]
+        # Honor the request's date window and cash override.
+        pin_strategy_window(strategy, data_start_date, end_date, cash=request.initial_cash)
 
         fill_mode = _parse_fill_mode(fill_mode_norm)
         engine = BacktestEngine(

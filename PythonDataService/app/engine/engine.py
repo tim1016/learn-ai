@@ -92,6 +92,34 @@ class BacktestResult:
 ZERO_BARS_EVALUATED = "missing data: backtest evaluated zero bars for the requested window"
 
 
+def pin_strategy_window(
+    strategy: Strategy,
+    start: date,
+    end: date,
+    *,
+    cash: float | int | Decimal | None = None,
+) -> None:
+    """Make ``strategy`` run over ``start``..``end`` instead of its built-in window.
+
+    A strategy sets its own default window (and cash) inside ``initialize``,
+    which :meth:`BacktestEngine.run` calls first; the engine then asks its
+    reader only for bars dated inside that window (America/New_York dates,
+    both ends inclusive). This wraps ``initialize`` so the caller's window --
+    and ``cash``, when given -- is set right after the strategy's own, and
+    so wins, without editing the strategy. Call it before ``run``.
+    """
+    configure = strategy.initialize
+
+    def initialize() -> None:
+        configure()
+        strategy.set_start_date(start.year, start.month, start.day)
+        strategy.set_end_date(end.year, end.month, end.day)
+        if cash is not None:
+            strategy.set_cash(cash)
+
+    strategy.initialize = initialize  # type: ignore[method-assign]
+
+
 class BacktestEngine:
     def __init__(
         self,
