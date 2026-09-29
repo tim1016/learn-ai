@@ -26,9 +26,8 @@ from typing import Final
 
 from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
-    reconnecting_refusal,
+    compose_failure_refusal,
     terminal_startup_recovery,
-    transient_startup_failure,
     unavailable_runtime,
 )
 
@@ -40,9 +39,8 @@ logger = logging.getLogger(__name__)
 #: account read a minute. A rate limit's own Retry-After is waited out whole.
 RECONNECT_FIRST_DELAY_S: Final = 2.0
 RECONNECT_MAX_DELAY_S: Final = 60.0
-#: A reconnect that ended on an error nothing expected, or whose boot
-#: recovery failed for a reason other than Alpaca. Final, like every startup
-#: failure but Alpaca not answering, and its copy says so.
+#: A reconnect that ended on an error nothing expected. Final, like every
+#: startup failure but Alpaca not answering, and its copy says so.
 RECONNECT_FAILED: Final = "CLERK_RECONNECT_FAILED"
 
 
@@ -74,7 +72,8 @@ class AuthoritySteps:
     ``retire`` undoes ``install`` for an authority whose boot recovery failed:
     it stops what the install started and closes the authority, releasing its
     execution lease. ``boot`` runs boot recovery against whatever was
-    installed -- a Clerk-less one included, so Start reads a finished report.
+    installed -- a Clerk-less refusal included, so Start reads a finished
+    report whichever way an attempt ends.
     """
 
     select: Callable[[], Awaitable[ActiveClerkRuntime]]
@@ -96,7 +95,9 @@ async def run_authority_reconnect(
 
     The task never dies silently: an error no step expected is logged and
     installs a final refusal, whose copy stops promising a reconnect that is
-    no longer running.
+    no longer running. It keeps the activation evidence of the refusal the
+    attempt started from, so the account's Home line and panels keep naming
+    the failed authority, and it is booted like every refusal.
     """
     if first_delay_s <= 0 or max_delay_s < first_delay_s:
         raise ValueError("reconnect backoff must start positive and cap at or above its start")
@@ -135,13 +136,28 @@ async def run_authority_reconnect(
             exc,
             extra={"action": "clerk_authority_reconnect_failed", "attempts": attempt, "error": str(exc)},
         )
-        failure = unreachable.startup_failure
+        # The loop binds ``failure`` before any step runs: never None here,
+        # it is the failure of the refusal this attempt started from.
         final = unavailable_runtime(
             RECONNECT_FAILED,
-            account_id=None if failure is None else failure.account_id,
+            account_id=failure.account_id,
             recovery=terminal_startup_recovery(f"its reconnect to Alpaca failed ({exc})"),
+            activation_detected=failure.activation_detected,
+            authority_generation=failure.authority_generation,
+            db_identity_token=failure.db_identity_token,
         )
         steps.install(final)
+        try:
+            await steps.boot(final)
+        except Exception:
+            # Raised out of the task, this would surface only when shutdown
+            # awaits it, and abort custody's teardown there. Start stays
+            # refused either way: no sweep report means no Start.
+            logger.exception(
+                "Boot recovery failed for this Clerk's final refusal too; Start stays refused "
+                "until the Clerk restarts",
+                extra={"action": "clerk_authority_reconnect_final_boot_failed", "account_id": failure.account_id},
+            )
         return final
     if runtime.clerk is not None:
         RECONNECT_COUNTERS.installed += 1
@@ -179,26 +195,39 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     installed and boot-recovered. An installed authority whose boot recovery
     fails is retired before its refusal replaces it, so no half-booted
     authority -- sweepless, Start refused for good -- is ever left serving.
+    That refusal is the one a failed boot composition installs
+    (``compose_failure_refusal``): reconnecting when Alpaca was the cause,
+    else final, and naming the activation the retired authority served, read
+    before retirement closes its repository.
     """
     selected = await steps.select()
     if selected.reconnecting:
         return selected
     acknowledged = await steps.acknowledge(selected)
     steps.install(acknowledged)
-    if acknowledged.clerk is None:
+    # A refusal holds no repository, so no lease to release: it is booted as
+    # it stands.
+    repository = acknowledged.sqlite_repository
+    if repository is None:
         await steps.boot(acknowledged)
         return acknowledged
+    activation = repository.control_meta_snapshot()
     try:
         await steps.boot(acknowledged)
     except Exception as exc:
-        refusal = _boot_failure_refusal(exc, account_id=acknowledged.selected_account_id)
+        refusal = compose_failure_refusal(
+            exc,
+            account_id=activation.account_id,
+            authority_generation=activation.authority_generation,
+            db_identity_token=activation.db_identity_token,
+        )
         logger.error(
             "This Clerk's account authority installed, but its boot recovery failed; it is "
             "retired: %s",
             exc,
             extra={
                 "action": "clerk_authority_reconnect_boot_failed",
-                "account_id": acknowledged.selected_account_id,
+                "account_id": activation.account_id,
                 "error": str(exc),
                 "reconnecting": refusal.reconnecting,
             },
@@ -209,18 +238,6 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
         await steps.boot(refusal)
         return refusal
     return acknowledged
-
-
-def _boot_failure_refusal(exc: Exception, *, account_id: str | None) -> ActiveClerkRuntime:
-    """What replaces an authority whose boot recovery failed: reconnecting, or final."""
-    transient = transient_startup_failure(exc)
-    if transient is not None:
-        return reconnecting_refusal(transient, account_id=account_id)
-    return unavailable_runtime(
-        RECONNECT_FAILED,
-        account_id=account_id,
-        recovery=terminal_startup_recovery(f"its recovery after reconnecting failed ({exc})"),
-    )
 
 
 __all__ = [

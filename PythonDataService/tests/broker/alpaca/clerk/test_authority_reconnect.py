@@ -33,7 +33,11 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.active_runtime import reconnecting_refusal, unavailable_runtime
+from app.broker.alpaca.clerk.active_runtime import (
+    ClerkStartupFailure,
+    reconnecting_refusal,
+    unavailable_runtime,
+)
 from app.broker.alpaca.clerk.authority_reconnect import (
     AuthoritySteps,
     ReconnectCounters,
@@ -46,7 +50,13 @@ from app.broker.alpaca.fault_injection import _api_error
 from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerUnreachable
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.routers.broker_v2_panel import read_account_money_scoped
+from app.schemas.broker_v2_panel import LaneAttentionItem
 from app.services.bot_boot_recovery import BootAuthorityPreparationError
+from app.services.broker_v2_panel.lane_summary import lane_attention_read
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
+from app.services.sqlite_clerk_compat import failed_sqlite_projection
+from app.services.sqlite_clerk_transaction_projection import sqlite_transaction_history
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_authority_fixtures import (
     instance_seals_over,
@@ -204,6 +214,57 @@ def _next_process_can_take_the_lease(tmp_path: Path) -> None:
     ClerkSqliteRepository.open(
         account_id=LIVE_ACCT, artifacts_root=tmp_path, lease_owner="boot:next-process", clock=lambda: NOW_MS
     ).close()
+
+
+def _boot_cannot_reach_alpaca() -> BootAuthorityPreparationError:
+    """Boot recovery's own failure when the Clerk's recover step could not read Alpaca."""
+    error = BootAuthorityPreparationError("SQLite boot authority step 'recover' failed")
+    error.__cause__ = StartupBrokerTruthUnavailable(_unreachable())
+    return error
+
+
+class _ShutdownAfter(_Backoff):
+    """The reconnect's sleep, cut short by shutdown once it has waited ``waits`` times."""
+
+    def __init__(self, waits: int) -> None:
+        super().__init__()
+        self.remaining = waits
+
+    async def __call__(self, delay_s: float) -> None:
+        if not self.remaining:
+            raise asyncio.CancelledError
+        self.remaining -= 1
+        await super().__call__(delay_s)
+
+
+async def _what_the_owner_sees(refusal: ActiveClerkRuntime, *, activation: ClerkStartupFailure) -> LaneAttentionItem:
+    """While ``refusal`` serves: one Home line, and account panels that name the failed authority.
+
+    ``activation`` is the boot's own refusal, which carries the account's
+    activation as the selection read it; the refusal serving now must name
+    the same generation and database.
+    """
+    assert get_active_clerk_runtime() is refusal
+    assert refusal.startup_failure is not None
+    attention = await lane_attention_read()
+    assert attention.account_id == LIVE_ACCT
+    [line] = attention.items
+    projection = failed_sqlite_projection(account_id=LIVE_ACCT, strategy_instance_id=None)
+    assert projection is not None
+    assert projection.authority_health_reason == refusal.startup_failure.recovery
+    assert activation.authority_generation is not None
+    assert (projection.authority_generation, projection.db_identity_token) == (
+        activation.authority_generation,
+        activation.db_identity_token,
+    )
+    with pytest.raises(ClerkTransactionProjectionUnavailable):
+        sqlite_account_pnl_attribution(account_id=LIVE_ACCT, from_ms=NOW_MS - 60_000, to_ms=NOW_MS)
+    with pytest.raises(ClerkTransactionProjectionUnavailable):
+        sqlite_transaction_history(
+            account_id=LIVE_ACCT, limit=10, cursor=None, origin=None,
+            lifecycle_state=None, strategy_instance_id=None, run_id=None,
+        )
+    return line
 
 
 async def test_a_live_boot_that_briefly_cannot_reach_alpaca_installs_and_boots_its_authority(
@@ -513,9 +574,7 @@ async def test_a_reconnected_authority_whose_boot_cannot_reach_alpaca_is_retired
     lane-quiet probe and Start waiting on a boot recovery that never reran.
     """
     select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
-    boot_cannot_reach_alpaca = BootAuthorityPreparationError("SQLite boot authority step 'recover' failed")
-    boot_cannot_reach_alpaca.__cause__ = StartupBrokerTruthUnavailable(_unreachable())
-    root = _CompositionRoot(select, boot_errors=[boot_cannot_reach_alpaca])
+    root = _CompositionRoot(select, boot_errors=[_boot_cannot_reach_alpaca()])
     backoff = _Backoff()
 
     serving = await _reconnect(await select(), root, backoff)
@@ -543,27 +602,56 @@ async def test_a_reconnected_authority_whose_boot_cannot_reach_alpaca_is_retired
 async def test_a_reconnected_authority_whose_boot_fails_otherwise_is_retired_and_final(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Any other boot failure retires the authority and installs a final refusal that says restart."""
+    """Any other boot failure retires the authority and installs a final refusal that says restart.
+
+    The refusal is the one a failed boot composition installs, for the same
+    activation: Home keeps a blocking line and the account panels keep
+    naming the failed authority instead of going quiet.
+    """
     select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    assert at_boot.startup_failure is not None
     root = _CompositionRoot(select, boot_errors=[RuntimeError("boot recovery could not project a bot")])
     caplog.set_level(logging.ERROR, logger="app.broker.alpaca.clerk.authority_reconnect")
 
-    final = await _reconnect(await select(), root)
+    final = await _reconnect(at_boot, root)
 
     assert root.names() == ["acknowledge", "install", "boot", "install", "retire", "boot"]
     retired = root.events[4][1]
     assert retired is root.events[1][1]
     # Retired means closed: its execution lease is free for the next process.
     _next_process_can_take_the_lease(tmp_path)
-    assert get_active_clerk_runtime() is final
     assert final.reconnecting is False
     assert final.startup_failure is not None
-    assert final.startup_failure.reason_code == "CLERK_RECONNECT_FAILED"
+    line = await _what_the_owner_sees(final, activation=at_boot.startup_failure)
+    assert (line.condition_id, line.severity) == ("account:authority-failed:SQLITE_CLERK_STARTUP_FAILED", "blocking")
     assert "boot recovery could not project a bot" in final.startup_failure.recovery
     assert "restart the Clerk once that is fixed" in final.startup_failure.recovery
     assert root.events[-1] == ("boot", final)
     (logged,) = [r for r in caplog.records if getattr(r, "action", None) == "clerk_authority_reconnect_boot_failed"]
     assert "boot recovery could not project a bot" in logged.getMessage()
+
+
+async def test_a_retired_authority_reconnecting_keeps_its_line_on_home_and_its_panels(tmp_path: Path) -> None:
+    """Between its retirement and the next attempt the account is reconnecting, never gone from Home.
+
+    Shutdown ends the reconnect during that wait, so the refusal the
+    retirement installed is what the lane serves.
+    """
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    assert at_boot.startup_failure is not None
+    root = _CompositionRoot(select, boot_errors=[_boot_cannot_reach_alpaca()])
+
+    with pytest.raises(asyncio.CancelledError):
+        await _reconnect(at_boot, root, _ShutdownAfter(1))
+
+    assert root.names() == ["acknowledge", "install", "boot", "install", "retire", "boot"]
+    reconnecting = root.events[3][1]
+    assert reconnecting.reconnecting is True
+    line = await _what_the_owner_sees(reconnecting, activation=at_boot.startup_failure)
+    assert (line.condition_id, line.severity) == ("account:authority-reconnecting", "warning")
+    _next_process_can_take_the_lease(tmp_path)
 
 
 async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
@@ -580,7 +668,9 @@ async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
 
     final = await _reconnect(unreachable, root)
 
-    assert root.names() == ["install"]
+    # Boot recovery runs for the final refusal too, so Start reads a finished report.
+    assert root.names() == ["install", "boot"]
+    assert root.events[-1] == ("boot", final)
     assert get_active_clerk_runtime() is final
     assert final.reconnecting is False
     assert final.startup_failure is not None
@@ -589,6 +679,68 @@ async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
     assert "will not retry on its own" in final.startup_failure.recovery
     assert any(getattr(record, "action", None) == "clerk_authority_reconnect_failed" for record in caplog.records)
     assert _fresh_counters.final == 1
+
+
+async def test_a_reconnect_that_breaks_while_retiring_boots_its_final_refusal_and_keeps_home_s_line(
+    tmp_path: Path,
+) -> None:
+    """Retirement raising after a failed boot recovery already cleared Start's report.
+
+    The final refusal is booted, so Start reads a finished report instead of
+    waiting forever on a sweep nothing reruns, and it keeps the account's
+    activation, so Home and the panels keep naming the failed authority.
+    """
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    assert at_boot.startup_failure is not None
+    root = _CompositionRoot(select, boot_errors=[RuntimeError("boot recovery could not project a bot")])
+
+    async def _retire_breaks(runtime: ActiveClerkRuntime) -> None:
+        root.events.append(("retire", runtime))
+        await runtime.close()
+        raise OSError("the trade-updates consumer would not stop")
+
+    root.retire = _retire_breaks  # type: ignore[method-assign]
+
+    final = await _reconnect(at_boot, root)
+
+    assert root.names() == ["acknowledge", "install", "boot", "install", "retire", "install", "boot"]
+    assert root.events[-1] == ("boot", final)
+    assert final.startup_failure is not None
+    assert "the trade-updates consumer would not stop" in final.startup_failure.recovery
+    assert "restart the Clerk once that is fixed" in final.startup_failure.recovery
+    line = await _what_the_owner_sees(final, activation=at_boot.startup_failure)
+    assert (line.condition_id, line.severity) == ("account:authority-failed:CLERK_RECONNECT_FAILED", "blocking")
+
+
+async def test_a_final_refusal_whose_boot_recovery_also_fails_ends_the_reconnect_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Shutdown awaits the reconnect before custody comes down; it must not raise there."""
+
+    async def _select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    root = _CompositionRoot(_select_breaks)
+
+    async def _boot_breaks(runtime: ActiveClerkRuntime) -> None:
+        root.events.append(("boot", runtime))
+        raise OSError("a bot's lifecycle record could not be read")
+
+    root.boot = _boot_breaks  # type: ignore[method-assign]
+    caplog.set_level(logging.ERROR, logger="app.broker.alpaca.clerk.authority_reconnect")
+
+    final = await _reconnect(reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT), root)
+
+    assert root.names() == ["install", "boot"]
+    assert get_active_clerk_runtime() is final
+    assert final.reconnecting is False
+    (logged,) = [
+        record for record in caplog.records
+        if getattr(record, "action", None) == "clerk_authority_reconnect_final_boot_failed"
+    ]
+    assert logged.exc_info is not None
+    assert str(logged.exc_info[1]) == "a bot's lifecycle record could not be read"
 
 
 async def test_a_selection_cut_short_by_shutdown_releases_its_execution_lease(

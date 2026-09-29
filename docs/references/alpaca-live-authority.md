@@ -79,10 +79,14 @@ the refusal installed while `authority_reconnect.py` retries on a capped
 backoff (2 s doubling to 60 s, forever: owner decision 2026-09-29), logging
 and counting every attempt (`RECONNECT_COUNTERS`). One attempt is the boot's
 own steps — select, acknowledge, install, boot recovery — and an installed
-authority whose boot recovery fails is retired: the lane goes back to
-reconnecting when Alpaca was the cause, and to a final refusal that says
-restart otherwise. Every other startup failure stays final, and its copy says
-so and names the fix. Routed reads tell the same truth from the lane's beat:
+authority whose boot recovery fails is retired and replaced by the refusal a
+failed boot composition installs (`compose_failure_refusal`): reconnecting
+when Alpaca was the cause, final with copy that says restart otherwise, and
+naming the same activation either way, so Home's account line and the account
+panels keep naming it. A reconnect that breaks on an unexpected error installs
+a final refusal that keeps that activation too, and boot recovery reruns for
+every refusal so Start reads a finished report. Every other startup failure
+stays final, and its copy says so and names the fix. Routed reads tell the same truth from the lane's beat:
 its summary reports `authority_state=reconnecting`, and the coordinator
 authors the 503's copy from the session it routed through.
 
