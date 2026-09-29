@@ -67,8 +67,9 @@ _RELEASE_REJECTED_CLAIM = "#FOLLOWUP-A: a refused or rejected ENTER keeps its ca
 _NAME_ORDER_REJECTIONS = "#FOLLOWUP-B: Alpaca's order-level 403 (wash trade) reads as a credentials failure"
 
 # Alpaca's documented wash-trade refusal: HTTP 403 on POST /v2/orders
-# (https://docs.alpaca.markets/us/docs/user-protection). The code and message
-# are the ones Alpaca returns for it; the HTTP status is what the Clerk maps on.
+# (https://docs.alpaca.markets/us/docs/user-protection). The page states only
+# the status; the body's code and message are as reported on Alpaca's community
+# forum. The Clerk maps on the status alone.
 _WASH_TRADE_CODE = 40310000
 _WASH_TRADE_MESSAGE = "potential wash trade detected. use complex orders"
 
