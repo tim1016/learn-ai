@@ -401,15 +401,40 @@ function attentionSentence(attention: LaneAttention): string | null {
  * that split is intentional rather than the #2185 kind of drift.
  */
 function modeWordFor(state: LaneVerdictState): string {
-  if (state.verdict !== null) {
-    switch (state.verdict.final_verdict) {
-      case 'paper': return 'Paper';
-      case 'live': return 'Live';
-      case 'shadow': return 'Shadow';
-      case 'unknown': return 'Mode unknown — assume real money';
-    }
+  if (state.verdict === null) {
+    return state.lastError !== null ? 'Mode unavailable — assume real money' : 'Reading…';
   }
-  return state.lastError !== null ? 'Mode unavailable — assume real money' : 'Reading…';
+  // No fall-through: every case returns, so a verdict missing here is a
+  // compile error ("not all code paths return"), not a silent "Reading…".
+  switch (recognisedVerdict(state.verdict)) {
+    case 'paper': return 'Paper';
+    case 'live': return 'Live';
+    case 'shadow': return 'Shadow';
+    case 'unknown': return 'Mode unknown — assume real money';
+  }
+}
+
+/**
+ * `final_verdict` as this build knows it. The wire is not the type: a clerk on
+ * another release can send a value outside the contract's union (#2550
+ * renamed `live-unarmed` to `live`), and that is undetermined — the loud
+ * real-money state — never a fall-through that throws inside `badge` or
+ * leaves the pill reading "Reading…" as if the first read had not landed.
+ * The `satisfies never` makes a verdict added to the contract a compile error
+ * here, so both switches below stay exhaustive.
+ */
+function recognisedVerdict(verdict: AlpacaLiveVerdict): AlpacaLiveVerdict['final_verdict'] {
+  const value = verdict.final_verdict;
+  switch (value) {
+    case 'paper':
+    case 'live':
+    case 'shadow':
+    case 'unknown':
+      return value;
+    default:
+      value satisfies never;
+      return 'unknown';
+  }
 }
 
 function verdictBadge({
@@ -440,7 +465,8 @@ function verdictBadge({
     // separate account-read failure makes the overall verdict unknown.
     shadow: v.clerk_authority === 'shadow',
   };
-  switch (v.final_verdict) {
+  const finalVerdict = recognisedVerdict(v);
+  switch (finalVerdict) {
     case 'paper':
       return {
         ...base,
@@ -451,7 +477,7 @@ function verdictBadge({
     case 'shadow':
       return {
         ...base,
-        tone: v.final_verdict === 'shadow' ? 'is-shadow' : 'is-live',
+        tone: finalVerdict === 'shadow' ? 'is-shadow' : 'is-live',
         refusalCode: null,
       };
     case 'unknown':

@@ -248,6 +248,25 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
+  it('renders a verdict value this build does not recognise as the loud real-money warning, never "Reading…"', async () => {
+    // The wire is not the type: a clerk on another release can send a
+    // `final_verdict` outside this build's union (#2550 renamed
+    // `live-unarmed` to `live`), and that must read as undetermined — a pill
+    // frozen on "Reading…" would look like a routine cold load forever.
+    const fromAnotherRelease = {
+      ...verdict({ configured_mode: 'live', headline: 'Live account — not armed', detail: 'fixture' }),
+      final_verdict: 'live-unarmed',
+    } as unknown as AlpacaLiveVerdict;
+    await renderWith(LIVE_LANE, { verdict: fromAnotherRelease, lastError: null });
+
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-undetermined');
+    expect(status.textContent).toContain('Mode unknown');
+    expect(status.textContent).toContain('assume real money');
+    expect(status.textContent).not.toContain('Reading');
+    expect(status.getAttribute('aria-label')).toContain('Assume real money until a read succeeds.');
+  });
+
   it('says Shadow authority on an undetermined verdict, in its accessible name, when the clerk holds the no-submit Shadow authority', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
