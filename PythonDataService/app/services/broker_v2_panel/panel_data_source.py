@@ -66,7 +66,8 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     get_bot_task_registry,
 )
-from app.services.bot_runner_errors import BotRunnerError
+from app.services.bot_runner_errors import BotRunnerError, InvalidStrategyInstanceIdError
+from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
@@ -165,6 +166,11 @@ async def _selected_panel_authority(
     Yields the resolved account id, the registry, the bot's binding and the
     selected facade, so a read and the action it gates project from the same
     authority, selected once.
+
+    An id the runner holds no binding for -- or could never hold one for --
+    is the panel's own ``UnknownBotError`` (404) in the runner's words: the
+    runner's error type is not a panel error, so untranslated it answered
+    the bot page with a 500 and aborted a whole clear batch at one leg.
     """
     resolved = await validate_account(broker, account_id)
     registry = get_bot_task_registry()
@@ -173,7 +179,10 @@ async def _selected_panel_authority(
             "The bot runner is not available.",
             detail="The service is still starting or has shut down.",
         )
-    binding = registry.binding_for_control(broker, sid)
+    try:
+        binding = registry.binding_for_control(broker, sid)
+    except (RunnerUnknownBotError, InvalidStrategyInstanceIdError) as exc:
+        raise UnknownBotError(str(exc), detail=exc.detail) from exc
     async with _panel_authority_for_binding(registry, binding) as facade:
         yield resolved, registry, binding, facade
 

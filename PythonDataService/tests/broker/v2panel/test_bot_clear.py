@@ -14,6 +14,8 @@ in ``test_sqlite_roster_source``.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -24,15 +26,16 @@ from pydantic import ValidationError
 
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest, PanelActionResult
+from app.services.bot_runner import BotTaskRegistry
 from app.services.broker_v2_panel import bot_clear, panel_data_source
 from app.services.broker_v2_panel.action_execution_service import ActionNotAvailableError
-from app.services.broker_v2_panel.panel_errors import UnknownBotError
 from tests.broker.v2panel.fixtures import ACCT
 
 _FINISHED = "spy-done-1"
 _DRY_RUN = "dry-done-1"
 _HOLDING = "qqq-holding-1"
 _RACED = "tsla-raced-1"
+_KNOWN = (_FINISHED, _DRY_RUN, _HOLDING, _RACED)
 
 _STRAND_HEADLINE = "This bot still holds shares or has a working order."
 _STRAND_WHY = "Flatten it and let its working orders finish, then clear it."
@@ -57,17 +60,28 @@ class _Lane:
     reason; ``raced`` bots present it armed but a fill lands before the click,
     so the commit-time guard refuses. ``applied`` records every idempotency
     key the pipeline completed, so a resend replays instead of reapplying.
+
+    A bot this lane does not know is read through the real panel read against
+    a real, empty bot runner, so the lookup fails exactly as production's does
+    -- with the runner's own error type, not a stand-in for it.
     """
 
-    def __init__(self, *, holding: tuple[str, ...] = (), raced: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        real_get_panel: Callable[[str, str, str], Awaitable[object]],
+        *,
+        holding: tuple[str, ...] = (),
+        raced: tuple[str, ...] = (),
+    ) -> None:
+        self.real_get_panel = real_get_panel
         self.holding = holding
         self.raced = raced
         self.applied: set[str] = set()
         self.calls: list[tuple[str, str, str, str]] = []
 
-    async def get_panel(self, broker: str, account_id: str, sid: str) -> SimpleNamespace:
-        if sid == "not-a-bot":
-            raise UnknownBotError(f"No bot '{sid}' is bound to broker '{broker}'.", detail="Refresh Home.")
+    async def get_panel(self, broker: str, account_id: str, sid: str) -> object:
+        if sid not in _KNOWN:
+            return await self.real_get_panel(broker, account_id, sid)
         return _panel(sid, enabled=sid not in self.holding)
 
     async def run_action(
@@ -91,9 +105,17 @@ class _Lane:
         )
 
 
+def _empty_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real bot runner with no bots bound, behind a route account that resolves."""
+    runner = BotTaskRegistry(tmp_path / "runner", feed_resolver=lambda: None, boot_recovery_required=False)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: runner)
+    monkeypatch.setattr(panel_data_source, "validate_account", _accept_account)
+
+
 @pytest.fixture()
-def lane(monkeypatch: pytest.MonkeyPatch) -> _Lane:
-    fake = _Lane(holding=(_HOLDING,), raced=(_RACED,))
+def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Lane:
+    _empty_runner(tmp_path, monkeypatch)
+    fake = _Lane(panel_data_source.get_panel, holding=(_HOLDING,), raced=(_RACED,))
     monkeypatch.setattr(panel_data_source, "get_panel", fake.get_panel)
     monkeypatch.setattr(panel_data_source, "run_action", fake.run_action)
     monkeypatch.setattr(bot_clear, "validate_account", _accept_account)
@@ -123,6 +145,13 @@ def test_a_bot_is_cleared_once_per_request() -> None:
 def test_the_derived_leg_identity_budget_is_enforced() -> None:
     with pytest.raises(ValidationError, match="identity budget"):
         BotClearRequest(idempotency_key="k" * 64, strategy_instance_ids=["s" * 96])
+
+
+@pytest.mark.parametrize("malformed", ["evil id", "../escape", ".hidden", "spy/done"])
+def test_a_malformed_bot_id_is_refused_at_the_request_boundary(malformed: str) -> None:
+    """Every id must be a strategy instance id; a malformed one never reaches a leg."""
+    with pytest.raises(ValidationError, match="strategy_instance_ids"):
+        _request(_FINISHED, malformed)
 
 
 # ── the legs ─────────────────────────────────────────────────────────────────
@@ -182,12 +211,21 @@ async def test_a_resend_replays_the_cleared_legs_and_retries_only_the_refused(la
 
 
 async def test_an_unknown_bot_is_refused_and_never_aborts_its_siblings(lane: _Lane) -> None:
-    result = await bot_clear.clear_bots("alpaca", ACCT, _request("not-a-bot", _FINISHED), operator_identity="owner")
+    """The runner has no binding for the id and says so with its own error;
+    that leg is refused with the runner's words and its siblings still clear."""
+    result = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request(_FINISHED, "not-a-bot", _DRY_RUN), operator_identity="owner"
+    )
 
     assert [(leg.strategy_instance_id, leg.outcome) for leg in result.legs] == [
-        ("not-a-bot", "refused"), (_FINISHED, "applied"),
+        (_FINISHED, "applied"), ("not-a-bot", "refused"), (_DRY_RUN, "applied"),
     ]
-    assert [call[0] for call in lane.calls] == [_FINISHED]
+    unknown = result.legs[1].error
+    assert unknown is not None
+    assert (unknown.outcome, unknown.reason_code) == ("conflict", None)
+    assert unknown.message == "No bot 'not-a-bot' is bound to broker 'alpaca'."
+    assert [call[0] for call in lane.calls] == [_FINISHED, _DRY_RUN]
+    assert (result.applied_count, result.refused_count) == (2, 1)
 
 
 async def test_the_clear_route_answers_every_leg(lane: _Lane) -> None:
@@ -210,6 +248,36 @@ async def test_the_clear_route_answers_every_leg(lane: _Lane) -> None:
     ]
     assert body["legs"][1]["error"]["reason_code"] == "ARCHIVE_WOULD_STRAND_CUSTODY"
     assert malformed.status_code == 422
+
+
+async def test_a_malformed_bot_id_is_a_422_and_no_leg_runs(lane: _Lane) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/clear",
+            json={"idempotency_key": "clear-route", "strategy_instance_ids": [_FINISHED, "evil id"]},
+        )
+
+    assert response.status_code == 422, response.text
+    assert lane.calls == []
+
+
+@pytest.mark.parametrize("sid", ["not-a-bot", "evil id"])
+async def test_the_bot_page_of_an_unknown_bot_is_not_found(
+    sid: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bot page's panel read shares the clear leg's lookup: an id the runner
+    has no binding for -- or cannot even hold one for -- is a 404 in the
+    runner's own words, never an internal error."""
+    _empty_runner(tmp_path, monkeypatch)
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{sid}/panel")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["message"]
 
 
 async def test_the_commit_time_refusal_is_a_typed_refusal_not_an_unknown_outcome(

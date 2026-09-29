@@ -30,6 +30,7 @@ from app.broker.v2panel.vocabulary import (
     StationId,
     StationState,
 )
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.marketdata.feed import WarmupRefusalReason
 from app.schemas.account_authority import (
     SIMULATED_AUTHORITY_KINDS,
@@ -896,9 +897,12 @@ class BotClearRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     idempotency_key: str = Field(min_length=1, max_length=64)
-    strategy_instance_ids: list[Annotated[str, Field(min_length=1, max_length=96)]] = Field(
-        min_length=1, max_length=256
-    )
+    # Each id is a strategy instance id or the whole request is a 422: a
+    # malformed id can name no bot, and refusing it here keeps it from ever
+    # reaching a leg's lookup or its receipt path.
+    strategy_instance_ids: list[
+        Annotated[str, Field(min_length=1, max_length=96, pattern=INSTANCE_ID_PATTERN)]
+    ] = Field(min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def _bots_are_distinct_and_keys_fit(self) -> BotClearRequest:
