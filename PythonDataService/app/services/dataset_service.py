@@ -788,9 +788,10 @@ def preprocess_and_calculate(
          when given — a gap inside warm-up lead-in rows the caller will trim
          away is not the output's gap)
       5. Forward-fill gaps (optional)
-      6. Calculate dynamic indicators
-      7. Trim warm-up rows (optional, by timestamp) and the exclusive
-         ``trim_to_ts`` bound
+      6. Calculate dynamic indicators, then trim warm-up rows (optional, by
+         timestamp) and the exclusive ``trim_to_ts`` bound — through
+         :func:`calculate_indicators_then_trim`, the path the Data Lab chart
+         shares
     """
     assert_canonical_bar_stream(bars, "dataset")
     df = pd.DataFrame(bars)
@@ -817,10 +818,19 @@ def preprocess_and_calculate(
     if forward_fill:
         df = forward_fill_gaps(df, session, timespan=timespan, multiplier=multiplier)
 
-    column_meta: list[dict[str, Any]] = []
-    if indicator_entries:
-        df, column_meta = calculate_dynamic_indicators(df, indicator_entries)
+    return calculate_indicators_then_trim(df, indicator_entries, trim_from_ts, trim_to_ts)
 
+
+def trim_to_window(
+    df: pd.DataFrame,
+    trim_from_ts: int | None = None,
+    trim_to_ts: int | None = None,
+) -> pd.DataFrame:
+    """Keep the rows inside ``[trim_from_ts, trim_to_ts)``; either bound may be open.
+
+    Rows before ``trim_from_ts`` are the warm-up lead-in; ``trim_to_ts`` is
+    exclusive by contract.
+    """
     if trim_from_ts is not None:
         before = len(df)
         df = df[df["timestamp"] >= trim_from_ts].reset_index(drop=True)
@@ -829,8 +839,37 @@ def preprocess_and_calculate(
         before = len(df)
         df = df[df["timestamp"] < trim_to_ts].reset_index(drop=True)
         logger.info(f"[TRIM] Exclusive end bound: {before} → {len(df)} rows")
+    return df
 
-    return df, column_meta
+
+def calculate_indicators_then_trim(
+    df: pd.DataFrame,
+    indicator_entries: list[dict[str, Any]],
+    trim_from_ts: int | None = None,
+    trim_to_ts: int | None = None,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """Compute indicators over the warm-up-inclusive frame, then trim it to the window.
+
+    The ONE compute-then-trim path the dataset export and the Data Lab chart
+    share (#2458). Every indicator runs over the lead-in bars before the
+    window, so its first value inside the window is already warm; only then
+    does :func:`trim_to_window` drop the lead-in. Trimming first restarts
+    every indicator cold at the window's first bar — the chart did exactly
+    that, and disagreed with the export for the same window.
+
+    Formula: indicator_i(bars[fetch_start:])[t >= trim_from_ts, t < trim_to_ts]
+    Reference: pandas-ta (external) through :func:`calculate_dynamic_indicators`.
+    Canonical implementation: this file.
+    Validated against: tests/services/test_data_lab_chart_indicator_warmup.py
+      (chart vs export at atol=1e-9, rtol=0 on the 6-dp values both publish).
+
+    ``calculate_dynamic_indicators`` adds its columns to ``df`` in place; a
+    caller that keeps its frame (the chart's cached bars) passes a copy.
+    """
+    column_meta: list[dict[str, Any]] = []
+    if indicator_entries:
+        df, column_meta = calculate_dynamic_indicators(df, indicator_entries)
+    return trim_to_window(df, trim_from_ts, trim_to_ts), column_meta
 
 
 def rename_to_indicator_table_columns(

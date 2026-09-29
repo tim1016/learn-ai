@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import logging
 from collections.abc import Callable
-from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -29,6 +28,7 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.schemas.dataset_plan import DatasetPlanResponse
+from app.services.chart_service import resolve_window_start_ms
 from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
 from app.services.dataset_service import (
     add_previous_close_column,
@@ -47,14 +47,10 @@ from app.services.dataset_service import (
     select_output_columns,
 )
 from app.services.polygon_client import PolygonClientService
-from app.utils.session_anchors import et_midnight_ms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
-
-_EPOCH_DAY = date(1970, 1, 1)
-_MS_PER_DAY = 86_400_000
 
 
 def _projection_without_indicators(
@@ -116,7 +112,6 @@ def _fetch_and_process(
 
     # Warm-up: fetch extra bars before from_date so indicators converge
     fetch_from = request.from_date
-    trim_from_ts = None
     if request.warmup and request.indicator_entries:
         max_lookback = estimate_max_lookback(request.indicator_entries)
         fetch_from = compute_warmup_start_date(
@@ -125,25 +120,19 @@ def _fetch_and_process(
             timespan=request.timespan,
             multiplier=request.multiplier,
         )
-        trim_from_ts = (
-            datetime.strptime(request.from_date, "%Y-%m-%d").date() - _EPOCH_DAY
-        ).days * _MS_PER_DAY
         logger.info(
             f"[DATASET] Warm-up: fetching from {fetch_from} (requested {request.from_date}, lookback={max_lookback})"
         )
-    # The picked session begins at ET midnight of from_date: the prior
-    # session's 19:00–20:00 ET post-market bars carry timestamps from the
-    # picked date's UTC morning (00:00–01:00/01:00–02:00 UTC), so a
-    # UTC-midnight trim would retain up to two hours of the previous
-    # session the chart never shows (#2524 review). ET midnight is
-    # DST-safe through app.utils.session_anchors.
-    et_midnight = et_midnight_ms(datetime.strptime(request.from_date, "%Y-%m-%d").date())
-    trim_from_ts = et_midnight if trim_from_ts is None else max(trim_from_ts, et_midnight)
+    # The picked window begins at ET midnight of from_date — the bound the
+    # chart trims its warm-up lead-in to as well (#2458), through the one
+    # shared resolver: the prior session's 19:00–20:00 ET post-market bars
+    # carry the picked date's UTC-morning timestamps, so a UTC-midnight trim
+    # would retain up to two hours of a session the chart never shows
+    # (#2524 review).
+    trim_from_ts = resolve_window_start_ms(request.from_date)
     # The export trims to the requested start (#2457): the day-granular
     # fetch cannot split a session, so a mid-session numeric start would
-    # otherwise leak the bars before it into dataset.csv. The resolver
-    # floors start_ms_utc to from_date's UTC date, so it always bounds the
-    # warm-up trim from above.
+    # otherwise leak the bars before it into dataset.csv.
     if request.start_ms_utc is not None:
         trim_from_ts = max(trim_from_ts, request.start_ms_utc)
     # The requested end is exclusive by contract (DatasetGenerationRequest.

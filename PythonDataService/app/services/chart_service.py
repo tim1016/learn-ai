@@ -17,7 +17,7 @@ import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -37,12 +37,14 @@ from app.services.chart_bar_source import compose_chart_bars, split_sessions_at_
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     assert_canonical_bar_stream,
-    calculate_dynamic_indicators,
+    calculate_indicators_then_trim,
     compute_warmup_start_date,
     estimate_max_lookback,
     fetch_bars_chunked,
+    trim_to_window,
 )
 from app.services.polygon_client import PolygonClientService
+from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,6 @@ logger = logging.getLogger(__name__)
 # Constants
 # ──────────────────────────────────────────────
 _ET = ZoneInfo("US/Eastern")
-_UTC = ZoneInfo("UTC")
 _MAX_BARS = 20_000
 
 # All indicators with default params — built from the canonical registry.
@@ -323,6 +324,20 @@ def resolve_request_dates(
     return resolved_from, resolved_to
 
 
+def resolve_window_start_ms(from_date: str) -> int:
+    """The instant a resolved window begins: ET midnight of its first date.
+
+    The companion of :func:`resolve_request_dates`: the chart and the dataset
+    export both trim their indicator warm-up lead-in at this one bound
+    (#2458), so a picked window shows the same first bar on both surfaces.
+    ET midnight, not UTC midnight — during EST the prior session's 19:00–20:00
+    ET post-market bars carry the picked date's UTC-morning timestamps
+    (#2524 review) — and never the server's local midnight. DST-safe through
+    the NY zone.
+    """
+    return et_midnight_ms(date.fromisoformat(from_date))
+
+
 def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
     """Resolve every :data:`RANGE_PRESETS` entry against the canonical calendar.
 
@@ -404,6 +419,7 @@ def _canonical_indicator_key(indicators: list[dict[str, Any]]) -> str:
 
 def _resample_cache_key(
     ticker: str,
+    fetch_from: str,
     from_date: str,
     to_date: str,
     timeframe: str,
@@ -411,6 +427,10 @@ def _resample_cache_key(
     forward_fill: bool,
     adjusted: bool,
 ) -> str:
+    # ``fetch_from`` is the warm-up lead-in start: the cached frame carries the
+    # lead-in bars its indicators warm up on (#2458), so a window cached for a
+    # request without indicators must never answer one that needs them.
+    #
     # This key carried a ``lake_read`` discriminator until #1893, to stop a
     # process that flipped DATA_LAKE_ENABLED from serving a composed entry to a
     # flag-off caller. There is one sourcing mode now, so the discriminator had
@@ -423,7 +443,7 @@ def _resample_cache_key(
     # stale — the bars are the same bars either way — and the next miss recomputes
     # it. Keying on lake coverage instead would mean probing the lake on every
     # cache hit, which is the cost this cache exists to avoid.
-    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
+    return f"{ticker}|{fetch_from}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
 
 
 def _indicator_cache_key(resample_key: str, indicators: list[dict[str, Any]]) -> str:
@@ -504,6 +524,8 @@ def _preprocess_minute_bars(
     to_date: str,
     session: str,
     forward_fill: bool,
+    *,
+    warmup_from: str | None = None,
 ) -> tuple[pd.DataFrame, QualityReport]:
     """
     Preprocess raw 1-minute bars:
@@ -511,6 +533,13 @@ def _preprocess_minute_bars(
     2. Session-mask using NYSE calendar
     3. Optionally forward-fill gaps
     4. Compute quality metrics
+
+    ``warmup_from`` is the indicator warm-up fetch start. The session mask,
+    the session tags and the forward-fill span the lead-in sessions from it
+    too, so they reach indicator computation the way the export's do (#2458)
+    — a mask built from the visible dates alone dropped them. The quality
+    report describes only the visible window, which begins at
+    :func:`resolve_window_start_ms` of ``from_date``.
     """
     quality = QualityReport(raw_bar_count=len(bars))
 
@@ -539,8 +568,8 @@ def _preprocess_minute_bars(
     df["_dt_utc"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df["_dt_et"] = df["_dt_utc"].dt.tz_convert(_ET)
 
-    # Session mask using NYSE calendar
-    schedule = _get_trading_schedule(from_date, to_date)
+    # Session mask using NYSE calendar, across the warm-up lead-in too
+    schedule = _get_trading_schedule(warmup_from or from_date, to_date)
 
     if session == "rth" and not schedule.empty:
         masks = []
@@ -572,17 +601,22 @@ def _preprocess_minute_bars(
             post_mask = (df["_dt_utc"] >= close_t) & (df["_dt_utc"] < post_end_utc)
             df.loc[post_mask, "session"] = "post"
 
+    # The quality report measures the visible window; the lead-in before it
+    # exists only to warm the indicators up and is never shown.
+    window_start_ms = resolve_window_start_ms(from_date)
+    visible = df[df["timestamp"] >= window_start_ms].reset_index(drop=True)
+
     # Gap detection + classification
-    if len(df) > 1:
-        diffs = df["timestamp"].diff().dropna()
+    if len(visible) > 1:
+        diffs = visible["timestamp"].diff().dropna()
         expected_gap = 60_000  # 1 minute in ms
         gaps = diffs[diffs > expected_gap * 2]  # gaps > 2 minutes
         quality.gaps_found = len(gaps)
         if not gaps.empty:
             quality.largest_gap_minutes = int(gaps.max() / 60_000)
             for idx in gaps.index:
-                before_ts = int(df.at[idx - 1, "timestamp"])
-                after_ts = int(df.at[idx, "timestamp"])
+                before_ts = int(visible.at[idx - 1, "timestamp"])
+                after_ts = int(visible.at[idx, "timestamp"])
                 dur = int((after_ts - before_ts) / 60_000)
                 classification = _classify_gap(before_ts, after_ts)
                 quality.gap_details.append(
@@ -597,21 +631,20 @@ def _preprocess_minute_bars(
     # Session coverage
     expected_mins = _count_trading_minutes(from_date, to_date, session)
     if expected_mins > 0:
-        quality.session_coverage_pct = round(len(df) / expected_mins * 100, 1)
+        quality.session_coverage_pct = round(len(visible) / expected_mins * 100, 1)
 
     # Missing sessions
     if not schedule.empty:
-        trading_dates = set(schedule.index.date)
-        actual_dates = set(df["_dt_et"].dt.date.unique())
+        trading_dates = set(schedule.loc[from_date:].index.date)
+        actual_dates = set(visible["_dt_et"].dt.date.unique())
         missing = trading_dates - actual_dates
         quality.missing_sessions = len(missing)
         quality.missing_session_dates = sorted(d.isoformat() for d in missing)
 
     # Forward fill
     if forward_fill:
-        before_fill = len(df)
         df = _forward_fill_bars(df, schedule, session)
-        quality.synthetic_bars = len(df) - before_fill
+        quality.synthetic_bars = int((df["timestamp"] >= window_start_ms).sum()) - len(visible)
 
     # Clean up helper columns (keep 'session')
     df = df.drop(columns=["_dt_utc", "_dt_et"], errors="ignore")
@@ -790,21 +823,40 @@ def _resample_bars(df: pd.DataFrame, timeframe: str, session: str) -> pd.DataFra
     return resampled
 
 
+def _resample_with_lead_in(df: pd.DataFrame, timeframe: str, session: str, window_start_ms: int) -> pd.DataFrame:
+    """Resample the window and its warm-up lead-in apart, lead-in first (#2458).
+
+    No bar may straddle the window start: a weekly or monthly bin holding days
+    on both sides of it would change the window's first bar whenever
+    indicators asked for a lead-in. The window resamples exactly as it would
+    alone; the lead-in adds only its bars stamped before the window — its
+    share of a period the window also holds is dropped, never shown twice.
+    Intraday and daily bins never cross ET midnight, so for them this is one
+    resample of the whole frame.
+    """
+    in_window = df["timestamp"] >= window_start_ms
+    window = _resample_bars(df[in_window], timeframe, session)
+    if in_window.all():
+        return window
+    lead_in = _resample_bars(df[~in_window], timeframe, session)
+    return pd.concat([lead_in[lead_in["timestamp"] < window_start_ms], window], ignore_index=True)
+
+
 # ──────────────────────────────────────────────
 # Indicator computation on resampled bars
 # ──────────────────────────────────────────────
 def _compute_indicators(
     df: pd.DataFrame,
     indicators: list[dict[str, Any]],
+    trim_from_ts: int | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
-    Compute indicators on resampled OHLCV DataFrame.
+    Compute indicators on a copy of a resampled OHLCV DataFrame, then trim it
+    to ``trim_from_ts`` — the warm-up lead-in stays in for the computation.
     Returns (enriched_df, column_meta).
-    Reuses dataset_service.calculate_dynamic_indicators.
+    Reuses dataset_service.calculate_indicators_then_trim, the export's path.
     """
-    if not indicators:
-        return df, []
-    return calculate_dynamic_indicators(df.copy(), indicators)
+    return calculate_indicators_then_trim(df.copy(), indicators, trim_from_ts=trim_from_ts)
 
 
 # ──────────────────────────────────────────────
@@ -1206,9 +1258,19 @@ def get_chart_data(
             "recommended_timeframe": recommended,
         }
 
-    # ── Layer 1: Fetch + Preprocess + Resample (cached) ──
+    # The window begins at ET midnight of from_date — the bound the export
+    # trims to as well. Indicators warm up on a lead-in fetched before it and
+    # are trimmed to the window only after they are computed, as the export's
+    # are (#2458); trimming first restarted every indicator cold.
+    window_start_ms = resolve_window_start_ms(from_date)
+    fetch_from = from_date
+    if indicators:
+        fetch_from = compute_warmup_start_date(from_date, estimate_max_lookback(indicators))
+
+    # ── Layer 1: Fetch + Preprocess + Resample (cached, lead-in included) ──
     resample_key = _resample_cache_key(
         ticker,
+        fetch_from,
         from_date,
         to_date,
         timeframe,
@@ -1219,19 +1281,13 @@ def get_chart_data(
     cached_resample = _resample_cache.get(resample_key)
 
     if cached_resample is not None:
-        df_resampled, quality, bar_sources = cached_resample
+        df_warm, quality, bar_sources = cached_resample
         logger.info(f"[CHART] Cache HIT for resample: {resample_key}")
         cache_hit_resample = True
     else:
         logger.info(f"[CHART] Cache MISS for resample: {resample_key}")
         cache_hit_resample = False
-
-        # Fetch 1m bars with warmup for indicators
-        fetch_from = from_date
-        if indicators:
-            max_lookback = estimate_max_lookback(indicators)
-            fetch_from = compute_warmup_start_date(from_date, max_lookback)
-            logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
+        logger.info(f"[CHART] Fetching 1m bars from {fetch_from} (window starts {from_date})")
 
         # A lake gap (or the flag-off path outright) falls back to Polygon.
         # `PolygonClientService` re-raises whatever its underlying
@@ -1265,34 +1321,35 @@ def get_chart_data(
             }
 
         # Preprocess
-        df_preprocessed, quality = _preprocess_minute_bars(bars, from_date, to_date, session, forward_fill)
-        if df_preprocessed.empty:
+        df_preprocessed, quality = _preprocess_minute_bars(
+            bars, from_date, to_date, session, forward_fill, warmup_from=fetch_from
+        )
+        # A lead-in alone is not a chart: no bar inside the window (an empty
+        # frame included) is no data.
+        if (df_preprocessed["timestamp"] < window_start_ms).all():
             return {
                 "error_code": "NO_DATA",
                 "detail": f"No bars after preprocessing for {ticker}",
             }
 
-        # Resample
-        df_resampled = _resample_bars(df_preprocessed, timeframe, session)
-
-        # Trim warmup bars
-        if indicators:
-            trim_ts = int(datetime.strptime(from_date, "%Y-%m-%d").timestamp() * 1000)
-            df_resampled = df_resampled[df_resampled["timestamp"] >= trim_ts].reset_index(drop=True)
-
-        quality.resampled_bar_count = len(df_resampled)
+        # Resample the lead-in with the window, so indicators can warm up on it
+        df_warm = _resample_with_lead_in(df_preprocessed, timeframe, session, window_start_ms)
+        visible_bar_count = int((df_warm["timestamp"] >= window_start_ms).sum())
+        quality.resampled_bar_count = visible_bar_count
 
         # Confirm actual count ≤ max
-        if len(df_resampled) > _MAX_BARS:
+        if visible_bar_count > _MAX_BARS:
             return {
                 "error_code": "TIMEFRAME_NOT_ALLOWED",
-                "detail": f"Actual bar count ({len(df_resampled)}) exceeds max ({_MAX_BARS}) after resample.",
+                "detail": f"Actual bar count ({visible_bar_count}) exceeds max ({_MAX_BARS}) after resample.",
                 "allowed_timeframes": allowed,
                 "estimated_bars_per_timeframe": estimates,
                 "recommended_timeframe": recommended,
             }
 
-        _resample_cache.put(resample_key, (df_resampled.copy(), quality, bar_sources))
+        _resample_cache.put(resample_key, (df_warm.copy(), quality, bar_sources))
+
+    df_resampled = trim_to_window(df_warm, window_start_ms)
 
     # ── Layer 2: Indicator computation (cached) ──
     indicator_results: list[dict[str, Any]] = []
@@ -1308,7 +1365,7 @@ def get_chart_data(
             logger.info("[CHART] Cache HIT for indicators")
         else:
             logger.info("[CHART] Cache MISS for indicators, computing...")
-            df_with_ind, col_meta = _compute_indicators(df_resampled, indicators)
+            df_with_ind, col_meta = _compute_indicators(df_warm, indicators, trim_from_ts=window_start_ms)
             indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators, compute_all_indicators)
             _indicator_cache.put(ind_key, indicator_results)
 
