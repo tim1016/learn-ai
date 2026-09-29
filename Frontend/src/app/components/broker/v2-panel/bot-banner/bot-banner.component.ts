@@ -19,7 +19,6 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type {
-  ActionId,
   BotPanelView,
   CurrentRunState,
   PanelActionTrigger,
@@ -30,9 +29,6 @@ import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-over
 import { BotBannerRunTimingComponent } from './bot-banner-run-timing.component';
 import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action';
 
-/** The registration exits, offered from the More menu only when armed. */
-const MORE_MENU_ACTION_IDS: readonly ActionId[] = ['retire', 'archive'];
-
 /**
  * The bot page's header (PRD #2560 D2): which bot this is, the way back, its
  * world, state, strategy and symbol, its run timing, and one primary action.
@@ -41,7 +37,9 @@ const MORE_MENU_ACTION_IDS: readonly ActionId[] = ['retire', 'archive'];
  * a recovery cure, Stop for a running bot, or none for a stopped one. A
  * stopped bot also offers Deploy again, which starts a new bot and never
  * takes over what this one still holds. The More menu carries the manual
- * order ticket and the armed registration exits.
+ * order ticket. It never offers Retire or Archive, although the backend still
+ * presents them: clearing a finished bot is Home's Finished fold alone (owner
+ * decision 2026-09-28).
  *
  * A Dry Run bot is marked as simulated cash, never with the lane's colour
  * (hurdle H23): its money is not the account's.
@@ -108,10 +106,4 @@ export class BotBannerComponent {
       accountId: this.panel().account_id,
       symbol: this.panel().symbol,
     }));
-
-  protected readonly moreActions = computed(() =>
-    this.panel().actions.filter(
-      (action) => MORE_MENU_ACTION_IDS.includes(action.action_id) && action.enabled,
-    ),
-  );
 }

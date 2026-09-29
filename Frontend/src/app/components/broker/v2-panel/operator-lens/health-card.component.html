@@ -45,17 +45,4 @@
     }
 
   </dl>
-
-  @if (exitActions().length) {
-    <div class="health-card__actions">
-      @for (action of exitActions(); track action.action_id) {
-        <app-panel-action-button
-          [action]="action"
-          [pending]="actionPending()"
-          tone="danger"
-          (triggered)="actionRequested.emit($event)"
-        />
-      }
-    </div>
-  }
 </section>
