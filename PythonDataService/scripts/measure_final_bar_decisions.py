@@ -36,6 +36,7 @@ Usage (from ``PythonDataService/``)::
         --ibkr-ledger <copy>/source_bars.sqlite3 ... \\
         --ibkr-jsonl 'artifacts/live_bars/*/1m/*.jsonl' \\
         --receipts-db <copy>/clerk.db \\
+        --grouping-ledger <copy>/source_bars.sqlite3 ... \\
         --out final_bar_decisions.json
 """
 
@@ -233,6 +234,15 @@ def build_strategy(live: LiveStrategy, start: date, end: date) -> Strategy:
     return strategy
 
 
+#: Which final-bar decisions each model settles DISCARD instead of filling.
+_MODEL_DISCARDS: dict[Model, frozenset[SignalIntentKind]] = {
+    "close": frozenset(),
+    "next_open": frozenset(),
+    "live": frozenset({SignalIntentKind.ENTER}),
+    "skip_all": frozenset({SignalIntentKind.ENTER, SignalIntentKind.EXIT}),
+}
+
+
 def run_model(
     live: LiveStrategy,
     model: Model,
@@ -242,26 +252,14 @@ def run_model(
     end: date,
 ) -> tuple[BacktestResult, Strategy, list[DiscardedDecision]]:
     strategy = build_strategy(live, start, end)
-    config = ExecutionConfig()
-    if model == "next_open":
-        # The LEAN-compatibility path the engine already has: a signal bar
-        # emitted only after a session gap fills at the current minute's open.
-        fill_model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=True)
-        engine: BacktestEngine = FinalBarPolicyEngine(data_source=reader, execution_config=config, fill_model=fill_model)
-    elif model == "live":
-        engine = FinalBarPolicyEngine(
-            data_source=reader, execution_config=config, discard=frozenset({SignalIntentKind.ENTER})
-        )
-    elif model == "skip_all":
-        engine = FinalBarPolicyEngine(
-            data_source=reader,
-            execution_config=config,
-            discard=frozenset({SignalIntentKind.ENTER, SignalIntentKind.EXIT}),
-        )
-    else:
-        engine = FinalBarPolicyEngine(data_source=reader, execution_config=config)
+    # ``next_open`` is the LEAN-compatibility path the engine already has: a
+    # signal bar emitted only after a session gap fills at the current
+    # minute's open. Every other model keeps today's signal-bar-close fill.
+    fill_model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=model == "next_open")
+    engine = FinalBarPolicyEngine(
+        data_source=reader, execution_config=ExecutionConfig(), fill_model=fill_model, discard=_MODEL_DISCARDS[model]
+    )
     result = engine.run(strategy, retain_bars=False)
-    assert isinstance(engine, FinalBarPolicyEngine)
     return result, strategy, engine.discarded
 
 
