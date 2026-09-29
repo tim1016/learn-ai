@@ -160,6 +160,30 @@ describe('BotBannerComponent', () => {
     expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
   });
 
+  it("renders a cleared bot's page read-only, with Deploy again and the way to History (#2574)", async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({ health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' } }));
+
+    expect(screen.getByRole('note').textContent).toContain('its records here are read-only');
+    expect(screen.getByRole('link', { name: 'Every cleared bot is in History' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?status=cleared');
+    expect(screen.getByRole('link', { name: 'Deploy again' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/pa9/deploy?from=spy-momentum-01');
+    expect(screen.queryByRole('button', { name: 'More actions for this bot' })).toBeNull();
+  });
+
+  it('keeps the cure on a retired bot that still holds shares: it is not cleared', async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      actions: [fakePanelAction('flatten_stop', { label: 'Flatten' })],
+      primary_action: 'flatten_stop',
+    }));
+
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByRole('button', { name: /Flatten/ })).toBeTruthy();
+  });
+
   it('offers a Dry Run bot no manual ticket on the account', async () => {
     await renderBanner({ mode: 'dry_run' });
 

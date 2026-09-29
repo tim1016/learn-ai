@@ -423,6 +423,10 @@ describe('AlpacaHomeComponent', () => {
     expect(within(rows[0]).getByRole('link', { name: 'Deploy again from old-bot' }).getAttribute('href')).toBe(
       `${ACCOUNT_URL}/deploy?from=old-bot`,
     );
+    // A cleared bot is looked up in History, filtered to the cleared ones (#2574).
+    expect(within(fold).getByRole('link', { name: 'see cleared bots in History' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/history?status=cleared`,
+    );
   });
 
   it('says what needs the owner in one line, with its severity in words and its one fix', async () => {

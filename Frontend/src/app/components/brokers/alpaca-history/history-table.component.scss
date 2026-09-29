@@ -1,0 +1,96 @@
+:host {
+  display: block;
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    color: var(--text-secondary);
+    font-weight: var(--fw-semi);
+    white-space: nowrap;
+  }
+}
+
+/* A Dry Run is simulated cash, never the account's money: dashed, and named
+   in words by its world label. */
+.history-table__row--dry-run td {
+  border-top-style: dashed;
+}
+
+.history-table__sid {
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+}
+
+.history-table__meta,
+.history-table__code {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.history-table__account {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+.history-table__toggle {
+  margin-top: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  cursor: pointer;
+
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+.history-table__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-table__orders {
+  font-variant-numeric: tabular-nums;
+}
+
+.history-table__note td {
+  border-top-style: dashed;
+  color: var(--text-secondary);
+
+  p { margin: 0; }
+}
+
+.history-table__run td {
+  border-top-style: dotted;
+  background: var(--bg-sunken);
+}
+
+.history-table__muted {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.history-table__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

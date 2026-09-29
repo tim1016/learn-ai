@@ -6,10 +6,12 @@ import {
   accountWorkspaceDeployAgainRoute,
   accountWorkspaceEntryRoute,
   accountWorkspaceFixRoute,
+  accountWorkspaceHistoryLink,
   accountWorkspaceHomeRoute,
   accountWorkspaceLocation,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
+  ACCOUNT_WORKSPACE_TABS,
   type AccountWorkspaceLocation,
 } from './account-workspace';
 
@@ -44,6 +46,8 @@ describe('accountWorkspaceLocation', () => {
 
   it.each([
     [`${LANE}/settings`, 'settings'],
+    [`${LANE}/history`, 'history'],
+    [`${LANE}/history?status=cleared`, 'history'],
     [`${LANE}/home`, 'home'],
   ] as const)('resolves the lane-scoped %s to the %s tab with no account', (url, tab) => {
     expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
@@ -93,8 +97,10 @@ describe('accountWorkspaceTabRoute', () => {
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9']],
     ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy']],
     ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],
-    // Settings is lane-scoped wherever it is opened from (FR-092).
+    // Settings is lane-scoped wherever it is opened from (FR-092), and so is
+    // History: it is every account's bots, the same list from any workspace.
     ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
+    ['history' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history']],
   ])('builds the %s tab route for a bound account', (tab, expected) => {
     expect(accountWorkspaceTabRoute(LOCATION, tab)).toEqual(expected);
   });
@@ -102,6 +108,8 @@ describe('accountWorkspaceTabRoute', () => {
   it.each([
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'home']],
     ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings']],
+    // History needs no confirmed account: it lists every account's bots.
+    ['history' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history']],
   ])('addresses the %s tab of a lane with no account in place', (tab, expected) => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, tab)).toEqual(expected);
   });
@@ -118,13 +126,13 @@ describe('accountWorkspaceTabRoute', () => {
   });
 
   it('round-trips every routed tab back through the resolver', () => {
-    for (const tab of ['home', 'activity', 'deploy', 'settings'] as const) {
+    for (const tab of ['home', 'activity', 'deploy', 'history', 'settings'] as const) {
       const url = accountWorkspaceTabRoute(LOCATION, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual(
-        tab === 'settings' ? { ...LANE_ONLY, tab } : { ...LOCATION, tab },
+        tab === 'settings' || tab === 'history' ? { ...LANE_ONLY, tab } : { ...LOCATION, tab },
       );
     }
-    for (const tab of ['home', 'settings'] as const) {
+    for (const tab of ['home', 'history', 'settings'] as const) {
       const url = accountWorkspaceTabRoute(LANE_ONLY, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
     }
@@ -167,6 +175,20 @@ describe('the links Home hands out', () => {
   it('links no bot fix that names no bot', () => {
     expect(accountWorkspaceFixRoute(ACCOUNT, 'bot', null)).toBeNull();
   });
+
+  it("opens History on the cleared bots from Home's Finished fold (#2574)", () => {
+    expect(accountWorkspaceHistoryLink(ACCOUNT, { status: 'cleared' })).toEqual({
+      commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history'],
+      queryParams: { status: 'cleared' },
+    });
+    expect(accountWorkspaceHistoryLink(ACCOUNT, { account: 'clrk_spec' }).queryParams).toEqual({ account: 'clrk_spec' });
+  });
+});
+
+describe('the tab strip', () => {
+  it('reads Home · Activity · History · Settings (#2574)', () => {
+    expect(ACCOUNT_WORKSPACE_TABS.map((tab) => tab.label)).toEqual(['Home', 'Activity', 'History', 'Settings']);
+  });
 });
 
 describe('accountWorkspaceEntryRoute', () => {
@@ -190,6 +212,7 @@ describe('accountWorkspaceBadgeRoute', () => {
     ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
     ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'activity']],
     ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'deploy']],
+    ['history' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'history']],
     ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
   ])('keeps the %s tab when a pill is clicked from inside a workspace', (tab, expected) => {
     expect(accountWorkspaceBadgeRoute({ ...LOCATION, tab }, target).commands).toEqual(expected);

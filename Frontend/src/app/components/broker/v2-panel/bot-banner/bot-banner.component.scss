@@ -147,3 +147,11 @@
   .bot-banner__status-row { flex-direction: column; align-items: stretch; }
   .bot-banner__actions { justify-content: flex-start; }
 }
+
+.bot-banner__cleared {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  a { color: var(--accent-text); }
+}

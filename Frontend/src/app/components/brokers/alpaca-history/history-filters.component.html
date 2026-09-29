@@ -1,0 +1,36 @@
+<div class="history-filters" role="group" aria-label="Filter bots">
+  <label class="history-filters__field">
+    <span>Account</span>
+    <select (change)="choose('account', $event)">
+      <option value="" [selected]="query().clerkId === null">All accounts</option>
+      @for (account of accounts(); track account.clerkId) {
+        <option [value]="account.clerkId" [selected]="query().clerkId === account.clerkId">{{ account.label }}</option>
+      }
+    </select>
+  </label>
+  <label class="history-filters__field">
+    <span>Status</span>
+    <select (change)="choose('status', $event)">
+      <option value="" [selected]="query().status === null">Any status</option>
+      @for (status of statuses; track status.id) {
+        <option [value]="status.id" [selected]="query().status === status.id">{{ status.label }}</option>
+      }
+    </select>
+  </label>
+  <label class="history-filters__field">
+    <span>World</span>
+    <select (change)="choose('world', $event)">
+      <option value="" [selected]="query().world === null">Any world</option>
+      @for (world of worlds; track world.id) {
+        <option [value]="world.id" [selected]="query().world === world.id">{{ world.label }}</option>
+      }
+    </select>
+  </label>
+  <div class="history-filters__symbol">
+    <app-instrument-card appearance="field" label="Symbol" [universe]="symbolUniverse()"
+                         [value]="symbolRange()" (valueChange)="pickSymbol($event)" />
+    @if (query().symbol) {
+      <button type="button" class="history-filters__clear" (click)="anySymbol()">Any symbol</button>
+    }
+  </div>
+</div>
