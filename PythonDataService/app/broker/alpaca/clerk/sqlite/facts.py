@@ -114,6 +114,16 @@ class RunStartedFacts:
 
 @dataclass(frozen=True)
 class RunStoppedFacts:
+    """A Stop, and -- for a budgeted run -- what it released (#2555).
+
+    ``released_cents`` and ``held_cents`` are the deployment's release as the
+    Stop valued it (``budgets.ReleaseAtStop``): its positive free budget, and
+    what stayed claimed in shares and entry orders. They are present together
+    or not at all, and omitted when absent (hash-chained schema evolution): a
+    Stop of a run with no budget, or one whose money could not be valued at
+    that instant, keeps the byte-identical facts every earlier Stop has.
+    """
+
     idempotency_key: str
     payload_hash: str
     kind: str
@@ -121,13 +131,27 @@ class RunStoppedFacts:
     intended_end_state: str
     lifecycle_run_id: str
     operator_reason: str | None = None
+    released_cents: int | None = None
+    held_cents: int | None = None
+
+    def __post_init__(self) -> None:
+        amounts = (self.released_cents, self.held_cents)
+        if (amounts[0] is None) != (amounts[1] is None):
+            raise ValueError("A Stop records both what it released and what stayed claimed, or neither")
+        if any(value is not None and (type(value) is not int or value < 0) for value in amounts):
+            raise ValueError("A Stop's released and claimed amounts are non-negative whole cents")
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        return canonicalize(_omit_defaults(asdict(self), _RUN_STOPPED_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> RunStoppedFacts:
         return cls(**json.loads(facts_json))
+
+
+# Only the release amounts are omitted when absent: ``operator_reason`` has
+# always serialized as ``null``, and every earlier Stop hashes with it.
+_RUN_STOPPED_DEFAULTS: Mapping[str, Any] = {"released_cents": None, "held_cents": None}
 
 
 @dataclass(frozen=True)

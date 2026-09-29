@@ -70,6 +70,9 @@ is archived while the code it names still runs.
   reserved while the deployment runs.
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
+  The amount is what the Stop released, recorded with the Stop; money that comes
+  back later (a sale, an entry order that ends unfilled) is not released cash,
+  and a fee charged later never changes it.
 - **Fee provision** — an estimated fee claim held until the observed broker
   charge replaces it. Priced by the canonical fee model at ENTER admission and,
   for the unfilled remainder of a pending order, by its own conservative quote;

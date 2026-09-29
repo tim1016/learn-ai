@@ -334,13 +334,17 @@ def _effective_fills(
 def custody_fee_attribution(
     conn: sqlite3.Connection, *, now_ms: int, evidence_checked_at_ms: int | None = None,
     from_ms: int | None = None, to_ms: int | None = None, simulated_fill_cutoff_ms: int | None = None,
+    require_fresh_evidence: bool = True,
 ) -> FeeAttribution:
     """Lifetime fee projection in the caller's custody snapshot (no network).
 
     Real accounts are fresh only while the producer's latest successful read
     (``evidence_checked_at_ms``, process-local, see ``fee_attribution`` on the
     repository) is within ``FEE_EVIDENCE_MAX_AGE_MS`` of ``now_ms``; missing
-    freshness refuses like missing evidence.
+    freshness refuses like missing evidence. Freshness guards new spending:
+    ``require_fresh_evidence=False`` values the evidence already recorded, for
+    a read that spends nothing -- what a Stop releases (#2555, owner decision
+    2026-09-29) -- and every other refusal, missing evidence included, stands.
 
     ``known`` gates new spending. Per-subject totals contain reported fill fees
     once; ``unobserved_cash_claim`` excludes those fees because the existing
@@ -466,8 +470,10 @@ def custody_fee_attribution(
     predicted_known = observed_known = True
     if not simulated and (
         not snapshots
-        or evidence_checked_at_ms is None
-        or not 0 <= now_ms - evidence_checked_at_ms <= FEE_EVIDENCE_MAX_AGE_MS
+        or (require_fresh_evidence and (
+            evidence_checked_at_ms is None
+            or not 0 <= now_ms - evidence_checked_at_ms <= FEE_EVIDENCE_MAX_AGE_MS
+        ))
     ):
         unresolved.append("Account fee evidence is missing or stale.")
     for day in sorted(
