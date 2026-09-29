@@ -8,12 +8,14 @@ Every stamp is fixed ``int64 ms UTC``; nothing reads the wall clock.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
-from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_at
+from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_at, observed_day_pnl
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
@@ -172,26 +174,74 @@ def test_a_missing_prior_close_baseline_cannot_produce_day_pnl() -> None:
         )
 
 
-def test_the_owner_reads_an_exact_day_only_when_both_equities_are_exact() -> None:
-    """#2586: simulated custody's exact equities give an exact figure to show.
+def test_the_owner_reads_the_exact_day_in_every_custody_world() -> None:
+    """#2586: every recorded figure is normalized on its own, then subtracted exactly.
 
-    A real broker's floats keep the loss rule's float difference, normalized
-    once, as before. Either way the loss rule's own figure is the same float.
+    Owner decision 2026-09-29: exact for all accounts. A real broker's floats
+    100000.1 and 99999.9 are the recorded figures, so the day is exactly $0.2,
+    not their float difference; simulated custody's exact equities, or an
+    exact equity beside a float baseline, give the same. The loss rule's own
+    figure is the float difference it always was.
     """
-    real = day_pnl_at(
-        observation=_observation(current_equity=100_000.1, prior_close_equity=99_999.9),
-        cash_flows=[],
-        now_ms=NOON,
+    days = [
+        day_pnl_at(observation=_observation(current_equity=current, prior_close_equity=prior), cash_flows=[], now_ms=NOON)
+        for current, prior in (
+            (100_000.1, 99_999.9),
+            (Decimal("100000.1"), Decimal("99999.9")),
+            (Decimal("100000.1"), 99_999.9),
+        )
+    ]
+
+    assert [day.display_total_usd for day in days] == [Decimal("0.2")] * 3
+    assert [day.total_usd for day in days] == [0.20000000001164153] * 3
+    assert all(day.known for day in days)
+
+
+def test_a_sealed_float_baseline_beside_exact_equity_still_shows_the_exact_cent() -> None:
+    """#2586: clearing a Shadow loss hold mixes exact equity with a sealed float.
+
+    The clearance path re-reads the day against the float baseline the hold
+    sealed, beside Shadow's exact equity. Equity of exactly
+    $2,000.0049999999999999999 over a $1,999.99 baseline is exactly
+    $0.0149999999999999999 -- 1 cent -- whichever type the baseline arrives
+    as. Their float difference, 0.015000000000100044, shows 2 cents; the loss
+    rule still judges that float.
+    """
+    session_start = previous_completed_session_close_ms(NOON)
+    equity = Decimal("2000.0049999999999999999")
+    shadow = replace(
+        _observation(current_equity=equity, prior_close_equity=Decimal("1999.99")),
+        simulation_session_start_ms=session_start, risk_equity_window_start_ms=session_start,
+        risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=0,
     )
-    exact = day_pnl_at(
-        observation=_observation(
-            current_equity=Decimal("100000.1"), prior_close_equity=Decimal("99999.9")
-        ),
-        cash_flows=[],
+
+    fresh = observed_day_pnl(observation=shadow, now_ms=NOON)
+    retained = observed_day_pnl(
+        observation=shadow, now_ms=NOON, retained_start_ms=session_start, retained_equity_usd=1999.99)
+
+    assert fresh.known and retained.known
+    assert retained.display_total_usd == fresh.display_total_usd == Decimal("0.0149999999999999999")
+    assert dollars(display_cents(retained.display_total_usd)) == "0.01"
+    assert retained.total_usd == fresh.total_usd == float(equity) - 1999.99 == 0.015000000000100044
+
+
+def test_each_transfer_is_normalized_on_its_own_never_their_float_sum() -> None:
+    """#2586: $3.30 of deposits is 1.10 + 2.20 as recorded, not 3.3000000000000003.
+
+    Equity $10,004.015 over a $10,000.70 close with those two deposits is a
+    day of exactly $0.015, shown $0.02 (half-even). The float formula gives
+    0.014999999998690061 and normalizing the deposits' float sum gives
+    0.0149999999999997 -- both show $0.01. The loss rule's figure is the
+    float formula it always was.
+    """
+    pnl = day_pnl_at(
+        observation=_observation(current_equity=10_004.015, prior_close_equity=10_000.7),
+        cash_flows=[_cash_flow("CSD", 1.1), _cash_flow("CSD", 2.2)],
         now_ms=NOON,
     )
 
-    assert real.display_total_usd == Decimal("0.20000000001164153")
-    assert exact.display_total_usd == Decimal("0.2")
-    assert exact.total_usd == real.total_usd == 0.20000000001164153
-    assert exact.known and real.known
+    assert pnl.known and pnl.cash_flow_count == 2
+    assert pnl.display_total_usd == Decimal("0.015")
+    assert dollars(display_cents(pnl.display_total_usd)) == "0.02"
+    assert pnl.net_cash_flow_usd == 1.1 + 2.2 == 3.3000000000000003
+    assert pnl.total_usd == 10_004.015 - 10_000.7 - (1.1 + 2.2) == 0.014999999998690061

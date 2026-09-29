@@ -207,8 +207,10 @@ class AccountObservation:
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float | Decimal
-    # The broker's float under real custody; simulated custody's exact
-    # retained prior-close baseline (#2586). The loss rule reads it as a float.
+    # The broker's float, or simulated custody's exact retained prior-close
+    # baseline (#2586); on the loss-hold clearance path a sealed hold's float
+    # baseline replaces either. The loss rule reads it as a float; the owner's
+    # day figure normalizes it as recorded.
     last_equity_usd: float | Decimal | None
     position_count: int | None
     # The broker's float under real custody; simulated custody's exact
