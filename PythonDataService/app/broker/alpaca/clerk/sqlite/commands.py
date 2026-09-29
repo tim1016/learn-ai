@@ -306,6 +306,9 @@ def submit_stop_run(
         # check runs here, under the lock, rather than before it.
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
+        # Valued under the same lock as the append: the release is exactly
+        # the custody this transition ends (#2555).
+        release = repo.release_at_stop(run_id=active.run_id)
         facts = RunStoppedFacts(
             idempotency_key=idempotency_key,
             payload_hash=payload_hash,
@@ -314,6 +317,8 @@ def submit_stop_run(
             intended_end_state=INTENDED_END_STATE_STOPPED,
             lifecycle_run_id=lifecycle_run_id,
             operator_reason=operator_reason,
+            released_cents=None if release is None else release.released_cents,
+            held_cents=None if release is None else release.held_cents,
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,

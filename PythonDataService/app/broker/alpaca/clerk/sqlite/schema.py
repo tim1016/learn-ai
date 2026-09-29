@@ -19,7 +19,12 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite.account_risk import SCHEMA_V19_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.budget_authority import SCHEMA_V21_DDL, SCHEMA_V21_STATEMENTS
-from app.broker.alpaca.clerk.sqlite.budget_schema import BUDGET_SCHEMA_DDL, BUDGET_SCHEMA_STATEMENTS
+from app.broker.alpaca.clerk.sqlite.budget_schema import (
+    BUDGET_SCHEMA_DDL,
+    BUDGET_SCHEMA_STATEMENTS,
+    SCHEMA_V22_DDL,
+    SCHEMA_V22_STATEMENTS,
+)
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     COMMAND_SUBJECT_COMPATIBILITY_DDL,
     CUSTODY_SUBJECT_IDENTITY_DDL,
@@ -40,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_un
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -758,6 +763,8 @@ SCHEMA_DDL = (
     + BUDGET_SCHEMA_DDL
     + "\n"
     + SCHEMA_V21_DDL
+    + "\n"
+    + SCHEMA_V22_DDL
 ).rstrip("\n")
 
 
@@ -987,6 +994,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     18: SCHEMA_V19_STATEMENTS,
     19: BUDGET_SCHEMA_STATEMENTS,
     20: SCHEMA_V21_STATEMENTS,
+    # v21 -> v22: a Stop's recorded release on its budget row (#2555); the
+    # same statements as the fresh block, backfilling from recorded Stops.
+    21: SCHEMA_V22_STATEMENTS,
 }
 
 

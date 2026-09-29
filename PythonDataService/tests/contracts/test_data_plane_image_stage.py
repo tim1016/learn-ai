@@ -17,9 +17,10 @@ exactly as the other compose contracts do. Compose merging lets an overlay
 carries no ``context`` of its own is still checked, for any service some
 tracked file builds from the data-plane context.
 
-The ``runtime`` stage also owns the requirement files the sweep identity
-hashes (``app.research.sweep.identity.ENVIRONMENT_FILES``): dropping them from
-the always-on image digests them as ``<absent>``.
+The requirement files belong to the ``qualification`` stage alone: its
+``pip install -r requirements-dev.txt`` follows that file's ``-r`` includes, and
+nothing in the runtime image reads a requirement file (the sweep identity
+digests the installed distributions, #2588).
 """
 
 from __future__ import annotations
@@ -29,11 +30,11 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 
-from app.research.sweep.identity import ENVIRONMENT_FILES
 from tests.contracts.compose_files import ROOT, render_module, tracked_compose_files
 
 DATA_PLANE_CONTEXT = "PythonDataService"
 DOCKERFILE = ROOT / DATA_PLANE_CONTEXT / "Dockerfile"
+DEV_REQUIREMENTS = ROOT / DATA_PLANE_CONTEXT / "requirements-dev.txt"
 
 # The only services allowed to build the developer-tooling stage: one-shot
 # qualification runs whose test tree is mounted read-only.
@@ -180,11 +181,26 @@ def test_the_runtime_stage_ships_no_developer_tooling() -> None:
     assert stages["qualification"][0].split()[1] == "runtime"
 
 
-def test_the_runtime_stage_ships_the_files_the_sweep_identity_hashes() -> None:
-    """`environment_digest` reads these from `/app`; an absent file digests as
-    `<absent>`, so a study started before a rebuild could not finish after it,
-    and a later dependency upgrade would stop changing the digest."""
-    runtime = _dockerfile_stages()["runtime"]
+def _included_requirement_files(requirements: str) -> set[str]:
+    """The files a requirements file pulls in with `-r` / `--requirement`."""
+    included: set[str] = set()
+    for line in requirements.splitlines():
+        tokens = line.split("#", 1)[0].split()
+        if len(tokens) == 2 and tokens[0] in ("-r", "--requirement"):
+            included.add(posixpath.normpath(tokens[1]))
+    return included
 
-    assert "WORKDIR /app" in runtime
-    assert set(ENVIRONMENT_FILES) <= _files_copied_into_app(runtime)
+
+def test_the_qualification_stage_copies_every_file_its_dev_install_reads() -> None:
+    """The runtime stage no longer ships the heavy and light pins (#2588), so
+    the stage that runs `pip install -r requirements-dev.txt` must put them,
+    and the dev file itself, into `/app` before that RUN."""
+    stages = _dockerfile_stages()
+    qualification = stages["qualification"]
+    install = next(index for index, line in enumerate(qualification) if line.startswith("RUN pip install -r requirements-dev.txt"))
+    included = _included_requirement_files(DEV_REQUIREMENTS.read_text(encoding="utf-8"))
+    present = _files_copied_into_app(stages["runtime"]) | _files_copied_into_app(qualification[:install])
+
+    assert "WORKDIR /app" in stages["runtime"]
+    assert included, "requirements-dev.txt no longer includes the runtime pins; revisit this contract"
+    assert {"requirements-dev.txt", *included} <= present

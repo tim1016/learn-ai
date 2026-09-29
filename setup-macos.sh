@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
-# One-shot dev bootstrap for macOS (Apple Silicon, Tahoe 26+).
+# First-run bootstrap for macOS (Apple Silicon, Tahoe 26+).
 #
 # Provisions the Podman VM with generous resources, installs the host
-# toolchain, wires up .env files, builds the container stack, and brings
-# it up. Idempotent — safe to re-run; it reconfigures rather than
-# duplicates.
+# toolchain, wires up .env files, creates the bind-mount host directories,
+# builds the container stack, performs the one-time Clerk volume and
+# data-lake identity ceremonies, and brings the stack up in the combined
+# posture. The frontend is one of those containers (my-frontend,
+# http://localhost:4200); nothing runs on the host. Idempotent -- safe to
+# re-run on a machine that has not moved to the fleet posture.
+#
+# It REFUSES to run once the fleet lane env files exist
+# (deploy/fleet/env/live.env, paper.env): it stops the Podman VM and would
+# bring the stack back from compose.yaml alone, without the clerks. On that
+# machine ./restart.sh is the way to rebuild and restart.
 #
 # Usage:
-#   ./setup-macos.sh                         # full setup, leaves frontend for you to start
-#   ./setup-macos.sh --serve                 # also runs `npm install` + `ng serve` at the end
+#   ./setup-macos.sh
 #
 # Resource overrides (env vars, optional — defaults are auto-computed):
 #   PODMAN_CPUS=8 PODMAN_MEMORY_MB=16384 PODMAN_DISK_GB=120 ./setup-macos.sh
-#
-# This is the macOS analogue of ./restart.sh (which targets GNU/Linux
-# userland and is not portable to BSD tools).
 
 set -euo pipefail
 
-SERVE=false
 for arg in "$@"; do
   case "$arg" in
-    --serve)             SERVE=true ;;
     -h|--help)
-      sed -n '2,17p' "$0"
+      sed -n '2,21p' "$0"
       exit 0
       ;;
     *)
@@ -66,6 +68,62 @@ esac
 
 echo "==> Repo root: $ROOT_DIR"
 
+# Last assignment of KEY in an env file, without surrounding quotes; empty if
+# the file or the key is absent.
+env_file_value() {
+  local file="$1" key="$2" value
+  [[ -f "$file" ]] || return 0
+  value="$(sed -n "s/^${key}=//p" "$file" | tail -n1)"
+  value="${value%\"}"; value="${value#\"}"
+  value="${value%\'}"; value="${value#\'}"
+  printf '%s\n' "$value"
+}
+
+# The value Compose interpolates for KEY: the shell environment wins, then the
+# repo-root .env, then DEFAULT — Compose's own precedence.
+compose_setting() {
+  local key="$1" default="$2" value
+  value="${!key:-}"
+  if [[ -z "$value" ]]; then
+    value="$(env_file_value "$ROOT_DIR/.env" "$key")"
+  fi
+  printf '%s\n' "${value:-$default}"
+}
+
+# Compose resolves a relative host path against the project directory.
+project_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *)  printf '%s\n' "$ROOT_DIR/${1#./}" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# 0b. A fleet machine belongs to restart.sh.
+#     restart.sh layers compose.fleet.dev.yaml onto compose.yaml; that overlay
+#     needs the gitignored lane env files, whose paths it interpolates from
+#     FLEET_LIVE_ENV_FILE and FLEET_PAPER_ENV_FILE. The defaults below are the
+#     overlay's own (a contract test extracts them from it and fails on drift).
+#     Where a lane file exists the machine runs the fleet posture. This script
+#     stops the Podman VM and then brings the stack up from compose.yaml alone:
+#     the data plane would come back in the combined posture on the Live
+#     account's volume, with no clerks. Refuse before anything is touched.
+# ---------------------------------------------------------------------------
+for lane_env_file in \
+  "$(project_path "$(compose_setting FLEET_LIVE_ENV_FILE deploy/fleet/env/live.env)")" \
+  "$(project_path "$(compose_setting FLEET_PAPER_ENV_FILE deploy/fleet/env/paper.env)")"
+do
+  if [[ -f "$lane_env_file" ]]; then
+    echo "ERROR: this machine runs the fleet posture — found $lane_env_file." >&2
+    echo "       setup-macos.sh would stop the Podman VM and bring the stack back" >&2
+    echo "       without the broker clerks (compose.yaml alone), leaving the data" >&2
+    echo "       plane running in the combined posture on the Live account's volume." >&2
+    echo "       Nothing has been changed. To rebuild and restart the stack, run:" >&2
+    echo "         ./restart.sh              (add --no-cache for a from-scratch rebuild)" >&2
+    exit 1
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # 1. Homebrew + host toolchain.
 # ---------------------------------------------------------------------------
@@ -78,7 +136,8 @@ fi
 # podman:         the container engine
 # docker-compose: the compose provider that `podman compose` delegates to on
 #                 macOS (without it, `podman compose` has no backend)
-# node:           the Angular frontend dev server
+# node:           runs Frontend/scripts/data-plane-control-secret.cjs below (the
+#                 Angular dev server itself runs in the my-frontend container)
 for pkg in podman docker-compose node; do
   if brew list --formula "$pkg" >/dev/null 2>&1; then
     echo "==> $pkg already installed"
@@ -92,7 +151,7 @@ done
 # 2. Compute generous VM resources from this machine's hardware.
 #    Cores drive build speed (parallel .NET/Python compilation), so we hand
 #    the VM (cpus - 2), leaving 2 for the host + editor. RAM does NOT speed
-#    things up past the working set: this 3-container stack peaks ~15-20 GB
+#    things up past the working set: this five-container stack peaks ~15-20 GB
 #    even mid-build, so we target half of physical RAM but CAP at 32 GB —
 #    plenty of headroom without reserving memory the stack can't use. On a
 #    128 GB machine that's 32 GB to the VM, 96 GB left for the host.
@@ -183,6 +242,11 @@ copy_env_if_missing() {
 
 copy_env_if_missing "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
 copy_env_if_missing "$ROOT_DIR/PythonDataService/.env.example" "$ROOT_DIR/PythonDataService/.env"
+# The my-frontend container crash-loops without this file (angular.json's
+# development file replacement). primeUiLicense in it is a placeholder.
+copy_env_if_missing \
+  "$ROOT_DIR/Frontend/src/environments/environment.development.ts.example" \
+  "$ROOT_DIR/Frontend/src/environments/environment.development.ts"
 
 # Fresh checkouts receive a random local credential before Compose evaluates
 # its required interpolation. Upgrades carrying the retired public default are
@@ -200,18 +264,145 @@ if grep -q "POLYGON_API_KEY=your_polygon_api_key_here" "$ROOT_DIR/.env" 2>/dev/n
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Build + bring up the container stack (db, python-service, backend).
+# 5. Host directories, image build, first-run ceremonies, stack up.
 #    First build is slow (~5-10 min): .NET SDK image + Python heavy deps.
 # ---------------------------------------------------------------------------
-echo "==> Building and starting containers (first build is slow)..."
+# Rootless Podman does not create a missing bind-mount source, so every host
+# path compose.yaml mounts must exist before `up` (windows-onboarding §2).
+# LEAN_DATA_VOLUME_HOST_PATH relocates the data-lake root; Compose reads it from
+# the shell or .env, so this does too.
+LAKE_HOST_DIR="$(project_path "$(compose_setting LEAN_DATA_VOLUME_HOST_PATH data-lake-volume)")"
+for host_dir in \
+  "$(dirname "$ROOT_DIR")/Lean/Data" \
+  "$LAKE_HOST_DIR" \
+  "$ROOT_DIR/PythonDataService/cache" \
+  "$ROOT_DIR/PythonDataService/lean-cache" \
+  "$ROOT_DIR/PythonDataService/artifacts/alpaca_clerk"
+do
+  mkdir -p "$host_dir"
+done
+
+echo "==> Building containers (first build is slow)..."
 export COMPOSE_BAKE=false   # match restart.sh: avoid the bake fallback warning
+podman compose build
+
+# First-run ceremonies (windows-onboarding §4a, §4b). The data plane refuses to
+# start without them (exit 78 and exit 3), which is what a first run used to
+# time out on. Each acts only on a provably first install and otherwise stops
+# with the next step, so a re-run never adopts data it did not create.
+#
+# (a) The Alpaca Clerk volume. compose.yaml declares it external, so it must be
+#     created explicitly, and the data plane needs a `_compose_volume_ready`
+#     marker inside it. The marker is written only for a provably first install:
+#     already marked is a no-op, and anything in the volume or in the legacy host
+#     tree is an existing authority set that only the cutover runbook may adopt
+#     (exit 3). A tree that cannot be inspected is not an empty one (exit 4).
+#     The check runs in a bare container with the volume at /volume: podman
+#     copies an image's content into a new named volume on its first mount, and
+#     the python-service image creates directories under
+#     /app/artifacts/alpaca_clerk, so mounting the volume there would make every
+#     fresh volume look populated (runbook §4a mounts it in a bare image too).
+CLERK_VOLUME="learn-ai-alpaca-clerk-data"
+LEGACY_CLERK_TREE="$ROOT_DIR/PythonDataService/artifacts/alpaca_clerk"
+BARE_IMAGE="docker.io/library/alpine:3"
+if ! podman volume exists "$CLERK_VOLUME"; then
+  echo "==> Creating the Alpaca Clerk volume ($CLERK_VOLUME)..."
+  podman volume create "$CLERK_VOLUME" >/dev/null
+fi
+SEAL_CLERK_VOLUME='
+  [ -d /volume ] && [ -d /legacy ] || exit 4
+  if [ -f /volume/_compose_volume_ready ] && [ ! -L /volume/_compose_volume_ready ]; then exit 0; fi
+  if [ -n "$(ls -A /volume)" ] || [ -n "$(ls -A /legacy)" ]; then exit 3; fi
+  : > /volume/_compose_volume_ready
+'
+seal_status=0
+podman run --rm -v "$CLERK_VOLUME:/volume" -v "$LEGACY_CLERK_TREE:/legacy:ro,z" \
+  "$BARE_IMAGE" /bin/sh -c "$SEAL_CLERK_VOLUME" || seal_status=$?
+case "$seal_status" in
+  0) echo "==> Alpaca Clerk volume is marked ready" ;;
+  3)
+    echo "ERROR: the Alpaca Clerk volume ($CLERK_VOLUME) or the legacy host tree" >&2
+    echo "       (PythonDataService/artifacts/alpaca_clerk) already holds data, so this is" >&2
+    echo "       not a first install and the volume was NOT marked ready. Adopt that" >&2
+    echo "       data with docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md," >&2
+    echo "       then re-run this script." >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: could not check the Alpaca Clerk volume (podman run exited $seal_status)." >&2
+    exit 1
+    ;;
+esac
+
+# (b) The data-lake root identity (#1876). A root's UUID is claimed once, and the
+#     data plane fails closed on a root whose marker is missing or is not the id
+#     it is configured with. This step keeps that property: it mints, claims and
+#     records an id only when BOTH the root's marker and DATA_LAKE_ROOT_ID in
+#     PythonDataService/.env are absent. Anything else (an id with no marker, a
+#     marker with no or a different id) means the root or the env file came from
+#     somewhere else, and claiming an empty directory under the old id would
+#     leave a catalog that believes the lake is full. Those stop with the next
+#     step. The marker is read through `manage_data_root inspect` and claimed
+#     through `init`, which refuses a populated root.
+LAKE_TOOL=(podman compose run --rm --no-deps -T python-service python -m scripts.manage_data_root)
+ENV_LAKE_ROOT_ID="$(env_file_value "$ROOT_DIR/PythonDataService/.env" DATA_LAKE_ROOT_ID | tr '[:upper:]' '[:lower:]')"
+if ! lake_inspection="$("${LAKE_TOOL[@]}" inspect 2>&1)"; then
+  echo "ERROR: could not read the data-lake root identity:" >&2
+  printf '%s\n' "$lake_inspection" >&2
+  exit 1
+fi
+MARKER_LAKE_ROOT_ID="$(printf '%s\n' "$lake_inspection" \
+  | sed -n 's/.*data_root_id=\([0-9A-Fa-f-]*\).*/\1/p' | tail -n1 | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$MARKER_LAKE_ROOT_ID" ]]; then
+  # An unset DATA_LAKE_ROOT_ID means the legacy all-zero root, as in app/config.py.
+  if [[ "$MARKER_LAKE_ROOT_ID" == "${ENV_LAKE_ROOT_ID:-00000000-0000-0000-0000-000000000000}" ]]; then
+    echo "==> Data-lake root identity already set ($MARKER_LAKE_ROOT_ID)"
+  else
+    env_says="no DATA_LAKE_ROOT_ID"
+    if [[ -n "$ENV_LAKE_ROOT_ID" ]]; then env_says="DATA_LAKE_ROOT_ID=$ENV_LAKE_ROOT_ID"; fi
+    echo "ERROR: the data lake at $LAKE_HOST_DIR is stamped $MARKER_LAKE_ROOT_ID," >&2
+    echo "       but PythonDataService/.env has $env_says." >&2
+    echo "       The data plane will not start on a root that is not the one it is" >&2
+    echo "       told to use. If that lake is the one you mean, set" >&2
+    echo "       DATA_LAKE_ROOT_ID=$MARKER_LAKE_ROOT_ID in PythonDataService/.env and re-run; to look" >&2
+    echo "       again: podman compose run --rm --no-deps python-service \\" >&2
+    echo "                python -m scripts.manage_data_root inspect" >&2
+    exit 1
+  fi
+elif ! printf '%s\n' "$lake_inspection" | grep -q 'no root-identity marker'; then
+  echo "ERROR: unrecognised output from manage_data_root inspect:" >&2
+  printf '%s\n' "$lake_inspection" >&2
+  exit 1
+elif [[ -n "$ENV_LAKE_ROOT_ID" ]]; then
+  echo "ERROR: PythonDataService/.env names the data-lake root $ENV_LAKE_ROOT_ID, but" >&2
+  echo "       $LAKE_HOST_DIR carries no identity marker: it is a new or replaced" >&2
+  echo "       directory, not that root. Restore or mount the root that was stamped" >&2
+  echo "       with that id. To claim this directory under that id on purpose:" >&2
+  echo "         podman compose run --rm --no-deps python-service \\" >&2
+  echo "           python -m scripts.manage_data_root init --root-id $ENV_LAKE_ROOT_ID" >&2
+  echo "       (a root that already holds data is claimed with stamp instead; see" >&2
+  echo "       manage_data_root --help), then re-run this script." >&2
+  exit 1
+else
+  LAKE_ROOT_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  echo "==> Claiming the data-lake root as $LAKE_ROOT_ID..."
+  if ! "${LAKE_TOOL[@]}" init --root-id "$LAKE_ROOT_ID"; then
+    echo "ERROR: could not claim the data-lake root at $LAKE_HOST_DIR (see above). A root" >&2
+    echo "       that already holds data is claimed on purpose with stamp; see" >&2
+    echo "       manage_data_root --help." >&2
+    exit 1
+  fi
+  printf '\nDATA_LAKE_ROOT_ID=%s\n' "$LAKE_ROOT_ID" >> "$ROOT_DIR/PythonDataService/.env"
+  echo "==> Recorded DATA_LAKE_ROOT_ID in PythonDataService/.env"
+fi
+
+echo "==> Starting containers..."
 # Build and up are separated (as restart.sh does): a real build failure must
 # abort under `set -e`, but `up` can exit non-zero merely because a
 # `depends_on: service_healthy` dependency misses the compose startup window on
 # a cold/slow first run. Tolerate that here (`|| true`) so the health-wait loop
 # below — not compose's startup race — is the authoritative readiness gate and
 # containers aren't left stranded in `Created`.
-podman compose build
 podman compose up -d || true
 
 # ---------------------------------------------------------------------------
@@ -237,6 +428,7 @@ wait_for() {
 health_failures=0
 wait_for "python-service" "http://localhost:8000/health" || health_failures=$((health_failures + 1))
 wait_for "backend (GraphQL)" "http://localhost:5000/graphql?sdl" || health_failures=$((health_failures + 1))
+wait_for "frontend" "http://localhost:4200" || health_failures=$((health_failures + 1))
 
 echo ""
 echo "==> Container status:"
@@ -250,31 +442,24 @@ if (( health_failures > 0 )); then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Frontend.
+# 7. Report.
 # ---------------------------------------------------------------------------
-if [[ "$SERVE" == "true" ]]; then
-  echo "==> Installing frontend deps + starting ng serve (foreground)..."
-  cd "$ROOT_DIR/Frontend"
-  npm install
-  echo "==> Frontend will be at http://localhost:4200 — Ctrl-C to stop."
-  exec npx ng serve
-else
-  echo ""
-  echo "============================================================"
-  echo " Backend stack is up. To start the frontend:"
-  echo ""
-  echo "   cd Frontend && npm install && npx ng serve"
-  echo ""
-  echo " Then open http://localhost:4200"
-  echo ""
-  echo " Services:"
-  echo "   Frontend     http://localhost:4200  (after ng serve)"
-  echo "   GraphQL      http://localhost:5000/graphql"
-  echo "   Python API   http://localhost:8000/health"
-  echo "   Postgres     localhost:5432"
-  echo ""
-  echo " The full Python test suite runs from a HOST venv, not the container."
-  echo " Provision it once with:"
-  echo "   ./bootstrap-host-venv.sh"
-  echo "============================================================"
-fi
+echo ""
+echo "============================================================"
+echo " The stack is up. Open http://localhost:4200"
+echo ""
+echo " Services:"
+echo "   Frontend     http://localhost:4200  (my-frontend container, hot reload)"
+echo "   GraphQL      http://localhost:5000/graphql"
+echo "   Python API   http://localhost:8000/health"
+echo "   Postgres     localhost:5432"
+echo "   Redis        localhost:6379"
+echo ""
+echo " This is the combined posture (one data-plane process). To run the"
+echo " broker clerks, set up the fleet lanes (see"
+echo " docs/runbooks/first-time-setup.md); from then on use ./restart.sh."
+echo ""
+echo " The full Python test suite runs from a HOST venv, not the container."
+echo " Provision it once with:"
+echo "   ./bootstrap-host-venv.sh"
+echo "============================================================"
