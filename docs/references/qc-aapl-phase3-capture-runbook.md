@@ -270,16 +270,16 @@ cp qc_orders.json qc_price_history.csv qc_equity.json \
 Now run the parity tests:
 
 ```bash
-podman exec polygon-data-service python -m pytest \
-  /app/tests/research/parity/test_qc_fixture_smoke.py -v
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
+  tests/research/parity/test_qc_fixture_smoke.py -v)
 ```
 
 If smoke passes, implement ``_build_our_fills`` in ``test_qc_aapl_phase3_trade_parity.py`` (one engine-replay call + an adapter from ``LoggedTrade`` to ``OurFill``) and run the acceptance test:
 
 ```bash
-podman exec polygon-data-service python -m pytest \
-  /app/tests/research/parity/test_qc_aapl_phase3_trade_parity.py -v \
-  --write-recon-report
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
+  tests/research/parity/test_qc_aapl_phase3_trade_parity.py -v \
+  --write-recon-report)
 ```
 
 If status is ``passed``, write the hand-authored summary to ``docs/references/reconciliations/qc-aapl-phase3.md`` and the Phase 3 acceptance gate is closed.

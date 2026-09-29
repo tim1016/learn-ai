@@ -283,10 +283,9 @@ Run it from the repo root once to provision that interpreter:
 ```
 
 It installs the same `requirements-heavy.txt` + `-light.txt` + `-dev.txt` set CI
-installs. Prefer it over the `polygon-data-service` container for any full-suite
-run: the container resolves `FRONTEND_ROOT` differently and silently
-`pytest.skip()`s tests that genuinely fail on the host, and large suites hit its
-cgroup memory cap. Prefix `DATA_PLANE_CONTROL_SECRET=""` or roughly 33 router
+installs. Python tests do not run in the `polygon-data-service` container: that
+image is built from the Dockerfile's `runtime` stage and ships neither pytest nor
+the test tree (#2576). Prefix `DATA_PLANE_CONTROL_SECRET=""` or roughly 33 router
 tests return 403 against a developer's real secret.
 
 ```bash
@@ -319,7 +318,6 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | PrimeNG p-table re-sorts component data | `[sortField]` mutates the backing array | Assert data presence, not specific order |
 | Random parallel failures on Windows | Jest/Vitest worker contention | `maxWorkers: '50%'` in config |
 | Python tests need local deps | The host venv is the gate, and it is not created by `setup-macos.sh` | `./bootstrap-host-venv.sh` from the repo root |
-| Full suite passes in the container but fails on the host | The container resolves `FRONTEND_ROOT` differently and `pytest.skip()`s tests that genuinely fail | Treat only the host-venv run as authoritative |
 | LstmService `num_folds` branching | Polymorphic JSON deserialization | Tested via FakeHttpMessageHandler in LstmServiceTests |
 
 ---

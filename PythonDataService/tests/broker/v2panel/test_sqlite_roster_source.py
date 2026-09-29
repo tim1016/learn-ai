@@ -595,7 +595,7 @@ def _economic_rollup_map(
             fills_today=0,
             exposure={},
             realized_pnl_today=0.0,
-            open_pnl=0.0,
+            exact_open_pnl=Decimal(0),
             marks_complete=True,
             mark_observed_at_ms={},
             fee_fidelity="not_reported",

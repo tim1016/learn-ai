@@ -220,8 +220,8 @@ Keep the per-row tolerance at `atol=1e-9, rtol=0` — do not loosen unless you'r
 #### Step 11. Verify
 
 ```bash
-ruff check PythonDataService/app/ PythonDataService/tests/   # from repo root, NOT via podman exec
-podman exec polygon-data-service python -m pytest tests/research/ml/ -v
+ruff check PythonDataService/app/ PythonDataService/tests/   # from repo root
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/research/ml/ -v)
 ```
 
 Expected: all four previously-skipped tests now pass; nothing else regresses.

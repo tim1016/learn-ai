@@ -194,7 +194,7 @@ def adapt_sqlite_panel(
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
             ),
-            **open_pnl_fields(None if economics is None else economics.open_pnl),
+            **open_pnl_fields(None if economics is None else economics.exact_open_pnl),
         }
     )
 
