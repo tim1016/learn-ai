@@ -344,9 +344,9 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Permanently decommission this bot. Its id is never reused. This is irreversible.",
     ),
     "archive": OperatorCopy(
-        "Archive",
-        "Take a bot you are finished with off the roster. It must be stopped and "
-        "flat. Its id is never reused. This is irreversible.",
+        "Clear",
+        "Take a finished bot off Home. It must be stopped and flat, with nothing "
+        "claimed. Its fills, fees and result stay in Activity. There is no undo.",
     ),
     "cancel_order": OperatorCopy(
         "Cancel order",

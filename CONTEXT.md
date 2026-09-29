@@ -2166,8 +2166,10 @@ Where one account's money is (PRD #2560). Python authors every figure and every 
   _Avoid_: available cash, buying power (Alpaca's margin figure, under Account details).
 - **Held by stopped bot** — money a stopped bot still holds (shares at cost, or an entry order still working), shown striped until it is flattened and released.
 - **Account charges** — fees the account has paid that are not yet matched to a bot; their own slice, so no dollar is hidden.
-- **Finished** — a stopped bot that is flat with nothing still claimed; it moves by itself into Home's folded Finished list, with its result and Deploy again. There is no manual archive.
+- **Finished** — a stopped bot that is flat with nothing still claimed; it moves by itself into Home's folded Finished list, with its result and Deploy again. A stopped, flat Dry Run is Finished too, worded "DRY RUN · simulated cash"; while a Dry Run runs or still holds simulated cash it keeps its own Dry Run group, off the bar (D5).
   _Avoid_: archived, retired (as a group).
+- **Clear (a finished bot)** — the owner's one way to take Finished bots out of day-to-day sight (owner decision 2026-09-28, #2567): tick rows in the Finished fold, or clear them all, and confirm once. Each bot is one **archive** leg under the batch shape of ADR 0052 §4: named explicitly, re-proved under its own lock, and answered one by one, so a bot that is running or holding is refused with its own reason while the rest clear. A cleared bot leaves Home, the Wall and the catalog poll; its runs, fills, fees, result and budget stay in custody, readable by id. Manual only, and one-way.
+  _Avoid_: delete, remove, hide (nothing is erased), archive (the mechanism, not the owner's word).
 
 ## Market-data readiness (resolved 2026-09-22)
 

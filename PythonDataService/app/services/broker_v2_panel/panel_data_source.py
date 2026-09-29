@@ -66,6 +66,7 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     get_bot_task_registry,
 )
+from app.services.bot_runner_errors import BotRunnerError
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
@@ -322,6 +323,11 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     synthetic_rows: list[BotCatalogView] = []
     for binding in registry.bindings_for_broker(broker):
         if binding.mode != "dry_run":
+            continue
+        # A cleared Dry Run leaves Home and this poll: its sealed simulator is
+        # never opened again for it (#2567). Clearing needed it stopped and
+        # flat, so there is nothing left in it to show.
+        if registry.status(broker, binding.strategy_instance_id).phase == "RETIRED":
             continue
         try:
             async with _panel_authority_for_binding(registry, binding) as facade:
@@ -641,14 +647,20 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
-        await registry.archive(
-            broker,
-            sid,
-            updated_by=operator,
-            # The operator's own words when they gave any; the generic line is
-            # a fallback, not a replacement for the audit context they typed.
-            reason=reason or f"Panel archive by {operator}",
-        )
+        try:
+            await registry.archive(
+                broker,
+                sid,
+                updated_by=operator,
+                # The operator's own words when they gave any; the generic line is
+                # a fallback, not a replacement for the audit context they typed.
+                reason=reason or f"Panel archive by {operator}",
+            )
+        except BotRunnerError as error:
+            # The commit-time guard refused under the bot's lock, before any
+            # write (ADR 0052 §3): a typed refusal that names its cause, not
+            # an unknown outcome -- nothing was applied.
+            raise ActionNotAvailableError(str(error), detail=error.detail, reason_code=error.reason_code) from error
         return (
             "Bot archived and taken off the roster. Its history and receipts are "
             "kept; it can start no new runs."
@@ -937,14 +949,18 @@ async def _run_action_under_live_authority(
             )
         availability_error: ActionNotAvailableError | None = None
         if not action.enabled:
+            # The refusal is the guard's own: its headline, its why and its
+            # condition code, so a batch leg reports the reason its bot gave.
             blocker = action.blockers[0] if action.blockers else None
-            availability_error = ActionNotAvailableError(
-                f"The '{action.label}' action is blocked by the current panel state.",
-                detail=(
-                    blocker.detail
-                    if blocker is not None
-                    else "Refresh the panel and inspect the operation's readiness check."
-                ),
+            availability_error = (
+                ActionNotAvailableError(
+                    f"The '{action.label}' action is blocked by the current panel state.",
+                    detail="Refresh the panel and inspect the operation's readiness check.",
+                )
+                if blocker is None
+                else ActionNotAvailableError(
+                    blocker.headline, detail=blocker.detail, reason_code=blocker.condition.id
+                )
             )
         try:
             sqlite_result = await execute_sqlite_panel_action(

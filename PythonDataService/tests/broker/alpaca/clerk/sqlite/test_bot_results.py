@@ -158,3 +158,23 @@ def test_an_entry_filled_in_fractional_slices_claims_nothing_once_it_is_filled(t
         assert repo.bots_holding_money() == frozenset()
     finally:
         repo.close()
+
+
+def test_a_cleared_bot_keeps_every_record_readable_by_id(account: ClerkSqliteRepository) -> None:
+    """Clearing (#2567) is ADR 0052's archive: one STRATEGY_INSTANCE_RETIRED
+    transition and nothing erased. The bot leaves Home, but its run, fills,
+    fees, result and budget stay readable by id -- what the Bot history
+    issue will read."""
+    from app.services.bot_lifecycle_projection import SqliteAlpacaLifecycleAuthority
+
+    result = account.bot_results(["c"])
+    budget = account.deployment_budget("c")
+    stops = account.latest_run_stops()
+
+    SqliteAlpacaLifecycleAuthority(account).retire("c", NOON + 5, "Cleared from Home")
+
+    registration = next(row for row in account.strategy_instances() if row["strategy_instance_id"] == "c")
+    assert registration["retired_at_ms"] == NOON + 5
+    assert account.bot_results(["c"]) == result and result["c"].trade_count == 2
+    assert account.deployment_budget("c") == budget
+    assert account.latest_run_stops()["c"] == stops["c"]

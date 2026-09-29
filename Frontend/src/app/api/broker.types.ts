@@ -1547,6 +1547,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear finished bots from Home: one per-bot archive leg each, with per-leg outcomes (ADR 0052) */
+        post: operations["clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
         parameters: {
             query?: never;
@@ -2364,6 +2381,26 @@ export interface paths {
         get: operations["fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bots Clear
+         * @description Fleet-routed POST /accounts/{account_id}/bots/clear (bot_action).
+         */
+        post: operations["fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9927,6 +9964,21 @@ export interface components {
             trade_count?: number | null;
             /** World Label */
             world_label: string;
+        };
+        /**
+         * BotClearRequest
+         * @description Clear finished bots from Home (owner decision 2026-09-28; ADR 0052 §4).
+         *
+         *     Membership is explicit (ADR 0051 D2): exactly these bots, each one leg of
+         *     the unchanged per-bot ``archive`` under the derived identity
+         *     ``{idempotency_key}:{sid}`` (ADR 0051 D4). The request names no action:
+         *     this endpoint clears, and nothing else.
+         */
+        BotClearRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Strategy Instance Ids */
+            strategy_instance_ids: string[];
         };
         /**
          * BotControlAuthorityFacts
@@ -31437,6 +31489,44 @@ export interface operations {
             };
         };
     };
+    clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotClearRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
@@ -33148,6 +33238,45 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

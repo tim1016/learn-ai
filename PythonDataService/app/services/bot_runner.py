@@ -308,21 +308,24 @@ _RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
 _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
     "BOT_STILL_RUNNING": (
         "The bot is still running.",
-        "Stop the bot before archiving its registration.",
+        "Stop the bot before clearing it.",
+    ),
+    "BOT_DUTY_NOT_SETTLED": (
+        "This bot's last run has not finished settling.",
+        "Wait for recovery to record how that run ended, then clear the bot.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
-        "The Clerk cannot prove this bot is flat.",
-        "Archiving is allowed on proof that the bot holds nothing. Restore "
-        "broker observation and reconcile before archiving.",
+        "This account cannot prove the bot is flat.",
+        "A bot is cleared only on proof that it holds nothing. Choose Reconcile "
+        "now once Alpaca can be read, then clear it.",
     ),
     "ARCHIVE_WOULD_STRAND_CUSTODY": (
-        "The bot still holds custody.",
-        "Archiving now would strand attributed exposure or a working order. "
-        "Flatten and let working orders reach a terminal state first.",
+        "This bot still holds shares or has a working order.",
+        "Flatten it and let its working orders finish, then clear it.",
     ),
     None: (
-        "This registration cannot be archived.",
-        "Archive preconditions are no longer satisfied.",
+        "This bot cannot be cleared.",
+        "Its clearing conditions are no longer met.",
     ),
 }
 
@@ -978,7 +981,7 @@ class BotTaskRegistry:
                     return status
                 if not verdict.eligible:
                     headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
-                    raise BotRunnerError(headline, detail=detail)
+                    raise BotRunnerError(headline, detail=detail, reason_code=verdict.cause)
                 self._lifecycle_projector_for_instance(strategy_instance_id).retire(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),

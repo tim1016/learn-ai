@@ -4581,6 +4581,35 @@
         "title": "BotCatalogView",
         "type": "object"
       },
+      "BotClearRequest": {
+        "additionalProperties": false,
+        "description": "Clear finished bots from Home (owner decision 2026-09-28; ADR 0052 \u00a74).\n\nMembership is explicit (ADR 0051 D2): exactly these bots, each one leg of\nthe unchanged per-bot ``archive`` under the derived identity\n``{idempotency_key}:{sid}`` (ADR 0051 D4). The request names no action:\nthis endpoint clears, and nothing else.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "strategy_instance_ids": {
+            "items": {
+              "maxLength": 96,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Strategy Instance Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "strategy_instance_ids"
+        ],
+        "title": "BotClearRequest",
+        "type": "object"
+      },
       "BotControlAuthorityFacts": {
         "additionalProperties": false,
         "description": "Independent process and Clerk facts for one bot control decision.",
@@ -53388,6 +53417,83 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/clear": {
+      "post": {
+        "operationId": "clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotClearRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CohortActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear finished bots from Home: one per-bot archive leg each, with per-leg outcomes (ADR 0052)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
       "get": {
         "operationId": "get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get",
@@ -57288,6 +57394,98 @@
           }
         },
         "summary": "Fleet Bots Catalog Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/clear": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/clear (bot_action).",
+        "operationId": "fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bots Clear",
         "tags": [
           "broker-clerks"
         ]

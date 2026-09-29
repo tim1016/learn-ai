@@ -49,18 +49,24 @@ def bot_world(authority_world: AuthorityKind, mode: str) -> AuthorityKind:
 def bot_group(*, world: AuthorityKind, running: bool, holds_money: bool) -> BotGroup:
     """Where a bot sits on its account's Home (PRD #2560 D5/D7).
 
-    ``world`` is the bot's own (``bot_world``). A Dry Run is always its own
-    group, whatever it holds. Any other bot is running while it runs; once
-    stopped it is holding while it has position cost or still-claimed money
-    (``holds_money``), and finished when it is flat with nothing still
-    claimed. Nothing is archived by hand: a holding bot moves to finished by
-    itself once its money is released.
+    ``world`` is the bot's own (``bot_world``). A bot is running while it
+    runs; once stopped it is holding while it has position cost or
+    still-claimed money (``holds_money``), and finished when it is flat with
+    nothing still claimed. Nothing is cleared by hand while it holds: a
+    holding bot moves to finished by itself once its money is released.
+
+    A Dry Run trades simulated cash, never the account's (D5), so while it
+    runs or still holds simulated money it keeps its own Dry Run group, out
+    of the bar's running and holding groups. Once stopped and flat it is
+    finished like any other bot -- worded by its world label, "DRY RUN ·
+    simulated cash" -- so the Finished fold is the one place a bot is
+    cleared from (owner decision 2026-09-28, #2567).
     """
-    if world == "synthetic":
-        return "dry_run"
-    if running:
-        return "running"
-    return "holding" if holds_money else "finished"
+    if running or holds_money:
+        if world == "synthetic":
+            return "dry_run"
+        return "running" if running else "holding"
+    return "finished"
 
 
 def ended_at_ms(status: BotStatusView, *, latest_stop_ms: int | None) -> int | None:

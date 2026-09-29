@@ -47,3 +47,15 @@ Read cost becomes linear in *live* rows. Measured on `scripts/bench_panel_read_l
 The cohort form ships with an operator surface rather than waiting on one: cohort-flatten landed backend-only under ADR 0051 and its UI is still open as #1909, so a second unclicked batch endpoint would have left #1911's motivating 142 bots exactly as unreachable as before. The batch execution taxonomy both cohorts run under now lives in one module (`cohort_execution`), so the contract an operator depends on when a leg fails halfway through a fleet-wide command has one home rather than two that can drift.
 
 **Not decided here, and deliberately so.** The catalog runs N per-bot custody projections where one account-wide projection holds the same rows. Collapsing them would remove the row-count curve for *all* rows rather than only terminal ones — but the account-wide projection applies its limits account-wide, so per-bot slices could be silently truncated. That is a correctness hazard and belongs to #1801's follow-up with its own PR, not to this one.
+
+## Amendment 2026-09-28 — the batch is "Clear" on Home (PRD #2560, #2567)
+
+The owner made §4's batch the only way to take finished bots off Home: `POST /{broker}/accounts/{account_id}/bots/clear` names the bots (`BotClearRequest`: an idempotency key and the bot ids, never an action) and answers `CohortActionResult`, one leg per bot in request order. Each leg is this ADR's unchanged `archive` run through `cohort_execution` under `{key}:{sid}`, with the concurrency token its own panel presents.
+
+Two refinements, both about how a refusal reads rather than what is refused:
+
+- **No presentation read.** The Finished rows on Home are what the owner chose from, and each leg's executability is read when that leg is prepared; §3's commit-time re-proof is what decides. A presentation fetched first would only be older than both.
+- **A commit-time refusal is typed.** `bot_runner.archive` refuses under the bot's lock before any write, so the panel performer now reports it as the guard's own `ActionNotAvailableError` (headline, why and cause code, key released) rather than the "outcome unknown" an untyped performer error becomes. A presented-but-disabled action likewise refuses with its first blocker's headline and condition code. `_ARCHIVE_REFUSAL` also gained the `BOT_DUTY_NOT_SETTLED` wording its lookup was missing.
+
+A cleared (archived, inert terminal) bot is no longer returned by the catalog at all, and a cleared Dry Run's sealed simulator is no longer opened by the catalog poll; every record it wrote stays readable by id. `retire` (#1795) is unchanged and no longer offered by the UI.
+

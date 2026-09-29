@@ -49,6 +49,13 @@ LANE_STOP_ALL_READ_TIMEOUT_S = 110.0
 #: the migration CLI's wait (``installation_migration.lanes``) is derived
 #: from this bound.
 LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S = 40.0
+#: The coordinator -> lane read bound of ``bots_clear`` (#2567). One clear runs
+#: the per-bot archive for every bot the owner ticked, in turn -- each a panel
+#: read plus a fresh custody proof under that bot's lock -- so "Clear all
+#: finished" over a long Finished fold outlasts the 10 s default. The same
+#: 110 s as a lane-wide stop; a clear cut off anyway is safe to resend under
+#: its key (cleared legs replay as no-ops).
+BOTS_CLEAR_READ_TIMEOUT_S = 110.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
 
 

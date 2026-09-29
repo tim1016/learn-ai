@@ -978,7 +978,7 @@ async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
     with pytest.raises(BotRunnerError) as blocked:
         await registry.archive("alpaca", _SID, updated_by="operator")
 
-    assert "custody" in str(blocked.value).lower()
+    assert blocked.value.reason_code == "ARCHIVE_WOULD_STRAND_CUSTODY"
     assert registry.status("alpaca", _SID).phase != "RETIRED"
 
 
@@ -999,6 +999,7 @@ async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
         await registry.archive("alpaca", _SID, updated_by="operator")
 
     assert "prove" in str(blocked.value).lower()
+    assert blocked.value.reason_code == "ARCHIVE_CUSTODY_UNPROVABLE"
     assert registry.status("alpaca", _SID).phase != "RETIRED"
 
 
