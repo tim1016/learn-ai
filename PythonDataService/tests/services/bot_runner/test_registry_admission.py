@@ -250,14 +250,14 @@ async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_run_history_pages_previous_runs_without_changing_current_target(
+async def test_a_multi_run_bots_current_target_is_its_newest_run(
     tmp_path: Path,
 ) -> None:
-    """Pre-#2550 accounts already carry multi-run history on disk; this page
-    must keep walking it forever. ``resume_existing`` (the flow the original
-    version of this test used to build multiple runs) was removed by #2550,
-    so the three runs are seeded directly through the durable run-evidence
-    repository (``BotBindingRepository.record_launch``) instead."""
+    """Pre-#2550 accounts already carry multi-run history on disk (Bot
+    history lists every run, #2574); the current-run read must still target
+    the newest. ``resume_existing`` was removed by #2550, so the three runs
+    are seeded directly through the durable run-evidence repository
+    (``BotBindingRepository.record_launch``)."""
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     action_plan = alpaca_v1_action_plan("SPY")
     first = BrokerBotBinding(
@@ -275,18 +275,6 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
     registry._bindings.record_launch(second, launch_reason="deploy")
     registry._bindings.record_launch(third, launch_reason="deploy")
 
-    first_page = registry.run_history("alpaca", _SID, cursor=None, limit=1)
-    second_page = registry.run_history(
-        "alpaca",
-        _SID,
-        cursor=first_page.next_cursor,
-        limit=1,
-    )
-
-    assert [run.run_id for run in first_page.runs] == ["run-2"]
-    assert first_page.next_cursor == "run-2"
-    assert [run.run_id for run in second_page.runs] == ["run-1"]
-    assert second_page.next_cursor is None
     assert registry.current_run("alpaca", _SID).run_id == "run-3"
 
 

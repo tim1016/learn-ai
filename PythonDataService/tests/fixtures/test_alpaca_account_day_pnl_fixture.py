@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -74,3 +75,5 @@ def test_account_day_pnl_matches_the_hand_computed_alpaca_fixture() -> None:
                 abs=fixture.tolerance.atol,
                 rel=fixture.tolerance.rtol,
             )
+        # The owner's figure (#2586) is the reference's exact Decimal, bit-exact.
+        assert actual.display_total_usd == Decimal(expected["total_usd"]), case["case"]

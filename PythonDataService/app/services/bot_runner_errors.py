@@ -36,10 +36,6 @@ class InvalidStrategyInstanceIdError(BotRunnerError):
     http_status = 422
 
 
-class InvalidRunHistoryCursorError(BotRunnerError):
-    http_status = 422
-
-
 class BotAlreadyRunningError(BotRunnerError):
     http_status = 409
 

@@ -127,6 +127,7 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
     actions: [],
     primary_action: null,
     exit_terms: null,
+    status: 'running',
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,

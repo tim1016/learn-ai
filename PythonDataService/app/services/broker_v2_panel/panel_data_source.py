@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationCut,
 )
 from app.broker.alpaca.clerk.money import dollars
+from app.broker.alpaca.clerk.sqlite.exit_resolution import PANEL_FLATTEN_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     RepositoryPoisoned,
@@ -87,6 +88,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, custody_facade
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
+    custody_bot_status,
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
@@ -440,6 +442,7 @@ async def _get_panel_with_entries_from_authority(
         status,
         clerk,
         entries,
+        bot_status=custody_bot_status(facade.repository, sid, running=status.running),
         account_id=resolved,
         authority_account_id=authority_account_id,
         exposure=dict(economics.exposure),
@@ -694,7 +697,7 @@ def _action_performers(
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=sid,
             run_id=binding.run_id,
-            decision_id=f"panel-flatten:{idempotency_key}",
+            decision_id=f"{PANEL_FLATTEN_DECISION_PREFIX}{idempotency_key}",
             purpose=EffectPurpose.EXIT,
             action_plan=binding.action_plan,
             quantity=binding.quantity,

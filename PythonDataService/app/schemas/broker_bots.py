@@ -463,7 +463,7 @@ class BotStatusView(BaseModel):
 
 
 class BotRunView(BaseModel):
-    """Read-only launch and terminal evidence for one strategy run."""
+    """Read-only launch, process and terminal evidence for a bot's current run."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -472,18 +472,8 @@ class BotRunView(BaseModel):
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     launch_reason: Literal["deploy", "resume", "legacy"]
     started_at_ms: int = Field(ge=0)
-    is_current: bool
-    process: BotProcessFact | None
+    process: BotProcessFact
     terminal_outcome: BotRunTerminalOutcomeView | None
-
-
-class BotRunHistoryPage(BaseModel):
-    """One bounded page of previous runs; current run has its own endpoint."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    runs: tuple[BotRunView, ...]
-    next_cursor: str | None
 
 
 class BotRunReadBrokerErrorDetail(BaseModel):
@@ -520,24 +510,6 @@ class BotRunReadRunnerErrorResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     detail: BotRunReadRunnerErrorDetail
-
-
-class BotRunReadValidationIssue(BaseModel):
-    """One FastAPI request-validation issue for a run-history query."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    loc: tuple[str | int, ...]
-    msg: str
-    type: str
-
-
-class BotRunHistoryUnprocessableResponse(BaseModel):
-    """422 envelope for a runner error or an invalid history query."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    detail: BotRunReadRunnerErrorDetail | tuple[BotRunReadValidationIssue, ...]
 
 
 class AlpacaPaperDeployReceipt(BaseModel):

@@ -61,6 +61,9 @@ class HomeStubComponent {}
 @Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
 class ActivityStubComponent {}
 
+@Component({ selector: 'app-history-stub', template: '<main aria-label="History">History tab</main>' })
+class HistoryStubComponent {}
+
 @Component({
   selector: 'app-settings-stub',
   template: '<main aria-label="Settings">Settings tab</main>',
@@ -87,6 +90,7 @@ const WORKSPACE_ROUTES: Routes = [
     component: AlpacaAccountWorkspaceComponent,
     children: [
       { path: 'settings', component: SettingsStubComponent },
+      { path: 'history', component: HistoryStubComponent },
       { path: 'home', component: AlpacaSurfaceNotReadyTabComponent },
       {
         path: 'accounts/:accountId',
@@ -217,6 +221,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     [WORKSPACE_URL, 'Home'],
     [`${WORKSPACE_URL}?view=wall`, 'Home'],
     [`${WORKSPACE_URL}/activity`, 'Activity'],
+    [`${LANE_URL}/history`, 'History'],
     [`${WORKSPACE_URL}/deploy`, 'Deploy a bot'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
     await renderWorkspace({ url });
@@ -224,7 +229,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
     // Overview, Bots and Gallery are one Home tab (PRD #2560).
-    for (const label of ['Home', 'Activity', 'Settings', 'Deploy a bot']) {
+    for (const label of ['Home', 'Activity', 'History', 'Settings', 'Deploy a bot']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     for (const retired of ['Overview', 'Bots', 'Gallery']) {

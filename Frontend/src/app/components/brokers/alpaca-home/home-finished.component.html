@@ -1,5 +1,9 @@
 <details class="home-finished">
   <summary><strong>Finished</strong> ({{ bots().length }}) · flat, all money returned</summary>
+  <p class="home-finished__history">
+    Cleared bots keep their records:
+    <a [routerLink]="clearedHistory().commands" [queryParams]="clearedHistory().queryParams">see cleared bots in History</a>
+  </p>
   @if (rows().length === 0) {
     <p class="home-finished__empty">No finished bots yet.</p>
   } @else {

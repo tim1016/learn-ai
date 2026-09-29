@@ -8,8 +8,10 @@ Reference: ADR 0059 Decision 4, amended 2026-09-24; Alpaca Account Object
   Activities (``CSD`` deposit, ``CSW`` withdrawal, signed ``net_amount``),
   https://docs.alpaca.markets/us/docs/account-activities.
 Canonical implementation: this file.
-Validated against: ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py`` and
-  ``tests/broker/alpaca/clerk/sqlite/test_live_envelope_sync.py``.
+Validated against: ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py``,
+  ``tests/broker/alpaca/clerk/sqlite/test_live_envelope_sync.py`` and, for
+  simulated custody's exact figure, the ``Fraction`` oracle in
+  ``tests/broker/alpaca/clerk/sqlite/test_simulated_account.py``.
 
 The broker's equity makes this account-wide without composing incompatible
 lot horizons: an overnight position contributes only its change since the
@@ -19,6 +21,13 @@ the two owner cash-flow types; deposits must be strictly positive and
 withdrawals strictly negative. Anything unexpected or without a finite,
 direction-consistent signed amount makes the fact unknown rather than silently
 treating cash flow as P&L.
+
+Two figures, one formula. The loss hold compares and seals ``total_usd``,
+float arithmetic in every custody world. What the owner reads is
+``display_total_usd``, the same formula in exact ``Decimal`` for every account
+(#2586): each recorded figure -- a broker float, simulated custody's exact
+equity or baseline, one transfer amount -- is normalized on its own, so no
+float subtraction or sum ever chooses the cent the owner sees.
 """
 
 from __future__ import annotations
@@ -26,8 +35,10 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
+from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
@@ -43,19 +54,46 @@ class DayPnl:
     # The observation instant; the figures below span
     # (day_start_ms, day_end_ms].
     day_end_ms: int
-    current_equity_usd: float
-    prior_close_equity_usd: float
-    net_cash_flow_usd: float
+    # Each is a broker float or simulated custody's exact ``Decimal``, in any
+    # mix: a sealed loss hold's float baseline stands in on the clearance path.
+    current_equity_usd: float | Decimal
+    prior_close_equity_usd: float | Decimal
+    # Each usable deposit (positive) and withdrawal (negative), as recorded.
+    cash_flow_amounts_usd: tuple[float, ...]
     cash_flow_count: int
     cash_flows_known: bool
 
     @property
+    def net_cash_flow_usd(self) -> float:
+        return sum(self.cash_flow_amounts_usd)
+
+    @property
     def total_usd(self) -> float:
+        """The figure the loss hold compares and seals: float arithmetic.
+
+        An exact simulated equity enters as its nearest float, so one loss
+        rule judges every custody world, byte for byte as before #2586.
+        """
         return (
-            self.current_equity_usd
-            - self.prior_close_equity_usd
+            float(self.current_equity_usd)
+            - float(self.prior_close_equity_usd)
             - self.net_cash_flow_usd
         )
+
+    @property
+    def display_total_usd(self) -> Decimal:
+        """Today's P&L as the owner reads it: exact, rounded once by the caller.
+
+        Every recorded figure is normalized on its own and the formula runs
+        in exact ``Decimal``, for every account and every mix of float and
+        exact inputs (#2586). Never a loss-hold input.
+        """
+        with money_context():
+            return (
+                normalize_money(self.current_equity_usd)
+                - normalize_money(self.prior_close_equity_usd)
+                - sum((normalize_money(amount) for amount in self.cash_flow_amounts_usd), ZERO)
+            )
 
     @property
     def known(self) -> bool:
@@ -92,11 +130,9 @@ def day_pnl_at(
     return DayPnl(
         day_start_ms=day_start_ms,
         day_end_ms=now_ms,
-        # The day figure is float arithmetic (the loss hold compares it);
-        # simulated custody's exact equity is rounded once, here.
-        current_equity_usd=float(observation.equity_usd),
+        current_equity_usd=observation.equity_usd,
         prior_close_equity_usd=observation.last_equity_usd,
-        net_cash_flow_usd=sum(usable_amounts),
+        cash_flow_amounts_usd=tuple(usable_amounts),
         cash_flow_count=len(cash_flows),
         cash_flows_known=cash_flows_known,
     )
