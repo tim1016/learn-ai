@@ -223,12 +223,6 @@ notional cap, no symbol allowlist, no session restriction.
   ([Account Object](https://docs.alpaca.markets/us/v1.1/docs/account-plans))
   and recommends `equity - last_equity` for the account's day change
   ([Working with /account](https://docs.alpaca.markets/us/docs/working-with-account)).
-  The adapter's `to_float`/`opt_float` refuse a JSON boolean in any Alpaca
-  numeric, because `float(True)` is `1.0`. An account response the adapter
-  cannot map (a boolean, null, non-numeric or missing `cash` or `equity`, or a
-  boolean or non-numeric `last_equity`) makes `AlpacaBroker.get_account` raise
-  `BrokerEvidenceUnavailable`, which withdraws the prior envelope observation
-  immediately, like rejected transfer evidence below.
   The start is the canonical close of the trading day before the current ET
   calendar day. It therefore does not advance after today's session closes,
   and weekends, holidays, and early closes cannot make the cash-flow horizon
@@ -260,6 +254,16 @@ notional cap, no symbol allowlist, no session restriction.
   Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
+- **A malformed account response is rejected evidence.** The adapter's
+  `to_float`/`opt_float`, which parse every Alpaca money and quantity field,
+  refuse a JSON boolean, because `float(True)` is `1.0`: a boolean
+  `last_equity` would otherwise be a $1 prior close. An account response the
+  adapter cannot map (a boolean, null, non-numeric or missing `cash` or
+  `equity`, or a boolean or non-numeric `last_equity`) makes
+  `AlpacaBroker.get_account` raise `BrokerEvidenceUnavailable`, carrying the
+  underlying cause in its `detail`. That withdraws the prior envelope
+  observation immediately, like rejected transfer evidence above, and the
+  sync's warning line names the cause.
 - **Positions are not a loss input.** Current equity already includes every
   open position. The sync therefore does not call the positions endpoint for
   this verdict; `AccountObservation.position_count` remains `None` rather

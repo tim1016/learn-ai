@@ -629,7 +629,7 @@ class LiveEnvelopeSync:
             # of the invalid evidence under the same fence as policy Apply.
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
         except BrokerEvidenceUnavailable as exc:
-            return self._acted("unknown", {"why": str(exc)})
+            return self._acted("unknown", {"why": str(exc), "detail": exc.detail})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.

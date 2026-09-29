@@ -457,12 +457,15 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
         client=_ActivitiesClient({None: [malformed]})  # type: ignore[arg-type]
     )
 
-    with pytest.raises(BrokerUnavailable, match="evidence was malformed"):
+    with pytest.raises(BrokerUnavailable, match="evidence was malformed") as info:
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,
             activity_type="TRANS",
         )
+
+    assert info.value.detail is not None
+    assert "KeyError: 'activity_type'" in info.value.detail
 
 
 async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_evidence() -> None:
@@ -470,12 +473,15 @@ async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_eviden
         client=_ActivitiesClient({None: [None]})  # type: ignore[list-item, arg-type]
     )
 
-    with pytest.raises(BrokerUnavailable, match="evidence was malformed"):
+    with pytest.raises(BrokerUnavailable, match="evidence was malformed") as info:
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,
             activity_type="TRANS",
         )
+
+    assert info.value.detail is not None
+    assert "must be an object" in info.value.detail
 
 
 @pytest.mark.parametrize("invalid_id", [None, "", "   "])

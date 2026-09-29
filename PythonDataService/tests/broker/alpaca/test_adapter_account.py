@@ -113,19 +113,20 @@ def test_malformed_pattern_day_trader_is_rejected(
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("field", "value", "cause"),
     [
-        pytest.param("cash", True, id="boolean-cash"),
-        pytest.param("equity", False, id="boolean-equity"),
-        pytest.param("last_equity", True, id="boolean-last-equity"),
-        pytest.param("cash", "not-a-number", id="unparseable-cash"),
-        pytest.param("equity", None, id="null-equity"),
+        pytest.param("cash", True, "not a boolean", id="boolean-cash"),
+        pytest.param("equity", False, "not a boolean", id="boolean-equity"),
+        pytest.param("last_equity", True, "not a boolean", id="boolean-last-equity"),
+        pytest.param("cash", "not-a-number", "'not-a-number'", id="unparseable-cash"),
+        pytest.param("equity", None, "NoneType", id="null-equity"),
     ],
 )
 async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(
     load_alpaca_fixture: AlpacaFixtureLoader,
     field: str,
     value: object,
+    cause: str,
 ) -> None:
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload[field] = value
@@ -134,6 +135,10 @@ async def test_broker_names_a_malformed_account_response_as_unavailable_evidence
         await _paper_broker(payload).get_account()
 
     assert info.value.http_status == 503
+    # The plain message stays plain; the underlying cause rides on ``detail`` so
+    # the operator's log line can say what was wrong with the answer (#2606).
+    assert info.value.detail is not None
+    assert cause in info.value.detail
 
 
 async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
@@ -142,8 +147,11 @@ async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload.pop("equity")
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed"):
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
         await _paper_broker(payload).get_account()
+
+    assert info.value.detail is not None
+    assert "KeyError: 'equity'" in info.value.detail
 
 
 def test_live_mode_maps_live_and_a_non_pa_account_number(

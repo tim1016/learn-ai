@@ -584,7 +584,7 @@ class TradeUpdatesConsumer:
             # ``_seen`` and abort the drain. A bad order is a parse error: the frame
             # is already captured, the counter is incremented, the stream continues.
             broker_order = adapter.from_alpaca_order(order) if order else None
-        except (KeyError, ValueError):
+        except (KeyError, TypeError, ValueError):
             self._counters.parse_errors += 1
             if not from_gap_reconcile:
                 self._mark_evidence_health(False)

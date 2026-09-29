@@ -355,7 +355,7 @@ def from_alpaca_order(
         order_type=str(payload.get("order_type") or payload.get("type")),
         time_in_force=str(payload["time_in_force"]),
         quantity=opt_float(payload.get("qty")),
-        filled_quantity=to_float(payload.get("filled_qty") or 0),
+        filled_quantity=opt_float(payload.get("filled_qty")) or 0.0,
         limit_price=opt_float(payload.get("limit_price")),
         stop_price=opt_float(payload.get("stop_price")),
         extended_hours=bool(payload.get("extended_hours") or False),

@@ -15,7 +15,7 @@ import copy
 import json
 import math
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -773,6 +773,33 @@ async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
         await source.send(_load_frames()[0])
         await _wait_for_execution_health(healthy=True)
         assert consumer.connected is True
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        pytest.param(lambda data: data.update(price=True), id="boolean-execution-price"),
+        pytest.param(lambda data: data.update(qty=False), id="boolean-execution-qty"),
+        pytest.param(lambda data: data["order"].update(filled_qty=True), id="boolean-order-filled-qty"),
+    ],
+)
+async def test_a_boolean_numeric_is_a_parse_error_not_a_reconnect(
+    tmp_path: Path,
+    corrupt: Callable[[dict[str, Any]], None],
+) -> None:
+    # ``float(True)`` is refused with a ``TypeError``; a frame carrying one is a
+    # frame that would not map — counted, health degraded, socket kept — not a
+    # crash that tears the connection down and reconnects (#2606).
+    fill = _load_frames()[2]
+    corrupt(fill["data"])
+    async with _running_consumer(tmp_path) as (source, consumer):
+        await source.send(fill)
+        await _wait_for_execution_health(healthy=False)
+        assert consumer.connected is True
+        assert consumer.counters.parse_errors == 1
+
+        await source.send(_load_frames()[0])
+        await _wait_for_execution_health(healthy=True)
 
 
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
