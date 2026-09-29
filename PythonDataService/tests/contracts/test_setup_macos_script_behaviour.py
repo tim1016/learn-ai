@@ -428,6 +428,19 @@ def test_a_marker_with_no_id_in_the_env_file_stops_and_shows_how_to_look(machine
     assert not machine.started_the_stack()
 
 
+def test_a_legacy_all_zero_marker_with_no_id_in_the_env_file_is_left_alone(machine: Machine) -> None:
+    """An unset DATA_LAKE_ROOT_ID is the legacy all-zero root (app/config.py), so
+    a machine stamped before #1876 re-runs cleanly."""
+    legacy_root_id = "00000000-0000-0000-0000-000000000000"
+    machine.stamp_lake_root(legacy_root_id)
+
+    completed = machine.run()
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not machine.claimed_the_lake()
+    assert "DATA_LAKE_ROOT_ID" not in machine.python_env_file.read_text(encoding="utf-8")
+
+
 def test_a_marker_that_differs_from_the_env_file_id_stops(machine: Machine) -> None:
     machine.stamp_lake_root(_ROOT_ID)
     machine.python_env_file.write_text(

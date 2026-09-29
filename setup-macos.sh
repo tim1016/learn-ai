@@ -354,7 +354,8 @@ fi
 MARKER_LAKE_ROOT_ID="$(printf '%s\n' "$lake_inspection" \
   | sed -n 's/.*data_root_id=\([0-9A-Fa-f-]*\).*/\1/p' | tail -n1 | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$MARKER_LAKE_ROOT_ID" ]]; then
-  if [[ "$MARKER_LAKE_ROOT_ID" == "$ENV_LAKE_ROOT_ID" ]]; then
+  # An unset DATA_LAKE_ROOT_ID means the legacy all-zero root, as in app/config.py.
+  if [[ "$MARKER_LAKE_ROOT_ID" == "${ENV_LAKE_ROOT_ID:-00000000-0000-0000-0000-000000000000}" ]]; then
     echo "==> Data-lake root identity already set ($MARKER_LAKE_ROOT_ID)"
   else
     env_says="no DATA_LAKE_ROOT_ID"
