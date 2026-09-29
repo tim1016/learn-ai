@@ -72,6 +72,9 @@ is archived while the code it names still runs.
   reserved while the deployment runs.
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
+  The amount is what the Stop released, recorded with the Stop; money that comes
+  back later (a sale, an entry order that ends unfilled) is not released cash,
+  and a fee charged later never changes it.
 - **Fee provision** — an estimated fee claim held until the observed broker
   charge replaces it. Priced by the canonical fee model at ENTER admission and,
   for the unfilled remainder of a pending order, by its own conservative quote;
@@ -2050,14 +2053,14 @@ proves its running build at Deploy.
 
 Decision record: ADR 0052.
 
-- **Registration exit** — the terminal act that takes a bot off the roster for good. Two exits reach it, distinguished by what proves them; both write the same terminal duty fact, so nothing downstream branches on which was used. A registration that has taken either can never admit another run.
+- **Registration exit** — the terminal act that takes a bot off the roster for good. Archive (Clear on Home) is the one exit since #2578; registrations retired earlier through the removed Retire exit carry the same terminal duty fact, so nothing downstream branches on which was used. A registration that has taken an exit can never admit another run.
   _Avoid_: delete, remove, decommission (none of these say what is kept — the bot's history and receipts survive an exit).
-- **Retire** — the exit for a registration that is *provably dead*: its strategy program is gone from the runtime, or the broker has durably answered that its symbol is not a listed asset. The proof is system-derived, so retire is offered on evidence the operator did not supply.
-  _Avoid_: end, kill, retire-as-cleanup (retire is not "I am done with this bot" — that is archive).
+- **Retire** *(retired, #2578)* — the former second exit, for a registration that was *provably dead* (strategy program gone, or symbol durably unlisted). Removed once Clear became the only way off Home; its action id survives only as read-only history in a bot's receipt ledger. A dead bot whose last run never settled now stays on Home, refused `BOT_DUTY_NOT_SETTLED`, until recovery settles the run.
+  _Avoid_: offering it, or using "retire" for the archive exit.
 - **Archive** — the exit for a registration the operator is *finished with*. The proof is custody: stopped, flat, no working orders, and an account that can prove it. Because custody is the enabling proof rather than a backstop, an account that cannot observe the broker refuses archive outright rather than reading its own ignorance as flatness.
-  _Avoid_: retire (the contract is different), soft delete, hide (an archived bot is still readable and still auditable).
+  _Avoid_: retire (the removed exit's name), soft delete, hide (an archived bot is still readable and still auditable).
 - **Inert terminal row** — a registration that has taken an exit and against which nothing bot-scoped is outstanding: no unresolved uncertainty, no non-zero attributed position, no active run. The catalog projects such a row from identity alone, which is what keeps read cost linear in live rows rather than in every row ever registered. A row that fails the test — an exited bot still holding custody — is projected in full and keeps its authored cure.
-  _Avoid_: dead row, archived row (the second names one of the two exits, and the test is about outstanding custody, not about which exit was taken).
+  _Avoid_: dead row, archived row (the test is about outstanding custody, not about which exit was taken).
 
 ## Broker configuration profiles (resolved 2026-09-11)
 

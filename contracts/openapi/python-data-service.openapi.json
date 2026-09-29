@@ -5393,7 +5393,6 @@
                   "deploy",
                   "stop",
                   "flatten_stop",
-                  "retire",
                   "archive",
                   "cancel_order",
                   "reconcile_now",
@@ -14707,7 +14706,7 @@
       },
       "DeploymentBudgetView": {
         "additionalProperties": false,
-        "description": "All dollars are authored by Python, including display rounding.\n\n``headline`` and ``detail`` say where this bot's money stands in the\nowner's words -- holding a position is a normal state, never worded as a\nfault (hurdle H25). ``statement`` is the bot's money as the owner reads\nit, in order: a running bot's budget, results, balance and where the\nbalance is; a stopped bot's balance and what was released and what is\nstill held, which add up to that balance. It is empty unless ``state``\nis ``ready``.\n``segment`` is this bot's slice exactly as the account's money bar draws\nit (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of\nits own; ``None`` when the bot is finished and holds no money any more.",
+        "description": "All dollars are authored by Python, including display rounding.\n\n``headline`` and ``detail`` say where this bot's money stands in the\nowner's words -- holding a position is a normal state, never worded as a\nfault (hurdle H25). ``statement`` is the bot's money as the owner reads\nit, in order: a running bot's budget, results, balance and where the\nbalance is; a stopped bot's balance, what its Stop released (the Stop's\nrecorded figure, #2555), what came back or was charged since, signed,\nand what is still held, which add up to that balance less any \"Over its\nbudget by\". It is empty unless ``state`` is ``ready``.\n``segment`` is this bot's slice exactly as the account's money bar draws\nit (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of\nits own; ``None`` when the bot is finished and holds no money any more.",
         "properties": {
           "committed_usd": {
             "anyOf": [
@@ -27588,7 +27587,7 @@
       },
       "MoneySegment": {
         "additionalProperties": false,
-        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent\nbeyond its balance -- absent, never \"0.00\", when nothing is short;\n``released_usd`` and ``still_claimed_usd`` to a stopped bot that still\nholds money.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
+        "description": "One place the account's money is, in display order on the money bar.\n\n``label`` is the legend's words for the slice; ``share_bps`` its width.\n``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent\nbeyond its balance -- absent, never \"0.00\", when nothing is short;\n``released_usd`` and ``still_claimed_usd`` to a stopped bot that still\nholds money. ``released_usd`` is what its Stop released, as the Stop\nrecorded it (#2555); ``released_estimated`` marks a Stop that recorded\nnone, whose figure is an estimate from the bot's money now.\n``palette_index`` is a bot's stable colour slot (its registration order\non the account), the same on every surface that draws that bot.\n``settling`` is sale proceeds on their way into cash: not yet free to\ndeploy, never a shortfall.",
         "properties": {
           "amount_usd": {
             "title": "Amount Usd",
@@ -27632,6 +27631,11 @@
                 "type": "null"
               }
             ]
+          },
+          "released_estimated": {
+            "default": false,
+            "title": "Released Estimated",
+            "type": "boolean"
           },
           "released_usd": {
             "anyOf": [
@@ -30196,7 +30200,6 @@
               "deploy",
               "stop",
               "flatten_stop",
-              "retire",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30278,7 +30281,6 @@
               "deploy",
               "stop",
               "flatten_stop",
-              "retire",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30366,7 +30368,6 @@
               "deploy",
               "stop",
               "flatten_stop",
-              "retire",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30429,7 +30430,6 @@
               "deploy",
               "stop",
               "flatten_stop",
-              "retire",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30524,7 +30524,6 @@
                 "deploy",
                 "stop",
                 "flatten_stop",
-                "retire",
                 "archive",
                 "cancel_order",
                 "reconcile_now",
@@ -32850,7 +32849,6 @@
               "deploy",
               "stop",
               "flatten_stop",
-              "retire",
               "archive",
               "cancel_order",
               "reconcile_now",

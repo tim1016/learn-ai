@@ -51,6 +51,19 @@ describe('MoneyBarComponent', () => {
     expect(screen.getByText(/released \$329\.57 · still claimed \$12\.05/)).toBeTruthy();
   });
 
+  it('marks a stopped bot’s release as an estimate only when its Stop recorded none (#2555)', async () => {
+    const stopped = SEGMENTS[1];
+    await renderBar('detail', [{ ...stopped, released_usd: '329.57', released_estimated: true }]);
+
+    expect(screen.getByText(/released \$329\.57 \(estimate\) · still claimed \$0\.00/)).toBeTruthy();
+  });
+
+  it('never marks a release the Stop recorded as an estimate', async () => {
+    await renderBar('detail', [SEGMENTS[1]]);
+
+    expect(screen.queryByText(/estimate/)).toBeNull();
+  });
+
   it('never states a shortfall the backend did not send', async () => {
     await renderBar('detail', [{ ...SEGMENTS[0], shortfall_usd: null }]);
 

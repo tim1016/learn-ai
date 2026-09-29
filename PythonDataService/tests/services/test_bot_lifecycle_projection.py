@@ -395,12 +395,10 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The case ``retire`` refuses and #1911 asked for (ADR 0052).
+    """The case #1911 asked for (ADR 0052): a healthy bot you are done with.
 
-    The bot's strategy is registered and its symbol is fine, so retire refuses
-    it with ``STRATEGY_STILL_RUNNABLE`` -- correctly, for what #1795 covers.
-    ``archive`` is the sanctioned exit for exactly that bot, and it commits to
-    the authority: this asserts ``strategy_instances.retired_at_ms``, not just
+    ``archive`` is the exit for exactly that bot, and it commits to the
+    authority: this asserts ``strategy_instances.retired_at_ms``, not just
     the file projection, because that column is what the catalog reads and
     what ``run_admission`` refuses ``BOT_RETIRED`` on.
     """
@@ -425,11 +423,6 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
         )
         await registry.stop("alpaca", "paper-archive")
-
-        from app.services.bot_runner import BotRunnerError
-
-        with pytest.raises(BotRunnerError):
-            await registry.retire("alpaca", "paper-archive", updated_by="operator")
 
         status = await registry.archive(
             "alpaca", "paper-archive", updated_by="operator"

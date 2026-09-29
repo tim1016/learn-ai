@@ -355,6 +355,17 @@ describe('AlpacaHomeComponent', () => {
     expect(within(dryRun).getByText('today, simulated')).toBeTruthy();
   });
 
+  it('marks a holding bot’s release as an estimate when its Stop recorded none (#2555)', async () => {
+    const money = fakeAccountMoney({ account_id: TEST_ACCOUNT_ID });
+    const segments = (money.segments ?? []).map((segment) =>
+      segment.kind === 'stopped' ? { ...segment, released_estimated: true } : segment);
+    await renderHome({ money: { ...money, segments } });
+
+    const bots = screen.getByRole('list', { name: 'Bots' });
+    const [, holding] = Array.from(bots.querySelectorAll<HTMLElement>(':scope > li'));
+    expect(within(holding).getByText(/held \$670\.43 · released \$0\.00 \(estimate\)/)).toBeTruthy();
+  });
+
   it('lists running bots, then stopped bots still holding, each with its own money', async () => {
     await renderHome();
 
@@ -366,6 +377,7 @@ describe('AlpacaHomeComponent', () => {
     expect(within(running).getByRole('button', { name: 'Stop spy-ema-20260929-0931' })).toBeTruthy();
     expect(within(holding).getByText('Stopped · still holds 1 SPY · no bot is managing it')).toBeTruthy();
     expect(within(holding).getByText(/held \$670\.43 · released \$0\.00/)).toBeTruthy();
+    expect(within(holding).queryByText(/estimate/)).toBeNull();
     expect(within(holding).getByRole('link', { name: 'Flatten spy-ema-20260925-1402…' }).getAttribute('href')).toBe(
       `${ACCOUNT_URL}/bots/spy-ema-20260925-1402`,
     );

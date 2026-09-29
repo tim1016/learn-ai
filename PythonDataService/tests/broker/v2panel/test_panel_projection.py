@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -383,7 +384,7 @@ def _panel(
         exposure=resolved_exposure,
         fills_today=0,
         realized_pnl_today=0.0,
-        open_pnl=None,
+        exact_open_pnl=None,
         latest_decision=decision,
         last_bar_at_ms=last_bar_at_ms,
         journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
@@ -1004,7 +1005,7 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
         fills_today=3,
         exposure={"GOOGL": 0.0},
         realized_pnl_today=25.0,
-        open_pnl=0.0,
+        exact_open_pnl=Decimal(0),
         marks_complete=True,
         mark_observed_at_ms={},
         fee_fidelity="not_reported",
@@ -1046,18 +1047,18 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
 
 
 @pytest.mark.parametrize(
-    ("open_pnl", "expected_usd", "expected_direction"),
+    ("exact_open_pnl", "expected_usd", "expected_direction"),
     [
-        (-3.254, "-3.25", "loss"),
+        (Decimal("-3.254"), "-3.25", "loss"),
         # Half-even display cents: 12.405 shows as 12.40, never re-rounded in the browser.
-        (12.405, "12.40", "gain"),
+        (Decimal("12.405"), "12.40", "gain"),
         # A loss smaller than half a cent shows as 0.00, and reads flat, not red.
-        (-0.004, "0.00", "flat"),
-        (0.0, "0.00", "flat"),
+        (Decimal("-0.004"), "0.00", "flat"),
+        (Decimal(0), "0.00", "flat"),
     ],
 )
 def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
-    open_pnl: float, expected_usd: str, expected_direction: str,
+    exact_open_pnl: Decimal, expected_usd: str, expected_direction: str,
 ) -> None:
     projection = _rail_projection(orders=())
     economics = EconomicSnapshot(
@@ -1071,7 +1072,7 @@ def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
         fills_today=0,
         exposure={"SPY": 1.0},
         realized_pnl_today=0.0,
-        open_pnl=open_pnl,
+        exact_open_pnl=exact_open_pnl,
         marks_complete=True,
         mark_observed_at_ms={"SPY": _NOW},
         fee_fidelity="reported",
@@ -1082,10 +1083,48 @@ def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
     adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
 
     assert (adapted.open_pnl, adapted.open_pnl_usd, adapted.open_pnl_direction) == (
-        open_pnl, expected_usd, expected_direction,
+        float(exact_open_pnl), expected_usd, expected_direction,
     )
     wire = adapted.model_dump(mode="json")
     assert (wire["open_pnl_usd"], wire["open_pnl_direction"]) == (expected_usd, expected_direction)
+
+
+def test_bot_page_open_pnl_is_exact_fifo_at_a_whole_cent_boundary(tmp_path: Path) -> None:
+    """#2556, end to end over a real SQLite repository: the bot page's open
+    P&L is rounded from FIFO's exact open valuation, never its float view.
+
+    0.048360857 SPY bought at $100 and marked at $100.3101682007 gain exactly
+    $0.0149999999999999999, which shows as $0.01. The float view is 0.015,
+    which half-even rounds to $0.02.
+    """
+    from app.broker.alpaca.clerk.sqlite.economic_projection import MarketMark, SqliteEconomicProjectionReader
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo = _real_repo(tmp_path)
+    try:
+        entered = accept_enter(
+            repo, account_id=repo.account_id, strategy_instance_id=SID, decision_id="whole-cent",
+            lifecycle_run_id="run-1", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        )
+        _append_slice(repo, entered, execution_id="whole-cent-buy", quantity=0.048360857, price=100.0,
+                      source_event_at_ms=_NOW)
+        custody = SqliteClerkProjectionReader.from_repository(repo)
+        economic = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            projection = custody.bot_snapshot(SID)
+            economics = economic.bot_economic_snapshot(
+                SID, session_window=None, marks={"SPY": MarketMark(price=100.3101682007, observed_at_ms=_NOW)},
+            )
+        finally:
+            custody.close()
+            economic.close()
+        assert projection is not None and economics is not None
+
+        adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
+    finally:
+        repo.close()
+
+    assert (adapted.open_pnl_usd, adapted.open_pnl_direction) == ("0.01", "gain")
 
 
 def test_open_pnl_without_a_price_has_no_words_either() -> None:
@@ -1101,7 +1140,7 @@ def test_open_pnl_words_cannot_drift_from_the_figure() -> None:
 
     with pytest.raises(ValidationError, match="open_pnl_usd"):
         BotPanelView.model_validate(payload)
-    payload.update(open_pnl_fields(4.5))
+    payload.update(open_pnl_fields(Decimal("4.5")))
     assert BotPanelView.model_validate(payload).open_pnl_usd == "4.50"
 
 
@@ -1142,7 +1181,7 @@ def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> N
         fills_today=0,
         exposure={"SPY": 1e-12},
         realized_pnl_today=0.0,
-        open_pnl=0.0,
+        exact_open_pnl=Decimal(0),
         marks_complete=True,
         mark_observed_at_ms={"SPY": _NOW},
         fee_fidelity="reported",
@@ -1193,7 +1232,7 @@ def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
         fills_today=0,
         exposure={},
         realized_pnl_today=0.0,
-        open_pnl=0.0,
+        exact_open_pnl=Decimal(0),
         marks_complete=True,
         mark_observed_at_ms={},
         fee_fidelity="reported",
@@ -1581,7 +1620,6 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert len(panel.rail.stations) == 6
     action_ids = {a.action_id for a in panel.actions}
     assert action_ids == {
-        "retire",
         "archive",
         "stop",
         "flatten_stop",
@@ -1836,7 +1874,7 @@ def test_build_panel_requires_program_build_evidence() -> None:
             exposure={"SPY": 100.0},
             fills_today=0,
             realized_pnl_today=0.0,
-            open_pnl=None,
+            exact_open_pnl=None,
             latest_decision=None,
             last_bar_at_ms=None,
             journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
@@ -1885,33 +1923,12 @@ def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() 
     assert row.effect_operation_id is None
 
 
-def test_a_registration_with_no_runtime_presents_retire_enabled() -> None:
-    """Wiring guard for #1778 S5.
-
-    The retire policy is tested on its own context, so it stays green even
-    if nobody resolves `strategy_runtime_missing`. This pins the panel
-    actually resolving it: a stopped, flat bot whose strategy key the
-    runtime no longer knows must be offered retire.
-    """
-    panel = _panel(
-        _status(running=False, strategy_key="strategy_that_no_longer_exists"),
-        _clerk_status(),
-        [],
-        exposure={},
-    )
-
-    assert _action(panel, "retire").enabled is True
-
-
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
     changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
 
-    # retire is now presented (#1778, S5) but stays disabled for a runnable
-    # strategy -- narrow retire is registration cleanup, not "end this bot".
-    retire = _action(panel, "retire")
-    assert retire.enabled is False
-    assert "cancel_order" not in {action.action_id for action in panel.actions}
+    # Retire is gone (#2578): Clear's archive is the one lifecycle exit.
+    assert {"retire", "cancel_order"}.isdisjoint(action.action_id for action in panel.actions)
     confirmation = _action(panel, "flatten_stop").confirmation
     assert confirmation is not None
     assert confirmation.required_token == "FLATTEN"
@@ -2665,33 +2682,22 @@ def test_primary_action_rejects_a_dangling_reference() -> None:
         BotPanelView.model_validate(payload)
 
 
-def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
-    """Retire must not be stripped on the way to Angular (#1778, S5).
+def test_archive_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
+    """Archive must not be stripped on the way to Angular (#1778, S5).
 
     The adapter replaces the generic policy's actions with SQLite-owned
     recovery actions, preserving only the bot-lifecycle actions it names.
-    Retire is a bot-lifecycle action -- SQLite owns broker recovery, not the
-    roster -- so omitting it from that set silently deletes the action after
-    the guard, the performer, and the lens have all been wired. The feature
-    would be complete everywhere except where an operator can reach it.
+    Archive -- Clear on Home -- is a bot-lifecycle action: SQLite owns broker
+    recovery, not the roster, so omitting it from that set would silently
+    delete the one way off Home after its guard and performer were wired.
     """
     base = _panel(_status(running=False), _clerk_status(), [])
-    retire = PanelAction(
-        action_id="retire",
-        label="Retire",
-        explanation="Clear a registration the runtime can no longer honour.",
-        enabled=True,
-        blockers=[],
-        confirmation=None,
-        revision=1,
-        concurrency_token="generic-token",
-    )
-    base = base.model_copy(update={"actions": [*base.actions, retire]})
     projection = _rail_projection(orders=())
 
     adapted = adapt_sqlite_panel(base, projection)
 
-    assert "retire" in [action.action_id for action in adapted.actions]
+    assert [action.action_id for action in base.actions if action.action_id == "archive"] == ["archive"]
+    assert "archive" in [action.action_id for action in adapted.actions]
 
 
 @pytest.mark.parametrize(

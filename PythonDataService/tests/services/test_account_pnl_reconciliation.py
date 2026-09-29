@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
@@ -28,6 +30,11 @@ def _history(equity: list[float]) -> BrokerPortfolioHistory:
     )
 
 
+def _exact(value: float | None) -> Decimal | None:
+    """A literal float fixture as the exact total C2 carries."""
+    return None if value is None else Decimal(str(value))
+
+
 def _attribution(
     *,
     realized_pnl_total: float,
@@ -47,9 +54,9 @@ def _attribution(
         from_ms=1_700_000_000_000,
         to_ms=1_700_000_001_000,
         attribution_rows=(),
-        realized_pnl_total=realized_pnl_total,
-        start_open_pnl_total=start_open_pnl_total,
-        open_pnl_total=open_pnl_total,
+        exact_realized_pnl_total=_exact(realized_pnl_total),
+        exact_start_open_pnl_total=_exact(start_open_pnl_total),
+        exact_open_pnl_total=_exact(open_pnl_total),
         fee_total=fee_total,
         fee_fidelity=fee_fidelity,
         execution_coverage=execution_coverage,

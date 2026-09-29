@@ -4,7 +4,7 @@
 **Provenance:** Decision ticket [#1911](https://github.com/tim1016/learn-ai/issues/1911). Source: `docs/audits/read-latency-profile-live-2026-08-31.md` §13 — a profiling session ended with 142 stopped, flat bots that `retire` refused, because `STRATEGY_STILL_RUNNABLE` is correct for every one of them.
 **Decision drivers:** #1801 measured read *and* deploy cost as linear in roster rows (~2.9 ms/row live; deploy 6.3× from 53 → 144 rows), and roster rows only ever accumulate. The 2026-08-26 fleet-stress run described its 94 leftover rows as "legacy roster rows retained deliberately as read-scale ballast" — i.e. the baseline was 94 rows before a single bot was deployed that day.
 **Vocabulary:** `CONTEXT.md` § "Registration exit (resolved 2026-08-31)" — the two exits, what proves each, and the inert-terminal test the read path keys on.
-**Related:** #1795 (Retire clears a *provably dead* registration — untouched by this ADR), #1778 (a retired bot holding stranded exposure keeps its authored cure), ADR 0051 (cohort-scoped flatten — the affordance shape a cohort archive should follow), #1776 (reads project the sweep's verdict; no second reconciler), #1801 (the cost curve this reduces).
+**Related:** #1795 (Retire cleared a *provably dead* registration — untouched by this ADR; Retire itself was removed by #2578, see the 2026-09-29 amendment), #1778 (a retired bot holding stranded exposure keeps its authored cure), ADR 0051 (cohort-scoped flatten — the affordance shape a cohort archive should follow), #1776 (reads project the sweep's verdict; no second reconciler), #1801 (the cost curve this reduces).
 
 ## Context
 
@@ -61,3 +61,9 @@ Two refinements, both about how a refusal reads rather than what is refused:
 
 A cleared (archived, inert terminal) bot is no longer returned by the catalog at all, and a cleared Dry Run's sealed simulator is no longer opened by the catalog poll; every record it wrote stays readable by id. `retire` (#1795) is unchanged and no longer offered by the UI.
 
+
+## Amendment 2026-09-29 — Retire is removed; archive is the one exit (#2578)
+
+With Clear the only way off Home (#2567), `retire` (#1795) and everything that existed only for it are deleted: its policy, guard, confirmation and `evaluate_retirement`, the `retire` action id and copy, the `_retire` performer and `bot_runner.retire`, and the symbol-validity chain behind its second proof (the store, the reconciliation sweep's post-pass probe and its roster-symbols wiring). The panel no longer presents `retire`. Its id survives only in `RetiredActionId`, so a bot's receipt ledger written before the removal still reads as history. References to retire in the sections above are the decision's history; the terminal phase, `STRATEGY_INSTANCE_RETIRED` and `retired_at_ms` are archive's and are unchanged.
+
+Retire admitted one registration archive refuses: a bot that is provably dead but whose last run never settled (§1's not-running-but-not-`OFF_DUTY` window). **Owner decision 2026-09-29: remove the dead machinery and add no new settle path.** Such a bot stays on Home, and Clear refuses it `BOT_DUTY_NOT_SETTLED`, until recovery that already exists settles its run — the boot scan a restart runs, or the lease-revival repair (ADR 0050). Pinned by `test_bot_clear.py::test_a_dead_bot_whose_run_never_settled_stays_on_home_until_recovery_settles_it`.

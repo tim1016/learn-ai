@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "rootDir": "../..",
     "resolveJsonModule": true,
-    "types": ["node", "@playwright/test"]
+    "types": ["@playwright/test"]
   },
   "include": ["./**/*.ts"],
   "exclude": []

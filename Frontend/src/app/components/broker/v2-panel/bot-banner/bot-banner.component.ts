@@ -40,9 +40,9 @@ import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action
  * a recovery cure, Stop for a running bot, or none for a stopped one. A
  * stopped bot also offers Deploy again, which starts a new bot and never
  * takes over what this one still holds. The More menu carries the manual
- * order ticket. It never offers Retire or Archive, although the backend still
- * presents them: clearing a finished bot is Home's Finished fold alone (owner
- * decision 2026-09-28).
+ * order ticket. It never offers Archive, although the backend still presents
+ * it: clearing a finished bot is Home's Finished fold alone (owner decision
+ * 2026-09-28).
  *
  * A cleared bot's page, opened from History (#2574), is read-only: it says it
  * was cleared, links back to History, offers no manual order, and keeps

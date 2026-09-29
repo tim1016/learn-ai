@@ -506,7 +506,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
             exposure={},
             fills_today=1,
             realized_pnl_today=0.0,
-            open_pnl=None,
+            exact_open_pnl=None,
             latest_decision=None,
             last_bar_at_ms=None,
             journal_tail_ref=f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/decisions",

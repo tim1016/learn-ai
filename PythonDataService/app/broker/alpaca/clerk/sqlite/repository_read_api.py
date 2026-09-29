@@ -9,6 +9,7 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -33,11 +34,13 @@ from app.broker.alpaca.clerk.sqlite.models import (
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
-    from app.broker.alpaca.clerk.budgets import AccountBudget
+    from app.broker.alpaca.clerk.budgets import AccountBudget, ReleaseAtStop
     from app.broker.alpaca.clerk.sqlite.bot_history import CustodyHistory
     from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -824,18 +827,22 @@ class ClerkSqliteRepositoryReadApi:
             row = self._conn.execute("SELECT * FROM deployment_budgets WHERE strategy_instance_id=?", (strategy_instance_id,)).fetchone()
             return None if row is None else dict(row)
 
-    def fee_attribution(self: ClerkSqliteRepository, *, now_ms: int, from_ms: int | None = None) -> FeeAttribution:
+    def fee_attribution(
+        self: ClerkSqliteRepository, *, now_ms: int, from_ms: int | None = None, require_fresh_evidence: bool = True,
+    ) -> FeeAttribution:
         """The canonical custody fee projection, fresh only while this process's producer is.
 
         ``from_ms`` keeps only the fee days whose ET midnight is at or after it
         (an Activity period); admission always reads the whole lifetime.
+        ``require_fresh_evidence=False`` values the evidence already recorded,
+        for a read that spends nothing (``custody_fee_attribution``).
         """
         from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
         with self._write_lock:
             return custody_fee_attribution(
                 self._conn, now_ms=now_ms, evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
-                from_ms=from_ms,
+                from_ms=from_ms, require_fresh_evidence=require_fresh_evidence,
             )
 
     def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountBudget:
@@ -845,6 +852,36 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             fees = self.fee_attribution(now_ms=self.clock())
             return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
+
+    def release_at_stop(self: ClerkSqliteRepository, *, run_id: str) -> ReleaseAtStop | None:
+        """What stopping ``run_id`` releases now, valued as every money read values it (#2555).
+
+        ``None`` for a run with no budget, which releases nothing; only a
+        budgeted run pays for the lifetime fee projection. A Stop spends
+        nothing, so it values the fee evidence already recorded however old
+        (owner decision 2026-09-29): a restart's recovery stops every running
+        bot before this process has read any. A Stop is never refused for
+        money: when the deployment still cannot be valued
+        (``RELEASE_VALUATION_FAILURES``), this is ``None`` -- the Stop records
+        no amounts and the bot's money shows a labelled estimate -- and why is
+        logged with its traceback.
+        """
+        from app.broker.alpaca.clerk.sqlite import budget_projection
+
+        with self._write_lock:
+            if self._conn.execute("SELECT 1 FROM deployment_budgets WHERE run_id=?", (run_id,)).fetchone() is None:
+                return None
+            try:
+                fees = self.fee_attribution(now_ms=self.clock(), require_fresh_evidence=False)
+                return budget_projection.value_release(self._conn, run_id=run_id, fees=fees)
+            except budget_projection.RELEASE_VALUATION_FAILURES as exc:
+                logger.warning(
+                    "Stop records no release: the deployment's money cannot be valued",
+                    exc_info=True,
+                    extra={"action": "stop_release_unvalued", "account_id": self.account_id, "run_id": run_id,
+                           "reason": str(exc), "error_type": type(exc).__name__},
+                )
+                return None
 
     def account_money(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountMoney:
         """Where the account's money is, from the same read ``account_budget`` makes."""

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from app.research.grid_search.models import CellResult, GridSearchSpec, SearchRo
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.grid import RunSpec, ValueListRange
-from app.research.sweep.identity import CodeIdentity
+from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study import service
 from app.research.walk_forward_study.models import StudySpec
@@ -300,7 +301,7 @@ async def test_progress_counts_the_cells_a_failed_fold_actually_recorded(conn, l
 
 
 async def test_status_presentation_and_resume_refusals(conn, lake: Path, monkeypatch) -> None:
-    clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64)
+    clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64, digest_scheme=DIGEST_SCHEME)
     monkeypatch.setattr(service, "resolve_code_identity", lambda: clean)  # what the receipt records
     monkeypatch.setattr(lifecycle, "resolve_code_identity", lambda: clean)  # what Finish compares against
     study_id = await _launch(lake)
@@ -313,7 +314,7 @@ async def test_status_presentation_and_resume_refusals(conn, lake: Path, monkeyp
     assert lifecycle.presented_status(row, live=True) == "running"
     assert lifecycle.presented_status(row, live=None) == "running"
     assert refusal(live=True) == "the study is still running"
-    identity = CodeIdentity(**row.receipt["code_identity"])
+    identity = CodeIdentity.from_dict(row.receipt["code_identity"])
     assert refusal(live=False, identity=identity) is None
-    moved = CodeIdentity(git_revision=identity.git_revision, tree_state=identity.tree_state, source_digest="0" * 64, environment_digest=identity.environment_digest)
+    moved = replace(identity, source_digest="0" * 64)
     assert "code changed" in (refusal(live=False, identity=moved) or "")

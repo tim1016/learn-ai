@@ -116,12 +116,6 @@ FRIDAY_CLOSE = session_close_ms_utc(date(2026, 9, 4))
 
 def _period_account(repo, monkeypatch, positions: list[BrokerPosition] | None, *, authority_kind: str = "sqlite"):
     """Friday's buy held over the weekend and sold today, one share bought and held today, an outside MSFT order Friday."""
-    from fastapi import FastAPI
-
-    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-    from app.routers import brokers
-    from app.services import account_activity, alpaca_fee_reconciliation, sqlite_account_pnl_attribution
-
     accepted = _accept_day_pnl_enter(repo, decision_id="period-slices")
     _append_day_pnl_slice(repo, accepted, execution_id="buy-friday", side="BUY", quantity=0.125, price=400,
                           occurred_at_ms=YESTERDAY_NOON)
@@ -137,6 +131,17 @@ def _period_account(repo, monkeypatch, positions: list[BrokerPosition] | None, *
     )
     record_fee_evidence(repo, [_activity("fee", "FEE", YESTERDAY_NOON, -0.05), outside],
                         checked_at_ms=NOON, history_complete=True)
+    return _serve_account(repo, monkeypatch, positions, authority_kind=authority_kind)
+
+
+def _serve_account(repo, monkeypatch, positions: list[BrokerPosition] | None, *, authority_kind: str = "sqlite"):
+    """Serve ``repo`` as the active account behind the brokers router, positions from a fake port."""
+    from fastapi import FastAPI
+
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+    from app.routers import brokers
+    from app.services import account_activity, alpaca_fee_reconciliation, sqlite_account_pnl_attribution
+
     facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
     runtime = SimpleNamespace(authority_kind=authority_kind, clerk=facade, startup_failure=None)
     monkeypatch.setattr(alpaca_fee_reconciliation, "active_sqlite_facade", lambda _: facade)
@@ -176,6 +181,28 @@ async def test_today_counts_only_the_move_since_the_last_close(day_pnl_repo, mon
         "open_change_usd": "1.75",  # 1 x (412 - 410) - 0.125 x (402 - 400)
         "net_usd": "2.22",
     }
+
+
+async def test_today_shows_fifos_exact_gains_at_a_whole_cent_boundary(day_pnl_repo, monkeypatch) -> None:
+    """#2556: Today's realized and open-change figures are rounded from FIFO's
+    exact totals, never from their float views.
+
+    0.096721714 SPY bought at $100 today, half sold at $100.3101682007 and
+    half still held at that price: each half gains exactly
+    $0.0149999999999999999, which shows as $0.01. The float view of each is
+    0.015, which half-even rounds to $0.02.
+    """
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="whole-cent")
+    _append_day_pnl_slice(day_pnl_repo, accepted, execution_id="whole-cent-buy", side="BUY", quantity=0.096721714,
+                          price=100, occurred_at_ms=TODAY_OPEN + 1_000)
+    _append_day_pnl_slice(day_pnl_repo, accepted, execution_id="whole-cent-sell", side="SELL", quantity=0.048360857,
+                          price=100.3101682007, occurred_at_ms=TODAY_OPEN + 2_000)
+    app, _ = _serve_account(day_pnl_repo, monkeypatch, [_spy_at(100.3101682007)])
+
+    result = await _get_json(app, "/today-statement")
+
+    # Nothing was held at Friday's close, so today's change is the whole open gain.
+    assert (result["realized_usd"], result["open_change_usd"]) == ("0.01", "0.01")
 
 
 async def test_today_leaves_the_change_unknown_without_the_closing_price(day_pnl_repo, monkeypatch) -> None:

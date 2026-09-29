@@ -529,7 +529,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await expect(pending).resolves.toMatchObject({ action_id: actionId });
   });
 
-  it.each(['resolve_execution_coverage', 'retire'] as const)(
+  it.each(['resolve_execution_coverage', 'archive'] as const)(
     'sends %s on /actions, which a draining lane refuses',
     async (actionId) => {
       const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request(actionId));
