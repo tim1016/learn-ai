@@ -31,7 +31,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.run_gate import one_backtest_in_flight
@@ -211,17 +211,12 @@ def run_spec_against_bars(
         captured: list[OrderEvent] = []
         strategy = _RecordingSpecAlgorithm(spec, fill_events=captured)
         strategy._symbol_name = symbol  # type: ignore[attr-defined]  # match symbol of provided bars
-
-        orig_init = strategy.initialize
-
-        def _patched_init() -> None:
-            orig_init()
-            strategy.set_start_date(*start_date)
-            strategy.set_end_date(*end_date)
-            if starting_cash is not None:
-                strategy.set_cash(float(starting_cash))
-
-        strategy.initialize = _patched_init  # type: ignore[method-assign]
+        pin_strategy_window(
+            strategy,
+            date(*start_date),
+            date(*end_date),
+            cash=None if starting_cash is None else float(starting_cash),
+        )
 
         reader = InMemoryDataReader(bars=bars)
         engine = BacktestEngine(

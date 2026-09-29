@@ -1503,6 +1503,44 @@ async def test_reconcile_account_reports_stale_and_fails_closed_on_broker_read_f
     )
 
 
+class _MalformedSnapshotClient:
+    """An Alpaca client seam whose open orders or positions carry an unmappable row."""
+
+    def __init__(self, malformed: Literal["orders", "positions"]) -> None:
+        self._malformed = malformed
+
+    async def list_orders(self, **_query: object) -> list[dict[str, str]]:
+        return [{"symbol": "SPY"}] if self._malformed == "orders" else []
+
+    async def list_positions(self) -> list[dict[str, str]]:
+        return [{"symbol": "SPY"}] if self._malformed == "positions" else []
+
+
+@pytest.mark.parametrize("malformed", ["orders", "positions"])
+async def test_reconcile_holds_the_account_stale_on_a_malformed_broker_snapshot(
+    repo: ClerkSqliteRepository,
+    malformed: Literal["orders", "positions"],
+) -> None:
+    """A raw adapter error once skipped the stale hold entirely (#2627).
+
+    It escaped the reconciler's ``BrokerError`` handling into the sweep's
+    catch-all, so new exposure was not held and exit recovery not paused.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    read = AlpacaBroker(client=_MalformedSnapshotClient(malformed))  # type: ignore[arg-type]
+
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+
+    assert result.verdict == "stale"
+    assert result.stale_cause is not None and "data this app could not read" in result.stale_cause.message
+    assert repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code="BROKER_SNAPSHOT_STALE",
+        strategy_instance_id=None,
+    )
+
+
 async def test_reconcile_fails_closed_when_open_order_snapshot_hits_limit(
     repo: ClerkSqliteRepository,
 ) -> None:

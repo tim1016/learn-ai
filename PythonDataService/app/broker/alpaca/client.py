@@ -49,7 +49,7 @@ from app.broker.alpaca.config import (
     AlpacaSettings,
     alpaca_configuration_error_detail,
 )
-from app.broker.alpaca.errors import map_api_error, status_of
+from app.broker.alpaca.errors import AlpacaRequest, map_api_error, status_of
 from app.broker.alpaca.fault_injection import (
     ArmedFault,
     WriteFaultKind,
@@ -255,7 +255,7 @@ class AlpacaTradingClient:
         return self._raw_client
 
     async def _call(
-        self, fn: Callable[[Any], Any], *, describe: str, is_order_mutation: bool = False
+        self, fn: Callable[[Any], Any], *, describe: str, request: AlpacaRequest = AlpacaRequest.READ
     ) -> Any:
         if self._thread_limiter is None:
             # AnyIO 3 requires an active async backend when constructing a
@@ -293,9 +293,7 @@ class AlpacaTradingClient:
                 detail=f"The broker did not respond within {self._timeout_s:g} seconds.",
             ) from exc
         except APIError as exc:
-            raise map_api_error(
-                exc, broker=self.broker_id, is_order_mutation=is_order_mutation
-            ) from exc
+            raise map_api_error(exc, broker=self.broker_id, request=request) from exc
         except RequestException as exc:
             raise BrokerUnreachable(
                 f"Could not reach Alpaca while fetching {describe}.",
@@ -444,12 +442,15 @@ class AlpacaTradingClient:
         describe: str,
         throttle_context: str,
         identifier: str,
+        request: AlpacaRequest,
     ) -> Any:
         """Run a write call with a bounded rate-limit retry (429 only).
 
         Every other error (auth, invalid, conflict, unavailable, timeout) flows
         through :meth:`_call` unchanged — only a ``BrokerRateLimited`` is
         retried, because only a throttle guarantees the request did not land.
+        ``request`` names the order request (submit or cancel) so its answer
+        maps to the right contract error.
 
         ``identifier`` (the submit ``client_order_id`` or the cancel
         ``order_id``) scopes the dev-only fault-injection seam; it is otherwise
@@ -461,10 +462,10 @@ class AlpacaTradingClient:
             try:
                 fault = self._take_injected_write_fault(identifier)
                 if fault is not None and fault.kind != WriteFaultKind.POST_SDK_TIMEOUT:
-                    raise craft_write_error(fault.kind)
-                result = await self._call(fn, describe=describe, is_order_mutation=True)
+                    raise craft_write_error(fault.kind, request=request)
+                result = await self._call(fn, describe=describe, request=request)
                 if fault is not None:
-                    raise craft_write_error(fault.kind)
+                    raise craft_write_error(fault.kind, request=request)
                 return result
             except BrokerRateLimited as exc:
                 if attempt >= _MAX_RATE_LIMIT_RETRIES:
@@ -512,6 +513,7 @@ class AlpacaTradingClient:
                 describe="order submission",
                 throttle_context="order",
                 identifier=client_order_id,
+                request=AlpacaRequest.ORDER_SUBMIT,
             )
         except BrokerUnavailable:
             # The synchronous SDK worker may continue after AnyIO returns a
@@ -538,6 +540,7 @@ class AlpacaTradingClient:
             describe="order cancellation",
             throttle_context="cancel",
             identifier=order_id,
+            request=AlpacaRequest.ORDER_CANCEL,
         )
 
     async def get_order_by_client_order_id(

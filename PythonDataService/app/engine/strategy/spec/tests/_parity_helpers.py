@@ -34,7 +34,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade, Strategy
@@ -199,22 +199,11 @@ def run_strategy(
 ) -> list[LoggedTrade]:
     """Run a Strategy through BacktestEngine and return its trade_log.
 
-    Wraps ``initialize`` to pin the strategy's date window to the synthetic
-    data range — both hand-coded references and ``SpecAlgorithm`` use a
-    SPY default window in their own initialize() that doesn't match
-    synthetic data dates.
+    Pins the strategy's date window to the synthetic data range — both
+    hand-coded references and ``SpecAlgorithm`` use a SPY default window in
+    their own initialize() that doesn't match synthetic data dates.
     """
-    # Patch initialize() to also override dates after the strategy's own
-    # initialize() sets its defaults. Same pattern as the existing
-    # test_sma_crossover_parity script.
-    orig_init = strategy.initialize
-
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(*start_date)
-        strategy.set_end_date(*end_date)
-
-    strategy.initialize = _patched_init  # type: ignore[assignment]
+    pin_strategy_window(strategy, date(*start_date), date(*end_date))
 
     reader = FakeDataReader(bars=bars)
     engine = BacktestEngine(

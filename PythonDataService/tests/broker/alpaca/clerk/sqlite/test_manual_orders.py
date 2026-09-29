@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from alpaca.common.exceptions import APIError
 
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -22,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderCancelResultFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
+    OrderSubmitFailedFacts,
     UncertaintyRaisedFacts,
     leg_instruction_payload,
     validate_manual_order_accepted_facts,
@@ -64,8 +68,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FAILED_ENTER_FILLED_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
+from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
@@ -86,8 +91,10 @@ class FakeTrade:
         mismatched_client_order_id: bool = False,
         cancel_unavailable: bool = False,
         cancel_error: BrokerError | None = None,
+        refusal: BrokerError | None = None,
     ) -> None:
         self.repo = repo
+        self.refusal = refusal
         self.unavailable = unavailable
         self.cancel_unavailable = cancel_unavailable
         self.cancel_error = cancel_error
@@ -106,6 +113,8 @@ class FakeTrade:
         )
         if self.unavailable:
             raise BrokerUnavailable("response lost", broker="alpaca")
+        if self.refusal is not None:
+            raise self.refusal
         if self.unexpected:
             raise RuntimeError("malformed broker response")
         order = BrokerOrder(
@@ -703,6 +712,67 @@ async def test_manual_submit_mismatched_client_order_id_is_durable_uncertain(
     assert submitted.command.state == "unknown"
     assert submitted.ticket.state == "PAUSED_UNKNOWN"
     assert submitted.leg.state == "UNKNOWN"
+
+
+def _alpaca_order_refusal(message: str) -> BrokerError:
+    """Alpaca's 403 on ``POST /v2/orders``, mapped the way the broker port raises it."""
+    body = json.dumps({"code": 40310000, "message": message})
+    response = SimpleNamespace(status_code=403, headers={})
+    return map_api_error(
+        APIError(body, http_error=SimpleNamespace(response=response, request=None)),
+        broker="alpaca",
+        request=AlpacaRequest.ORDER_SUBMIT,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_manual_order_alpaca_refuses_fails_definitively_and_keeps_alpacas_code(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2621: a 403 on the order is Alpaca's definitive refusal, never an unknown outcome."""
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=FakeTrade(repo=repo, refusal=_alpaca_order_refusal("insufficient buying power")),
+    )
+
+    assert submitted.command.state == "failed"
+    assert submitted.leg.state == "FAILED"
+    assert repo.uncertain_orders() == []
+    assert submitted.leg.order_ref is not None
+    [failed] = [row for row in repo.transitions_for_order(submitted.leg.order_ref)
+                if row["transition_kind"] == "ORDER_SUBMIT_FAILED"]
+    facts = OrderSubmitFailedFacts.from_facts_json(failed["facts_json"])
+    assert facts.broker_error_code == 40310000
+    assert facts.why == "Alpaca refused the order: insufficient buying power"
+    assert facts.opposite_open_order_refs == []
+
+
+@pytest.mark.asyncio
+async def test_a_working_manual_order_is_an_open_order_on_its_symbol_for_the_other_side(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Alpaca's wash-trade protection spans the account, so manual tickets count too (#2621, #2622)."""
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(2),
+        trade=FakeTrade(repo=repo),
+    )
+
+    [working] = repo.open_opposite_side_orders(symbol="spy", side=OrderSide.SELL)
+    assert (working.order_ref, working.role, working.symbol, working.side, working.quantity) == (
+        submitted.leg.order_ref, "MANUAL", "SPY", "buy", 2.0,
+    )
+    assert repo.open_opposite_side_orders(symbol="SPY", side=OrderSide.BUY) == ()
+    assert repo.open_opposite_side_orders(symbol="QQQ", side=OrderSide.SELL) == ()
 
 
 @pytest.mark.asyncio

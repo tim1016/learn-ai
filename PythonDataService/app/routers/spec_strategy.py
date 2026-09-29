@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
-from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
@@ -288,15 +288,7 @@ def run_spec_backtest(
         ) from exc
 
     # Override the strategy's default date window with the request.
-    orig_init = strategy.initialize
-
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(start_d.year, start_d.month, start_d.day)
-        strategy.set_end_date(end_d.year, end_d.month, end_d.day)
-        strategy.set_cash(request.initial_cash)
-
-    strategy.initialize = _patched_init  # type: ignore[assignment]
+    pin_strategy_window(strategy, start_d, end_d, cash=request.initial_cash)
 
     engine = BacktestEngine(
         data_source=data_source,

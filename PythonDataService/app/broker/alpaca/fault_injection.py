@@ -41,7 +41,7 @@ from alpaca.common.exceptions import APIError
 
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnreachable
 from app.config import settings
 
@@ -260,10 +260,11 @@ def _api_error(status: int, message: str, *, headers: dict[str, str] | None = No
     return APIError(body, http_error=http_error)
 
 
-def craft_write_error(kind: str) -> BrokerError:
+def craft_write_error(kind: str, *, request: AlpacaRequest) -> BrokerError:
     """Translate a write-fault kind into the contract error the real path yields.
 
-    Reject / conflict / throttle route through the real ``map_api_error`` so the
+    Reject / conflict / throttle route through the real ``map_api_error`` for
+    the order ``request`` (submit or cancel) the fault was armed on, so the
     contract error is byte-identical to a genuine vendor failure (and the Clerk
     classifies it identically). Timeout returns the same ``BrokerUnreachable``
     the real ``anyio.fail_after`` path produces, so the uncertain-submission
@@ -273,19 +274,19 @@ def craft_write_error(kind: str) -> BrokerError:
         return map_api_error(
             _api_error(422, "injected order rejection"),
             broker=BROKER_ID,
-            is_order_mutation=True,
+            request=request,
         )
     if kind == WriteFaultKind.CONFLICT_409:
         return map_api_error(
             _api_error(409, "injected order conflict"),
             broker=BROKER_ID,
-            is_order_mutation=True,
+            request=request,
         )
     if kind == WriteFaultKind.THROTTLE_429:
         return map_api_error(
             _api_error(429, "injected rate limit", headers={"Retry-After": "0"}),
             broker=BROKER_ID,
-            is_order_mutation=True,
+            request=request,
         )
     if kind in (WriteFaultKind.TIMEOUT, WriteFaultKind.POST_SDK_TIMEOUT):
         return BrokerUnreachable(

@@ -191,8 +191,13 @@ def from_alpaca_account(
     configuration truth, never inferred from the payload (ADR 0059 D1). The
     account-number shape is a refusal input only: a paper-shaped number under
     ``live``, or a live-shaped number under ``paper``, is a disagreement.
+
+    A number that is not a non-blank string is no account at all, in any
+    mode: ``str(None)`` once became live account ``"None"`` (#2627).
     """
-    account_number = str(payload["account_number"])
+    account_number = payload["account_number"]
+    if not isinstance(account_number, str) or not account_number.strip():
+        raise ValueError(f"Alpaca account_number must be a non-blank string, got {account_number!r}")
     looks_paper = account_number.startswith(_PAPER_ACCOUNT_NUMBER_PREFIX)
     if looks_paper != (account_mode == "paper"):
         raise BrokerAccountModeDisagreement(

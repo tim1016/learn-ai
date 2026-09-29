@@ -44,13 +44,13 @@ committed in the repo.
 
 | Fact | Evidence |
 |---|---|
-| Every order carries `learn-ai/{bot}/v1:{intent}` as Alpaca's `client_order_id`, minted at ENTER acceptance and on the EXIT's reducing order. | [code] `engine/live/order_identity.py:105,135`; `broker/alpaca/clerk/sqlite/enter.py:253-254`; `exit_resolution.py:1440` |
+| Every order carries `learn-ai/{bot}/v1:{intent}` as Alpaca's `client_order_id`, minted at ENTER acceptance and on the EXIT's reducing order. | [code] `engine/live/order_identity.py:105,135`; `broker/alpaca/clerk/sqlite/enter.py:254-255`; `exit_resolution.py:1445` |
 | A fill is credited to the custody subject of the order's effect; positions are keyed `(subject, symbol)`. | [code] `clerk/sqlite/folds.py:937-965`; `clerk/sqlite/schema.py:336` |
 | Two bots on SPY hold 3 and 5 separately; the account total is 8. | [test] `test_same_symbol_positions_stay_per_bot_while_reconciliation_sees_one_netted_position` |
 | Reconciliation compares the broker's **net** quantity per symbol with the **sum** over subjects. A mismatch is `position_drift` on the symbol and names no bot. | [code] `clerk/sqlite/reconcile.py:154-172,220-232,275-289`; [test] same test (broker 5 vs attributed 8) |
-| A bot's EXIT quantity is its own attributed position, never the broker's. It may only target its own entry order. | [code] `exit_resolution.py:312`; `idempotency.py:104`; [test] `test_each_bots_exit_sells_only_its_own_attributed_shares` (sells 3 of the broker's 8) |
+| A bot's EXIT quantity is its own attributed position, never the broker's. It may only target its own entry order. | [code] `exit_resolution.py:314`; `idempotency.py:104`; [test] `test_each_bots_exit_sells_only_its_own_attributed_shares` (sells 3 of the broker's 8) |
 | An EXIT cancels that bot's own working entries first and re-reads the proven remainder, so partial fills are per bot. A bot cannot cancel another bot's order. | existing tests `test_exit.py::test_resolve_exit_cancels_the_working_entry_before_computing_quantity`, `::test_partial_fill_during_cancel_uses_only_the_clerk_proven_remaining_quantity`, `::test_accept_exit_rejects_an_entry_order_belonging_to_a_different_bot` |
-| Budgets and bot results run FIFO over that bot's fills only. | [code] `clerk/sqlite/budget_projection.py:153,289,403`; existing test `test_budget_claims.py::test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_stop` |
+| Budgets and bot results run FIFO over that bot's fills only. | [code] `clerk/sqlite/budget_projection.py:155,291,405`; existing test `test_budget_claims.py::test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_stop` |
 | The account-wide P&L attribution runs **one** FIFO over every bot's fills. One bot's sale can close the other bot's older lot. | [code] `clerk/sqlite/economic_projection.py:555-620`, `clerk/fifo_pnl.py:238` |
 
 **The two FIFO views disagree on realized P&L; the totals agree.**
@@ -153,7 +153,7 @@ The rejection table on that page gives the conditions:
 ### When two bots meet it
 
 Under bot budgets every bot is long-only: an open short lot refuses the account's
-budgets [code] `budget_projection.py:405`. So a conflict is always one bot
+budgets [code] `budget_projection.py:407`. So a conflict is always one bot
 entering (buy) while another exits (sell). Same-side orders never conflict.
 
 - **Regular session.** Legs are market orders, open until they fill. The one
@@ -174,19 +174,26 @@ entering (buy) while another exits (sell). Same-side orders never conflict.
 
 ### What the Clerk sees and does today
 
-**The error.** `map_api_error` turns every 401/403 into `BrokerAuthError`, worded
-"Alpaca rejected our credentials: potential wash trade detected. use complex
-orders" with detail "HTTP 403". Whatever code Alpaca's body carries is dropped.
+**The error.** When this note was written, `map_api_error` turned every 401/403
+into `BrokerAuthError`, worded "Alpaca rejected our credentials: potential wash
+trade detected. use complex orders", and dropped Alpaca's code. #2621 fixed it:
+a 403 on an order submission is `BrokerOrderNotPermitted` ("Alpaca refused the
+order: …"); a 403 on a cancel or a read stays `BrokerAuthError`, and a 409 is an
+order conflict. Every mapped error keeps Alpaca's code in `BrokerError.code`,
+and the refusal's facts carry it as `broker_error_code`. For a not-permitted
+refusal only, the facts record `opposite_open_order_refs` (the Clerk's own open
+orders on the other side of the symbol, `[]` when none), and the record names
+another open order only when that list is not empty.
 
-- [code] `broker/alpaca/errors.py:77-82`
-- [test] `test_a_wash_trade_refusal_reads_today_as_a_credentials_failure`
-- [xfail] `test_a_wash_trade_refusal_is_an_order_rejection_not_a_credentials_failure`
+- [code] `broker/alpaca/errors.py` (`map_api_error`); `clerk/sqlite/order_evidence.py` (`broker_refusal`)
+- [test] `test_a_wash_trade_refusal_is_an_order_rejection_that_keeps_alpacas_code`
+- [test] `test_a_refusal_with_no_opposite_order_open_never_names_another_order`
 
 **A refused ENTER** folds `ORDER_SUBMIT_FAILED` (effect and command `failed`).
-The facts keep Alpaca's message but not its code, and the bot may enter again.
-The decision itself is discarded.
+The facts keep Alpaca's message and, since #2621, its code, and the bot may
+enter again. The decision itself is discarded.
 
-- [code] `clerk/sqlite/enter.py:411-424`
+- [code] `clerk/sqlite/enter.py:401-416`
 - [test] `test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again`
 
 **Its cash claim was never released. This was a defect, and not only for two
@@ -202,7 +209,7 @@ The findings below describe the code before that change.
   claims $200.01 (2 × $100 plus a $0.01 fee provision).
 - **Account money.** The account's `available` is short by that amount.
 - **Home.** The bot stays in `bots_holding_money`, so it is never Finished.
-  [code] `clerk/sqlite/budget_projection.py:231-257`
+  [code] `clerk/sqlite/budget_projection.py:233-259`
 - **The pre-broker refusal leaks too.** A post-acceptance refusal
   (`ENTER_SUBMISSION_REFUSED`, the market-liveness re-check) uses the same fold
   and leaks the same way.
@@ -210,7 +217,7 @@ The findings below describe the code before that change.
   (a strict xfail until #2553 landed)
 
 **A refused EXIT** folds `EXIT_NOT_FLAT` and the bot keeps its shares
-[code] `exit_resolution.py:1629-1639,1680-1725`.
+[code] `exit_resolution.py:1641-1651,1692-1740`.
 
 The stuck-EXIT watchdog then re-sends it on its own. All paths below are in
 [code] `clerk/sqlite/exit_watchdog.py` unless stated.
@@ -419,7 +426,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-21 passed, 1 xfailed
+37 passed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -428,10 +435,9 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
   submitted earlier); the budget harness from `test_budget_commands`;
   `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
   from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
-- **The xfail.** It is `strict=True` and names its issue, #2621, for the error
-  mapping. Run with `--runxfail`, it fails on the asserted defect:
-  `BrokerAuthError` is not `BrokerOrderRejected`. The two #2553 cash-claim
-  cases were strict xfails until #2553 landed and now pass.
+- **The former xfails.** The file carried strict xfails for #2621 (the error
+  mapping) and the two #2553 cash-claim cases. Each passed once its issue
+  landed, and its mark was removed.
 
 ## Sources
 

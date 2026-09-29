@@ -243,6 +243,59 @@ async def test_background_producer_uses_completion_proof_without_ui(day_pnl_repo
     assert day_pnl_repo.fee_attribution(now_ms=NOON).known
 
 
+async def test_a_malformed_activity_row_refuses_one_tick_instead_of_ending_the_producer(
+    day_pnl_repo, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One malformed Alpaca row once ended ``clerk-fee-evidence`` for the process's life (#2627).
+
+    The adapter's raw ``KeyError`` escaped the producer's refusal list, so the
+    task died and fee coverage aged out with nothing retrying it.
+    """
+    import asyncio
+    import logging
+
+    from app.broker.alpaca.broker import AlpacaBroker
+    from app.broker.alpaca.clerk.sqlite import fee_evidence_sync
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+    from app.broker.contract.errors import BrokerEvidenceUnavailable
+
+    class _Client:
+        """First read: a row with no ``activity_type``; then a clean, complete history."""
+
+        def __init__(self) -> None:
+            self.reads = 0
+            self.retried = asyncio.Event()
+
+        async def list_activities(self, *, limit: int, page_token: str | None = None) -> list[dict]:
+            self.reads += 1
+            if self.reads == 1:
+                return [{"id": "fee-1", "date": "2026-07-21", "net_amount": "-0.01"}]
+            if self.reads == 2:
+                return []
+            # The producer survived into a later tick; park it until stop().
+            self.retried.set()
+            await asyncio.Event().wait()
+            return []
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(fee_evidence_sync.asyncio, "sleep", lambda _seconds: real_sleep(0))
+    _seed(day_pnl_repo)
+    client = _Client()
+    sync = FeeEvidenceSync(repo=day_pnl_repo, read=AlpacaBroker(client=client))  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING, logger=fee_evidence_sync.__name__):
+        sync.start()
+        try:
+            await asyncio.wait_for(client.retried.wait(), timeout=5)
+        finally:
+            await sync.stop()
+
+    refused = [record for record in caplog.records if record.name == fee_evidence_sync.__name__]
+    assert refused and refused[0].exc_info is not None
+    assert isinstance(refused[0].exc_info[1], BrokerEvidenceUnavailable)
+    assert day_pnl_repo.fee_attribution(now_ms=NOON).known
+
+
 class _PagedHistory:
     """Newest-first provider history read like the adapter: 3 pages of 100."""
 

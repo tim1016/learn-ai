@@ -143,7 +143,7 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
 
     from decimal import Decimal as _D
 
-    from app.engine.engine import BacktestEngine
+    from app.engine.engine import BacktestEngine, pin_strategy_window
     from app.engine.execution.fill_model import FillModel
     from app.engine.execution.order import Direction, FillMode
     from app.research.ml.loader import PredictionSet
@@ -156,18 +156,9 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
     spec = _aapl_spec()
     strategy = SpecAlgorithm(spec, prediction_set=prediction_set)
 
-    # Monkey-patch initialize to override start/end dates and cash after
-    # the default initialize logic runs (registers consolidator, builds
-    # indicators etc). Same pattern the runner uses internally.
-    orig_init = strategy.initialize
-
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(2026, 2, 9)
-        strategy.set_end_date(2026, 2, 12)
-        strategy.set_cash(float(_INITIAL_CASH))
-
-    strategy.initialize = _patched_init  # type: ignore[method-assign]
+    # Override start/end dates and cash after the default initialize logic
+    # runs (registers consolidator, builds indicators etc), as the runner does.
+    pin_strategy_window(strategy, date(2026, 2, 9), date(2026, 2, 12), cash=float(_INITIAL_CASH))
 
     data_source = FixtureDataReader(csv_path=_PRICES, symbol="AAPL")
     engine = BacktestEngine(

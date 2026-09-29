@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca import fault_injection as fi
+from app.broker.alpaca.errors import AlpacaRequest
 from app.broker.contract.errors import (
     BrokerOrderRejected,
     BrokerRateLimited,
@@ -142,14 +143,14 @@ def test_write_fault_none_target_matches_any(permit: None) -> None:
 
 
 def test_reject_422_crafts_request_invalid() -> None:
-    error = fi.craft_write_error(fi.WriteFaultKind.REJECT_422)
+    error = fi.craft_write_error(fi.WriteFaultKind.REJECT_422, request=AlpacaRequest.ORDER_SUBMIT)
 
     assert isinstance(error, BrokerRequestInvalid)
     assert error.http_status == 400
 
 
 def test_conflict_409_crafts_definitive_order_rejected() -> None:
-    error = fi.craft_write_error(fi.WriteFaultKind.CONFLICT_409)
+    error = fi.craft_write_error(fi.WriteFaultKind.CONFLICT_409, request=AlpacaRequest.ORDER_SUBMIT)
 
     assert isinstance(error, BrokerOrderRejected)
     assert not isinstance(error, BrokerUnavailable)
@@ -157,21 +158,21 @@ def test_conflict_409_crafts_definitive_order_rejected() -> None:
 
 
 def test_throttle_429_crafts_rate_limited_with_zero_retry_after() -> None:
-    error = fi.craft_write_error(fi.WriteFaultKind.THROTTLE_429)
+    error = fi.craft_write_error(fi.WriteFaultKind.THROTTLE_429, request=AlpacaRequest.ORDER_SUBMIT)
 
     assert isinstance(error, BrokerRateLimited)
     assert error.retry_after_ms == 0
 
 
 def test_timeout_crafts_broker_unavailable_timed_out() -> None:
-    error = fi.craft_write_error(fi.WriteFaultKind.TIMEOUT)
+    error = fi.craft_write_error(fi.WriteFaultKind.TIMEOUT, request=AlpacaRequest.ORDER_SUBMIT)
 
     assert isinstance(error, BrokerUnavailable)
     assert "timed out" in error.message
 
 
 def test_post_sdk_timeout_crafts_landed_response_loss() -> None:
-    error = fi.craft_write_error(fi.WriteFaultKind.POST_SDK_TIMEOUT)
+    error = fi.craft_write_error(fi.WriteFaultKind.POST_SDK_TIMEOUT, request=AlpacaRequest.ORDER_SUBMIT)
 
     assert isinstance(error, BrokerUnavailable)
     assert "landed" in (error.detail or "")
