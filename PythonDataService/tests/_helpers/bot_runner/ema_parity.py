@@ -12,29 +12,27 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar
 
 _EMA_FIRST_EXIT_MS = 1_770_393_600_000
+_LEAN_CELLS = Path(__file__).resolve().parents[2] / "fixtures/golden/cross-engine-studies/cells"
 
 
-def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
-    """Load the retained LEAN input stream through its first EMA round-trip."""
-    fixture = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures/golden/cross-engine-studies/cells"
-        / "SPY_W3mo_2026-02-02_to_2026-04-30/lean/observations.csv"
-    )
+def lean_cell_bars(cell: str, *, symbol: str, stop_after_ms: int) -> list[MarketDataBar]:
+    """The retained LEAN input stream of one cross-engine cell, through the first bar after ``stop_after_ms``."""
     bars: list[MarketDataBar] = []
-    with fixture.open(encoding="utf-8", newline="") as handle:
+    with (_LEAN_CELLS / cell / "lean/observations.csv").open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
             end_ms = int(row["ms_utc"])
             bars.append(
                 MarketDataBar(
-                    symbol="SPY",
+                    symbol=symbol,
                     start_ms=end_ms - 60_000,
                     end_ms=end_ms,
                     open=Decimal(row["open"]),
@@ -47,9 +45,32 @@ def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
                     session_phase="RTH",
                 )
             )
-            if end_ms > _EMA_FIRST_EXIT_MS:
+            if end_ms > stop_after_ms:
                 break
     return bars
+
+
+def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
+    """Load the retained LEAN input stream through its first EMA round-trip."""
+    return lean_cell_bars(
+        "SPY_W3mo_2026-02-02_to_2026-04-30", symbol="SPY", stop_after_ms=_EMA_FIRST_EXIT_MS
+    )
+
+
+EMA_LAST_BAR_ENTER_DAY = date(2026, 2, 3)
+"""The day QQQ's first EMA ENTER is decided on the session's last bucket (15:45-16:00).
+
+LEAN's own run submitted that market order at the 16:00 close and filled it at
+the next open -- an overnight entry nobody decided (#2596)."""
+
+
+def ema_bars_through_a_last_bar_enter() -> list[MarketDataBar]:
+    """QQQ's retained LEAN input stream through its first EMA ENTER, decided at the close."""
+    return lean_cell_bars(
+        "QQQ_W3mo_2026-02-02_to_2026-04-30",
+        symbol="QQQ",
+        stop_after_ms=session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY) - 1,
+    )
 
 
 def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:

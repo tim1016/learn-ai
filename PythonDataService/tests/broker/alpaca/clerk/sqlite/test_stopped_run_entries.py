@@ -17,6 +17,8 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
@@ -33,6 +35,9 @@ from app.broker.contract.models import (
 )
 from app.services.bot_carryover import prove_stop_outcome, read_checkpoint
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _Broker, _order
+
+# #2596: these ENTERs run on the default clock; keep it inside a session.
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
 
 
 class _OpenOrdersBroker(_Broker):

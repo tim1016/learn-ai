@@ -39,6 +39,9 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
+# #2596: these ENTERs run on the default clock; keep it inside a session.
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
+
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
@@ -133,18 +136,20 @@ async def _enter(
     live_envelope: LiveEnvelopeGate | None = None,
     send_delay_ms: int = 0,
     order_transitions: list[dict] | None = None,
+    clock: Clock | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt.
 
     ``send_delay_ms`` puts the Clerk's clock that long after the decision bar's
-    close, as ``_exit``'s does. ``order_transitions``, when given, collects the
-    custody transitions of the ENTER's order before the repository closes.
+    close, as ``_exit``'s does; ``clock`` replaces that clock outright.
+    ``order_transitions``, when given, collects the custody transitions of the
+    ENTER's order before the repository closes.
     """
     decision_clock = _decision_clock(retained_source_bar)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID,
         artifacts_root=tmp_path,
-        clock=lambda: decision_clock() + send_delay_ms,
+        clock=clock if clock is not None else lambda: decision_clock() + send_delay_ms,
     )
     trade = _FakeTradePort()
     facade = SqliteAlpacaClerkFacade(
@@ -559,22 +564,16 @@ async def test_an_extended_decision_without_a_retained_bar_is_rejected_before_br
 
 
 async def test_a_regular_hours_decision_keeps_the_market_day_leg(tmp_path: Path) -> None:
-    """The leg shape ignores the bar's session; the runtime does not re-check it.
-
-    The RTH filter never yields an 18:30 bar in production, and a clock answer
-    that names its close stops this ENTER at the entry gate (#2596, below);
-    this double's always-open clock names none.
-    """
+    """A regular-hours ENTER is the market DAY leg whatever the declared window."""
     trade, _state, _explanation = await _enter(
         tmp_path,
         use_rth=True,
         policy=_EXTENDED_POLICY,
-        retained_source_bar=_bar(18, 30, phase="POST"),
+        retained_source_bar=_bar(10, 0, phase="RTH"),
     )
 
     (leg,) = trade.submitted_legs
-    assert leg.order_type is OrderType.MARKET
-    assert leg.extended_hours is False
+    assert (leg.order_type, leg.time_in_force, leg.extended_hours) == (OrderType.MARKET, TimeInForce.DAY, False)
 
 
 async def test_a_regular_only_authority_refuses_an_extended_decision(tmp_path: Path) -> None:
@@ -858,6 +857,100 @@ async def test_an_extended_enter_on_the_last_regular_bar_still_goes_out_as_an_af
     assert state is not EffectOperationState.REJECTED
     (leg,) = trade.submitted_legs
     assert (leg.order_type, leg.time_in_force, leg.extended_hours) == (OrderType.LIMIT, TimeInForce.DAY, True)
+
+
+_MARKET_ENTRY_AFTER_THE_CLOSE = (
+    "The regular session has closed, or closes within seconds. A market order sent now "
+    "could reach the broker after the close and wait there until the next open."
+)
+
+
+@pytest.mark.parametrize("day", [_DAY, _EARLY_CLOSE_DAY], ids=["regular-close", "early-close"])
+async def test_a_last_bar_market_enter_on_a_clerk_clock_running_behind_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, day: date,
+) -> None:
+    """#2596: the Clerk holds a market ENTER to the rule a reducing market leg obeys.
+
+    The last bar's decision lands after the close, but this Clerk's clock
+    trails real time and reads it 1.2 s before the close. There the broker's
+    last answer is fresh and has not reached the close it named, so the
+    liveness recheck admits the ENTER. The order could still reach Alpaca
+    after the close, which would hold it for the next open: the canonical
+    calendar, judged a few seconds ahead, refuses it.
+    """
+    close_ms = session_close_ms_utc(day)
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", clock_read_before_the_close(close_ms))
+
+    trade, state, explanation = await _enter(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_last_bar(day),
+        clock=lambda: close_ms - 1_200,
+    )
+
+    assert trade.submitted_legs == []
+    assert state is EffectOperationState.REJECTED
+    assert explanation == f"MARKET_CLOSED: {_MARKET_ENTRY_AFTER_THE_CLOSE}"
+
+
+async def test_a_market_enter_checked_before_broker_contact_a_tenth_of_a_second_before_the_close_sends_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2596: the check just before broker contact asks the calendar again.
+
+    The Clerk accepts the ENTER ten seconds before the close; it reaches the
+    point of broker contact at 15:59:59.9, where the broker's answer still
+    reads open and the order could not reach Alpaca before the close.
+    """
+    close_ms = session_close_ms_utc(_DAY)
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", clock_read_before_the_close(close_ms))
+    now_ms = close_ms - 10_000
+    accept_enter = clerk_runtime.accept_enter
+
+    def accepted_then_delayed(*args: object, **kwargs: object) -> object:
+        nonlocal now_ms
+        accepted = accept_enter(*args, **kwargs)
+        now_ms = close_ms - 100
+        return accepted
+
+    monkeypatch.setattr(clerk_runtime, "accept_enter", accepted_then_delayed)
+    transitions: list[dict] = []
+
+    trade, state, _explanation = await _enter(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(15, 59, phase="RTH"),
+        order_transitions=transitions,
+        clock=lambda: now_ms,
+    )
+
+    assert trade.submitted_legs == []
+    assert state is EffectOperationState.REJECTED
+    refused = transitions[-1]
+    assert refused["transition_kind"] == "ENTER_SUBMISSION_REFUSED"
+    assert json.loads(refused["facts_json"])["why"] == _MARKET_ENTRY_AFTER_THE_CLOSE
+
+
+async def test_a_market_enter_with_time_to_reach_the_broker_before_the_close_still_goes_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Six seconds before the close the order lands inside the session: nothing changes."""
+    close_ms = session_close_ms_utc(_DAY)
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", clock_read_before_the_close(close_ms))
+
+    trade, state, _explanation = await _enter(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(15, 59, phase="RTH"),
+        clock=lambda: close_ms - 6_000,
+    )
+
+    assert state is not EffectOperationState.REJECTED
+    (leg,) = trade.submitted_legs
+    assert (leg.order_type, leg.time_in_force, leg.extended_hours) == (OrderType.MARKET, TimeInForce.DAY, False)
 
 
 async def test_explicit_terms_survive_a_crash_after_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

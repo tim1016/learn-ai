@@ -30,6 +30,7 @@ from app.schemas.market_liveness import (
 )
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.market_liveness import MarketLivenessStore, compose_market_liveness
+from tests._helpers.session_clock import pin_wall_clock_in_session
 
 
 def _tradable_market_liveness(symbol: str, observed_at_ms: int):
@@ -120,17 +121,8 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
-    from datetime import date
-    from time import monotonic
-    from types import SimpleNamespace
-
-    from app.lean_sidecar.trading_calendar import session_open_ms_utc
-    from app.utils import timestamps
-
     # One controllable source backs imported/default clock callables too.
-    start = session_open_ms_utc(date(2026, 9, 25)) + 60_000
-    started = monotonic()
-    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: start / 1000 + monotonic() - started))
+    pin_wall_clock_in_session(monkeypatch)
 
 
 def patch_wall_clock_to_the_fed_bar(

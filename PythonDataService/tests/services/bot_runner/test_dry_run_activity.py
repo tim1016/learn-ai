@@ -31,6 +31,23 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk, _wait_for
 
+# The Monday of a trading week whose regulatory fee rates are all pinned.
+_FEE_PINNED_MONDAY = date(2026, 9, 21)
+
+
+def _in_a_fee_pinned_week(bars: list[MarketDataBar]) -> list[MarketDataBar]:
+    """Move a February LEAN stream, prices and session-relative times intact, into a fee-pinned week.
+
+    February predates the pinned CAT fee rate, so a funded Dry Run could not
+    price a fill there. The stream starts on a Monday, as the target week does.
+    """
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+    from app.utils.session_anchors import et_date_at_ms
+
+    shift = session_open_ms_utc(_FEE_PINNED_MONDAY) - session_open_ms_utc(et_date_at_ms(bars[0].end_ms))
+    return [bar.model_copy(update={"start_ms": bar.start_ms + shift, "end_ms": bar.end_ms + shift,
+        "fetched_at_ms": bar.fetched_at_ms + shift}) for bar in bars]
+
 
 @pytest.fixture
 def _isolated_synthetic_authority() -> None:
@@ -92,14 +109,7 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     # Dry-run mechanics test reusing the LEAN-parity bars fixture; the
     # deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054), which is
     # irrelevant to what it proves.
-    bars = _ema_parity_bars_through_first_exit()
-    from app.lean_sidecar.trading_calendar import session_open_ms_utc
-    from app.utils.session_anchors import et_date_at_ms
-    # February predates pinned CAT fees. Preserve the fixture's prices and
-    # session-relative times in a fully pinned September trading week.
-    shift = session_open_ms_utc(date(2026, 9, 21)) - session_open_ms_utc(et_date_at_ms(bars[0].end_ms))
-    bars = [bar.model_copy(update={"start_ms": bar.start_ms + shift, "end_ms": bar.end_ms + shift,
-        "fetched_at_ms": bar.fetched_at_ms + shift}) for bar in bars]
+    bars = _in_a_fee_pinned_week(_ema_parity_bars_through_first_exit())
     from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
     from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -232,6 +242,76 @@ async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
     # and never staged the EXIT; nothing reached the synthetic authority.
     assert _late_refusals() == ["blocked"]
     assert registry.dry_run_activity("alpaca", _SID) == []
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_synthetic_authority: None,
+) -> None:
+    """#2596: the sandbox predicts the live Clerk's refusal of a last-bar market ENTER.
+
+    A Dry Run reads no live market clock, but its synthetic Clerk asks the same
+    calendar question the live one does: a market order sent at 16:00:00.6
+    reaches the broker after the close, where Alpaca would hold it for the next
+    open. So QQQ's first EMA ENTER, decided on its second session's last
+    bucket, is refused -- and no simulated fill is recorded at a close Live
+    never trades.
+    """
+    from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+    from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
+    from app.lean_sidecar.trading_calendar import session_close_ms_utc
+    from app.utils import timestamps
+    from app.utils.session_anchors import et_date_at_ms
+    from tests._helpers.bot_runner.ema_parity import ema_bars_through_a_last_bar_enter
+
+    bars = _in_a_fee_pinned_week(ema_bars_through_a_last_bar_enter())
+    close_ms = session_close_ms_utc(et_date_at_ms(bars[-1].end_ms))
+    # The synthetic Clerk's clock reads the instant the last bar's decision
+    # lands, 0.6 s after the close; every earlier bucket decides no action.
+    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: (close_ms + 600) / 1000))
+    # A funded sandbox prices the entry off a quote, as the round trip above does.
+    monkeypatch.setattr(clerk_runtime, "prepared_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=bars[-1].close))
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy_with_admission(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="QQQ",
+        mode="dry_run",
+        quantity=3,
+        budget_consent=DeployBudgetConsent(committed_cents=1_000_000, risk_revision=0, actor="owner",
+            request_fingerprint="reviewed-dry-run-last-bar", world="synthetic"),
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    runtime = get_clerk_runtime(synthetic_account_id_for_strategy(_SID))
+    assert runtime is not None and runtime.clerk is not None
+
+    def _refusals() -> list[dict[str, Any]]:
+        receipts = runtime.clerk.repository.decision_receipt_tail(strategy_instance_id=_SID, limit=500)
+        return [
+            {"outcome": receipt.outcome, **json.loads(receipt.facts_json)}
+            for receipt in receipts
+            if receipt.outcome == "blocked"
+        ]
+
+    await _wait_for(lambda: bool(_refusals() or registry.dry_run_activity("alpaca", _SID)))
+
+    assert registry.dry_run_activity("alpaca", _SID) == []
+    (refusal,) = _refusals()
+    assert (refusal["reason_code"], refusal["decision_bar_close_ms"]) == ("MARKET_CLOSED", close_ms)
+    assert refusal["refusal_reason"] == (
+        "The regular session has closed, or closes within seconds. A market order sent now "
+        "could reach the broker after the close and wait there until the next open."
+    )
+    assert clerk.calls == []
     await registry.stop("alpaca", _SID)
 
 

@@ -24,6 +24,9 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrde
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+# #2596: these ENTERs run on the default clock; keep it inside a session.
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
+
 
 class _ParkedQqqBroker:
     """A broker double whose barriers expose the required composition seam."""

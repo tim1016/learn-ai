@@ -41,6 +41,9 @@ from app.services.bot_carryover import configuration_hash, immutable_configurati
 from app.services.strategy_validation_manifest import strategy_registry_seeds
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+# #2596: these ENTERs run on the default clock; keep it inside a session.
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
+
 
 class _Broker:
     broker_id = "alpaca"

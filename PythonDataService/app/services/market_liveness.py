@@ -270,7 +270,11 @@ def _clock_closed_reason(clock: MarketClockLivenessEvidence, *, now_ms: int) -> 
     carried a regular-hours ENTER out as a market order Alpaca holds for the
     next open. Every entry gate — the strategy's, the Clerk's recheck, and the
     check before broker contact — reads the fact composed here, so this is the
-    one place the close is applied.
+    one place the broker's close is applied. It carries no send margin on
+    purpose: an EXIT reads CLOSED inside the scheduled session as an emergency
+    close and holds, so a margin here would hold every EXIT in the session's
+    last seconds. The Clerk gives a market ENTER that margin from the calendar
+    instead (``runtime._market_enter_session_refusal``).
     """
     if clock.state == "CLOSED":
         return "Fresh broker clock evidence reports the market closed."
