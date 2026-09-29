@@ -37,17 +37,17 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# The runtime dependency pins. Not installed from here (the builder did that);
+# read at runtime by app/research/sweep/identity.py, whose environment_digest
+# hashes them into every sweep/grid/walk-forward study's identity. A missing
+# file digests as "<absent>", so a study started before a rebuild could no
+# longer finish after it. tests/contracts/test_data_plane_image_stage.py pins
+# this COPY to identity.ENVIRONMENT_FILES.
+COPY requirements-heavy.txt requirements-light.txt ./
+
 # Copy application code
 COPY ./app ./app
 COPY ./scripts ./scripts
-
-# Ruff config — ad-hoc ``podman exec polygon-data-service ruff check
-# app/ tests/`` must run under the same ruleset as CI. Without this file
-# in the container, ruff falls back to its default ruleset (only
-# pyflakes), silently passing on errors that CI flags (SIM/UP/I) and
-# leaving local devs surprised when CI fails on Yoda conditions, import
-# ordering, or contextlib.suppress idioms that local runs allowed.
-COPY ./ruff.toml ./ruff.toml
 
 # Golden-fixture manifest — read at runtime by ``GET /api/golden-fixtures``
 # (see app/routers/golden_fixtures.py). Lives under tests/ for historical
@@ -72,16 +72,20 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeou
 # This is the LAST stage, which is what a build that names no ``--target``
 # produces. Every Compose service built from this context therefore names its
 # ``target:`` explicitly -- ``runtime`` for everything always-on -- and
-# tests/contracts/test_data_plane_image_stage.py fails the build of a service
-# that forgets (#2576).
+# tests/contracts/test_data_plane_image_stage.py fails the contract test for a
+# service that forgets (#2576).
 FROM runtime AS qualification
 
-COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt ./
+# requirements-dev.txt pulls in the heavy and light pins with ``-r``; the
+# runtime stage already put both beside it.
+COPY requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
-# Pytest config: pytest needs ``asyncio_mode = auto`` from this file, or it
-# defaults to strict mode and any un-decorated async test errors out at
-# collection. Only this stage ships pytest, so only this stage ships its config.
+# Pytest and ruff config: pytest needs ``asyncio_mode = auto`` from its file, or
+# it defaults to strict mode and any un-decorated async test errors out at
+# collection; ruff needs its file to run under the same ruleset as CI. Only
+# this stage is used to run either, so only this stage ships their config.
 COPY ./pytest.ini ./pytest.ini
+COPY ./ruff.toml ./ruff.toml
 RUN mkdir -p \
     /app/contracts \
     /app/evidence \

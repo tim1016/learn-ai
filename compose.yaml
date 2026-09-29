@@ -105,11 +105,6 @@ services:
       # Development liveness diagnostics: the image can receive GIT_SHA at
       # build time, while the bind-mounted dev service can read HEAD directly.
       - ./.git:/app/.git:ro,z
-      # Ruff config — keep the in-container linter in lockstep with CI
-      # (which runs ``ruff check app/ tests/`` from PythonDataService/).
-      # Without this, ``podman exec ... ruff check`` silently runs with
-      # the default ruleset and misses every SIM/UP/I issue CI flags.
-      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
       # Golden-fixture manifest — read at runtime by GET /api/golden-fixtures.
       # Mounted so manifest edits are visible without rebuild; baked into the
       # image too (see Dockerfile) so prod images don't depend on the mount.

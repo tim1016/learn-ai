@@ -105,7 +105,6 @@ services:
     volumes: !override
       - ./PythonDataService/app:/app/app:z
       - ./.git:/app/.git:ro,z
-      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
       - ./PythonDataService/tests/fixtures/golden/manifest.json:/app/tests/fixtures/golden/manifest.json:ro,z
       - ../Lean/Data:/lean-data:ro,z
       - ./PythonDataService/lean-cache:/lean-cache:z
