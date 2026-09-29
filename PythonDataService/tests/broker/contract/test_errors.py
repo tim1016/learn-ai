@@ -62,3 +62,10 @@ def test_rate_limited_carries_retry_after() -> None:
 
 def test_rate_limited_retry_after_optional() -> None:
     assert BrokerRateLimited("Throttled.").retry_after_ms is None
+
+
+def test_error_carries_the_vendors_numeric_code_when_it_gave_one() -> None:
+    """#2621: the vendor's own code is a typed field, never folded into free text."""
+    assert BrokerOrderRejected("Refused.", code=40310000).code == 40310000
+    assert BrokerRateLimited("Throttled.", code=42910000).code == 42910000
+    assert BrokerError("Failed.").code is None

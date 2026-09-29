@@ -57,8 +57,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictOrder,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
-from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
+from app.broker.contract.errors import BrokerError, BrokerOrderRejected
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,7 @@ falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
 __all__ = [
     "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
+    "describe_broker_refusal",
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fence_fills_on_terminal_enters",
@@ -921,6 +922,38 @@ def fold_uncertain(
     )
 
 
+def describe_broker_refusal(
+    repo: ClerkSqliteRepository,
+    *,
+    leg: BrokerOrderLeg,
+    error: BrokerError,
+) -> str:
+    """The recorded reason the broker definitively refused ``leg``.
+
+    The broker's own words always. An order refusal adds that another order on
+    the symbol was open only when the Clerk's own records show one open on the
+    other side as the refusal arrives -- what Alpaca's wash-trade protection
+    refuses. Never from the broker's numeric code: Alpaca documents none for
+    that refusal, and one code may also cover a buying-power or shares
+    refusal (#2621).
+    """
+    if not isinstance(error, BrokerOrderRejected):
+        return str(error)
+    opposite = repo.open_opposite_side_orders(symbol=leg.symbol, side=leg.side)
+    if not opposite:
+        return str(error)
+    symbol, other_side = leg.symbol.upper(), opposite[0].side
+    open_orders = (
+        f"an open {symbol} {other_side} order" if len(opposite) == 1
+        else f"{len(opposite)} open {symbol} {other_side} orders"
+    )
+    return (
+        f"This account still had {open_orders} when Alpaca refused this {leg.side.value}; "
+        "Alpaca refuses an order that could trade against another open order in the same account. "
+        f"{error}"
+    )
+
+
 def fold_failed(
     repo: ClerkSqliteRepository,
     *,
@@ -930,6 +963,7 @@ def fold_failed(
     reason: str,
     why: str,
     transition_kind: str = "ORDER_SUBMIT_FAILED",
+    broker_error_code: int | None = None,
 ) -> None:
     """Record a terminal outcome, including an explicit pre-contact refusal.
 
@@ -937,10 +971,12 @@ def fold_failed(
     confused with broker rejection or absence proven after the grace window.
     ``order_ref`` is ``None`` only for an effect-level outcome whose order
     evidence nests under another effect (``ENTER_UNFILLED`` during an EXIT).
+    ``broker_error_code`` is the broker's own code for the refusal that ended
+    the order, when it gave one (``BrokerError.code``).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    facts = OrderSubmitFailedFacts(reason=reason, why=why)
+    facts = OrderSubmitFailedFacts(reason=reason, why=why, broker_error_code=broker_error_code)
     repo.append_transition(
         TransitionInput(
             strategy_instance_id=effect.strategy_instance_id,

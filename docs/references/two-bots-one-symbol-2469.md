@@ -174,17 +174,21 @@ entering (buy) while another exits (sell). Same-side orders never conflict.
 
 ### What the Clerk sees and does today
 
-**The error.** `map_api_error` turns every 401/403 into `BrokerAuthError`, worded
-"Alpaca rejected our credentials: potential wash trade detected. use complex
-orders" with detail "HTTP 403". Whatever code Alpaca's body carries is dropped.
+**The error.** When this note was written, `map_api_error` turned every 401/403
+into `BrokerAuthError`, worded "Alpaca rejected our credentials: potential wash
+trade detected. use complex orders", and dropped Alpaca's code. #2621 fixed it:
+a 403 on an order is `BrokerOrderRejected` ("Alpaca refused the order: …"),
+every mapped error keeps Alpaca's code in `BrokerError.code`, and the refusal's
+facts carry it as `broker_error_code`. The record names another open order on
+the symbol only when the Clerk's own records show one open on the other side.
 
-- [code] `broker/alpaca/errors.py:77-82`
-- [test] `test_a_wash_trade_refusal_reads_today_as_a_credentials_failure`
-- [xfail] `test_a_wash_trade_refusal_is_an_order_rejection_not_a_credentials_failure`
+- [code] `broker/alpaca/errors.py` (`map_api_error`)
+- [test] `test_a_wash_trade_refusal_is_an_order_rejection_that_keeps_alpacas_code`
+- [test] `test_a_refusal_with_no_opposite_order_open_never_names_another_order`
 
 **A refused ENTER** folds `ORDER_SUBMIT_FAILED` (effect and command `failed`).
-The facts keep Alpaca's message but not its code, and the bot may enter again.
-The decision itself is discarded.
+The facts keep Alpaca's message and, since #2621, its code, and the bot may
+enter again. The decision itself is discarded.
 
 - [code] `clerk/sqlite/enter.py:411-424`
 - [test] `test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again`
@@ -419,7 +423,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-21 passed, 1 xfailed
+33 passed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -428,10 +432,9 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
   submitted earlier); the budget harness from `test_budget_commands`;
   `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
   from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
-- **The xfail.** It is `strict=True` and names its issue, #2621, for the error
-  mapping. Run with `--runxfail`, it fails on the asserted defect:
-  `BrokerAuthError` is not `BrokerOrderRejected`. The two #2553 cash-claim
-  cases were strict xfails until #2553 landed and now pass.
+- **The former xfails.** The file carried strict xfails for #2621 (the error
+  mapping) and the two #2553 cash-claim cases. Each passed once its issue
+  landed, and its mark was removed.
 
 ## Sources
 

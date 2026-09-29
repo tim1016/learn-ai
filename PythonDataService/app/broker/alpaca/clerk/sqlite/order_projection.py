@@ -13,10 +13,10 @@ import json
 import math
 import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
-from app.broker.contract.models import BrokerPosition
+from app.broker.contract.models import BrokerPosition, OrderSide
 
 ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES = frozenset(
     {"filled", "canceled", "expired", "rejected", "replaced"}
@@ -170,18 +170,56 @@ def read_current_orders(
         f"{where} ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         params,
     ).fetchall()
+    return _projected_orders(conn, rows)
+
+
+def read_open_opposite_side_orders(
+    conn: sqlite3.Connection,
+    *,
+    symbol: str,
+    side: OrderSide,
+) -> tuple[ProjectedOrder, ...]:
+    """The account's orders still open on ``symbol`` on the other side from ``side``.
+
+    Alpaca refuses a new order while an opposite-side order on the same
+    symbol is open in the account (its wash-trade protection,
+    https://docs.alpaca.markets/us/docs/user-protection), whoever placed it.
+    So this reads every custody subject's orders -- each bot's entries and
+    exits and every manual ticket's -- from the Clerk's own records, never a
+    broker read.
+
+    An order is open unless its broker state is terminal, or it provably never
+    reached the broker (its operation ended with no broker identity and no
+    fill). One still being sent, or whose outcome is unknown, is open: it may
+    be working at the broker.
+    """
+    terminal = tuple(sorted(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES))
+    rows = conn.execute(
+        "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
+        "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        f"WHERE LOWER(COALESCE(o.broker_state, '')) NOT IN ({', '.join('?' for _ in terminal)}) "
+        "AND NOT (e.state IN ('failed', 'rejected') AND o.broker_order_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref)) "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+        terminal,
+    ).fetchall()
+    other_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
+    return tuple(
+        order
+        for order in _projected_orders(conn, rows)
+        if order.symbol == symbol.upper() and order.side == other_side.value
+    )
+
+
+def _projected_orders(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+) -> tuple[ProjectedOrder, ...]:
+    """Each ``orders`` row joined with its immutable leg and effective fills."""
     details = read_order_details(conn, tuple(row["order_ref"] for row in rows))
     return tuple(
-        ProjectedOrder(
-            **dict(row),
-            symbol=details[row["order_ref"]].symbol,
-            side=details[row["order_ref"]].side,
-            quantity=details[row["order_ref"]].quantity,
-            order_type=details[row["order_ref"]].order_type,
-            limit_price=details[row["order_ref"]].limit_price,
-            time_in_force=details[row["order_ref"]].time_in_force,
-            filled_quantity=details[row["order_ref"]].filled_quantity,
-        )
+        ProjectedOrder(**dict(row), **asdict(details[row["order_ref"]]))
         for row in rows
     )
 
@@ -256,6 +294,7 @@ __all__ = [
     "OrderProjectionReadError",
     "ProjectedOrderDetails",
     "read_current_orders",
+    "read_open_opposite_side_orders",
     "read_order_details",
     "read_orders_by_operation",
 ]

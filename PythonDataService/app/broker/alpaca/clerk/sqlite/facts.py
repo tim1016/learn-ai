@@ -252,13 +252,22 @@ class OrderSubmitUncertainFacts:
 @dataclass(frozen=True)
 class OrderSubmitFailedFacts:
     """A definitive broker rejection, or an absence proven past the R4
-    uncertainty grace window."""
+    uncertainty grace window.
+
+    ``broker_error_code`` is the broker's own numeric code for a refusal that
+    carried one (#2621). It is omitted from the canonical JSON when absent, so
+    every row written before it existed -- and every failure no broker answer
+    caused -- hashes identically (hash-chained schema evolution)."""
 
     reason: str
     why: str
+    broker_error_code: int | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        facts = asdict(self)
+        if self.broker_error_code is None:
+            facts.pop("broker_error_code")
+        return canonicalize(facts)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderSubmitFailedFacts:

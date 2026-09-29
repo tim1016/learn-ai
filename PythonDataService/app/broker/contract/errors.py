@@ -21,7 +21,9 @@ class BrokerError(Exception):
 
     ``message`` is a caller-facing *what* (neutral, specific, no blame).
     ``detail`` is an optional *why* the router may append. ``broker`` names
-    the vendor for logs and multi-broker surfaces.
+    the vendor for logs and multi-broker surfaces. ``code`` is the vendor's
+    own numeric error code when its answer carried one (Alpaca's body
+    ``code``), kept as evidence; ``None`` when it gave none.
     """
 
     # Default HTTP status the router surfaces for this error family.
@@ -33,11 +35,13 @@ class BrokerError(Exception):
         *,
         broker: str | None = None,
         detail: str | None = None,
+        code: int | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.broker = broker
         self.detail = detail
+        self.code = code
 
 
 class UnknownBrokerError(BrokerError):
@@ -47,10 +51,11 @@ class UnknownBrokerError(BrokerError):
 
 
 class BrokerAuthError(BrokerError):
-    """Vendor rejected our credentials (HTTP 401/403).
+    """Vendor rejected our credentials (HTTP 401, or 403 on a read).
 
     Surfaced as ``502`` — a broker misconfiguration on our side, not a client
-    authorization problem.
+    authorization problem. A 403 on an order is the vendor refusing that
+    order, which is :class:`BrokerOrderRejected`.
     """
 
     http_status: ClassVar[int] = 502
@@ -71,9 +76,10 @@ class BrokerRateLimited(BrokerError):
         *,
         broker: str | None = None,
         detail: str | None = None,
+        code: int | None = None,
         retry_after_ms: int | None = None,
     ) -> None:
-        super().__init__(message, broker=broker, detail=detail)
+        super().__init__(message, broker=broker, detail=detail, code=code)
         self.retry_after_ms = retry_after_ms
 
 
@@ -84,10 +90,13 @@ class BrokerRequestInvalid(BrokerError):
 
 
 class BrokerOrderRejected(BrokerError):
-    """Vendor rejected an order (phase-2 write path). Surfaced as ``409``.
+    """Vendor definitively refused an order mutation. Surfaced as ``409``.
 
-    Declared now so the contract error set is complete; the phase-1 read paths
-    never raise it.
+    Raised only on the write path (submit / cancel): the account may not place
+    this order (Alpaca's 403 -- buying power, shares, or its wash-trade
+    protection) or it conflicts with the order's state (a 409). Nothing reached
+    the book, so it is never the uncertain :class:`BrokerUnavailable`. Read
+    paths never raise it.
     """
 
     http_status: ClassVar[int] = 409

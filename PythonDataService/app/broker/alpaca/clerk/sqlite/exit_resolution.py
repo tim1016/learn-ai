@@ -79,6 +79,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 from app.broker.alpaca.clerk.sqlite.open_replacement import OPEN_REPLACEMENT, replacement_due
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
+    describe_broker_refusal,
     entry_never_accepted_durably,
     entry_order_symbol,
     fold_entry_never_accepted,
@@ -553,6 +554,7 @@ def _fold_exit_not_flat(
     explanation: str,
     next_step: str,
     why: str | None = None,
+    broker_error_code: int | None = None,
 ) -> None:
     """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
 
@@ -562,7 +564,8 @@ def _fold_exit_not_flat(
     declared extended session (#2229). Recovery eligibility is recorded only
     after a successful reconciliation pass, then projected from that check.
     This fold retains custody and the failure cause without guessing a retry
-    time. ``why`` is recorded beside the quantity still held.
+    time. ``why`` is recorded beside the quantity still held, and a broker
+    refusal's own code beside it.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -575,6 +578,7 @@ def _fold_exit_not_flat(
         reason=reason,
         why=held if why is None else f"{why} {held}",
         transition_kind="EXIT_NOT_FLAT",
+        broker_error_code=broker_error_code,
     )
     raise_uncertainty(
         repo,
@@ -1632,13 +1636,14 @@ async def _submit_reducing_order(
         )
         return
     except BrokerError as exc:
-        failed_why = str(exc)
+        refusal = exc
         await run(
             lambda: _fold_submit_refused(
                 repo,
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
-                why=failed_why,
+                why=describe_broker_refusal(repo, leg=leg, error=refusal),
+                broker_error_code=refusal.code,
             )
         )
         return
@@ -1688,6 +1693,7 @@ def _fold_submit_refused(
     effect_operation_id: str,
     reducing: OrderResource,
     why: str,
+    broker_error_code: int | None = None,
 ) -> None:
     """The broker refused the reducing order outright (a 4xx): fail the EXIT, and tell the operator.
 
@@ -1695,6 +1701,7 @@ def _fold_submit_refused(
     releasably as before. While exposure is still held that is the
     ``EXIT_NOT_FLAT`` episode (#2440 review): a bare ``ORDER_SUBMIT_FAILED``
     raised no notice and no bell, and left the position open silently.
+    ``broker_error_code`` is the broker's own code for the refusal, if any.
     """
     created = _reducing_order_facts(repo, reducing.order_ref)
     effect = repo.effect_operation(effect_operation_id)
@@ -1709,6 +1716,7 @@ def _fold_submit_refused(
             summary_code="ORDER_SUBMIT_FAILED",
             reason=reason,
             why=why,
+            broker_error_code=broker_error_code,
         )
         return
     _fold_exit_not_flat(
@@ -1720,6 +1728,7 @@ def _fold_submit_refused(
         summary_code="ORDER_SUBMIT_FAILED",
         reason=reason,
         why=why,
+        broker_error_code=broker_error_code,
         headline="The broker refused this exit's order; the position is still open",
         explanation=(
             f"The broker refused the order to {created.side.lower()} {created.quantity:g} "

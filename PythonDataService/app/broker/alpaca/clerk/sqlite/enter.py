@@ -96,6 +96,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    describe_broker_refusal,
     fold_failed,
     fold_order_evidence,
     fold_order_submission_response,
@@ -404,7 +405,8 @@ async def submit_accepted_enter(
                 order_ref=accepted.order_ref,
                 summary_code="ORDER_SUBMIT_FAILED",
                 reason="The order did not reach the broker.",
-                why=str(exc),
+                why=describe_broker_refusal(repo, leg=leg, error=exc),
+                broker_error_code=exc.code,
             )
             return _snapshot(
                 repo,

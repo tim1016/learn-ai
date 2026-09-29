@@ -522,6 +522,7 @@ async def submit_manual_order(
         return accepted
     assert accepted.leg.effect_operation_id is not None and accepted.leg.order_ref is not None
     from app.broker.alpaca.clerk.sqlite.order_evidence import (
+        describe_broker_refusal,
         fold_failed,
         fold_order_submission_response,
         fold_uncertain,
@@ -552,7 +553,8 @@ async def submit_manual_order(
                 order_ref=accepted.leg.order_ref,
                 summary_code="ORDER_SUBMIT_FAILED",
                 reason="The manual order did not reach Alpaca.",
-                why=str(exc),
+                why=describe_broker_refusal(repo, leg=leg, error=exc),
+                broker_error_code=exc.code,
             )
         except Exception as exc:
             fold_uncertain(

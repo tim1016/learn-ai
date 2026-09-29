@@ -30,6 +30,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     RunResource,
 )
+from app.broker.alpaca.clerk.sqlite.order_projection import read_open_opposite_side_orders
+from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
+from app.broker.contract.models import OrderSide
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
@@ -724,6 +727,20 @@ class ClerkSqliteRepositoryReadApi:
         """Whether manual broker intent currently fences new account exposure."""
         with self._write_lock:
             return reads.has_nonterminal_manual_order(self._conn)
+
+    def open_opposite_side_orders(
+        self: ClerkSqliteRepository,
+        *,
+        symbol: str,
+        side: OrderSide,
+    ) -> tuple[ProjectedOrder, ...]:
+        """This account's orders still open on ``symbol`` on the other side from ``side``.
+
+        Every custody subject's, bots' and manual tickets' alike: the orders
+        Alpaca's wash-trade protection would refuse a ``side`` order against.
+        """
+        with self._write_lock:
+            return read_open_opposite_side_orders(self._conn, symbol=symbol, side=side)
 
     def has_nonterminal_manual_order_outside_ticket(
         self: ClerkSqliteRepository,

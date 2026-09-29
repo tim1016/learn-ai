@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 from alpaca.common.exceptions import APIError
 
@@ -68,6 +71,100 @@ def test_conflict_outside_order_mutation_does_not_raise_order_rejected(
 
     assert isinstance(error, BrokerUnavailable)
     assert not isinstance(error, BrokerOrderRejected)
+
+
+def test_a_403_on_an_order_mutation_is_a_definitive_order_rejection_keeping_alpacas_code(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    """#2621: Alpaca answers 403 on ``POST /v2/orders`` for too little buying
+    power or shares and for its wash-trade protection. That is a refusal of
+    this order, never a credentials failure, and the Clerk must fold it as
+    definitive -- so never the uncertain ``BrokerUnavailable`` kind."""
+    error = map_api_error(
+        make_api_error(403, message="insufficient buying power"),
+        broker="alpaca",
+        is_order_mutation=True,
+    )
+
+    assert isinstance(error, BrokerOrderRejected)
+    assert not isinstance(error, BrokerUnavailable)
+    assert error.message == "Alpaca refused the order: insufficient buying power"
+    assert error.detail == "HTTP 403"
+    assert error.code == 40010000
+
+
+def test_a_403_on_a_read_stays_a_credentials_failure(make_api_error: ApiErrorFactory) -> None:
+    error = map_api_error(make_api_error(403), broker="alpaca")
+
+    assert isinstance(error, BrokerAuthError)
+    assert error.message == "Alpaca rejected our credentials: denied"
+
+
+def test_a_401_on_an_order_mutation_stays_a_credentials_failure(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    error = map_api_error(make_api_error(401), broker="alpaca", is_order_mutation=True)
+
+    assert isinstance(error, BrokerAuthError)
+
+
+@pytest.mark.parametrize("status", [None, 400, 401, 403, 404, 409, 422, 429, 500])
+@pytest.mark.parametrize("is_order_mutation", [False, True])
+def test_every_mapped_error_keeps_alpacas_numeric_code(
+    make_api_error: ApiErrorFactory, status: int | None, is_order_mutation: bool
+) -> None:
+    error = map_api_error(make_api_error(status), broker="alpaca", is_order_mutation=is_order_mutation)
+
+    assert error.code == 40010000
+
+
+def _raw_api_error(status: int, body: str) -> APIError:
+    """An ``APIError`` carrying ``body`` verbatim, the way alpaca-py raises one."""
+    response = SimpleNamespace(status_code=status, headers={})
+    return APIError(body, http_error=SimpleNamespace(response=response, request=None))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<html><body>502 Bad Gateway</body></html>",
+        "",
+        '["not", "an", "object"]',
+    ],
+)
+def test_a_body_that_is_not_a_json_object_keeps_its_raw_text_and_no_code(body: str) -> None:
+    """alpaca-py's own ``APIError.code``/``.message`` raise on such a body; the map must not."""
+    error = map_api_error(_raw_api_error(502, body), broker="alpaca")
+
+    assert isinstance(error, BrokerUnreachable)
+    assert error.message == f"Alpaca returned a server error: {body}"
+    assert error.code is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        json.dumps({"message": "no code here"}),
+        json.dumps({"code": "40310000", "message": "no code here"}),
+        json.dumps({"code": True, "message": "no code here"}),
+        json.dumps({"code": None, "message": "no code here"}),
+    ],
+)
+def test_a_body_without_an_integer_code_carries_no_code(body: str) -> None:
+    error = map_api_error(_raw_api_error(403, body), broker="alpaca", is_order_mutation=True)
+
+    assert isinstance(error, BrokerOrderRejected)
+    assert error.message == "Alpaca refused the order: no code here"
+    assert error.code is None
+
+
+def test_a_json_body_without_a_message_falls_back_to_its_raw_text() -> None:
+    body = json.dumps({"code": 40310000})
+
+    error = map_api_error(_raw_api_error(403, body), broker="alpaca", is_order_mutation=True)
+
+    assert error.message == f"Alpaca refused the order: {body}"
+    assert error.code == 40310000
 
 
 def test_rate_limited_parses_retry_after_seconds(make_api_error: ApiErrorFactory) -> None:
