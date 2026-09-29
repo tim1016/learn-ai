@@ -467,7 +467,10 @@ missing baseline or incomplete transfer evidence.
 The independently hand-computed golden fixture `PNL-001` applies the cited
 Alpaca field semantics to no-flow, deposit, withdrawal, and mixed-flow cases.
 It pins the canonical result with `atol=1e-9, rtol=0`, so the accepted dollar
-error stays far below one cent and never grows with account magnitude.
+error stays far below one cent and never grows with account magnitude. The
+owner's figure, `DayPnl.display_total_usd`, is pinned bit-exact against the
+same Decimal outputs (#2586): the mixed-flow case is exactly -3904.33, where
+the float formula gives -3904.3300000000017.
 
 ## Immediate risk edits and retained loss holds (#2543, 2026-09-27)
 
@@ -519,9 +522,27 @@ pins it for both a Dry Run and Shadow: $1,000.01 of starting cash, BUY
 0.048360857 at $100 marked at $100.3101682007 (open P&L exactly
 $0.0149999999999999999) and the buy's $0.01 modelled fee give equity of
 exactly $1,000.0149999999999999999, shown as $1,000.01 with open P&L $0.01,
-where the float views showed $1,000.02 and $0.02. `last_equity_usd` and the
-day P&L stay binary floats -- the loss hold compares and seals them -- so
-`day_pnl_at` rounds the exact equity once, there.
+where the float views showed $1,000.02 and $0.02.
+
+The observation's `last_equity_usd` carries the exact retained baseline too
+(#2586). Deploy's today P&L is `DayPnl.display_total_usd` for every account
+(owner decision 2026-09-29, "exact for all accounts"): each recorded figure --
+current equity, the prior-close baseline, each transfer amount, whether a
+broker float or an exact `Decimal` -- is normalized on its own, the formula
+runs in exact `Decimal`, and the result is rounded once. No type test chooses
+the path, so the loss-hold clearance path's mix of exact equity and a sealed
+float baseline reads the same figure. $2,000 of starting cash, the same
+0.048360857-share BUY marked at $100 at the close (baseline exactly
+$1,999.99) and at $100.3101682007 today shows $0.01 today -- exactly
+$0.0149999999999999999 -- where the float difference of the two equities
+(0.015000000000100044) showed $0.02. A real account moves only at a half-cent
+tie, by at most one cent: equity 10004.015 over a 10000.70 close with
+deposits of 1.10 and 2.20 is exactly $0.015, shown $0.02, where the float
+formula (0.014999999998690061) showed $0.01. The loss rule is unchanged:
+`total_usd`, `loss_limit_usd` and the sealed `LossHoldCause` take each figure
+as its nearest float, exactly the floats the observation carried before, so
+no loss decision and no sealed hold's bytes change. A regression pins the
+Shadow hold's sealed facts on both the cadence and the admission path.
 
 Cash assertions use exact Decimal equality. Existing canonical FIFO outputs
 use absolute tolerance `1e-9`, relative tolerance zero; this is composition of

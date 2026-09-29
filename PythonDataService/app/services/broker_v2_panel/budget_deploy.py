@@ -91,6 +91,11 @@ LEGACY_BUDGET_DETAIL = "This account has not switched to budgets. Switch it in S
 def _primary(account_id: str) -> ActiveClerkRuntime:
     runtime = get_active_clerk_runtime()
     custody_id = None if runtime is None else runtime.selected_account_id
+    if runtime is not None and custody_id is None and runtime.reconnecting and runtime.startup_failure is not None:
+        # Nothing to activate (#2582): the authority installs on its own once
+        # Alpaca answers, and its copy says so; "activate it" would send the
+        # owner to Settings. Every other state keeps the copy below.
+        raise BudgetUnavailable(runtime.startup_failure.recovery)
     if runtime is None or custody_id is None or canonical_alpaca_account_id(custody_id.removeprefix("shadow:")) != canonical_alpaca_account_id(account_id):
         raise BudgetUnavailable("This account's custody authority is unavailable. Activate it in Settings.")
     if runtime.sqlite_repository is None:
@@ -642,12 +647,11 @@ def _money_view(
 
 def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation) -> dict[str, object]:
     """Alpaca's equity and today's account P&L, when the reading knows them."""
-    with money_context():
-        equity = _known_usd(observation.equity_usd)
-        today = None
-        if equity is not None and _known_usd(observation.last_equity_usd) is not None:
-            day = observed_day_pnl(observation=observation, now_ms=repo.clock())
-            today = _known_usd(day.total_usd) if day.known else None
+    equity = _known_usd(observation.equity_usd)
+    today = None
+    if equity is not None and _known_usd(observation.last_equity_usd) is not None:
+        day = observed_day_pnl(observation=observation, now_ms=repo.clock())
+        today = day.display_total_usd if day.known else None
     if equity is None and today is None:
         return {}
     return {
@@ -660,8 +664,8 @@ def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation
 def _known_usd(value: float | Decimal | None) -> Decimal | None:
     """A broker figure, or ``None`` when it is absent or not a finite number.
 
-    A simulated account's equity is already exact (#2556) and passes through
-    unchanged; a real broker's float is normalized once.
+    A simulated account's equity and baseline are already exact (#2556,
+    #2586) and pass through unchanged; a real broker's float is normalized once.
     """
     return None if value is None or not math.isfinite(value) else normalize_money(value)
 

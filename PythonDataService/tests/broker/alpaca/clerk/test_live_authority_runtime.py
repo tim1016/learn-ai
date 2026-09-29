@@ -409,7 +409,12 @@ def test_a_composition_that_raised_is_named_by_which_thing_failed(
     failure = runtime.startup_failure
     assert failure is not None
     assert failure.reason_code == expected
-    assert failure.recovery == str(exc)
+    # Terminal, and it says so: the cause, that nothing retries, and what ends it (#2582).
+    assert failure.recovery == (
+        f"This Clerk did not start: {exc}. It will not retry on its own; "
+        "restart the Clerk once that is fixed."
+    )
+    assert runtime.reconnecting is False
     assert failure.activation_detected is True
     assert failure.authority_generation == 7
     assert failure.db_identity_token == "live-db"

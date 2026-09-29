@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deplo
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.contract.models import BrokerActivity
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
@@ -455,6 +456,28 @@ async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(auth
     assert (view.equity_usd, view.today_pnl_usd) == ("1000.00", "0.00")
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
     assert view.deploy_refusal is not None
+
+
+async def test_a_real_accounts_today_is_the_exact_day_of_its_recorded_figures(authority: tuple) -> None:
+    """#2586, owner decision 2026-09-29: exact for all accounts, not only simulated ones.
+
+    Alpaca reports equity 10004.015 over a 10000.70 prior close, with deposits
+    of 1.10 and 2.20 since that close: today is exactly $0.015, shown $0.02
+    (half-even). The float arithmetic on the same figures, 0.014999999998690061,
+    showed $0.01.
+    """
+    repo, runtime, _ = _committed_view(authority)
+    deposits = tuple(
+        BrokerActivity(broker="alpaca", activity_id=f"deposit-{amount}", activity_type="CSD", category="non_trade_activity",
+                       symbol=None, side=None, quantity=None, price=None, net_amount=amount, occurred_at_ms=NOON, observed_at_ms=NOON)
+        for amount in (1.1, 2.2)
+    )
+    runtime.envelope_sync.reading = replace(
+        runtime.envelope_sync.reading, equity_usd=10_004.015, last_equity_usd=10_000.7, risk_cash_flows=deposits)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert (view.equity_usd, view.today_pnl_usd) == ("10004.02", "0.02")
 
 
 async def test_a_stale_reading_is_unavailable_never_zero(authority: tuple) -> None:
