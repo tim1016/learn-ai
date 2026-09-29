@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     developer_reset_refusal,
     open_repository,
+    open_repository_after_lease_expiry,
     unavailable_runtime,
 )
 from app.broker.alpaca.clerk.live_authority import (
@@ -321,11 +322,16 @@ async def activate_synthetic_clerk_authority(
     artifacts_root: Path,
     activation_store: SyntheticActivationStore | None = None,
     clock: Clock = now_ms_utc,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
 ) -> SyntheticActivationRecord:
     """Explicitly initialize and durably activate one isolated ``sim:`` account.
 
-    No startup path calls this helper.  A synthetic account has no authority
-    until a caller deliberately performs this one-time activation step.
+    A synthetic account has no authority until a caller deliberately performs
+    this one-time activation step; the Dry Run's Deploy is that caller. Boot
+    recovery re-enters it for each Dry Run binding it restores, where an
+    existing activation is re-proven against its repository and returned,
+    never appended twice.
     """
     require_synthetic_account_id(account_id)
     record = await activate_isolated_authority(
@@ -333,6 +339,8 @@ async def activate_synthetic_clerk_authority(
         artifacts_root=artifacts_root,
         store=activation_store or SyntheticActivationStore(artifacts_root),
         clock=clock,
+        execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+        execution_lease_retry_interval_s=execution_lease_retry_interval_s,
     )
     assert isinstance(record, SyntheticActivationRecord)
     return record
@@ -347,6 +355,8 @@ async def select_synthetic_clerk_runtime(
     activation_store: SyntheticActivationStore | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     simulation_initial_cash: Decimal | None = None,
     projection_only: bool = False,
 ) -> ActiveClerkRuntime:
@@ -356,6 +366,8 @@ async def select_synthetic_clerk_runtime(
     the opened repository must agree before a Clerk is returned.
     A projection-only opening retains existing custody recovery, but never
     samples simulated financial state or starts its observation cadence.
+    The execution-lease wait is a single attempt unless the caller asks for
+    one; boot asks, because a restart meets its dead predecessor's lease.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -391,7 +403,13 @@ async def select_synthetic_clerk_runtime(
     sweep: ReconciliationSweep | None = None
     envelope_sync: LiveEnvelopeSync | None = None
     try:
-        repository = repository_opener(account_id, artifacts_root)
+        repository = await open_repository_after_lease_expiry(
+            repository_opener,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
+        )
         meta = repository.control_meta_snapshot()
         if (
             meta.authority_generation != activation.authority_generation

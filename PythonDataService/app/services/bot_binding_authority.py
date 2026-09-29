@@ -30,6 +30,10 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
+from app.broker.alpaca.clerk.active_runtime import (
+    DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+    DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+)
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -51,6 +55,13 @@ from app.services.bot_start_admission import (
 )
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import Clock, now_ms_utc
+
+#: How long boot waits out a Dry Run account's execution lease before calling
+#: it that bot's own failure (#2582). A quick restart meets the lease its dead
+#: predecessor renewed and never released; it lapses within one lease
+#: lifetime, so boot waits exactly as the account authority's own opening does.
+BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
+BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S
 
 
 class BindingAuthority:
@@ -239,7 +250,15 @@ class SyntheticBindingAuthority(BindingAuthority):
         return SourceBarLedger(artifacts_root=self.artifacts_root, account_id=self.account_id)
 
     async def ensure_recoverable(self) -> None:
-        runtime = await self._runtime()
+        """Compose this Dry Run's authority at boot, or raise why it cannot be.
+
+        Boot recovery is the only caller, so the opening waits out a dead
+        predecessor's execution lease rather than failing on its first sight.
+        """
+        runtime = await self._runtime(
+            execution_lease_wait_timeout_s=BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+            execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+        )
         if runtime.clerk is None:
             detail = (
                 runtime.startup_failure.recovery
@@ -302,11 +321,27 @@ class SyntheticBindingAuthority(BindingAuthority):
             async with admission(self.binding.strategy_instance_id) as snapshot:
                 yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
 
-    async def _runtime(self, *, projection_only: bool = False) -> ActiveClerkRuntime:
+    async def _runtime(
+        self,
+        *,
+        projection_only: bool = False,
+        execution_lease_wait_timeout_s: float = 0.0,
+        execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+    ) -> ActiveClerkRuntime:
         async with self.runtime_access.hold():
-            return await self._runtime_locked(projection_only=projection_only)
+            return await self._runtime_locked(
+                projection_only=projection_only,
+                execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+                execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+            )
 
-    async def _runtime_locked(self, *, projection_only: bool) -> ActiveClerkRuntime:
+    async def _runtime_locked(
+        self,
+        *,
+        projection_only: bool,
+        execution_lease_wait_timeout_s: float,
+        execution_lease_retry_interval_s: float,
+    ) -> ActiveClerkRuntime:
         existing = get_clerk_runtime(self.account_id)
         if existing is not None:
             if not projection_only:
@@ -322,6 +357,8 @@ class SyntheticBindingAuthority(BindingAuthority):
                 account_id=self.account_id,
                 artifacts_root=self.artifacts_root,
                 clock=self.clock,
+                execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+                execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             )
         runtime = await select_synthetic_clerk_runtime(
             account_id=self.account_id,
@@ -331,6 +368,8 @@ class SyntheticBindingAuthority(BindingAuthority):
             repository_opener=lambda account_id, root: ClerkSqliteRepository.open(
                 account_id=account_id, artifacts_root=root, clock=self.clock,
             ),
+            execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+            execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             simulation_initial_cash=(None if projection_only or self.binding.budget_consent is None else Decimal(self.binding.budget_consent.committed_cents) / 100),
             projection_only=projection_only,
         )

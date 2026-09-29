@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,7 +84,7 @@ from app.schemas.run_replay import RunReplayReceipt
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
-from app.services.bot_binding_authority import BindingAuthoritySelector
+from app.services.bot_binding_authority import BindingAuthority, BindingAuthoritySelector
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -95,6 +95,7 @@ from app.services.bot_boot_recovery import (
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
+    UnrecoveredDryRun,
 )
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
@@ -464,6 +465,11 @@ class BotTaskRegistry:
         # ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_report: BootRecoveryReport | None = None
+        # The Dry Runs whose own authority this process's boot could not
+        # restore (#2582). Candidate enumeration leaves them out -- asking an
+        # authority that never composed for its runs would fail the whole
+        # sweep -- and the boot report carries them for Start to refuse.
+        self._unrecovered_dry_runs: tuple[UnrecoveredDryRun, ...] = ()
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
         self._recovery_evaluation: RecoveryEvaluationProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
@@ -1370,11 +1376,12 @@ class BotTaskRegistry:
         project against: the service still boots and serves its read
         surface, but Start stays refused with the sweep's reason.
         """
-        await self._recover_synthetic_authorities_for_boot()
+        self._unrecovered_dry_runs = await self._recover_synthetic_authorities_for_boot()
         report = await self._boot_recovery.run(
             recover=recover,
             reconcile=reconcile,
             unresolved_intents_probe=unresolved_intents_probe,
+            unrecovered_dry_runs=self._unrecovered_dry_runs,
         )
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
@@ -1789,10 +1796,42 @@ class BotTaskRegistry:
         async with authority.runtime_for_projection() as runtime:
             yield runtime
 
-    async def _recover_synthetic_authorities_for_boot(self) -> None:
-        """Compose each already-activated Dry Run authority before boot repair."""
+    async def _recover_synthetic_authorities_for_boot(self) -> tuple[UnrecoveredDryRun, ...]:
+        """Compose each already-activated Dry Run authority before boot repair.
+
+        A simulated account never takes the lane down with it (#2582): a quick
+        restart once crash-looped the real-money process because one Dry Run's
+        account was still leased by the dead process. Whatever stops one
+        authority from composing -- this is the isolation boundary, so it is
+        every exception -- is logged with its cause and returned as that bot's
+        own failure, and boot goes on.
+        """
+        unrecovered: list[UnrecoveredDryRun] = []
+        for strategy_instance_id, authority in self._boot_recoverable_authorities():
+            try:
+                await authority.ensure_recoverable()
+            except Exception as exc:
+                detail = exc.detail if isinstance(exc, StartAdmissionUnavailable) else str(exc)
+                logger.error(
+                    "A Dry Run's simulated account could not be restored at boot: %s",
+                    detail,
+                    extra={
+                        "action": "boot_dry_run_authority_unrecovered",
+                        "strategy_instance_id": strategy_instance_id,
+                        "account_id": authority.account_id,
+                        "error": detail,
+                    },
+                    exc_info=True,
+                )
+                unrecovered.append(
+                    UnrecoveredDryRun(strategy_instance_id=strategy_instance_id, detail=detail)
+                )
+        return tuple(unrecovered)
+
+    def _boot_recoverable_authorities(self) -> Iterator[tuple[str, BindingAuthority]]:
+        """Every custody authority boot must compose before repair, by its bot."""
         for binding in self._bindings.list_for_broker("alpaca"):
-            await self._authority_for(binding).ensure_recoverable()
+            yield binding.strategy_instance_id, self._authority_for(binding)
 
     async def _stop_interrupted_authority_run(
         self,
@@ -1864,7 +1903,12 @@ class BotTaskRegistry:
         return binding is None or binding.broker in self._supported_broker_ids
 
     def _recovery_candidates(self) -> tuple[BotRecoveryCandidate, ...]:
-        bindings = self._bindings.list_for_broker("alpaca")
+        unrecovered = {failure.strategy_instance_id for failure in self._unrecovered_dry_runs}
+        bindings = [
+            binding
+            for binding in self._bindings.list_for_broker("alpaca")
+            if binding.strategy_instance_id not in unrecovered
+        ]
         candidates = {
             binding.strategy_instance_id: BotRecoveryCandidate(
                 strategy_instance_id=binding.strategy_instance_id,

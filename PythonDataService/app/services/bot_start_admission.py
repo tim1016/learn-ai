@@ -271,6 +271,29 @@ async def resolve_start_runtime_fact(
             explanation="Bot runner recovery has not completed after process startup.",
             next_step="Wait for the boot recovery sweep before Start.",
         )
+    unrecovered = next(
+        (
+            failure
+            for failure in (boot_recovery_report.unrecovered_dry_runs if boot_recovery_report else ())
+            if failure.strategy_instance_id == strategy_instance_id
+        ),
+        None,
+    )
+    if boot_recovery_required and unrecovered is not None:
+        # This bot's own failure (#2582): its siblings and the account keep
+        # every admission they had.
+        return StartRuntimeAdmissionFact(
+            state="BOOT_RECOVERY_INCOMPLETE",
+            observed_at_ms=observed_at_ms,
+            explanation=(
+                "This Dry Run's simulated account could not be restored when the "
+                f"Clerk started: {unrecovered.detail}"
+            ),
+            next_step=(
+                "Fix the cause above, then restart the Clerk so its startup can "
+                "restore this Dry Run."
+            ),
+        )
     if boot_recovery_required and boot_recovery_report.authority_unavailable_instances:
         # The sweep ran and finished degraded; waiting for it cannot help.
         return StartRuntimeAdmissionFact(

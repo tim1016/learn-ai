@@ -228,7 +228,7 @@ def open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteReposit
     )
 
 
-async def _open_repository_after_lease_expiry(
+async def open_repository_after_lease_expiry(
     opener: Callable[[str, Path], ClerkSqliteRepository],
     *,
     account_id: str,
@@ -236,7 +236,12 @@ async def _open_repository_after_lease_expiry(
     wait_timeout_s: float,
     retry_interval_s: float,
 ) -> ClerkSqliteRepository:
-    """Retry only the expected crashed-process lease handoff condition."""
+    """Retry only the expected crashed-process lease handoff condition.
+
+    A restarted process meets its dead predecessor's lease on every account it
+    reopens: that process renewed it and then died without releasing it, so it
+    lapses within one lease lifetime. ``wait_timeout_s=0`` is a single attempt.
+    """
     if wait_timeout_s < 0 or retry_interval_s <= 0:
         raise ValueError("execution lease wait must be non-negative with a positive retry interval")
     deadline = asyncio.get_running_loop().time() + wait_timeout_s
@@ -309,7 +314,7 @@ async def compose_repository_runtime(
     envelope_sync: LiveEnvelopeSync | None = None
     fee_sync: FeeEvidenceSync | None = None
     try:
-        repository = await _open_repository_after_lease_expiry(
+        repository = await open_repository_after_lease_expiry(
             repository_opener,
             account_id=ports.account_id,
             artifacts_root=artifacts_root,
@@ -549,8 +554,14 @@ async def activate_isolated_authority(
     artifacts_root: Path,
     store: IsolatedActivationStore,
     clock: Clock = now_ms_utc,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
 ) -> IsolatedActivationRecord:
-    """Initialize (or reopen) one isolated repository and durably activate it exactly once."""
+    """Initialize (or reopen) one isolated repository and durably activate it exactly once.
+
+    The lease wait applies to the reopen, as it does to every authority's
+    opening (:func:`open_repository_after_lease_expiry`).
+    """
     try:
         repository = ClerkSqliteRepository.initialize(
             account_id=account_id,
@@ -561,10 +572,14 @@ async def activate_isolated_authority(
         # A process can crash after durable repository initialization but before
         # activation-record append. A later explicit activation must complete
         # that same repository fence rather than silently selecting it at boot.
-        repository = ClerkSqliteRepository.open(
+        repository = await open_repository_after_lease_expiry(
+            lambda reopened_id, root: ClerkSqliteRepository.open(
+                account_id=reopened_id, artifacts_root=root, clock=clock
+            ),
             account_id=account_id,
             artifacts_root=artifacts_root,
-            clock=clock,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
         )
     try:
         meta = repository.control_meta_snapshot()
@@ -608,5 +623,6 @@ __all__ = [
     "compose_repository_runtime",
     "developer_reset_refusal",
     "open_repository",
+    "open_repository_after_lease_expiry",
     "unavailable_runtime",
 ]
