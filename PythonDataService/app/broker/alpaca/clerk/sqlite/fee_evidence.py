@@ -8,6 +8,7 @@ there is no network I/O, separate fee ledger or independent cash authority.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -64,7 +65,9 @@ class FeeEvidenceFacts(BaseModel):
 
     checked_at_ms: int = Field(ge=0)
     activities: list[BrokerActivity]
-    # Oldest dated row anywhere in the read's newest-first window.
+    # Oldest dated row anywhere in the read's newest-first window. Coverage
+    # never reads it as reach: a date-only row's midnight stamp may lie long
+    # before where the row posted (#2557).
     oldest_occurred_at_ms: int | None
     history_complete: bool
     page_token: str | None
@@ -85,69 +88,65 @@ def _trade_instants(rows: Iterable[BrokerActivity]) -> list[int]:
     return [row.occurred_at_ms for row in rows if row.category == "trade_activity" and row.occurred_at_ms is not None]
 
 
-def _latest(*instants: int | None) -> int | None:
-    return max((ms for ms in instants if ms is not None), default=None)
-
-
 def _earliest(*instants: int | None) -> int | None:
     return min((ms for ms in instants if ms is not None), default=None)
 
 
+def _reach(read: FeeEvidenceFacts, trades: Sequence[int]) -> float:
+    """How far down one read proved it reached, as a trade instant.
+
+    ``-inf`` once it read to the start of history; ``+inf`` when it returned
+    no trade row, since a date-only row proves nothing about reach. A record
+    without its oldest trade row (every one written before #2557) falls back
+    to its own new trade rows, which can only place it higher.
+    """
+    if read.history_complete:
+        return -math.inf
+    oldest = _earliest(read.oldest_trade_at_ms, *trades)
+    return math.inf if oldest is None else oldest
+
+
 @dataclass(frozen=True)
 class _ProvenRun:
-    """One contiguous stretch of newest-first history the recorded reads proved."""
+    """One contiguous stretch of newest-first history the recorded reads proved.
 
-    # Newest trade row the run retained: a read above it must reach down to
-    # this row for no row to lie unread between them.
-    newest_trade_ms: int | None
-    # Oldest trade row the run read down to.
-    oldest_trade_ms: int | None
-    # Oldest dated row the run read down to; ``None`` once it reached the
-    # start of history. A date-only row sorts at the start of its date, so
-    # its midnight stamp can only understate this reach.
-    oldest_ms: int | None
+    A run is one head read and the walk reads chained to it by cursor. Only
+    trade instants place rows in the provider's order (``_trade_instants``),
+    so the stretch runs from ``top`` down to ``bottom``, both trade instants.
+    """
+
+    # The newest trade row retained when the head read started at the top of
+    # the order, or read by its walk since. Every such row existed then, so
+    # the read started at or above it. ``-inf`` before any trade row.
+    top: float
+    # The oldest trade row any of its reads returned: ``-inf`` once one read
+    # to the start of history, ``+inf`` while none returned a trade row.
+    bottom: float
     # Where the walk down from this run continues; ``None`` when it cannot.
     cursor: str | None
 
     def reaches(self, instant_ms: int) -> bool:
-        return self.oldest_ms is None or self.oldest_ms < instant_ms
+        return self.bottom < instant_ms
 
-    def meets(self, lower: _ProvenRun) -> bool:
-        """This run read down into ``lower``, so no unread row lies between them."""
-        return self.oldest_ms is None or (
-            self.oldest_trade_ms is not None
-            and lower.newest_trade_ms is not None
-            and self.oldest_trade_ms <= lower.newest_trade_ms
-        )
-
-    def joined(self, lower: _ProvenRun) -> _ProvenRun:
-        """One run from this one and the ``lower`` run it meets.
+    def joined(self, other: _ProvenRun) -> _ProvenRun:
+        """One run from this one and an ``other`` it overlaps.
 
         The deeper walk continues. When it cannot, the shallower cursor
         re-reads the overlap and then extends below it.
         """
-        deeper, shallower = sorted((lower, self), key=_depth)
-        return _ProvenRun(
-            _latest(self.newest_trade_ms, lower.newest_trade_ms),
-            _earliest(self.oldest_trade_ms, lower.oldest_trade_ms),
-            deeper.oldest_ms,
-            None if deeper.oldest_ms is None else deeper.cursor or shallower.cursor,
-        )
+        deeper, shallower = sorted((self, other), key=lambda run: run.bottom)
+        cursor = None if deeper.bottom == -math.inf else deeper.cursor or shallower.cursor
+        return _ProvenRun(max(self.top, other.top), deeper.bottom, cursor)
 
     def continued(self, read: FeeEvidenceFacts, trades: Sequence[int]) -> _ProvenRun:
-        """The run extended by a read that resumed exactly at its cursor."""
-        newest = _latest(self.newest_trade_ms, *trades)
-        oldest_trade = _earliest(self.oldest_trade_ms, read.oldest_trade_at_ms, *trades)
-        if read.history_complete:
-            return _ProvenRun(newest, oldest_trade, None, None)
-        return _ProvenRun(
-            newest, oldest_trade, _earliest(self.oldest_ms, read.oldest_occurred_at_ms), read.next_page_token
-        )
+        """The run extended by a walk read that resumed exactly at its cursor."""
+        cursor = None if read.history_complete else read.next_page_token
+        return _ProvenRun(max([self.top, *trades]), min(self.bottom, _reach(read, trades)), cursor)
 
 
-def _depth(run: _ProvenRun) -> tuple[bool, int]:
-    """Sort key, deepest first: a run that reached the start of history leads."""
-    return (run.oldest_ms is not None, run.oldest_ms or 0)
+def _day(instant: float, otherwise: date) -> date:
+    """The ET day of a trade instant; ``otherwise`` for an open end."""
+    return otherwise if math.isinf(instant) else et_date_at_ms(int(instant))
 
 
 def _days(first: date, last: date) -> set[date]:
@@ -159,7 +158,8 @@ def _days(first: date, last: date) -> set[date]:
 class _EvidenceWindow:
     """Which activity history the recorded reads proved, newest run first.
 
-    Between two runs lies a gap: rows no read proved.
+    Between two runs lies a gap: rows no read proved. The newest run's head
+    read started at the top of the order, so nothing above it is a gap.
     """
 
     runs: tuple[_ProvenRun, ...]
@@ -172,22 +172,14 @@ class _EvidenceWindow:
         """The ET days from ``since`` through ``through`` whose rows no read proved.
 
         Those are the days the deepest run has not read past, and every day a
-        gap touches: from the lower run's newest trade row (its reach when it
-        holds none) to the upper run's oldest trade row (``through`` when it
-        holds none), both included, since a boundary instant may hold rows
-        neither read returned.
+        gap touches, from the lower run's top to the upper run's bottom, both
+        included, since a boundary instant may hold rows neither read returned.
         """
         if not self.runs:
             return _days(since, through)
-        spans: list[tuple[date, date]] = []
-        if (deepest := self.runs[-1].oldest_ms) is not None:
-            spans.append((since, et_date_at_ms(deepest)))
-        for upper, lower in pairwise(self.runs):
-            bottom = lower.newest_trade_ms if lower.newest_trade_ms is not None else lower.oldest_ms
-            spans.append((
-                since if bottom is None else et_date_at_ms(bottom),
-                through if upper.oldest_trade_ms is None else et_date_at_ms(upper.oldest_trade_ms),
-            ))
+        deepest = self.runs[-1].bottom
+        spans = [] if deepest == -math.inf else [(since, _day(deepest, through))]
+        spans.extend((_day(lower.top, since), _day(upper.bottom, through)) for upper, lower in pairwise(self.runs))
         return set().union(*(_days(max(first, since), min(last, through)) for first, last in spans))
 
     @property
@@ -261,41 +253,44 @@ def _history_floor(
 def _evidence_window(snapshots: Sequence[FeeEvidenceFacts]) -> _EvidenceWindow:
     """History proven by newest-first reads and the walks linked to them.
 
-    A head read starts at the newest activity, so it opens a run above every
-    other. It joins the run below when its oldest trade row is no newer than
-    that run's newest retained trade row, or when it added no row at all (it
-    re-read only retained history). Otherwise the rows between them are
-    unread -- more arrived between two polls than one read returns -- and
-    that gap stays unproven until a walk closes it (#2557). A continuation
-    counts only when it resumed exactly at a run's retained cursor, so every
-    walk stays contiguous with its run. Proven history never shrinks: runs
-    only extend and join.
+    A head read starts at the top of the order, so it opens a run above every
+    other; a head read that added no row re-read only retained history and
+    extends the newest run instead. A walk read counts only when it resumed
+    exactly at a run's retained cursor, so every walk stays contiguous with
+    its run. Runs whose stretches overlap join (#2557). Tops never rise down
+    the list -- a head read's top is the newest trade row retained by then,
+    and a walk reads only below its head read -- so comparing neighbours
+    joins every overlap. A run that proved no reach proves nothing once a
+    newer head read starts from the top again, and is dropped. Proven history
+    never shrinks: runs only extend and join.
     """
     runs: list[_ProvenRun] = []
+    newest_trade: float = -math.inf
     for snapshot in snapshots:
         trades = _trade_instants(snapshot.activities)
+        newest_trade = max([newest_trade, *trades])
         if snapshot.page_token is not None:
             index = next((index for index, run in enumerate(runs) if run.cursor == snapshot.page_token), None)
             if index is None:
                 continue
             runs[index] = runs[index].continued(snapshot, trades)
         elif snapshot.history_complete or snapshot.oldest_occurred_at_ms is not None:
-            complete = snapshot.history_complete
             read = _ProvenRun(
-                _latest(*trades),
-                _earliest(snapshot.oldest_trade_at_ms, *trades),
-                None if complete else snapshot.oldest_occurred_at_ms,
-                None if complete else snapshot.next_page_token,
+                newest_trade,
+                _reach(snapshot, trades),
+                None if snapshot.history_complete else snapshot.next_page_token,
             )
             if runs and not snapshot.activities:
-                runs[0] = read.joined(runs[0])
+                runs[0] = runs[0].joined(read)
             else:
                 runs.insert(0, read)
         else:
             continue
         joined: list[_ProvenRun] = []
         for run in runs:
-            if joined and joined[-1].meets(run):
+            if joined and run.bottom == math.inf:
+                continue
+            if joined and joined[-1].bottom <= run.top:
                 joined[-1] = joined[-1].joined(run)
             else:
                 joined.append(run)
