@@ -356,7 +356,7 @@ def submit_retire_strategy_instance(
 
     Unlike Start and Stop the identity carries no ``lifecycle_run_id``:
     retirement is instance-scoped and happens exactly once, when the guards in
-    ``evaluate_retirement`` have already proved there is no active run. The
+    ``evaluate_archive`` have already proved there is no active run. The
     key therefore names the instance alone, which is also what makes a
     lost-response retry replay the original retirement rather than mint a
     second one at a later instant.

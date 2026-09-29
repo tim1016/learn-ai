@@ -40,6 +40,11 @@ from app.broker.contract.errors import BrokerError, BrokerRateLimited
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder, BrokerPosition
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.broker.fleet.internal_http import BOTS_CLEAR_READ_TIMEOUT_S
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest, PanelActionResult
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -402,6 +407,7 @@ class _Account:
     alpaca: _Alpaca
     facade: SqliteAlpacaClerkFacade
     runner: BotTaskRegistry
+    runner_root: Path
 
     def _deployed(self, sid: str) -> None:
         self.repo.register_strategy_instance(
@@ -442,6 +448,21 @@ class _Account:
             self._deployed(sid)
             self._stopped(sid)
 
+    def dead_before_its_run_settled(self, sid: str) -> None:
+        """A bot whose process died before its run settled (ADR 0052 §1's window).
+
+        The Clerk has ended the run -- the sweep ends a run whose runner is
+        gone (#2369) -- but the task died before the runner's own duty record
+        committed, so that record still says ON_DUTY for a run nobody holds.
+        """
+        self.finished(sid)
+        BotLifecycleStateRepo(stable_bot_lifecycle_state_path(self.runner_root, sid)).set_phase(
+            BotLifecyclePhase.ON_DUTY,
+            now_ms=1,
+            updated_by="runner",
+            active_run_id=f"run-{sid}",
+        )
+
     async def holding(self, sid: str) -> None:
         """A bot stopped while it still holds 10 SPY, which Alpaca reports."""
         self._deployed(sid)
@@ -471,10 +492,11 @@ async def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncItera
     repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path / "clerk")
     facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=alpaca, trade=alpaca)  # type: ignore[arg-type]
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, _sqlite_repository=repo))
-    runner = BotTaskRegistry(tmp_path / "runner", feed_resolver=lambda: None, boot_recovery_required=False)
+    runner_root = tmp_path / "runner"
+    runner = BotTaskRegistry(runner_root, feed_resolver=lambda: None, boot_recovery_required=False)
     set_bot_task_registry(runner)
     try:
-        yield _Account(repo=repo, alpaca=alpaca, facade=facade, runner=runner)
+        yield _Account(repo=repo, alpaca=alpaca, facade=facade, runner=runner, runner_root=runner_root)
     finally:
         set_active_clerk_runtime(None)
         set_bot_task_registry(None)
@@ -568,3 +590,48 @@ async def test_an_unreadable_alpaca_refuses_every_leg_as_unprovable_after_one_at
     assert {leg.error.reason_code for leg in result.legs if leg.error} == {"ARCHIVE_CUSTODY_UNPROVABLE"}
     assert account.alpaca.requests - before <= 2, "one pass's broker read, not one per bot"
 
+
+
+async def test_a_dead_bot_whose_run_never_settled_stays_on_home_until_recovery_settles_it(
+    account: _Account,
+) -> None:
+    """Owner decision 2026-09-29 (#2578): with Retire gone, Clear is the only
+    way off Home, and nothing new settles a dead run. A bot whose process died
+    before its run settled is refused with ``BOT_DUTY_NOT_SETTLED`` and stays
+    listed; its page offers no Retire. Recovery that already exists -- the
+    boot scan a restart runs -- is what settles the run, and then it clears.
+    """
+    account.dead_before_its_run_settled("spy-dead-1")
+    account.finished("spy-done-1")
+    await account.requests_per_pass()
+
+    panel = await panel_data_source.get_panel("alpaca", ACCT, "spy-dead-1")
+    assert [action.action_id for action in panel.actions if action.action_id in {"retire", "archive"}] == [
+        "archive"
+    ]
+
+    refused = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request("spy-dead-1", "spy-done-1"), operator_identity="owner"
+    )
+
+    assert [(leg.strategy_instance_id, leg.outcome) for leg in refused.legs] == [
+        ("spy-dead-1", "refused"), ("spy-done-1", "applied"),
+    ]
+    dead = refused.legs[0].error
+    assert dead is not None
+    assert (dead.reason_code, dead.message) == (
+        "BOT_DUTY_NOT_SETTLED", "This bot's last run has not finished settling.",
+    )
+    listed = [row.strategy_instance_id for row in await panel_data_source.get_catalog("alpaca", ACCT)]
+    assert listed == ["spy-dead-1"]
+
+    async def _nothing_to_recover() -> None:
+        return None
+
+    await account.runner.run_boot_recovery(recover=_nothing_to_recover, reconcile=_nothing_to_recover)
+    settled = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request("spy-dead-1", key="clear-2"), operator_identity="owner"
+    )
+
+    assert [(leg.strategy_instance_id, leg.outcome) for leg in settled.legs] == [("spy-dead-1", "applied")]
+    assert await panel_data_source.get_catalog("alpaca", ACCT) == []

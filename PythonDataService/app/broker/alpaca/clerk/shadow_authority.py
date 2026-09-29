@@ -12,7 +12,7 @@ every live boot's answer.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -62,7 +62,6 @@ async def select_shadow_clerk_runtime(
     execution_lease_wait_timeout_s: float,
     execution_lease_retry_interval_s: float,
     stream_health_gate: StreamHealthGate | None,
-    roster_symbols: Callable[[], Sequence[str]] | None,
     live_envelope_values: LiveEnvelopeValues | None,
 ) -> ActiveClerkRuntime:
     """Compose the Shadow Account Authority for a live account (ADR 0059 D2).
@@ -166,7 +165,6 @@ async def select_shadow_clerk_runtime(
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
-            roster_symbols=roster_symbols,
             # Simulated custody: the live account's cash never moves, so the
             # envelope subtracts what this Clerk's own fills would have spent
             # (plan R2). Shadow uses current account policy and per-run budgets.

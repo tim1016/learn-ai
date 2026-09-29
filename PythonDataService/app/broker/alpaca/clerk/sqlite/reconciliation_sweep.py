@@ -24,13 +24,6 @@ type Sleep = Callable[[float], Awaitable[None]]
 # project custody learn what the sweep found -- the sweep, not the facade,
 # is the sole automatic reconciler (#1776 WP2).
 type ReconciliationListener = Callable[[AccountReconciliationResult], object]
-# Awaited after each successful custody pass, once the verdict is published.
-# "Successful" is strict: a ``stale`` verdict skips the hook entirely, so the
-# hook never spends its own broker timeouts on a broker custody just failed to
-# reach. The one consumer today is the symbol-validity probe (#1795): custody
-# always reconciles first, and a hook failure is isolated -- it never turns a
-# succeeded custody pass into a backoff.
-type AfterPassHook = Callable[[], Awaitable[None]]
 # Awaited once after a successful lease revival (ADR 0050): closes the
 # terminal-evidence hole in-process by re-running the boot scan's lifecycle
 # repair. A hook failure is isolated -- the lease stays revived and the next
@@ -60,7 +53,6 @@ class ReconciliationSweep:
         max_passes: int | None = None,
         intake: ReentrantAsyncLock | None = None,
         on_result: ReconciliationListener | None = None,
-        after_pass: AfterPassHook | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
         pricing: RecoveryPricing,
         run_ownership: RunOwnership | None = None,
@@ -70,7 +62,6 @@ class ReconciliationSweep:
         # each pass retires a run whose runner is gone (#2369).
         self._run_ownership = run_ownership
         self._on_result = on_result
-        self._after_pass = after_pass
         self._on_lease_revived = on_lease_revived
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
@@ -393,29 +384,7 @@ class ReconciliationSweep:
             )
             if self._on_result is not None:
                 self._on_result(result)
-            succeeded = result.verdict != "stale"
-            # Custody first, evidence second -- and only once custody actually
-            # succeeded. A "stale" verdict means the broker snapshot itself did
-            # not arrive, so running the hook here would spend its own per-probe
-            # timeouts against the same unreachable broker and delay the next
-            # custody-recovery attempt before backoff even begins.
-            if succeeded and self._after_pass is not None:
-                try:
-                    await self._after_pass()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # Isolated on purpose: the custody pass above succeeded,
-                    # and a probe failure must not push the sweep into backoff.
-                    logger.warning(
-                        "reconciliation sweep after-pass hook errored; continuing",
-                        extra={
-                            "action": "reconcile_sweep_after_pass_error",
-                            "account_id": self._repo.account_id,
-                        },
-                        exc_info=True,
-                    )
-            return succeeded
+            return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -427,4 +396,4 @@ class ReconciliationSweep:
             return False
 
 
-__all__ = ["AfterPassHook", "LeaseRevivedHook", "ReconciliationListener", "ReconciliationSweep"]
+__all__ = ["LeaseRevivedHook", "ReconciliationListener", "ReconciliationSweep"]
