@@ -393,23 +393,23 @@ or the next session), and escalation when B's order keeps working through
 - **Follow-up A went into #2553** (comment on that issue): a refused or rejected
   ENTER keeps its cash claim forever (bug, all accounts). #2553 reworks the same
   claim query. The two strict xfails flip when it lands.
-- **#FOLLOWUP-B:** Alpaca's order-level 403 reads as a credentials failure, and
+- **#2621:** Alpaca's order-level 403 reads as a credentials failure, and
   its code is dropped.
-- **#FOLLOWUP-C:** check another bot's opposite working order before sending
+- **#2622:** check another bot's opposite working order before sending
   (the owner decision above).
-- **#FOLLOWUP-D:** one bot's fill refuses the other bots' entries until the next
+- **#2623:** one bot's fill refuses the other bots' entries until the next
   reading, and the decision is lost (owner decision).
-- **#FOLLOWUP-E:** remove the pattern-day-trader and day-trading-buying-power
+- **#2624:** remove the pattern-day-trader and day-trading-buying-power
   fields Alpaca retired.
-- **#FOLLOWUP-F:** retire the stale coexistence-guard and capital-sleeve glossary
+- **#2625:** retire the stale coexistence-guard and capital-sleeve glossary
   entries, and correct ADR 0059's "settled cash".
 
 ## 7. Dead machinery found
 
 | Item | Evidence | Proposed removal |
 |---|---|---|
-| `pattern_day_trader`, `daytrading_buying_power`: ingested, modelled, rendered. Always absent from Alpaca since 2026-07-06. | [code] section 3; [fixture] 2026-07-24 capture | #FOLLOWUP-E: remove from adapter, `BrokerAccountSnapshot`, OpenAPI/TS types, the account card and margin rows, the synthetic brokers and ~15 test constructors, and `test_malformed_pattern_day_trader_is_rejected`. |
-| The CONTEXT.md "all-in coexistence guard" and "capital sleeve (future — not v1)" entries describe a guard deleted in `366545ba` and a sleeve that bot budgets replaced. ADR 0009 §13 still reads as live. | [code] no `coexist` match under `app/`; CONTEXT.md:936-958 | #FOLLOWUP-F |
+| `pattern_day_trader`, `daytrading_buying_power`: ingested, modelled, rendered. Always absent from Alpaca since 2026-07-06. | [code] section 3; [fixture] 2026-07-24 capture | #2624: remove from adapter, `BrokerAccountSnapshot`, OpenAPI/TS types, the account card and margin rows, the synthetic brokers and ~15 test constructors, and `test_malformed_pattern_day_trader_is_rejected`. |
+| The CONTEXT.md "all-in coexistence guard" and "capital sleeve (future — not v1)" entries describe a guard deleted in `366545ba` and a sleeve that bot budgets replaced. ADR 0009 §13 still reads as live. | [code] no `coexist` match under `app/`; CONTEXT.md:936-958 | #2625 |
 | `app/engine/live/account_registry.py:73` `bot_order_namespace_for_instance` duplicates the canonical `order_identity.build_bot_order_namespace` with a hard-coded format. It is used only by three test helpers and one re-export. | [code] grep | Trivial: point the three test helpers at `build_bot_order_namespace` and delete the duplicate and its re-export (`account_artifacts.py:1316`, `account_registry.py:474`). No issue needed. |
 
 ## Tests and commands

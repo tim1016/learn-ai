@@ -81,7 +81,7 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
 # #2553 absorbed #2469's follow-up A; these xfails flip when it lands.
 _RELEASE_REJECTED_CLAIM = "#2553: an ENTER that never reached the broker's book keeps its cash claim"
 # Placeholder the orchestrator replaces with the filed issue number.
-_NAME_ORDER_REJECTIONS = "#FOLLOWUP-B: Alpaca's order-level 403 (wash trade) reads as a credentials failure"
+_NAME_ORDER_REJECTIONS = "#2621: Alpaca's order-level 403 (wash trade) reads as a credentials failure"
 
 # Alpaca's documented wash-trade refusal: HTTP 403 on POST /v2/orders
 # (https://docs.alpaca.markets/us/docs/user-protection). The page states only
