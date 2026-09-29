@@ -1,7 +1,10 @@
 # Two bots trading one symbol in one Alpaca account (#2469)
 
 Research for [#2469](https://github.com/tim1016/learn-ai/issues/2469) (parent #2439), 2026-09-29.
-Code examined at `79c79f22` (origin/master). Tests:
+Code examined at `79c79f22` (origin/master). The tests were re-run after merging
+origin/master `772d10dc`. The files first cited in the review revision
+(`exit_watchdog.py`, `exit_recovery.py`, `services/bot_trade_strategy.py`,
+`clerk/sqlite/runtime.py`) are identical at both commits. Tests:
 [`test_two_bots_one_symbol.py`](../../PythonDataService/tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py).
 
 Evidence labels: **[test]** a test in that file (command at the end), **[code]** a
@@ -21,14 +24,19 @@ committed in the repo.
   rejects a buy and a sell on the same symbol in one account as a potential wash
   trade (HTTP 403, paper included). Two long-only bots hit this when one enters
   while the other exits.
-- **The Clerk handles that refusal badly today:**
+- **The Clerk handles that refusal poorly today:**
   - it reads the refusal as bad credentials;
-  - a refused ENTER keeps its cash claim forever;
-  - a refused EXIT waits on the other bot's order, then escalates to `EXIT_STUCK`,
-    and automatic retries stop.
-- **Day trading and settlement no longer constrain this.** Alpaca retired the
-  pattern-day-trader rule and removed its fields on 2026-07-06. All Alpaca
-  accounts are margin accounts.
+  - a refused ENTER keeps its cash claim forever (now part of #2553);
+  - a refused EXIT is re-sent automatically, but late. In the regular session
+    it goes out 120 s after the refusal. Outside it, the retry waits for the next
+    session: a 17:00 refusal is retried at 04:00 the next morning.
+  - The EXIT escalates to `EXIT_STUCK` only if the other bot's order is still
+    working through 8 minutes of regular-session retries: 10 minutes after a
+    regular-session refusal. Then automatic retries stop.
+- **Day trading and settlement no longer constrain this.** Alpaca says the
+  pattern-day-trader rule no longer applies, and it removed the rule's fields
+  from the account object (a changelog entry dated 2026-07-06 by its URL). All
+  Alpaca accounts are margin accounts.
 - **A2 (#2441) is fixed on master.** A second, stricter gate now also refuses
   every ENTER after any bot's fill until cash is re-read.
 
@@ -94,16 +102,17 @@ for example when shares were sold outside the Clerk.
 - **The account check spans every bot.** An ENTER must also fit account cash
   after every other bot's positive free amount, all order claims and fee claims.
   [code] `clerk/budgets.py:140-145`
-- **Any bot's fill pauses every bot's entries.** A fill recorded after the last
+- **Any bot's fill refuses every bot's entries.** A fill recorded after the last
   account reading refuses every bot's ENTER with `LIVE_ENVELOPE_UNOBSERVED`
   ("Executions changed after the last account reading") until the next reading.
   [code] `clerk/sqlite/risk_admission.py:92-94`, added by `b920c799` / `78ca2b40`
   (#2543, #2566).
-- **The refused ENTER is dropped.** The runtime returns a rejected receipt and the
-  bot discards that decision. [code] `clerk/sqlite/runtime.py:1164-1168`
+- **The refused ENTER is dropped.** The runtime returns a rejected receipt
+  [code] `clerk/sqlite/runtime.py:1164-1168`, and the bot discards that decision
+  [code] `services/bot_trade_strategy.py:1029-1038`.
 - **Two bots deciding on the same bar:** once the first bot's fill is recorded,
   the second bot's entry is refused rather than delayed.
-  [test] `test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_reading`
+  [test] `test_one_bots_fill_refuses_the_other_bots_entry_until_the_next_account_reading`
 
 ## 2. Wash trades at Alpaca
 
@@ -126,18 +135,20 @@ The rejection table on that page gives the conditions:
 | any | opposite-side market or stop | always |
 | limit / stop-limit | opposite-side limit / stop-limit | when buy limit ≥ sell limit |
 
-- **The vendor code is second-hand.** Community reports give the body as code
-  `40310000`, message "potential wash trade detected. use complex orders". The
-  official page states only the 403. The Clerk's handling depends only on the
-  status, so the tests build that body.
+- **The message is second-hand, and there is no documented code.** An Alpaca
+  community forum thread quotes the message in its title: "potential wash trade
+  detected. use complex orders". The official page states only the 403. Alpaca
+  documents no numeric code for this refusal, and a 403's code may be shared with
+  other order refusals. The Clerk's handling depends only on the status, so the
+  tests build a body with that message and an illustrative code.
 - **The 403 is order-level.** Alpaca's order reference documents a 403 on
   `POST /v2/orders` as buying power or shares not sufficient [doc: Create an
   Order].
-- **FINRA's view.** The FINRA rule Alpaca links to (Rule 5210, Supplementary
-  Material .02) treats self-trades from separate, unrelated strategies at one
-  firm as generally bona fide. So Alpaca's block is a broker protection, not a
-  statement that two bots trading against each other would be unlawful [doc:
-  FINRA 5210].
+- **FINRA's view.** Alpaca links to FINRA Rule 5210. Its Supplementary Material
+  .02 is addressed to member firms. It treats self-trades from separate,
+  unrelated trading strategies as generally bona fide. Two bots owned by one
+  person are arguably related, so that is no safe harbour here. Alpaca's block
+  keeps the account away from the question [doc: FINRA 5210].
 
 ### When two bots meet it
 
@@ -165,11 +176,11 @@ entering (buy) while another exits (sell). Same-side orders never conflict.
 
 **The error.** `map_api_error` turns every 401/403 into `BrokerAuthError`, worded
 "Alpaca rejected our credentials: potential wash trade detected. use complex
-orders" with detail "HTTP 403". Alpaca's code is dropped.
+orders" with detail "HTTP 403". Whatever code Alpaca's body carries is dropped.
 
 - [code] `broker/alpaca/errors.py:77-82`
 - [test] `test_a_wash_trade_refusal_reads_today_as_a_credentials_failure`
-- [xfail] `test_a_wash_trade_refusal_is_an_order_rejection_that_keeps_alpacas_code`
+- [xfail] `test_a_wash_trade_refusal_is_an_order_rejection_not_a_credentials_failure`
 
 **A refused ENTER** folds `ORDER_SUBMIT_FAILED` (effect and command `failed`).
 The facts keep Alpaca's message but not its code, and the bot may enter again.
@@ -179,7 +190,7 @@ The decision itself is discarded.
 - [test] `test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again`
 
 **Its cash claim is never released. This is a defect, and not only for two
-bots.**
+bots.** It is folded into #2553, which reworks the same claim query.
 
 - **Where it comes from.** The claim query prices a working order's unfilled
   remainder unless the broker state is canceled, expired, rejected or replaced.
@@ -200,25 +211,65 @@ bots.**
 **A refused EXIT** folds `EXIT_NOT_FLAT` and the bot keeps its shares
 [code] `exit_resolution.py:1629-1639,1680-1725`.
 
-- **The watchdog waits on the other bot.** It will not re-drive while the Clerk
-  has other work on the symbol or the broker shows a working order there. It
-  records each wait as a **failure** [code] `clerk/sqlite/exit_watchdog.py:113-118,403-432,459-473`.
-- **Then it escalates.** After 480 s of regular-session failure time (120 s × 4,
-  `uncertainty_policies.py:280`), it raises `EXIT_STUCK`. The episode says
-  automatic re-drives stopped and an operator reduction is needed.
-- **In the test:** 41 passes of 15 s. No second order is ever sent, and the
-  episode names "work in flight that could fill under it".
-  [test] `test_an_exit_refused_as_a_wash_trade_while_the_other_bot_buys_escalates_without_a_retry`
-- **Net effect.** A resting opposite limit from another bot turns a temporary
-  conflict into a permanent operator task.
+The stuck-EXIT watchdog then re-sends it on its own. All paths below are in
+[code] `clerk/sqlite/exit_watchdog.py` unless stated.
+
+- **First it lets the refusal settle.** Until the policy's re-drive age has
+  passed (120 s, `uncertainty_policies.py:280`), every pass is a hold
+  (`:216,233-235`).
+- **Then it waits for the symbol to go quiet.** It re-sends only when neither the
+  Clerk nor the broker has another order working on the symbol and the broker
+  quantity equals the bots' total (`:403-432,459-473`).
+- **Waiting on another order is a hold outside the regular session.** Inside
+  it, that wait is a failure (`:306`, `market_leg_sendable`). Failure time adds
+  up only across back-to-back regular-session failure passes
+  (`exit_recovery.py:79-96`).
+
+What that means for a wash-trade refusal:
+
+- **Regular session, the ordinary case.** B's market buy fills a moment after
+  A's sell is refused (the recorded paper fill took 0.772 s). The watchdog
+  re-sends A's full market sell on its first pass at least 120 s after the
+  refusal; in the test that is 120 s exactly. Nothing escalates. [test]
+  `test_a_refused_exit_is_sent_again_two_minutes_later_once_the_other_bots_buy_fills`
+- **Outside the regular session, a refused limit waits for the next session.**
+  - A refused after-hours limit is not retried in the session it was priced
+    for, even once B's order has filled (`:240-245`).
+  - A's page names the next try. With an exit allowance that is 04:00 the next
+    morning; without one it is the 09:30 open
+    (`recovery_reduction.py:752-767`). At 04:00 A's sell goes out as a
+    pre-market limit.
+  - Every pass is a hold, so nothing escalates.
+  - [test] `test_a_refused_after_hours_exit_waits_for_the_next_session_and_never_escalates`
+    (refused at 17:00).
+  - A pre-market refusal waits for the 09:30 open. Existing test
+    `test_exit_send_session.py::test_failed_extended_limit_waits_for_next_eligible_session_without_chasing`
+    shows this for a pre-market limit the broker rejected after accepting it.
+- **Escalation needs the other order to keep working into the regular session.**
+  If B's order is still working after the 120 s wait, each regular-session pass
+  is a failure. After 480 s of them (120 s × 4) the watchdog raises `EXIT_STUCK`
+  (`:364-371`), 600 s after the refusal. Automatic re-drives stop and the owner
+  must flatten.
+  - In the test, B's buy stays `new` for ten regular-session minutes. No second
+    order is sent, and the episode names "work in flight that could fill under
+    it".
+  - [test] `test_a_refused_exit_escalates_only_if_the_other_bots_order_keeps_working_eight_regular_session_minutes`
+  - The same budget applies from 09:30 to an earlier refusal whose retry waited
+    for the open, if the other order (for example an extended-hours limit) is
+    still working then.
+- **Net effect.** A wash-trade refusal delays the other bot's exit: by two
+  minutes in the regular session, or to the next session outside it. It
+  becomes a task for the owner only when the opposite order keeps working
+  through 8 minutes of regular-session retries.
 
 ## 3. Pattern day trading, the intraday margin rule and settlement
 
 ### Pattern day trading no longer applies
 
 - **Alpaca removed the fields.** The Trading API account object lost
-  `pattern_day_trader`, `daytrade_count` and `daytrading_buying_power` on
-  2026-07-06 [doc: PDT removal changelog].
+  `pattern_day_trader`, `daytrade_count` and `daytrading_buying_power` [doc: PDT
+  removal changelog]. The date, 2026-07-06, comes from the entry's URL. The page
+  states neither the date nor that the rule is gone.
 - **Alpaca says the rule is gone.** The PDT designation, the 4-trade limit and
   the $25,000 minimum are gone, and clients no longer meet PDT rejections [doc:
   Intraday Margin Rule; Non-leverage accounts].
@@ -310,29 +361,38 @@ Two bots on one symbol add no new path: the bound is account-wide.
   the same thing.
 
 **Why guard:** Alpaca's wash-trade protection makes opposite-side orders from two
-bots fail predictably. Today each failure costs money or needs an operator:
+bots fail predictably. Today each failure has a cost:
 
-- a claim that never releases;
-- a mislabelled error;
-- an exit that becomes `EXIT_STUCK`.
+- a refused ENTER holds a cash claim that never releases (#2553);
+- the refusal is labelled as bad credentials;
+- a refused EXIT goes out late: 120 s later in the regular session, or at the
+  next session outside it. The owner also sees a refused-exit notice in the
+  meantime;
+- a refused EXIT escalates to `EXIT_STUCK` if the other order keeps working
+  through 8 minutes of regular-session retries.
 
 The Clerk already knows every working order in the account, since it placed them.
 It can apply Alpaca's documented table before sending, instead of learning it
 from a 403.
 
-**Owner decision needed:** when bot A must EXIT while bot B's opposite ENTER is
-working on the same symbol:
+**Owner decision needed:** when bot A must EXIT while bot B's opposite order is
+working on the same symbol. Waiting is mostly what the Clerk already does: A's
+exit is refused, and A retries on its own once B's order ends. The question is
+whether its two costs are acceptable: an exit that goes out late (two minutes,
+or the next session), and escalation when B's order keeps working through
+8 minutes of regular-session retries.
 
-1. A waits until B's order ends, with no escalation while it waits (recommended
-   default).
-2. A cancels B's working ENTER, because exits come first.
-3. Refuse a second bot on a symbol already traded in the account (the retired
-   guard, brought back).
+1. **Keep today's behaviour.** Accept both costs and add only a Deploy notice.
+2. **Check before sending** (recommended). The Clerk holds A's exit while B's
+   order is open and sends it on the first pass after B's order ends, in the
+   same session. Nothing is sent to be refused. Escalation stays as today.
+3. **Exits come first.** A cancels B's working ENTER, then sells.
 
 ## 6. Follow-ups (drafted; numbers filled in by the orchestrator)
 
-- **#FOLLOWUP-A:** a refused or rejected ENTER keeps its cash claim forever (bug,
-  all accounts).
+- **Follow-up A went into #2553** (comment on that issue): a refused or rejected
+  ENTER keeps its cash claim forever (bug, all accounts). #2553 reworks the same
+  claim query. The two strict xfails flip when it lands.
 - **#FOLLOWUP-B:** Alpaca's order-level 403 reads as a credentials failure, and
   its code is dropped.
 - **#FOLLOWUP-C:** check another bot's opposite working order before sending
@@ -358,26 +418,29 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-18 passed, 3 xfailed
+20 passed, 3 xfailed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
-  `conftest._FakeTradePort` and `_make_held_position`; the budget harness from
-  `test_budget_commands`; `_append_slice`; and the watchdog harness from
-  `test_reconcile`.
-- **The xfails.** Each is `strict=True` and names its follow-up. Run with
-  `--runxfail`, they fail on the asserted defect: `BrokerAuthError` is not
+  `conftest._FakeTradePort`, `_make_held_position` and `_fill_entry` (the fill
+  half of `_make_held_position`, split out so a test can fill an entry it
+  submitted earlier); the budget harness from `test_budget_commands`;
+  `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
+  from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
+- **The xfails.** Each is `strict=True` and names its issue: #2553 for the two
+  cash-claim cases, follow-up B for the error mapping. Run with `--runxfail`,
+  they fail on the asserted defect: `BrokerAuthError` is not
   `BrokerOrderRejected`, and `order_claims` is `200.01`, not 0.
 
 ## Sources
 
 - Alpaca, *User Protection*: wash-trade rule, rejection table, paper applicability, Equity/Order ratio check. https://docs.alpaca.markets/us/docs/user-protection (read 2026-09-29)
 - Alpaca, *Create an Order* (`POST /v2/orders` response codes). https://docs.alpaca.markets/us/reference/postorder
-- Alpaca, *Pattern day trading fields and configurations removed* (changelog 2026-07-06). https://docs.alpaca.markets/us/changelog/2026-07-06-pdt-db49dba
-- Alpaca, *Pattern day trading and DTBP fields and endpoints are deprecated* (changelog 2026-06-03). https://docs.alpaca.markets/us/changelog/2026-06-03-pdt-651df23
+- Alpaca, *Pattern day trading fields and configurations removed* (changelog; dated 2026-07-06 by its URL, not on the page). https://docs.alpaca.markets/us/changelog/2026-07-06-pdt-db49dba
+- Alpaca, *Pattern day trading and DTBP fields and endpoints are deprecated* (changelog; dated 2026-06-03 by its URL). https://docs.alpaca.markets/us/changelog/2026-06-03-pdt-651df23
 - Alpaca, *The Intraday Margin Rule*. https://docs.alpaca.markets/us/docs/the-intraday-margin-rule
 - Alpaca, *Intraday Margin Rule for Non-Leverage Margin Accounts*. https://docs.alpaca.markets/us/docs/intraday-margin-rule-for-non-leverage-margin-accounts
 - Alpaca, *Trading Account* (account plans, multipliers). https://docs.alpaca.markets/us/docs/account-plans
 - Alpaca, *Margin and Short Selling*. https://docs.alpaca.markets/us/docs/margin-and-short-selling
 - FINRA Rule 5210 and Supplementary Material .02 (linked from Alpaca's wash-trade section). https://www.finra.org/rules-guidance/rulebooks/finra-rules/5210
-- Wash-trade body code/message (secondary: Alpaca community forum). https://forum.alpaca.markets/t/apierror-potential-wash-trade-detected-use-complex-orders/13441
+- Wash-trade refusal message (secondary: the title of an Alpaca community forum thread; it gives no code). https://forum.alpaca.markets/t/apierror-potential-wash-trade-detected-use-complex-orders/13441
