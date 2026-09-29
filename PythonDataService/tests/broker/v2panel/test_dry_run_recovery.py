@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite import dry_run_close
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.marketdata.feed import MarketDataBar
@@ -52,7 +52,7 @@ from app.schemas.deployment_budget import DeployBudgetConsent, DeploymentBudgetV
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry, set_bot_task_registry
 from app.services.broker_v2_panel import budget_deploy, panel_data_source, panel_scope
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
@@ -576,3 +576,28 @@ async def test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the
     assert panel.exposure == {}
     assert [(fill.side, fill.price) for fill in panel.recent_fills][:1] == [("sell", 601.25)]
     assert crashed_dry_run.alpaca.calls == []
+
+
+async def test_a_failed_run_end_pass_never_fails_the_stop_and_still_releases(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The run has already ended: a lost lease in its run-end pass is logged,
+    the authority released, and the Stop or shutdown releasing it succeeds."""
+    registry = get_bot_task_registry()
+    assert registry is not None
+    authority = registry._authority_for(_binding())
+    await authority.ensure_recoverable()
+    runtime = get_clerk_runtime(SIM_ACCOUNT)
+    assert runtime is not None and runtime.clerk is not None
+
+    async def lease_lost() -> None:
+        raise ExecutionLeaseLost("lease reassigned", account_id=SIM_ACCOUNT)
+
+    monkeypatch.setattr(runtime.clerk, "reconcile_once", lease_lost)
+
+    await authority.release_after_run_end()
+
+    assert get_clerk_runtime(SIM_ACCOUNT) is None
+    assert any(
+        getattr(record, "action", None) == "dry_run_run_end_reconcile_failed" for record in caplog.records
+    )
