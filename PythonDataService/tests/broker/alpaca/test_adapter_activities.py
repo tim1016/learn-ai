@@ -470,6 +470,50 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
     assert info.value.__cause__.args == ("activity_type",)
 
 
+_GENERIC_ACTIVITY_READS = {
+    "newest-page": lambda broker: broker.list_activities(limit=25),
+    "bounded-recovery-walk": lambda broker: broker.list_activities(
+        after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"), limit=25
+    ),
+    "evidence-walk": lambda broker: broker.read_activity_evidence(),
+    "windowed-evidence-walk": lambda broker: broker.read_activity_evidence(
+        after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z")
+    ),
+}
+
+
+@pytest.mark.parametrize("read", sorted(_GENERIC_ACTIVITY_READS))
+@pytest.mark.parametrize(
+    ("shape", "cause_type"),
+    [
+        pytest.param("missing-type", KeyError, id="missing-type"),
+        pytest.param("unparseable-time", ValueError, id="unparseable-time"),
+        pytest.param("non-object-row", TypeError, id="non-object-row"),
+    ],
+)
+async def test_generic_activity_reads_name_a_malformed_row_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    read: str,
+    shape: str,
+    cause_type: type[Exception],
+) -> None:
+    """Only the transfer walk and the account read once named a malformed answer (#2627)."""
+    trade = load_alpaca_fixture("activities", "activities.json")[0]
+    rows: dict[str, list[object]] = {
+        "missing-type": [{key: value for key, value in trade.items() if key != "activity_type"}],
+        "unparseable-time": [{**trade, "transaction_time": "not-a-time"}],
+        "non-object-row": [trade, None],
+    }
+    broker = AlpacaBroker(client=_ActivitiesClient({None: rows[shape]}))  # type: ignore[arg-type, dict-item]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="activity evidence was malformed") as info:
+        await _GENERIC_ACTIVITY_READS[read](broker)
+
+    assert info.value.detail is not None
+    assert cause_type.__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, cause_type)
+
+
 async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_evidence() -> None:
     broker = AlpacaBroker(
         client=_ActivitiesClient({None: [None]})  # type: ignore[list-item, arg-type]

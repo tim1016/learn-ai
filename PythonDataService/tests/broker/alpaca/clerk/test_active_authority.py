@@ -505,13 +505,13 @@ async def test_live_account_holding_clerk_minted_orders_is_poisoned(tmp_path: Pa
 async def test_a_live_boot_degrades_to_unavailable_when_the_namespace_probe_errors(
     tmp_path: Path,
 ) -> None:
-    """A raw vendor-payload error must refuse the authority, never abort startup.
+    """An error outside the broker contract must refuse the authority, never abort startup.
 
-    ``AlpacaBroker.list_orders`` adapts each payload *outside* ``_call``, so a
-    malformed one raises a plain ``ValidationError`` rather than a
-    ``BrokerError``. Unhandled, that propagates out of the lifespan and takes
-    every unrelated surface down with it -- an exposure the paper path does
-    not have, on the real-money path.
+    ``AlpacaBroker`` names a malformed order row as ``BrokerEvidenceUnavailable``
+    (#2627), but a read port is only bound to the contract by convention.
+    Unhandled, a plain error propagates out of the lifespan and takes every
+    unrelated surface down with it -- an exposure the paper path does not
+    have, on the real-money path.
     """
 
     class _MalformedLiveBroker(_LiveBroker):

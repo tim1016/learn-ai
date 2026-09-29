@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 
+from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerEvidenceUnavailable, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -432,6 +433,44 @@ async def test_activities_endpoint_returns_list_and_forwards_query_params() -> N
     assert response.status_code == 200
     assert response.json()[0]["activity_id"] == "act-9"
     assert port.activities_call == {"after_ms": 999, "limit": 5}
+
+
+class _MalformedAlpacaClient:
+    """An Alpaca client seam whose every row is missing a required field."""
+
+    async def list_positions(self) -> list[dict[str, str]]:
+        return [{"symbol": "SPY"}]
+
+    async def list_orders(self, **_query: object) -> list[dict[str, str]]:
+        return [{"symbol": "SPY"}]
+
+    async def list_activities(self, **_query: object) -> list[dict[str, str]]:
+        return [{"id": "act-1"}]
+
+
+@pytest.mark.parametrize(
+    ("path", "evidence"),
+    [
+        pytest.param("/api/brokers/alpaca/positions", "position", id="positions"),
+        pytest.param("/api/brokers/alpaca/orders?status=open", "order", id="orders"),
+        pytest.param("/api/brokers/alpaca/order-groups", "order", id="order-groups"),
+        pytest.param("/api/brokers/alpaca/activities", "activity", id="activities"),
+        pytest.param("/api/brokers/alpaca/activities?after_ms=0", "activity", id="activities-window"),
+        pytest.param("/api/brokers/alpaca/activities/period?period=30d", "activity", id="activity-period"),
+    ],
+)
+async def test_a_malformed_alpaca_answer_reaches_the_owner_as_a_named_503(path: str, evidence: str) -> None:
+    """A malformed row once escaped the adapter as a raw error, not a named 503 (#2627)."""
+    get_broker_registry().register(AlpacaBroker(client=_MalformedAlpacaClient()))  # type: ignore[arg-type]
+
+    response = await _get(path)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "broker": "alpaca",
+        "message": f"Alpaca {evidence} evidence was malformed.",
+        "why": f"The {evidence} response could not be mapped to the broker contract.",
+    }
 
 
 async def test_portfolio_history_proof_preserves_one_broker_snapshot_when_local_proof_is_unavailable() -> None:

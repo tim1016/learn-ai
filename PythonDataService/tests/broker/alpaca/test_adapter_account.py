@@ -30,10 +30,22 @@ class _AccountClient:
         return self.payload
 
 
-def _paper_broker(payload: dict[str, object]) -> AlpacaBroker:
+# Every live envelope value is required configuration (ADR 0059 D4).
+_LIVE_ENVELOPE = {
+    "live_loss_fraction": 0.02,
+    "live_loss_usd": 500.0,
+    "live_shadow_sessions": 5,
+    "live_arming_max_sessions": 20,
+    "live_xh_entry_bps": 10.0,
+    "live_xh_exit_bps": 10.0,
+}
+
+
+def _broker(payload: dict[str, object], mode: str = "paper") -> AlpacaBroker:
+    envelope = _LIVE_ENVELOPE if mode == "live" else {}
     return AlpacaBroker(
         client=_AccountClient(payload),  # type: ignore[arg-type]
-        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode=mode, **envelope),
     )
 
 
@@ -133,7 +145,7 @@ async def test_broker_names_a_malformed_account_response_as_unavailable_evidence
     payload[field] = value
 
     with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
-        await _paper_broker(payload).get_account()
+        await _broker(payload).get_account()
 
     assert info.value.http_status == 503
     # The plain message and ``detail`` stay owner copy: a router returns both.
@@ -151,12 +163,54 @@ async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
     payload.pop("equity")
 
     with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
-        await _paper_broker(payload).get_account()
+        await _broker(payload).get_account()
 
     assert info.value.detail is not None
     assert "KeyError" not in info.value.detail
     assert isinstance(info.value.__cause__, KeyError)
     assert info.value.__cause__.args == ("equity",)
+
+
+_UNUSABLE_ACCOUNT_NUMBERS = [
+    pytest.param(None, id="null"),
+    pytest.param("", id="blank"),
+    pytest.param("   ", id="whitespace"),
+    pytest.param(12345, id="number"),
+    pytest.param(True, id="boolean"),
+]
+
+
+@pytest.mark.parametrize("mode", ["paper", "live"])
+@pytest.mark.parametrize("account_number", _UNUSABLE_ACCOUNT_NUMBERS)
+def test_adapter_refuses_an_account_number_that_is_not_text(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    mode: str,
+    account_number: object,
+) -> None:
+    """A null number once became live account "None" (#2627); no mode maps it."""
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload["account_number"] = account_number
+
+    with pytest.raises((TypeError, ValueError), match="account_number"):
+        from_alpaca_account(payload, account_mode=mode, observed_at_ms=_OBSERVED)
+
+
+@pytest.mark.parametrize("mode", ["paper", "live"])
+@pytest.mark.parametrize("account_number", _UNUSABLE_ACCOUNT_NUMBERS)
+async def test_broker_names_an_unusable_account_number_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    mode: str,
+    account_number: object,
+) -> None:
+    """Malformed evidence in every mode, never a snapshot or a mode disagreement (#2627)."""
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload["account_number"] = account_number
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+        await _broker(payload, mode).get_account()
+
+    assert info.value.http_status == 503
+    assert "account_number" in str(info.value.__cause__)
 
 
 def test_live_mode_maps_live_and_a_non_pa_account_number(

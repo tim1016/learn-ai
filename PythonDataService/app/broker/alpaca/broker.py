@@ -17,9 +17,11 @@ process-wide settings lazily on first use, exactly as it always has.
 
 from __future__ import annotations
 
+import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from itertools import pairwise
+from typing import Any
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
@@ -42,8 +44,38 @@ from app.broker.contract.models import (
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 from app.utils.session_anchors import et_date_at_ms
 
+logger = logging.getLogger(__name__)
+
 _ACTIVITY_MAX_PAGES = 3
 _CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
+
+
+def _mapped_evidence[T](evidence: str, mapping: Callable[[], T]) -> T:
+    """Run one adapter mapping; an answer it cannot map is unavailable evidence.
+
+    The broker answered, but not with contract evidence: a missing field, a
+    wrong type or an unparseable value. That is ``BrokerEvidenceUnavailable``
+    -- a named 503 a caller can hold on -- never the adapter's raw error,
+    which no broker-contract consumer is written to catch (#2627).
+    ``message`` and ``detail`` stay owner copy, because a router returns both;
+    the adapter's own error is chained and logged for the operator.
+    """
+    try:
+        return mapping()
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Alpaca evidence could not be mapped to the broker contract",
+            extra={
+                "action": "alpaca_evidence_malformed",
+                "evidence": evidence,
+                "cause": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        raise BrokerEvidenceUnavailable(
+            f"Alpaca {evidence} evidence was malformed.",
+            broker=BROKER_ID,
+            detail=f"The {evidence} response could not be mapped to the broker contract.",
+        ) from exc
 
 
 def _transfer_activity_may_overlap_window(
@@ -125,6 +157,24 @@ def _validate_transfer_payload(payload: object) -> None:
                 "it can adjust account day P&L."
             ),
         )
+
+
+def _mapped_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity]:
+    """Map one page of activity rows; a row the adapter cannot map is unavailable evidence."""
+    return _mapped_evidence(
+        "activity", lambda: [adapter.from_alpaca_activity(payload) for payload in payloads]
+    )
+
+
+def _mapped_transfer_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity]:
+    """Map one transfer page once every row on it proves identity and finality."""
+
+    def validated_page() -> list[BrokerActivity]:
+        for payload in payloads:
+            _validate_transfer_payload(payload)
+        return [adapter.from_alpaca_activity(payload) for payload in payloads]
+
+    return _mapped_evidence("transfer activity", validated_page)
 
 
 def _activity_page_oldest_ms(
@@ -255,20 +305,17 @@ class AlpacaBroker:
         # The mode that selected the endpoint is the only source of the
         # account's mode (ADR 0059 D1); the adapter refuses a disagreeing shape.
         account_mode = self._resolved_settings().mode
-        try:
-            return adapter.from_alpaca_account(payload, account_mode=account_mode)
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
-            # The broker answered, but not with account evidence: named like a
-            # malformed transfer row, so the envelope withdraws its observation.
-            raise BrokerEvidenceUnavailable(
-                "Alpaca account evidence was malformed.",
-                broker=BROKER_ID,
-                detail="The account response could not be mapped to the broker contract.",
-            ) from exc
+        return _mapped_evidence(
+            "account",
+            lambda: adapter.from_alpaca_account(payload, account_mode=account_mode),
+        )
 
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()
-        return [adapter.from_alpaca_position(payload) for payload in payloads]
+        return _mapped_evidence(
+            "position",
+            lambda: [adapter.from_alpaca_position(payload) for payload in payloads],
+        )
 
     async def list_orders(
         self,
@@ -280,7 +327,10 @@ class AlpacaBroker:
         payloads = await self._client.list_orders(
             status=status, limit=limit, after_ms=after_ms
         )
-        return [adapter.from_alpaca_order(payload) for payload in payloads]
+        return _mapped_evidence(
+            "order",
+            lambda: [adapter.from_alpaca_order(payload) for payload in payloads],
+        )
 
     async def list_activities(
         self,
@@ -294,7 +344,7 @@ class AlpacaBroker:
         )
         if after_ms is None:
             payloads = await self._client.list_activities(limit=limit, **activity_filter)
-            return [adapter.from_alpaca_activity(payload) for payload in payloads]
+            return _mapped_activities(payloads)
 
         if activity_type == _CASH_TRANSFER_ACTIVITY_FILTER:
             # The loss gate may call this history complete only after reaching
@@ -313,16 +363,7 @@ class AlpacaBroker:
                     page_token=page_token,
                     **activity_filter,
                 )
-                try:
-                    for payload in payloads:
-                        _validate_transfer_payload(payload)
-                    mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
-                except (AttributeError, KeyError, TypeError, ValueError) as exc:
-                    raise BrokerEvidenceUnavailable(
-                        "Alpaca transfer activity evidence was malformed.",
-                        broker=BROKER_ID,
-                        detail="A transfer row could not be mapped to the broker contract.",
-                    ) from exc
+                mapped = _mapped_transfer_activities(payloads)
                 page_oldest_ms = _activity_page_oldest_ms(
                     mapped,
                     previous_page_oldest_ms=previous_page_oldest_ms,
@@ -384,7 +425,7 @@ class AlpacaBroker:
                 page_token=page_token,
                 **activity_filter,
             )
-            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads):
+            for activity in _mapped_activities(payloads):
                 if (
                     activity.activity_id not in seen_activity_ids
                     and activity.occurred_at_ms is not None
@@ -435,7 +476,7 @@ class AlpacaBroker:
         boundary_crossed_on_previous_page = False
         for _ in range(_ACTIVITY_MAX_PAGES):
             payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
-            page = [adapter.from_alpaca_activity(payload) for payload in payloads]
+            page = _mapped_activities(payloads)
             if after_ms is None:
                 activities.extend(page)
                 window_proven = False

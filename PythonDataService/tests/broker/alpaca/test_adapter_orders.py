@@ -15,6 +15,8 @@ from app.broker.alpaca.adapter import (
     rfc3339_to_ms,
     to_alpaca_order_request,
 )
+from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
@@ -198,3 +200,52 @@ def test_from_alpaca_order_reads_extended_hours_and_defaults_it_false(
 
     assert from_alpaca_order(payload, observed_at_ms=_OBSERVED).extended_hours is False
     assert from_alpaca_order({**payload, "extended_hours": True}, observed_at_ms=_OBSERVED).extended_hours is True
+
+
+class _OrdersClient:
+    """The client seam: returns the raw order rows the test built."""
+
+    def __init__(self, payloads: list[object]) -> None:
+        self.payloads = payloads
+
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[object]:
+        return self.payloads
+
+
+@pytest.mark.parametrize(
+    ("shape", "cause_type"),
+    [
+        pytest.param("missing-id", KeyError, id="missing-id"),
+        pytest.param("boolean-fill-count", TypeError, id="boolean-fill-count"),
+        pytest.param("unparseable-submitted-at", ValueError, id="unparseable-submitted-at"),
+        pytest.param("non-object-row", AttributeError, id="non-object-row"),
+    ],
+)
+async def test_broker_names_a_malformed_order_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    shape: str,
+    cause_type: type[Exception],
+) -> None:
+    """A malformed row once escaped as a raw KeyError/TypeError/ValueError (#2627)."""
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+    rows: dict[str, list[object]] = {
+        "missing-id": [{key: value for key, value in open_order.items() if key != "id"}],
+        "boolean-fill-count": [{**open_order, "filled_qty": True}],
+        "unparseable-submitted-at": [{**open_order, "submitted_at": "yesterday"}],
+        "non-object-row": [open_order, None],
+    }
+    broker = AlpacaBroker(client=_OrdersClient(rows[shape]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="order evidence was malformed") as info:
+        await broker.list_orders(status="open", limit=500)
+
+    assert info.value.http_status == 503
+    assert info.value.detail is not None
+    assert cause_type.__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, cause_type)
