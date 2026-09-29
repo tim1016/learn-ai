@@ -200,7 +200,7 @@
     },
     "stop_bot_decisions": {
       "label": "Stop bot decisions",
-      "explanation": "Stop the bot making new decisions. Shares it holds are not sold."
+      "explanation": "Stop the bot making new decisions. Stopping doesn't sell its shares."
     },
     "unexplained_order": {
       "label": "Unexplained order",

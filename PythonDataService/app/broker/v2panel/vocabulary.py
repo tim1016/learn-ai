@@ -365,7 +365,7 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "stop_bot_decisions": OperatorCopy(
         "Stop bot decisions",
-        "Stop the bot making new decisions. Shares it holds are not sold.",
+        "Stop the bot making new decisions. Stopping doesn't sell its shares.",
     ),
     "open_custody_timeline": OperatorCopy(
         "Open custody timeline",

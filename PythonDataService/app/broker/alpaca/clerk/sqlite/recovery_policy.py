@@ -225,11 +225,12 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
     _Descriptor(
         action_id="stop_bot_decisions",
         label="Stop bot decisions",
-        explanation="Stop the bot making new decisions. Shares it holds are not sold.",
+        explanation="Stop the bot making new decisions. Stopping doesn't sell its shares.",
         mutation=True,
         confirmation=_confirmation(
             "Stop this bot?",
-            "The bot stops making new decisions. Shares it holds stay held; nothing is sold. Cash it isn't using goes back to the account.",
+            "The bot stops making new decisions. A sale already sent can still go through. "
+            "Cash it isn't using goes back to the account.",
             "Stop bot decisions",
         ),
     ),

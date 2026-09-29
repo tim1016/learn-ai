@@ -73,7 +73,7 @@ describe('OperatorReadinessComponent', () => {
     const { actionRequested } = await renderChecks(panelWith([stop], [check(stop)]), 'stop_bot_decisions');
 
     expand('Stop bot decisions');
-    expect(screen.getByText('Stop the bot making new decisions. Shares it holds are not sold.')).toBeTruthy();
+    expect(screen.getByText('Stop the bot making new decisions. Stopping doesn\'t sell its shares.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Stop bot decisions' })).toBeNull();
     expect(actionRequested).not.toHaveBeenCalled();
   });

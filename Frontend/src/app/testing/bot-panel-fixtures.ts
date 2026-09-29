@@ -184,11 +184,11 @@ function unavailableSqliteAction(
 export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): PanelAction {
   return fakePanelAction('stop_bot_decisions', {
     label: 'Stop bot decisions',
-    explanation: 'Stop the bot making new decisions. Shares it holds are not sold.',
+    explanation: 'Stop the bot making new decisions. Stopping doesn\'t sell its shares.',
     confirmation: {
       title: 'Stop this bot?',
-      body: 'Stop the bot making new decisions. Shares it holds are not sold.',
-      consequence: 'The bot stops making new decisions. Shares it holds stay held; nothing is sold. Cash it isn\'t using goes back to the account.',
+      body: 'Stop the bot making new decisions. Stopping doesn\'t sell its shares.',
+      consequence: 'The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.',
       confirm_label: 'Stop bot decisions',
       required_token: '',
     },
