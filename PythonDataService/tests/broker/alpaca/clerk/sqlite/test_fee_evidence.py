@@ -361,7 +361,9 @@ async def test_walk_stops_at_custody_floor_and_never_attributes_older_rows(day_p
 
 
 def test_outside_fills_attribute_from_the_custody_floor_day_on(day_pnl_repo) -> None:
-    """Only days before the floor leave attribution; the floor day still claims (#2550)."""
+    """Only days before the floor leave fee attribution; the floor day still
+    claims its fees (#2550). The execution itself predates custody's genesis
+    instant, so for money it is its order's quantity only (H35)."""
     repo = day_pnl_repo
     _seed(repo)
     on_floor = _outside_fill("floor-day-buy", YESTERDAY_OPEN, order="floor-day-order")
@@ -369,7 +371,8 @@ def test_outside_fills_attribute_from_the_custody_floor_day_on(day_pnl_repo) -> 
     record_fee_evidence(repo, [on_floor, before_floor], checked_at_ms=NOON, history_complete=True)
     result = repo.fee_attribution(now_ms=NOON)
     assert result.known
-    assert [fill.fill_id for fill in result.external_fills] == ["floor-day-buy"]
+    assert result.external_fills == ()
+    assert result.pre_custody_quantities == {"floor-day-order": Decimal(1)}
     assert result.total_for("external:floor-day-order") == Decimal("0.01")
     assert result.unobserved_cash_claim(cash_seen_before_ms=NOON) == Decimal("0.01")
 
@@ -421,7 +424,9 @@ async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_
     assert history.tokens == [None, "row-299", None, "row-599", None, "row-899", None]
     result = repo.fee_attribution(now_ms=NOON)
     assert result.known
-    assert sorted(fill.fill_id for fill in result.external_fills) == ["gtc-newer", "gtc-older"]
+    # Both executions predate custody: they complete the order, never price it.
+    assert result.external_fills == ()
+    assert result.pre_custody_quantities == {"gtc-order": Decimal(2)}
 
 
 # The tracked GTC works across custody's genesis (09-08). Its earlier execution
@@ -443,16 +448,18 @@ def test_tracked_order_execution_before_custody_reaches_only_the_cash_claim(
 ) -> None:
     repo = day_pnl_repo
     _observe_tracked_gtc(repo)
-    later = _outside_fill("gtc-later", NOON - 1_000, order="gtc-order")
+    later = _outside_fill("gtc-later", NOON + 1_000, order="gtc-order")
     earlier = _outside_fill("gtc-earlier", et_minute_of_day_ms(earlier_day, 12 * 60), order="gtc-order")
     record_fee_evidence(repo, [later, *unrelated, earlier], checked_at_ms=NOON, history_complete=True)
     result = repo.fee_attribution(now_ms=NOON)
     assert result.known, result.unresolved
-    assert sorted(fill.fill_id for fill in result.external_fills) == ["gtc-earlier", "gtc-later"]
+    assert [fill.fill_id for fill in result.external_fills] == ["gtc-later"]
+    assert result.pre_custody_quantities == {"gtc-order": Decimal(1)}
     # Only the execution on custody's day is priced.
     assert result.total_for("external:gtc-order") == Decimal("0.01")
-    # Both executions reach the claim's exact filled-quantity check (2 shares).
-    assert _external_cash_claim(repo._conn, result, seen_before_ms=NOON) == Decimal(200)
+    # Both executions reach the claim's exact filled-quantity check (2 shares);
+    # only the custody-era one is a purchase the cash may not show yet.
+    assert _external_cash_claim(repo._conn, result, seen_before_ms=NOON) == Decimal(100)
     assert _external_cash_claim(repo._conn, result, seen_before_ms=NOON + 1) == 0
 
 

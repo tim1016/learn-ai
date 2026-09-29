@@ -168,7 +168,14 @@ def account_money(
 
 
 def _check_conservation(money: AccountMoney) -> None:
-    """The exact identity every drawn bar rests on; a failure is a projection bug."""
+    """The exact identity every drawn bar rests on; a failure is a projection bug.
+
+    It checks the partition, not its inputs: total = C - U_buy + U_sell +
+    sum(position cost) is how ``account_money`` builds the total, so restating
+    it here would be a tautology. That U_buy never prices shares missing from
+    the positions is instead structural: the fee evidence splits outside
+    executions from before custody began off at their source (H35).
+    """
     with money_context():
         budget = money.budget
         parts = (

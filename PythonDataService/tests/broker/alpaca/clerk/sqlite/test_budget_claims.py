@@ -261,6 +261,101 @@ def test_outside_shorts_are_named_once_per_symbol_never_once_per_lot(tmp_path: P
         repo.close()
 
 
+def _outside_trade(order_id: str, symbol: str, side: str, *, quantity: float = 1, at_ms: int) -> tuple[BrokerOrder, BrokerActivity]:
+    """One filled outside order of ``quantity`` at $100 and its execution, dated ``at_ms``."""
+    order, fill = _outside_sale(order_id, symbol, at_ms=at_ms)
+    return (
+        order.model_copy(update={"side": side, "quantity": quantity, "filled_quantity": quantity}),
+        fill.model_copy(update={"side": side, "quantity": quantity}),
+    )
+
+
+def _drawn_total(money) -> tuple[Decimal, int, int]:
+    """The account's total, and what its drawn bar says: total and shortfall cents."""
+    from app.broker.alpaca.clerk.account_money import money_bar
+
+    bar = money_bar(money)
+    return money.total, bar.total_cents, bar.shortfall_cents
+
+
+# Custody (``_new_budget_repo``) began at NOON exactly.
+_BEFORE_CUSTODY_DAY = NOON - 4 * 86_400_000
+_EARLIER_ON_GENESIS_DAY = NOON - 3_600_000
+
+
+@pytest.mark.parametrize("before_custody", [_BEFORE_CUSTODY_DAY, _EARLIER_ON_GENESIS_DAY], ids=["days-before", "same-day"])
+def test_an_outside_purchase_from_before_custody_is_inside_the_cash(tmp_path: Path, before_custody: int) -> None:
+    """Review A1 (H35): an outside BUY from before custody began, recorded
+    only now -- at or after the cash observation's boundary -- is inside the
+    cash custody started from. Pricing it as an unseen purchase subtracted
+    shares no longer on the bar from the cash: $400 cash with 6 SPY bought
+    before custody drew -$200. Total = cash."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        order, fill = _outside_trade("old-buy", "SPY", "buy", quantity=6, at_ms=before_custody)
+        observe_external_order(repo, order=order)
+        record_fee_evidence(repo, [fill], checked_at_ms=NOON, history_complete=True)
+
+        money = repo.account_money(cash=400, seen_before_ms=NOON)
+
+        assert _drawn_total(money) == (Decimal(400), 40_000, 0)
+        assert money.cash == Decimal(400) and money.outside == 0
+        assert not money.holds_positions and money.unvalued == ()
+    finally:
+        repo.close()
+
+
+def test_outside_trades_from_before_custody_never_move_the_total(tmp_path: Path) -> None:
+    """Review A1 probe: 3 purchases and 4 sales of one AAPL at $100, all
+    before custody began and recorded now, drew $700 against $1,000 of cash
+    (and $1,100 before H35). They are inside the cash: the total is $1,000."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        trades = [
+            _outside_trade(f"old-{index}", "AAPL", side, at_ms=_BEFORE_CUSTODY_DAY + index)
+            for index, side in enumerate(["buy", "sell", "buy", "sell", "buy", "sell", "sell"])
+        ]
+        for order, _ in trades:
+            observe_external_order(repo, order=order)
+        record_fee_evidence(repo, [fill for _, fill in trades], checked_at_ms=NOON, history_complete=True)
+
+        money = repo.account_money(cash=1000, seen_before_ms=NOON)
+
+        assert _drawn_total(money) == (Decimal(1000), 100_000, 0)
+        assert money.unvalued == () and money.unseen_sales == 0 and not money.holds_positions
+    finally:
+        repo.close()
+
+
+def test_an_outside_short_from_after_custody_began_is_still_named(tmp_path: Path) -> None:
+    """Review A1: the population is split by the instant custody began, not
+    its ET day. A sale earlier on genesis day is inside the starting cash; a
+    sale after genesis with no purchase is a genuine short, still named."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        trades = [
+            _outside_trade("same-day-old-sale", "AAPL", "sell", at_ms=_EARLIER_ON_GENESIS_DAY),
+            _outside_trade("new-sale", "TSLA", "sell", at_ms=NOON + 1),
+        ]
+        for order, _ in trades:
+            observe_external_order(repo, order=order)
+        record_fee_evidence(repo, [fill for _, fill in trades], checked_at_ms=NOON, history_complete=True)
+
+        money = repo.account_money(cash=1000, seen_before_ms=NOON)
+
+        assert money.unvalued == ("1 TSLA sold short by outside orders",)
+        # Only the custody-era sale's proceeds are still on their way to cash.
+        assert money.unseen_sales == Decimal(100)
+    finally:
+        repo.close()
+
+
 def test_an_outside_sale_from_before_custody_began_is_never_a_short(tmp_path: Path) -> None:
     """H35 (paper account PA3KWXU1C4C3): a tracked outside order that sold
     before custody began closed a purchase made before custody too. Lotting
@@ -479,6 +574,7 @@ class _AnonymousExternalFee:
         FeeFill(fill_id="anonymous-external-fill", subject_id="external:?", side=OrderSide.BUY,
             quantity=Decimal(1), price=Decimal(100), native_order_id=None, observed_at_ms=NOON),
     )
+    pre_custody_quantities: dict[str, Decimal] = {}
 
 
 def test_external_fill_without_native_order_id_fails_closed(tmp_path: Path) -> None:

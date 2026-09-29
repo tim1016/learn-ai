@@ -7,7 +7,7 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -46,6 +46,9 @@ class BudgetFees(Protocol):
     @property
     def external_fills(self) -> tuple[FeeFill, ...]: ...
 
+    @property
+    def pre_custody_quantities(self) -> Mapping[str, Decimal]: ...
+
     def total_for(self, subject_id: str) -> Decimal: ...
 
     def unobserved_cash_claim(self, *, cash_seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> Decimal: ...
@@ -55,13 +58,18 @@ class BudgetFees(Protocol):
 def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_before_ms: int) -> Decimal:
     """Price normalized external BUY facts once, retaining unknown obligations.
 
-    Formula: sum(qty * price for external BUYs not yet inside observed cash).
+    Executions from before custody began arrive as quantities only: they
+    complete their order's population and are never priced (H35), because
+    their cash is inside the account custody started from.
+
+    Formula: sum(qty * price for custody-era external BUYs not yet inside
+      observed cash).
     Reference: PRD #2540 all-disjoint-claims contract; observation #2441/#2442.
     Canonical implementation: this composition over the fee evidence's exact
       activity population; no external balance or second execution ledger.
     Validated against: sqlite/test_budget_claims.py external cases (exact).
     """
-    quantities: dict[str, Decimal] = {}
+    quantities: dict[str, Decimal] = dict(fees.pre_custody_quantities)
     unseen = ZERO
     for fill in fees.external_fills:
         key = fill.native_order_id
@@ -160,7 +168,7 @@ def project_account_money(
             if fill.side is OrderSide.SELL and fill.recorded_at_ms is not None and fill.recorded_at_ms >= seen_before_ms
         ), ZERO) + sum((
             fill.quantity * fill.price for fill in fees.external_fills
-            if fill.side is OrderSide.SELL and not fill.pre_custody and fill.observed_at_ms >= seen_before_ms
+            if fill.side is OrderSide.SELL and fill.observed_at_ms >= seen_before_ms
         ), ZERO)
     return account_money(
         projected.budget, unseen_fills=projected.unseen_fills, unseen_sales=unseen_sales,
@@ -200,21 +208,17 @@ def _and_list(items: Sequence[str]) -> str:
 def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
     """Shares bought outside every bot, at FIFO cost, one holding per symbol.
 
-    The execution population is the one ``_external_cash_claim`` already
-    proved complete; each fill's symbol is its external order's. A fill whose
-    order or execution time is unknown cannot be lotted, so it is named.
-
-    An execution from before custody began is never lotted (H35): custody
-    starts from a flat account, so its shares -- and the purchase a sale of
-    them closed -- are inside the starting cash. Lotting one alone read the
+    The execution population is the custody-era one ``_external_cash_claim``
+    already proved complete; each fill's symbol is its external order's. A
+    fill whose order or execution time is unknown cannot be lotted, so it is
+    named. Executions from before custody began never reach it (H35): custody
+    starts from a flat account, so lotting an older sale alone would read the
     closing sale of an older purchase as a short.
     """
     symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
     records: list[FillRecord] = []
     unpriced: dict[str, Decimal] = {}
     for fill in fees.external_fills:
-        if fill.pre_custody:
-            continue
         symbol = symbols.get(fill.native_order_id) if fill.native_order_id is not None else None
         if symbol is None or fill.occurred_at_ms is None:
             order = fill.native_order_id or fill.fill_id

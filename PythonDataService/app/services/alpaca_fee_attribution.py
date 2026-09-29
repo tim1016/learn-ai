@@ -19,7 +19,7 @@ never a guessed deployment debit. Simulations never consume broker activities.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, Inexact, localcontext
 from typing import Any, Literal
@@ -54,11 +54,6 @@ class FeeFill:
     # When the broker executed it (int64 ms UTC); external fills carry it so
     # the account-money read can lot them in execution order.
     occurred_at_ms: int | None = None
-    # An external execution dated before custody began (H35): its shares are
-    # inside the flat account custody started from, so it proves its order's
-    # filled quantity and holds its cash claim, but is never lotted and its
-    # sale is never counted as proceeds still settling.
-    pre_custody: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,9 +107,15 @@ class FeeAttribution:
     unresolved: tuple[str, ...]
     observed_total: Decimal | None
     predicted_total: Decimal | None
-    # Normalized account-unattributed execution evidence, shared with the
-    # cash projection. Its notional is never charged to a bot's fee or P&L.
+    # Normalized account-unattributed execution evidence from custody's era,
+    # shared with the cash projection. Its notional is never charged to a
+    # bot's fee or P&L.
     external_fills: tuple[FeeFill, ...] = ()
+    # Tracked outside orders' executions from before custody began (H35), as
+    # filled quantity per broker order id and nothing else: their shares and
+    # cash are inside the account custody started from, so they only complete
+    # the order's execution population and are never priced or lotted.
+    pre_custody_quantities: Mapping[str, Decimal] = field(default_factory=dict)
     # Per-charge detail behind ``unattributed`` so the cash claim can respect
     # each charge's own observation time instead of double-counting forever.
     unattributed_charges: tuple[UnattributedCharge, ...] = ()
