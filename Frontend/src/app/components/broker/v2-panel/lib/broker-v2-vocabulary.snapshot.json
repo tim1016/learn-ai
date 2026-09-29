@@ -200,7 +200,7 @@
     },
     "stop_bot_decisions": {
       "label": "Stop bot decisions",
-      "explanation": "Stop new decisions while existing exposure remains under Clerk custody."
+      "explanation": "Stop the bot making new decisions. Shares it holds are not sold."
     },
     "unexplained_order": {
       "label": "Unexplained order",

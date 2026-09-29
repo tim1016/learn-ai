@@ -566,8 +566,8 @@ describe('AlpacaHomeComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
-    expect(within(dialog).getByText('Stop new strategy decisions while leaving exposure under Clerk custody.')).toBeTruthy();
-    expect(within(dialog).getByText('The bot will stop making decisions. Existing exposure is not flattened blindly.')).toBeTruthy();
+    expect(within(dialog).getByText('Stop the bot making new decisions. Shares it holds are not sold.')).toBeTruthy();
+    expect(within(dialog).getByText('The bot stops making new decisions. Shares it holds stay held; nothing is sold. Cash it isn\'t using goes back to the account.')).toBeTruthy();
     await vi.waitFor(() => expect(document.activeElement).toBe(within(dialog).getByTestId('typed-halt-confirm-cancel')));
     expect(panel.runBotAction).not.toHaveBeenCalled();
 

@@ -266,7 +266,7 @@ describe('BotDetailsComponent', () => {
     const checks = within(fold('Checks'));
     const stopRow = checks.getByRole('button', { name: /Ready Stop bot decisions/ });
     fireEvent.click(stopRow);
-    expect(checks.getByText('Stop new strategy decisions while leaving exposure under Clerk custody.')).toBeTruthy();
+    expect(checks.getByText('Stop the bot making new decisions. Shares it holds are not sold.')).toBeTruthy();
     expect(checks.queryByRole('button', { name: 'Stop bot decisions' })).toBeNull();
     expect(checks.getByRole('button', { name: /Blocked Reconcile now/ })).toBeTruthy();
     expect(actionRequested).not.toHaveBeenCalled();
