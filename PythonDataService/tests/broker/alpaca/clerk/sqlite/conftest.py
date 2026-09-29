@@ -276,6 +276,19 @@ async def _make_held_position(
         leg=_broker_leg(quantity=quantity),
         trade=_FakeTradePort(),
     )
+    await _fill_entry(repo, submission, quantity=quantity, execution_id=execution_id)
+    assert submission.order_ref is not None
+    return submission.order_ref
+
+
+async def _fill_entry(
+    repo: ClerkSqliteRepository,
+    submission: EnterSubmission,
+    *,
+    quantity: float,
+    execution_id: str,
+) -> BrokerOrder:
+    """The broker fills a submitted entry at $100: order evidence plus its exact execution slice."""
     assert submission.order_ref is not None
     filled = _broker_order_fixture(
         submission.order_ref, status="filled", quantity=quantity,
@@ -296,7 +309,7 @@ async def _make_held_position(
         recovery_source=None,
         recovery_window_limit=None,
     )
-    return submission.order_ref
+    return filled
 
 
 # ── The live-envelope admission harness (ADR 0059 D4) ─────────────────────────
