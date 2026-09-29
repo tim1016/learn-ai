@@ -28,8 +28,13 @@ its ``trade_count``.
 A run was **flattened** when the owner's own flatten -- the Clerk's safe
 flatten or the panel's flatten-and-stop, each a reducing EXIT under its own
 decision namespace -- was accepted at or after the run's stop and before the
-bot's next run began. The EXIT is the evidence; nothing records a flatten
-any other way.
+bot's next run began, **and sold**: the broker reports that EXIT's own order
+filled and the Clerk holds that order's effective fill (the same fills the
+transaction counts read). An accepted flatten that sold nothing -- refused by
+the broker, or a limit that expired unsent -- is not a flatten. Nor is a
+partial one: a flatten whose order sold part of the position and was then
+cancelled or expired, or is still working, leaves the bot holding the rest,
+so the run reads as stopped, not flattened.
 """
 
 from __future__ import annotations
@@ -62,6 +67,11 @@ _CANCELLED_STATES = ("canceled", "expired")
 _REJECTED_STATES = ("rejected",)
 
 
+def _reported_filled(broker_state: str | None) -> bool:
+    """Whether the broker reports an order filled -- whole, not in part."""
+    return broker_state is not None and broker_state.lower() in _FILLED_STATES
+
+
 @dataclass(frozen=True)
 class OrderCounts:
     """One bot's (or one run's) orders by the broker's last reported state."""
@@ -78,7 +88,7 @@ class OrderCounts:
         state = broker_state.lower()
         return OrderCounts(
             sent=self.sent + 1,
-            filled=self.filled + int(state in _FILLED_STATES),
+            filled=self.filled + int(_reported_filled(state)),
             cancelled=self.cancelled + int(state in _CANCELLED_STATES),
             rejected=self.rejected + int(state in _REJECTED_STATES),
         )
@@ -95,7 +105,7 @@ class RunFacts:
     stopped_at_ms: int | None
     transactions: int
     orders: OrderCounts
-    #: The owner flattened what the run held after stopping it (module doc).
+    #: The owner's flatten after the stop sold what the run held (module doc).
     flattened: bool
 
 
@@ -165,21 +175,27 @@ def project_custody_history(
         return CustodyHistory(account_id=account_id, bots=(), money_unavailable=fees_unavailable)
 
     order_runs: dict[str, tuple[str, str | None]] = {}
+    #: Each order the broker reports filled, to the effect operation it was placed for.
+    filled_order_effects: dict[str, str] = {}
     orders_by_bot: dict[str, OrderCounts] = {}
     orders_by_run: dict[str, OrderCounts] = {}
     for row in conn.execute(
-        "SELECT o.order_ref, o.broker_state, e.strategy_instance_id, e.run_id "
+        "SELECT o.order_ref, o.effect_operation_id, o.broker_state, e.strategy_instance_id, e.run_id "
         "FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE e.strategy_instance_id IS NOT NULL"
     ):
         sid, run_id, state = str(row["strategy_instance_id"]), row["run_id"], row["broker_state"]
         order_runs[str(row["order_ref"])] = (sid, run_id)
+        if _reported_filled(state):
+            filled_order_effects[str(row["order_ref"])] = str(row["effect_operation_id"])
         orders_by_bot[sid] = orders_by_bot.get(sid, OrderCounts()).plus(state)
         if run_id is not None:
             orders_by_run[run_id] = orders_by_run.get(run_id, OrderCounts()).plus(state)
 
     fills_by_bot: dict[str, int] = {}
     fills_by_run: dict[str, int] = {}
+    #: Effect operations whose own order filled and whose effective fill the Clerk holds.
+    sold_effects: set[str] = set()
     for fill in effective_fill_records(conn, account_id=account_id, strategy_instance_ids=sids):
         sid, run_id = order_runs[fill.order_ref]
         if fill.sid != bot_subject_id(sid):
@@ -187,8 +203,10 @@ def project_custody_history(
         fills_by_bot[sid] = fills_by_bot.get(sid, 0) + 1
         if run_id is not None:
             fills_by_run[run_id] = fills_by_run.get(run_id, 0) + 1
+        if fill.order_ref in filled_order_effects:
+            sold_effects.add(filled_order_effects[fill.order_ref])
 
-    flattens = _owner_flatten_instants(conn)
+    flattens = _owner_flatten_instants(conn, sold_effects=sold_effects)
     runs_by_bot: dict[str, list[RunFacts]] = {}
     for row in conn.execute(
         "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, stopped_at_ms "
@@ -261,16 +279,24 @@ def is_owner_flatten_decision(durable_decision_id: str) -> bool:
     return decision_id_from_durable(durable_decision_id).startswith(OWNER_FLATTEN_DECISION_PREFIXES)
 
 
-def _owner_flatten_instants(conn: sqlite3.Connection) -> dict[str, tuple[int, ...]]:
-    """When each bot's owner-flatten EXITs were accepted, from their own acceptance facts."""
+def _owner_flatten_instants(
+    conn: sqlite3.Connection, *, sold_effects: set[str]
+) -> dict[str, tuple[int, ...]]:
+    """When each bot's owner-flatten EXITs that sold (``sold_effects``) were accepted.
+
+    The instant is the EXIT's own acceptance; an owner flatten outside
+    ``sold_effects`` -- refused, expired unsent, only partly filled -- is no
+    flatten at all (module doc).
+    """
     flattens: dict[str, list[int]] = {}
     for row in conn.execute(
-        "SELECT e.strategy_instance_id, e.created_at_ms, json_extract(t.facts_json, '$.decision_id') AS decision_id "
+        "SELECT e.effect_operation_id, e.strategy_instance_id, e.created_at_ms, "
+        "json_extract(t.facts_json, '$.decision_id') AS decision_id "
         "FROM effect_operations e JOIN custody_transitions t "
         "ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = 'EXIT_ACCEPTED' "
         "WHERE e.kind = 'EXIT' AND e.strategy_instance_id IS NOT NULL"
     ):
-        if is_owner_flatten_decision(str(row["decision_id"])):
+        if row["effect_operation_id"] in sold_effects and is_owner_flatten_decision(str(row["decision_id"])):
             flattens.setdefault(str(row["strategy_instance_id"]), []).append(int(row["created_at_ms"]))
     return {sid: tuple(instants) for sid, instants in flattens.items()}
 

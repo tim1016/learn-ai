@@ -8,23 +8,35 @@ authority reports -- per bot, never split across runs.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.bot_history import OrderCounts, is_owner_flatten_decision, read_custody_history
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, ConfirmedRecoveryLimit
+from app.broker.alpaca.clerk.sqlite.bot_history import (
+    OrderCounts,
+    RunFacts,
+    is_owner_flatten_decision,
+    read_custody_history,
+)
 from app.broker.alpaca.clerk.sqlite.budget_projection import project_bot_results
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _durable_decision_id
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock, SqliteAlpacaClerkFacade, _durable_decision_id
+from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import SafeFlattenExecutionError, SafeFlattenResult
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerOrderRejected
+from app.broker.contract.models import BrokerOrderEvent, BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -142,29 +154,126 @@ def test_unvouched_fees_leave_result_and_fees_unknown_never_zero(old_bot: ClerkS
     assert bot.transactions == 3
 
 
-async def test_a_run_the_owner_flattened_after_its_stop_reads_as_flattened(
-    crashed_with_exposure,  # noqa: F811 — the imported fixture
-) -> None:
-    """The owner stops a bot holding 10 SPY, then flattens it through the
-    Clerk's own safe flatten: the reducing EXIT it records is the evidence,
-    so the run reads as flattened only once that EXIT exists."""
-    repo, _clock = crashed_with_exposure
+async def _stopped_holding_ten(repo: ClerkSqliteRepository) -> None:
+    """The owner stops a bot holding 10 SPY."""
     await safe_flatten._held_position(repo)
     submit_stop_run(
         repo, account_id=safe_flatten.ACCOUNT_ID, strategy_instance_id=safe_flatten.SID,
         lifecycle_run_id=safe_flatten.RUN_ID, operator_reason="operator_stop",
     )
-    (stopped,) = repo.bot_history().bots[0].runs
+
+
+async def _owner_flattens(repo: ClerkSqliteRepository, trade: safe_flatten._FakeTrade) -> SafeFlattenResult:
+    """The owner flattens the stopped bot through the Clerk's own safe flatten."""
     facade = SqliteAlpacaClerkFacade(
         repo=repo, read=safe_flatten._FakeRead(positions=[safe_flatten._position("SPY", quantity=10.0)]),
-        trade=safe_flatten._FakeTrade(), account_mode="paper",
+        trade=trade, account_mode="paper",
     )
+    return await facade.execute_safe_flatten(plan=await safe_flatten._reconciled_flatten_plan(repo), reason="owner flatten")
 
-    await facade.execute_safe_flatten(plan=await safe_flatten._reconciled_flatten_plan(repo), reason="owner flatten")
 
-    (flattened,) = repo.bot_history().bots[0].runs
+async def _broker_reports(repo: ClerkSqliteRepository, flatten: SafeFlattenResult, *, sold: int, state: str) -> None:
+    """The broker reports the flatten's order ``state``, having sold ``sold`` of its 10 SPY."""
+    (order,) = flatten.orders
+    reported = safe_flatten._broker_order(
+        order.order_ref, order_id=f"bo-{order.order_ref}", status=state, side="sell",
+        quantity=10.0, filled_quantity=sold, filled_avg_price=100.0,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=safe_flatten._NoReconciler())
+    await sink.record_lifecycle_event(
+        client_order_id=order.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill" if sold == 10 else "partial_fill", occurred_at_ms=repo.clock(),
+            price=100, quantity=sold, execution_id="flatten-exec-1",
+        ),
+        event_key="execution:flatten-exec-1", order=reported,
+        recovery_source=None, recovery_window_limit=None,
+    )
+    fold_order_evidence(repo, effect_operation_id=order.effect_operation_id, order=reported)
+
+
+def _only_run(repo: ClerkSqliteRepository) -> RunFacts:
+    (run,) = repo.bot_history().bots[0].runs
+    return run
+
+
+async def test_a_run_reads_as_flattened_only_once_the_owners_flatten_sold(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """The owner stops a bot holding 10 SPY and flattens it: the run reads
+    as flattened once the broker reports the flatten's order filled and the
+    Clerk holds its fill -- never while it is merely accepted."""
+    repo, _clock = crashed_with_exposure
+    await _stopped_holding_ten(repo)
+    stopped = _only_run(repo)
+
+    flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
+    accepted = _only_run(repo)
+    await _broker_reports(repo, flatten, sold=10, state="filled")
+
     assert not stopped.flattened
-    assert flattened.flattened
+    assert not accepted.flattened
+    assert _only_run(repo).flattened
+
+
+@pytest.mark.parametrize("state", ["partially_filled", "expired"])
+async def test_a_flatten_that_sold_only_part_of_the_position_is_not_a_flatten(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+    state: str,
+) -> None:
+    """A flatten that sold 4 of 10 SPY, still working or expired with the
+    rest unsold, leaves the bot holding 6: the run reads as stopped, not
+    flattened, beside the bot still holding."""
+    repo, _clock = crashed_with_exposure
+    await _stopped_holding_ten(repo)
+    flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
+
+    await _broker_reports(repo, flatten, sold=4, state=state)
+
+    (bot,) = repo.bot_history().bots
+    assert bot.holds_money
+    assert not bot.runs[0].flattened
+
+
+async def test_a_flatten_the_broker_rejected_is_not_a_flatten(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """The owner's flatten is accepted, then the broker refuses its order:
+    nothing was sold, so the run is not flattened."""
+    repo, _clock = crashed_with_exposure
+    await _stopped_holding_ten(repo)
+
+    with pytest.raises(SafeFlattenExecutionError, match="rejected"):
+        await _owner_flattens(repo, safe_flatten._FakeTrade(submit_error=BrokerOrderRejected("insufficient buying power")))
+
+    assert not _only_run(repo).flattened
+
+
+async def test_a_flatten_limit_that_expired_unsent_is_not_a_flatten(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """After hours the owner confirms a flatten limit (#2007) that cannot go
+    out before the session ends: it expires unsent, so the run is not
+    flattened."""
+    repo, _clock = crashed_with_exposure
+    facade, trade, current_context = await safe_flatten._stopped_facade_at(
+        repo, safe_flatten._JUST_BEFORE_POST_CLOSE_MS, trade=safe_flatten._LookupOutageTrade(),
+    )
+    await safe_flatten._execute(
+        facade, current_context,
+        confirmed_limit=ConfirmedRecoveryLimit(
+            limit_price=Decimal("99.95"), quote_observed_at_ms=safe_flatten._JUST_BEFORE_POST_CLOSE_MS,
+        ),
+    )
+    active = repo.active_exit_for_strategy(safe_flatten.SID)
+    assert active is not None
+    _walk_clock_to(repo, safe_flatten._JUST_AFTER_POST_CLOSE_MS)
+    trade.lookups_fail = False
+
+    await resolve_exit(repo, effect_operation_id=active.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+    assert trade.submit_calls == []
+    assert not _only_run(repo).flattened
 
 
 @pytest.mark.parametrize(
