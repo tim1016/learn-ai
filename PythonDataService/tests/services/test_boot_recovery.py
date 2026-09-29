@@ -234,6 +234,27 @@ async def test_failed_authority_preparation_keeps_boot_gate_closed(tmp_path: Pat
         await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
+async def test_a_rerun_boot_sweep_that_fails_closes_the_gate_its_first_run_opened(
+    tmp_path: Path,
+) -> None:
+    """#2582: a reconnected account authority reruns boot recovery.
+
+    Should that rerun fail, Start must not keep answering from the Clerk-less
+    first sweep's report: the gate is pending again until a sweep completes.
+    """
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.run_boot_recovery()
+
+    async def fail_recovery() -> None:
+        raise RuntimeError("authority unavailable")
+
+    with pytest.raises(BootAuthorityPreparationError, match="recover"):
+        await registry.run_boot_recovery(recover=fail_recovery)
+
+    with pytest.raises(BootRecoveryIncompleteError):
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+
 async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Path) -> None:
     artifacts_root = _artifacts_root(tmp_path)
     lifecycle_repo = BotLifecycleStateRepo(

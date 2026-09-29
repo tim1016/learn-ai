@@ -591,6 +591,26 @@ async def test_a_failed_custody_authority_is_a_line_not_a_quiet_home() -> None:
     )
 
 
+async def test_an_authority_reconnecting_to_alpaca_is_a_line_that_says_so_not_a_failure() -> None:
+    """#2582: a startup that could not reach Alpaca has not failed, and its line says so."""
+    from app.broker.alpaca.clerk.active_runtime import reconnecting_refusal
+    from app.broker.contract.errors import BrokerUnavailable
+
+    set_active_clerk_runtime(reconnecting_refusal(
+        BrokerUnavailable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+        account_id=ACCOUNT, activation_detected=True,
+    ))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/attention")
+
+    [line] = response.json()["items"]
+    assert (line["condition_id"], line["severity"]) == ("account:authority-reconnecting", "warning")
+    assert line["headline"] == (
+        "This account's Clerk could not reach Alpaca when it started. "
+        "It is reconnecting and will recover on its own."
+    )
+
+
 async def test_an_account_alpaca_blocked_is_a_line_from_the_cached_observation_without_a_broker_read(
     tmp_path: Path,
 ) -> None:

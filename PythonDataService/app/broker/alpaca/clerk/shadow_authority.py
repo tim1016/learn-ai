@@ -23,7 +23,10 @@ from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
     activate_isolated_authority,
     compose_repository_runtime,
+    reconnecting_refusal,
+    terminal_startup_recovery,
     unavailable_runtime,
+    unreachable_broker_error,
 )
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
@@ -100,6 +103,9 @@ async def select_shadow_clerk_runtime(
         )
         return unavailable_runtime(exc.reason_code, account_id=account.account_id, recovery=str(exc))
     except BrokerError as exc:
+        unreachable = unreachable_broker_error(exc)
+        if unreachable is not None:
+            return reconnecting_refusal(unreachable, account_id=account.account_id)
         return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=account.account_id,
@@ -180,10 +186,24 @@ async def select_shadow_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Shadow Alpaca Clerk failed startup; no authority installed",
-            extra={"action": "shadow_active_clerk_startup_failed", "account_id": shadow.account_id},
+            "Shadow Alpaca Clerk failed startup; no authority installed: %s",
+            exc,
+            extra={
+                "action": "shadow_active_clerk_startup_failed",
+                "account_id": shadow.account_id,
+                "error": str(exc),
+            },
             exc_info=True,
         )
+        unreachable = unreachable_broker_error(exc)
+        if unreachable is not None:
+            return reconnecting_refusal(
+                unreachable,
+                account_id=shadow.account_id,
+                activation_detected=True,
+                authority_generation=activation.authority_generation,
+                db_identity_token=activation.db_identity_token,
+            )
         return unavailable_runtime(
             (
                 "SHADOW_ACTIVATION_RECORD_INVALID"
@@ -191,7 +211,7 @@ async def select_shadow_clerk_runtime(
                 else "SHADOW_CLERK_STARTUP_FAILED"
             ),
             account_id=shadow.account_id,
-            recovery=str(exc),
+            recovery=terminal_startup_recovery(exc),
             activation_detected=True,
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,

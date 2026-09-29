@@ -12,9 +12,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.broker.alpaca.active_binding import reset_active_alpaca_binding_for_testing
-from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime, unavailable_runtime
+from app.broker.alpaca.clerk.active_runtime import (
+    ActiveClerkRuntime,
+    reconnecting_refusal,
+    unavailable_runtime,
+)
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
 from app.broker.alpaca.profile import resolve_runtime_context
+from app.broker.contract.errors import BrokerUnavailable
 from app.broker_configuration.binding_decision import BindingCandidate, BindingIntent
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.worker_binding import BoundWorker
@@ -158,6 +163,35 @@ async def test_failed_custody_records_apply_refusal_instead_of_waiting_for_anoth
     assert not selection.apply_requested
     assert selection.last_apply_outcome == "refused"
     assert selection.last_apply_refusal_reason == recovery
+    assert selection.effective_account_id is None
+
+
+async def test_a_reconnecting_boot_neither_acknowledges_nor_refuses_its_apply(
+    service: BrokerConfigurationService,
+) -> None:
+    """#2582: an Apply whose restart met an unreachable Alpaca waits for the reconnect.
+
+    Recording it refused would consume the owner's Apply over a blip the
+    reconnect is about to outlast; the reconnect's own outcome comes back
+    through the same acknowledgement.
+    """
+    profile = paper_profile(service)
+    staged = service.stage_selection(
+        profile_id=profile.profile.profile_id, revision=1, expected_selection_generation=0
+    )
+    requested = service.request_apply(expected_selection_generation=staged.selection_generation)
+    bound = _bound(profile.profile.profile_id, requested.selection_generation)
+    runtime = reconnecting_refusal(
+        BrokerUnavailable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+        account_id="PA-TEST",
+    )
+
+    result = await acknowledge_runtime_binding(bound=bound, runtime=runtime, service_factory=lambda: service)
+
+    assert result is runtime
+    selection = service.selection()
+    assert selection.apply_requested
+    assert selection.last_apply_outcome != "refused"
     assert selection.effective_account_id is None
 
 

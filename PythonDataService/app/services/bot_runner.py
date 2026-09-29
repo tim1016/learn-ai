@@ -1376,6 +1376,10 @@ class BotTaskRegistry:
         project against: the service still boots and serves its read
         surface, but Start stays refused with the sweep's reason.
         """
+        # A sweep in progress -- or one that raised -- is pending, never the
+        # answer an earlier sweep gave: a reconnected account authority runs
+        # this again (#2582), and Start must not read the Clerk-less report.
+        self._boot_recovery_report = None
         self._unrecovered_dry_runs = await self._recover_synthetic_authorities_for_boot()
         report = await self._boot_recovery.run(
             recover=recover,

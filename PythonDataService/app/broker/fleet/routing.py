@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.broker.fleet.delivery import (
+    ACCOUNT_AUTHORITY_HEADER,
     DeliveryContractViolation,
     DeliveryIdentityMismatch,
     DeliveryRequest,
@@ -68,6 +69,37 @@ _RECEIPT_BODY_KEYS = (
     "cancel_request_id",
     "ticket_id",
 )
+
+
+def _lane_server_error(
+    clerk_id: str,
+    headers: Mapping[str, str],
+    *,
+    failed: str,
+    cannot: str,
+    next_step: str,
+) -> ClerkUnreachable:
+    """A lane's own 5xx on a read, told as truthfully as the lane's echo allows (#2582).
+
+    A lane with no account authority echoes why (``ACCOUNT_AUTHORITY_HEADER``),
+    and that decides the copy: a lane reconnecting to its broker recovers on
+    its own, and a lane whose startup failure is final needs a restart and
+    never a retry. Any other 5xx keeps the generic copy, with ``next_step``.
+    """
+    echo = {name.lower(): value for name, value in headers.items()}.get(ACCOUNT_AUTHORITY_HEADER)
+    if echo == "reconnecting":
+        return ClerkUnreachable(
+            f"Clerk {clerk_id} {cannot} yet: it could not reach its broker when it "
+            "started and is reconnecting.",
+            next_step="It will recover on its own once its broker answers; no restart is needed.",
+        )
+    if echo == "failed":
+        return ClerkUnreachable(
+            f"Clerk {clerk_id} {cannot}: its account did not start, and it will not "
+            "retry on its own.",
+            next_step="The Clerk's log names the cause; restart the Clerk once that is fixed.",
+        )
+    return ClerkUnreachable(f"Clerk {clerk_id} {failed}", next_step=next_step)
 
 
 def _refusal_excerpt(body: bytes | None) -> str:
@@ -270,9 +302,11 @@ class LaneRouter:
                 operation.operation_id,
                 _refusal_excerpt(result.body),
             )
-            raise ClerkUnreachable(
-                f"Clerk {clerk_id} failed serving {operation.operation_id} "
-                f"with {result.status_code}.",
+            raise _lane_server_error(
+                clerk_id,
+                result.headers,
+                failed=f"failed serving {operation.operation_id} with {result.status_code}.",
+                cannot=f"cannot serve {operation.operation_id}",
                 next_step="Retry once the lane recovers from the reported "
                 "server error; the lane's own log names the cause.",
             )
@@ -359,9 +393,11 @@ class LaneRouter:
                 operation.operation_id,
                 _refusal_excerpt(result.error_body),
             )
-            raise ClerkUnreachable(
-                f"Clerk {clerk_id} failed opening {operation.operation_id} "
-                f"with {result.status_code}.",
+            raise _lane_server_error(
+                clerk_id,
+                result.headers,
+                failed=f"failed opening {operation.operation_id} with {result.status_code}.",
+                cannot=f"cannot open {operation.operation_id}",
                 next_step="Retry opening the stream once the lane recovers "
                 "from the reported server error; the lane's own log names "
                 "the cause.",

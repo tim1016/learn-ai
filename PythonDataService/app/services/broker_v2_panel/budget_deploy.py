@@ -87,6 +87,11 @@ LEGACY_BUDGET_DETAIL = "This account has not switched to budgets. Switch it in S
 def _primary(account_id: str) -> ActiveClerkRuntime:
     runtime = get_active_clerk_runtime()
     custody_id = None if runtime is None else runtime.selected_account_id
+    if runtime is not None and custody_id is None and runtime.startup_failure is not None:
+        # This lane's own authority did not start, and its startup copy says
+        # why -- reconnecting, or what ends it (#2582) -- which "activate it"
+        # would contradict.
+        raise BudgetUnavailable(runtime.startup_failure.recovery)
     if runtime is None or custody_id is None or canonical_alpaca_account_id(custody_id.removeprefix("shadow:")) != canonical_alpaca_account_id(account_id):
         raise BudgetUnavailable("This account's custody authority is unavailable. Activate it in Settings.")
     if runtime.sqlite_repository is None:

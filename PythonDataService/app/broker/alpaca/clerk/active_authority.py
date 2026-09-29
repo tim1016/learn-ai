@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -43,7 +43,10 @@ from app.broker.alpaca.clerk.active_runtime import (
     developer_reset_refusal,
     open_repository,
     open_repository_after_lease_expiry,
+    reconnecting_refusal,
+    terminal_startup_recovery,
     unavailable_runtime,
+    unreachable_broker_error,
 )
 from app.broker.alpaca.clerk.live_authority import (
     InstanceSealsForAccount,
@@ -154,14 +157,18 @@ async def select_active_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Alpaca account identity could not be resolved; Clerk unavailable",
-            extra={"action": "active_clerk_account_resolution_failed"},
+            "Alpaca account identity could not be resolved; Clerk unavailable: %s",
+            exc,
+            extra={"action": "active_clerk_account_resolution_failed", "error": str(exc)},
             exc_info=True,
         )
+        unreachable = unreachable_broker_error(exc)
+        if unreachable is not None:
+            return reconnecting_refusal(unreachable, account_id=None)
         return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=None,
-            recovery=f"Restore the Alpaca account identity probe: {exc}",
+            recovery=terminal_startup_recovery(f"Alpaca did not identify the account ({exc})"),
         )
     # This read is the identity used to open custody. A separate verification
     # may have been unavailable, or observed different upstream state, so its
@@ -284,10 +291,12 @@ async def select_active_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Activated SQLite Alpaca Clerk failed startup; no writer installed",
+            "Activated SQLite Alpaca Clerk failed startup; no writer installed: %s",
+            exc,
             extra={
                 "action": "sqlite_active_clerk_startup_failed",
                 "account_id": account.account_id,
+                "error": str(exc),
             },
             exc_info=True,
         )
@@ -580,6 +589,37 @@ def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
         _authority_registry.register(runtime)
 
 
+def install_primary_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
+    """Make ``runtime`` the primary authority, keeping every other registered one.
+
+    The composition root installs every selection here: the boot's first one,
+    and the authority a reconnect selects once Alpaca answers again (#2582).
+    By a reconnect, boot recovery has registered the Dry Runs' own authorities
+    and their bots may be running; ``set_active_clerk_runtime`` would drop
+    those registrations unclosed, still holding their execution leases.
+    """
+    global _runtime
+    previous = _runtime
+    previous_id = None if previous is None else previous.selected_account_id
+    if previous_id is not None and _authority_registry.resolve(previous_id) is previous:
+        _authority_registry.unregister(previous_id)
+    _runtime = runtime
+    if runtime.clerk is not None and runtime.selected_account_id is not None:
+        _authority_registry.register(runtime)
+
+
+def primary_authority_echo() -> Literal["reconnecting", "failed"] | None:
+    """Why this lane has no account authority, in the fleet echo's closed words.
+
+    ``None`` while an authority serves, or before one was ever selected: the
+    echo speaks only for a selection that ended without one.
+    """
+    runtime = _runtime
+    if runtime is None or runtime.clerk is not None or runtime.startup_failure is None:
+        return None
+    return "reconnecting" if runtime.reconnecting else "failed"
+
+
 def register_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
     """Add an authority without replacing the real-paper compatibility selection."""
     _authority_registry.register(runtime)
@@ -648,6 +688,8 @@ __all__ = [
     "get_active_clerk_runtime",
     "get_alpaca_clerk",
     "get_clerk_runtime",
+    "install_primary_clerk_runtime",
+    "primary_authority_echo",
     "primary_custody_world",
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",

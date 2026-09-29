@@ -50,7 +50,10 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
 )
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import (
+    SqliteAlpacaClerkFacade,
+    StartupBrokerTruthUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -60,6 +63,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -100,6 +104,14 @@ _ACCOUNT_KIND_BY_AUTHORITY: dict[str, AccountAuthorityKind] = {
 DEFAULT_STARTUP_RECOVERY_TIMEOUT_S = 60.0
 DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_LEASE_TTL_MS / 1000 + 5.0
 DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
+BROKER_UNREACHABLE_RECONNECTING: Final = "BROKER_UNREACHABLE_RECONNECTING"
+"""The one startup failure that is not terminal (#2582).
+
+Alpaca could not be read while the authority was selected -- its account read or
+startup recovery's orders-and-positions read. Nothing about the account is
+wrong; the composition root re-selects on a bounded backoff until Alpaca
+answers (``authority_reconnect``). Every other startup failure stays terminal.
+"""
 
 
 class BackgroundSweep(Protocol):
@@ -141,6 +153,11 @@ class ClerkStartupFailure:
     authority_generation: int | None = None
     db_identity_token: str | None = None
 
+    @property
+    def reconnecting(self) -> bool:
+        """Whether this failure is only an unreachable Alpaca, which startup retries."""
+        return self.reason_code == BROKER_UNREACHABLE_RECONNECTING
+
 
 @dataclass
 class ActiveClerkRuntime:
@@ -157,6 +174,11 @@ class ActiveClerkRuntime:
     _sqlite_repository: ClerkSqliteRepository | None = None
     account_id: str | None = None
     account_authority_kind: AccountAuthorityKind | None = None
+
+    @property
+    def reconnecting(self) -> bool:
+        """No authority yet, only because Alpaca was unreachable at selection."""
+        return self.clerk is None and self.startup_failure is not None and self.startup_failure.reconnecting
 
     @property
     def sqlite_repository(self) -> ClerkSqliteRepository | None:
@@ -444,10 +466,12 @@ async def compose_repository_runtime(
             envelope_sync=envelope_sync,
             fee_sync=fee_sync,
         )
-    except Exception:
+    except BaseException:
         # Whatever was built before the failure, stopped in the same declared
         # order the runtime's own ``close()`` uses -- a tap left running here
-        # would outlive the repository closed on the next line.
+        # would outlive the repository closed on the next line. A cancelled
+        # composition -- a reconnect interrupted by shutdown (#2582) --
+        # releases its execution lease the same way.
         for tap in _ordered_taps(
             envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync
         ):
@@ -520,6 +544,44 @@ def developer_reset_refusal(
     )
 
 
+def unreachable_broker_error(exc: BaseException) -> BrokerUnavailable | None:
+    """The broker error behind a failed selection, when an unreachable Alpaca is all it was.
+
+    Alpaca not answering -- a network failure, a timeout, a server error --
+    is transient (``BrokerUnavailable``). An answer that cannot support a
+    verdict (``BrokerEvidenceUnavailable``) is not, and neither is anything
+    that is not a broker error at all: a refused account, a broken repository,
+    a startup read that answered but could not be proven complete.
+    """
+    cause = exc.broker_error if isinstance(exc, StartupBrokerTruthUnavailable) else exc
+    if isinstance(cause, BrokerUnavailable) and not isinstance(cause, BrokerEvidenceUnavailable):
+        return cause
+    return None
+
+
+def reconnecting_refusal(
+    error: BrokerUnavailable,
+    *,
+    account_id: str | None,
+    activation_detected: bool = False,
+    authority_generation: int | None = None,
+    db_identity_token: str | None = None,
+) -> ActiveClerkRuntime:
+    """The refusal a selection that could not reach Alpaca installs while it reconnects."""
+    return unavailable_runtime(
+        BROKER_UNREACHABLE_RECONNECTING,
+        account_id=account_id,
+        recovery=(
+            f"This Clerk could not read its account from Alpaca when it started: "
+            f"{_sentence(error)} It is reconnecting and will take over this account on its own "
+            "once Alpaca answers; no restart is needed."
+        ),
+        activation_detected=activation_detected,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
+    )
+
+
 def compose_failure_refusal(
     exc: BaseException,
     *,
@@ -529,11 +591,21 @@ def compose_failure_refusal(
 ) -> ActiveClerkRuntime:
     """The one refusal for a composition that raised, on either side of the live fork.
 
-    An ``ActivationRecordInvalid`` is the cutover record's fault and names
-    itself; every other failure is the startup's. Both sides carried the same
-    six-keyword call with the same ternary, which is how the two sentences
-    would have drifted.
+    An unreachable Alpaca reconnects (``reconnecting_refusal``). An
+    ``ActivationRecordInvalid`` is the cutover record's fault and names
+    itself; every other failure is the startup's, and its copy says it is
+    final and what ends it. Both sides carried the same six-keyword call with
+    the same ternary, which is how the two sentences would have drifted.
     """
+    unreachable = unreachable_broker_error(exc)
+    if unreachable is not None:
+        return reconnecting_refusal(
+            unreachable,
+            account_id=account_id,
+            activation_detected=True,
+            authority_generation=authority_generation,
+            db_identity_token=db_identity_token,
+        )
     return unavailable_runtime(
         (
             "ACTIVATION_RECORD_INVALID"
@@ -541,11 +613,24 @@ def compose_failure_refusal(
             else "SQLITE_CLERK_STARTUP_FAILED"
         ),
         account_id=account_id,
-        recovery=str(exc),
+        recovery=terminal_startup_recovery(exc),
         activation_detected=True,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,
     )
+
+
+def terminal_startup_recovery(cause: object) -> str:
+    """The copy of a startup failure nothing will retry: its cause, and that a restart ends it."""
+    return (
+        f"This Clerk did not start: {_sentence(cause)} It will not retry on its own; "
+        "restart the Clerk once that is fixed."
+    )
+
+
+def _sentence(cause: object) -> str:
+    """A cause's own text as one sentence of the copy around it."""
+    return f"{str(cause).rstrip('.')}."
 
 
 async def activate_isolated_authority(
@@ -610,6 +695,7 @@ async def activate_isolated_authority(
 
 
 __all__ = [
+    "BROKER_UNREACHABLE_RECONNECTING",
     "DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S",
     "DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S",
     "DEFAULT_STARTUP_RECOVERY_TIMEOUT_S",
@@ -624,5 +710,8 @@ __all__ = [
     "developer_reset_refusal",
     "open_repository",
     "open_repository_after_lease_expiry",
+    "reconnecting_refusal",
+    "terminal_startup_recovery",
     "unavailable_runtime",
+    "unreachable_broker_error",
 ]

@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 
 IDENTITY_HEADER_PREFIX = "X-Fleet-"
 COORDINATOR_TOKEN_HEADER = "X-Fleet-Coordinator-Token"
+#: The lane's echo of why it serves no account authority, beside the identity
+#: echo (#2582): ``reconnecting`` while its startup could not reach the broker
+#: and retries on its own, ``failed`` when its startup failure is final.
+#: Absent while an authority serves. A closed vocabulary, so the coordinator
+#: authors the owner's copy from it and never relays a lane's body.
+ACCOUNT_AUTHORITY_HEADER = "x-fleet-account-authority"
 
 
 def lane_forward_is_authorized(headers: Headers) -> bool:

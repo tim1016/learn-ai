@@ -280,24 +280,30 @@ def serve_lane_presence(
     """
     from app.broker.alpaca.clerk.fleet_boot import start_heartbeat
 
-    def _fleet_served_identity() -> dict[str, object] | None:
-        """What this runtime actually serves, read at response time.
-
-        The identity echo (FR-076) derives from live state — the epoch
-        follows re-registrations, the generation follows the selection
-        transaction — never from what a caller pinned.
-        """
-        if boot.session is None:
-            return None
-        return {
-            "broker": "alpaca",
-            "clerk_id": boot.clerk_id,
-            "routing_epoch": boot.session.routing_epoch,
-            "binding_generation": _effective_binding_generation_now(),
-        }
-
-    _install_fleet_served_identity(app, _fleet_served_identity)
+    _install_fleet_served_identity(app, lambda: fleet_served_identity(boot))
     start_heartbeat(boot, interval_s=interval_s)
+
+
+def fleet_served_identity(boot: FleetLaneBoot) -> dict[str, object] | None:
+    """What this runtime actually serves, read at response time.
+
+    The identity echo (FR-076) derives from live state — the epoch follows
+    re-registrations, the generation follows the selection transaction —
+    never from what a caller pinned. Beside it rides why the lane serves no
+    account authority, when it serves none (#2582), so a routed 5xx can be
+    told truthfully: reconnecting, or failed for good.
+    """
+    from app.broker.alpaca.clerk.active_authority import primary_authority_echo
+
+    if boot.session is None:
+        return None
+    return {
+        "broker": "alpaca",
+        "clerk_id": boot.clerk_id,
+        "routing_epoch": boot.session.routing_epoch,
+        "binding_generation": _effective_binding_generation_now(),
+        "account_authority": primary_authority_echo(),
+    }
 
 
 @asynccontextmanager
@@ -497,8 +503,8 @@ async def _service_lifespan(
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk.active_authority import (
         ActiveClerkRuntime,
+        install_primary_clerk_runtime,
         select_active_clerk_runtime,
-        set_active_clerk_runtime,
     )
     from app.broker_configuration.worker_lifecycle import (
         acknowledge_runtime_binding,
@@ -637,24 +643,71 @@ async def _service_lifespan(
                             "changed binding waits for the coordinator (FR-066).",
                         )
 
-            alpaca_clerk_runtime = await select_active_clerk_runtime(
-                read=alpaca_broker,
-                trade=alpaca_broker,
-                artifacts_root=alpaca_clerk_root,
-                stream_health_gate=alpaca_stream_health_gate,
-                roster_symbols=_alpaca_roster_symbols,
-                live_envelope_values=live_envelope_values,
-                # ADR 0059 slice 7: the live authority reads sealed bindings beside
-                # the arming ledger every tick, and refuses to install behind an
-                # open control plane (R14).
-                instance_seals=_alpaca_instance_seals,
-                control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-                expected_account_id=alpaca_binding.context.account_pin,
-            )
+            async def _select_alpaca_authority() -> ActiveClerkRuntime:
+                """This boot's one authority selection; a reconnect re-runs it unchanged (#2582)."""
+                return await select_active_clerk_runtime(
+                    read=alpaca_broker,
+                    trade=alpaca_broker,
+                    artifacts_root=alpaca_clerk_root,
+                    stream_health_gate=alpaca_stream_health_gate,
+                    roster_symbols=_alpaca_roster_symbols,
+                    live_envelope_values=live_envelope_values,
+                    # ADR 0059 slice 7: the live authority reads sealed bindings beside
+                    # the arming ledger every tick, and refuses to install behind an
+                    # open control plane (R14).
+                    instance_seals=_alpaca_instance_seals,
+                    control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                    expected_account_id=alpaca_binding.context.account_pin,
+                )
+
+            def _install_alpaca_authority(alpaca_clerk_runtime: ActiveClerkRuntime) -> None:
+                """Install one acknowledged selection and start what its Clerk feeds.
+
+                The boot's selection and a reconnect's (#2582) both install
+                here, so a reconnected authority starts exactly as a booted one.
+                """
+                install_primary_clerk_runtime(alpaca_clerk_runtime)
+                if alpaca_clerk_runtime.clerk is not None:
+                    logger.info(
+                        "Alpaca Clerk ready (authority=%s).",
+                        alpaca_clerk_runtime.authority_kind,
+                    )
+
+                    # Capture/parsing stays shared, but durable lifecycle evidence is
+                    # folded only into the SQLite authority.
+                    from app.broker.alpaca.trade_updates import (
+                        TradeUpdatesConsumer,
+                        set_trade_updates_consumer,
+                    )
+
+                    alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
+                        evidence_sink=alpaca_clerk_runtime.evidence_sink,
+                        read=alpaca_broker,
+                        settings=alpaca_settings,
+                    )
+                    alpaca_trade_updates.start()
+                    set_trade_updates_consumer(alpaca_trade_updates)
+                    logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
+                    # Only now does the stream-health sync have both providers to
+                    # sample; starting it earlier reads the not-yet-registered
+                    # consumer as an outage (#1777 WP4). The envelope sync could have
+                    # started sooner but rides the same seam, so this is the one place
+                    # to ask whether the account's background taps are running.
+                    alpaca_clerk_runtime.start_background_taps()
+                elif alpaca_clerk_runtime.startup_failure is not None:
+                    logger.warning(
+                        "Alpaca Clerk unavailable after authority selection: %s",
+                        alpaca_clerk_runtime.startup_failure.recovery,
+                        extra={
+                            "reason_code": alpaca_clerk_runtime.startup_failure.reason_code,
+                            "account_id": alpaca_clerk_runtime.startup_failure.account_id,
+                        },
+                    )
+
             # Do not publish a writer or start any stream until its exact binding
             # is durably acknowledged. A refused receipt closes all custody handles.
             alpaca_clerk_runtime = await acknowledge_runtime_binding(
-                bound=alpaca_binding, runtime=alpaca_clerk_runtime,
+                bound=alpaca_binding, runtime=await _select_alpaca_authority(),
             )
             if fleet_lane is not None:
                 # Offline, this holds the evidence-vouched grant for the
@@ -673,47 +726,13 @@ async def _service_lifespan(
                     effective_revision=selection_row.effective_revision,
                     authority_kind=alpaca_clerk_runtime.authority_kind,
                     endpoint_mode=alpaca_settings.mode,
+                    reconnecting=alpaca_clerk_runtime.reconnecting,
                 )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()
                 set_market_liveness_consumer(alpaca_market_liveness)
                 logger.info("IBKR market-status source and Alpaca execution clock started.")
-            set_active_clerk_runtime(alpaca_clerk_runtime)
-            if alpaca_clerk_runtime.clerk is not None:
-                logger.info(
-                    "Alpaca Clerk ready (authority=%s).",
-                    alpaca_clerk_runtime.authority_kind,
-                )
-
-                # Capture/parsing stays shared, but durable lifecycle evidence is
-                # folded only into the SQLite authority.
-                from app.broker.alpaca.trade_updates import (
-                    TradeUpdatesConsumer,
-                    set_trade_updates_consumer,
-                )
-
-                alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
-                    evidence_sink=alpaca_clerk_runtime.evidence_sink,
-                    read=alpaca_broker,
-                    settings=alpaca_settings,
-                )
-                alpaca_trade_updates.start()
-                set_trade_updates_consumer(alpaca_trade_updates)
-                logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
-                # Only now does the stream-health sync have both providers to
-                # sample; starting it earlier reads the not-yet-registered
-                # consumer as an outage (#1777 WP4). The envelope sync could have
-                # started sooner but rides the same seam, so this is the one place
-                # to ask whether the account's background taps are running.
-                alpaca_clerk_runtime.start_background_taps()
-            elif alpaca_clerk_runtime.startup_failure is not None:
-                logger.warning(
-                    "Alpaca Clerk unavailable after authority selection.",
-                    extra={
-                        "reason_code": alpaca_clerk_runtime.startup_failure.reason_code,
-                        "account_id": alpaca_clerk_runtime.startup_failure.account_id,
-                    },
-                )
+            _install_alpaca_authority(alpaca_clerk_runtime)
 
             if active_alpaca_binding_refusal() is None:
                 from app.services.sovereign_equity_snapshots import (
@@ -867,41 +886,6 @@ async def _service_lifespan(
         set_bot_task_registry(bot_task_registry)
         logger.info("In-container bot runner installed (task registry, daemon-free).")
 
-    # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
-    # closed): the Clerk recovers and reconciles SQLite authority first; runner
-    # restoration candidates are then projected into typed interrupted evidence.
-    # Starts stay refused while any intent remains uncertain.
-    _boot_clerk = (
-        alpaca_clerk_runtime.clerk
-        if alpaca_clerk_runtime is not None
-        else None
-    )
-    if _boot_clerk is not None and bot_task_registry is not None:
-        from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-
-        async def _unresolved_intents(subject_id: str | None) -> int:
-            return await _boot_clerk.unresolved_effect_count(subject_id=subject_id)
-
-        await bot_task_registry.run_boot_recovery(
-            recover=_boot_clerk.recover,
-            reconcile=_boot_clerk.reconcile_once,
-            unresolved_intents_probe=_unresolved_intents,
-            # #1808: the sweep's evaluation posture lets an unresolved-intent
-            # refusal say "still evaluating — wait" during post-outage
-            # settling instead of sending the operator to intervene.
-            recovery_evaluation=(
-                _boot_clerk.recovery_evaluation_observation
-                if isinstance(_boot_clerk, SqliteAlpacaClerkFacade)
-                else None
-            ),
-        )
-    else:
-        # No Clerk (invalid ALPACA_* settings): the sweep leaves any
-        # pre-existing Alpaca binding unprojected and keeps the start gate
-        # closed, instead of aborting the lifespan into a restart loop.
-        if bot_task_registry is not None:
-            await bot_task_registry.run_boot_recovery()
-
     # #2154: once draining, the beat answers lane quiet from the runner's own
     # tasks and the account's clerk. Installed only when both exist; a lane
     # without a clerk never confirms and exits through force-retire.
@@ -912,18 +896,84 @@ async def _service_lifespan(
         set_lane_account_quiet_source,
     )
 
-    if _boot_clerk is not None and bot_task_registry is not None:
-        from app.broker.alpaca.clerk.fleet_boot import lane_quiet_probe
+    async def _boot_alpaca_authority(alpaca_clerk_runtime: ActiveClerkRuntime | None) -> None:
+        """Boot recovery against the installed Clerk, then its lane-quiet probe and its sweep.
 
-        account_quiet_probe = lane_quiet_probe(
-            bots_running=bot_task_registry.any_running,
-            observe_account=_boot_clerk.observe_account_quiet,
+        The boot runs this for the authority it installed, and a reconnect
+        (#2582) for the one it installed later, so both reach one serving state.
+        """
+        boot_clerk = None if alpaca_clerk_runtime is None else alpaca_clerk_runtime.clerk
+        # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
+        # closed): the Clerk recovers and reconciles SQLite authority first; runner
+        # restoration candidates are then projected into typed interrupted evidence.
+        # Starts stay refused while any intent remains uncertain.
+        if boot_clerk is not None and bot_task_registry is not None:
+            from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+
+            async def _unresolved_intents(subject_id: str | None) -> int:
+                return await boot_clerk.unresolved_effect_count(subject_id=subject_id)
+
+            await bot_task_registry.run_boot_recovery(
+                recover=boot_clerk.recover,
+                reconcile=boot_clerk.reconcile_once,
+                unresolved_intents_probe=_unresolved_intents,
+                # #1808: the sweep's evaluation posture lets an unresolved-intent
+                # refusal say "still evaluating — wait" during post-outage
+                # settling instead of sending the operator to intervene.
+                recovery_evaluation=(
+                    boot_clerk.recovery_evaluation_observation
+                    if isinstance(boot_clerk, SqliteAlpacaClerkFacade)
+                    else None
+                ),
+            )
+        elif bot_task_registry is not None:
+            # No Clerk (invalid ALPACA_* settings, or a selection still
+            # reconnecting): the sweep leaves any pre-existing Alpaca binding
+            # unprojected and keeps the start gate closed, instead of aborting
+            # the lifespan into a restart loop.
+            await bot_task_registry.run_boot_recovery()
+
+        if boot_clerk is not None and bot_task_registry is not None:
+            from app.broker.alpaca.clerk.fleet_boot import lane_quiet_probe
+
+            account_quiet_probe = lane_quiet_probe(
+                bots_running=bot_task_registry.any_running,
+                observe_account=boot_clerk.observe_account_quiet,
+            )
+            set_lane_account_quiet_source(
+                LaneAccountQuietSource(account_id=boot_clerk.account_id, probe=account_quiet_probe)
+            )
+            if fleet_lane is not None:
+                fleet_lane.lane_quiet_probe = account_quiet_probe
+
+        # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
+        # sweep cannot race the boot reconciliation pass (both call reconcile_once).
+        _pending_sweep = (
+            alpaca_clerk_runtime.sweep
+            if alpaca_clerk_runtime is not None
+            else None
         )
-        set_lane_account_quiet_source(
-            LaneAccountQuietSource(account_id=_boot_clerk.account_id, probe=account_quiet_probe)
-        )
-        if fleet_lane is not None:
-            fleet_lane.lane_quiet_probe = account_quiet_probe
+        if _pending_sweep is not None:
+            if boot_clerk is not None and bot_task_registry is not None:
+                # ADR 0050: after a supervised lease revival, re-run the boot
+                # scan's repair pass in-process so terminal STOP evidence for
+                # bots that crashed on the dead handle commits without waiting
+                # for the next container restart.
+                recovering_registry = bot_task_registry
+
+                async def _post_revival_recovery() -> None:
+                    await recovering_registry.run_lease_recovery(
+                        reconcile=boot_clerk.reconcile_once,
+                    )
+
+                _pending_sweep.set_on_lease_revived(_post_revival_recovery)
+            _pending_sweep.start()
+            logger.info(
+                "Alpaca reconciliation sweep started (authority=%s).",
+                alpaca_clerk_runtime.authority_kind,
+            )
+
+    await _boot_alpaca_authority(alpaca_clerk_runtime)
 
     # PRD #2560: every beat carries the lane's own bot and attention counts
     # for its account card. The composition root installs the counter, as it
@@ -955,29 +1005,38 @@ async def _service_lifespan(
 
         fleet_lane.stop_bots = _stop_bots_on_retired_lane
 
-    # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
-    # sweep cannot race the boot reconciliation pass (both call reconcile_once).
-    _pending_sweep = (
-        alpaca_clerk_runtime.sweep
-        if alpaca_clerk_runtime is not None
-        else None
-    )
-    if _pending_sweep is not None:
-        if _boot_clerk is not None and bot_task_registry is not None:
-            # ADR 0050: after a supervised lease revival, re-run the boot
-            # scan's repair pass in-process so terminal STOP evidence for
-            # bots that crashed on the dead handle commits without waiting
-            # for the next container restart.
-            async def _post_revival_recovery() -> None:
-                await bot_task_registry.run_lease_recovery(
-                    reconcile=_boot_clerk.reconcile_once,
-                )
+    # #2582: a selection whose only failure was an unreachable Alpaca does not
+    # wait for a restart. The lane serves with its reconnecting refusal while
+    # this re-runs the same selection on a bounded backoff; whatever it ends
+    # in is acknowledged, reported and installed exactly as the boot's own.
+    alpaca_reconnect_task: asyncio.Task[None] | None = None
+    if (
+        alpaca_binding is not None
+        and alpaca_clerk_runtime is not None
+        and alpaca_clerk_runtime.reconnecting
+    ):
+        from app.broker.alpaca.clerk.authority_reconnect import run_authority_reconnect
+        from app.broker.alpaca.clerk.fleet_boot import report_authority_state
 
-            _pending_sweep.set_on_lease_revived(_post_revival_recovery)
-        _pending_sweep.start()
-        logger.info(
-            "Alpaca reconciliation sweep started (authority=%s).",
-            alpaca_clerk_runtime.authority_kind,
+        reconnecting_binding = alpaca_binding
+
+        async def _acknowledge_reconnected(selected: ActiveClerkRuntime) -> ActiveClerkRuntime:
+            return await acknowledge_runtime_binding(bound=reconnecting_binding, runtime=selected)
+
+        def _install_reconnected(reconnected: ActiveClerkRuntime) -> None:
+            if fleet_lane is not None:
+                report_authority_state(fleet_lane, authority_kind=reconnected.authority_kind)
+            _install_alpaca_authority(reconnected)
+
+        alpaca_reconnect_task = asyncio.create_task(
+            run_authority_reconnect(
+                alpaca_clerk_runtime,
+                select=_select_alpaca_authority,
+                acknowledge=_acknowledge_reconnected,
+                install=_install_reconnected,
+                boot=_boot_alpaca_authority,
+            ),
+            name="alpaca-authority-reconnect",
         )
 
     # Start the shared fleet snapshot before serving its REST/SSE readers.
@@ -1007,6 +1066,12 @@ async def _service_lifespan(
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
+        # A reconnect still in flight ends before custody comes down; an
+        # attempt it interrupts closes whatever it opened (#2582).
+        if alpaca_reconnect_task is not None:
+            alpaca_reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await alpaca_reconnect_task
         if sovereign_equity_snapshot_scheduler is not None:
             await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
@@ -1021,6 +1086,7 @@ async def _service_lifespan(
         # independent of the IBKR teardown.
         from app.broker.alpaca.clerk.active_authority import (
             close_synthetic_clerk_runtimes,
+            get_active_clerk_runtime,
             set_active_clerk_runtime,
         )
         from app.broker.alpaca.market_liveness import (
@@ -1040,10 +1106,12 @@ async def _service_lifespan(
         if alpaca_market_liveness is not None:
             await alpaca_market_liveness.stop()
             set_market_liveness_consumer(None)
+        # The installed primary, which a reconnect may have replaced since boot.
+        installed_alpaca_runtime = get_active_clerk_runtime()
         await close_synthetic_clerk_runtimes()
         set_active_clerk_runtime(None)
-        if alpaca_clerk_runtime is not None:
-            await alpaca_clerk_runtime.close()
+        if installed_alpaca_runtime is not None:
+            await installed_alpaca_runtime.close()
         from app.broker.alpaca.clerk.sqlite.process_repositories import (
             close_all_repositories,
         )

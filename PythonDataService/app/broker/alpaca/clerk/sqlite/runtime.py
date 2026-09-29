@@ -228,6 +228,23 @@ class StrategyAdmissionStaleError(ClerkAdmissionSnapshotStaleError):
     """A Start or Resume snapshot no longer matches SQLite Clerk authority."""
 
 
+class StartupBrokerTruthUnavailable(RuntimeError):
+    """Startup recovery's reconciliation could not read fresh broker truth.
+
+    ``broker_error`` is the broker's own error when the read failed -- the one
+    fact the startup selector needs to tell an unreachable Alpaca (retried)
+    from a read that answered but could not be proven (terminal) (#2582).
+    """
+
+    def __init__(self, broker_error: BrokerError | None) -> None:
+        self.broker_error = broker_error
+        super().__init__(
+            "Startup recovery could not prove this account's orders and positions against Alpaca."
+            if broker_error is None
+            else f"Startup recovery could not read this account's orders and positions from Alpaca: {broker_error}"
+        )
+
+
 class MissingEntryCustodyError(RuntimeError):
     """An EXIT decision has no SQLite-owned entry identity to target."""
 
@@ -1307,7 +1324,7 @@ class SqliteAlpacaClerkFacade:
                     )
         result = await self._reconcile()
         if result.verdict == "stale":
-            raise RuntimeError("SQLite Alpaca Clerk recovery could not obtain broker truth")
+            raise StartupBrokerTruthUnavailable(result.stale_cause)
 
     async def reconcile_once(self) -> ReconciliationVerdict:
         return _legacy_verdict((await self._reconcile()).verdict)
@@ -1907,5 +1924,6 @@ __all__ = [
     "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",
+    "StartupBrokerTruthUnavailable",
     "StrategyRegistrationConflictError",
 ]

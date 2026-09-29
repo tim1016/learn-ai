@@ -179,8 +179,13 @@ async def select_live_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Live Alpaca Clerk failed startup; no authority installed",
-            extra={"action": "live_active_clerk_startup_failed", "account_id": account.account_id},
+            "Live Alpaca Clerk failed startup; no authority installed: %s",
+            exc,
+            extra={
+                "action": "live_active_clerk_startup_failed",
+                "account_id": account.account_id,
+                "error": str(exc),
+            },
             exc_info=True,
         )
         return compose_failure_refusal(

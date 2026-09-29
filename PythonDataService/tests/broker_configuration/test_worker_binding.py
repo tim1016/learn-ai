@@ -695,9 +695,9 @@ async def test_an_unreachable_broker_at_startup_is_not_a_pin_mismatch(
 ) -> None:
     """A transient blip must not unbind the worker for the whole process.
 
-    Today an unreachable broker still boots and authority selection reports
-    BROKER_ACCOUNT_UNAVAILABLE, which can recover. Treating "cannot observe" as
-    "wrong account" would be strictly worse.
+    An unreachable broker still boots, and authority selection reports it
+    unreachable and reconnects on its own (#2582). Treating "cannot observe"
+    as "wrong account" would be strictly worse.
     """
     import app.broker_configuration.worker_binding as wb
     from app.broker.alpaca.profile import AccountVerificationFailed
