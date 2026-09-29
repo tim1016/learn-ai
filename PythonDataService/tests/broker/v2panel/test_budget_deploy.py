@@ -211,19 +211,24 @@ def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
 
 
-def _committed_view(authority: tuple) -> tuple:
-    repo, runtime, snapshot = authority
+def _deploy_bot(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, sid: str, *, cents: int) -> None:
+    """Register and Deploy a one-share SPY bot whose run is ``<sid>-run``."""
     terms = _request().exit_terms.seal()
     config = {"symbol": "SPY", "quantity": 1}
     from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-    repo.register_strategy_instance(strategy_instance_id="view", symbol="SPY", config_hash=canonical_sha256(config),
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=canonical_sha256(config),
         config_json=canonicalize(config), exit_terms=terms)
+    submit_budgeted_deploy(repo, strategy_instance_id=sid, lifecycle_run_id=f"{sid}-run", world="real_paper",
+        committed_cents=cents, configuration_hash=canonical_sha256(config), exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+        risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal("100.02"))
+
+
+def _committed_view(authority: tuple) -> tuple:
+    repo, runtime, snapshot = authority
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     gate.publish(snapshot.observation)
     runtime.envelope_sync.envelope = gate
-    submit_budgeted_deploy(repo, strategy_instance_id="view", lifecycle_run_id="view-run", world="real_paper",
-        committed_cents=20_000, configuration_hash=canonical_sha256(config), exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
-        risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal("100.02"))
+    _deploy_bot(repo, gate, "view", cents=20_000)
     return repo, runtime, gate
 
 
@@ -833,7 +838,8 @@ def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(
 
     assert view.state == "ready" and not view.entry_eligible
     assert view.headline == "Stopped · still holds shares"
-    assert view.detail == "Its free budget was released when it stopped. The money in its shares comes back when they are sold."
+    assert view.detail == ("It released $100.00 when it stopped; $100.00 stayed claimed. "
+                           "The money in its shares comes back when they are sold.")
     assert _statement(view) == [
         ("Budget set aside at deploy", "200.00", False),
         ("Realized gains and losses", "0.00", False),
@@ -881,3 +887,176 @@ def test_a_stopped_bots_lines_add_up_to_its_balance_when_a_fee_is_fractional(aut
     assert sum(_cents(lines[label]) for label in held) == _cents(lines["Balance"])
     assert "Over its budget by" not in lines
     assert view.segment is not None and view.segment.released_usd == lines["Released at stop"]
+
+
+# ── A stopped bot's release is the fact its Stop recorded (#2555) ───────────
+
+
+def _stop(repo: ClerkSqliteRepository, sid: str = "view") -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id=sid, lifecycle_run_id=f"{sid}-run", clock=repo.clock)
+
+
+def _read_view(runtime: SimpleNamespace, gate: LiveEnvelopeGate, *, cash: float) -> DeploymentBudgetView:
+    """This bot's money read against a fresh account reading holding ``cash``."""
+    from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
+
+    repo = runtime.sqlite_repository
+    reading = replace(gate.latest_observation(), observed_at_ms=repo.clock(), cash_available_usd=cash,
+                      risk_fill_sequence=risk_fill_sequence(repo))
+    gate.publish(reading)
+    runtime.envelope_sync.reading = reading
+    view = budget_deploy._budget_view(runtime, "view")
+    assert view.state == "ready", view.detail
+    return view
+
+
+def _lines(view: DeploymentBudgetView) -> dict[str, str]:
+    return {label: amount for label, amount, _ in _statement(view)}
+
+
+def test_a_stopped_bots_released_money_stays_what_its_stop_released(authority: tuple) -> None:
+    """#2555: "released" was re-derived from the stopped bot's money on every
+    read, so a fee posting after Stop -- and another bot trading on the same
+    fee day, which re-splits that day's fees -- moved a one-time release."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerActivity, BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.conftest import YESTERDAY_NOON
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    held = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                        lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                        reference_price=100, envelope=gate)
+    # Filled last session with its fee not reported: the bot carries the modelled fee.
+    _append_slice(repo, held, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=YESTERDAY_NOON)
+    _stop(repo)
+    repo.clock.advance(10_000)
+    at_stop = _read_view(runtime, gate, cash=900)
+
+    # After Stop another bot trades on that fee day, and the day's fee posts.
+    _deploy_bot(repo, gate, "other", cents=30_000)
+    bought = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="other", decision_id="bought",
+                          lifecycle_run_id="other-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+                          reference_price=100, envelope=gate)
+    _append_slice(repo, bought, execution_id="other-fill", quantity=2, price=100, source_event_at_ms=YESTERDAY_NOON + 1)
+    repo.clock.advance(10_000)
+    posted = BrokerActivity(broker="alpaca", activity_id="day-fee", activity_type="FEE", category="non_trade_activity",
+                            symbol=None, side=None, quantity=None, price=None, net_amount=-0.05,
+                            occurred_at_ms=YESTERDAY_NOON, observed_at_ms=repo.clock())
+    assert record_fee_evidence(repo, [posted], checked_at_ms=repo.clock(), history_complete=True)
+    later = _read_view(runtime, gate, cash=700)
+
+    before, after = _lines(at_stop), _lines(later)
+    assert after["Fees"] != before["Fees"]  # the stopped bot's own money did move
+    assert after["Released at stop"] == before["Released at stop"] == "99.99"
+    assert at_stop.segment is not None and later.segment is not None
+    assert later.segment.released_usd == at_stop.segment.released_usd == "99.99"
+    assert not later.segment.released_estimated
+
+
+def test_money_a_stopped_bot_gets_back_after_stop_is_never_counted_as_released(authority: tuple) -> None:
+    """#2555: shares sold after Stop come back as their own line; the released
+    figure stays the Stop's, and every line still adds up to the balance."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    held = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                        lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                        reference_price=100, envelope=gate)
+    _append_slice(repo, held, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+    _stop(repo)
+    repo.clock.advance(5_000)
+    _record_sale(repo, held, key="sold-after-stop", price=110, at_ms=repo.clock())
+    repo.clock.advance(5_000)
+
+    view = _read_view(runtime, gate, cash=1010)
+
+    assert view.headline == "Stopped · fully released" and view.segment is None
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "10.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "210.00", True),
+        ("Released at stop", "100.00", False),
+        ("Came back since it stopped", "110.00", False),
+        ("Still in shares, at cost", "0.00", False),
+        ("Still in entry orders", "0.00", False),
+    ]
+
+
+def test_a_stopped_bots_still_claimed_money_shrinks_only_as_its_own_order_settles(authority: tuple) -> None:
+    """#2555: an entry order still working at Stop stays claimed while other
+    money moves, and leaves the claim only when that order itself ends -- as
+    money that came back, never as released."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+    from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    working = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="working",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    assert working.effect_operation_id is not None and working.order_ref is not None
+    _stop(repo)
+    at_stop = _lines(_read_view(runtime, gate, cash=1000))
+    assert at_stop["Released at stop"] == "99.99" and at_stop["Still in entry orders"] == "100.01"
+
+    # Other money moves: another bot trades and the account's cash changes.
+    _deploy_bot(repo, gate, "other", cents=30_000)
+    bought = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="other", decision_id="bought",
+                          lifecycle_run_id="other-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+                          reference_price=100, envelope=gate)
+    _append_slice(repo, bought, execution_id="other-fill", quantity=2, price=100, source_event_at_ms=NOON, fee=0)
+    repo.clock.advance(5_000)
+    moved = _lines(_read_view(runtime, gate, cash=800))
+    assert (moved["Released at stop"], moved["Still in entry orders"]) == ("99.99", "100.01")
+    assert "Came back since it stopped" not in moved
+
+    # Its own order ends unfilled: only now does its claim settle.
+    fold_order_evidence(repo, effect_operation_id=working.effect_operation_id, order=BrokerOrder(
+        broker="alpaca", order_id="bo-working", client_order_id=working.order_ref, symbol="SPY", asset_class="us_equity",
+        side="buy", order_type="market", time_in_force="day", quantity=1, filled_quantity=0, limit_price=None,
+        stop_price=None, filled_avg_price=None, status="canceled", submitted_at_ms=NOON, created_at_ms=NOON,
+        updated_at_ms=repo.clock(), filled_at_ms=None, canceled_at_ms=repo.clock(), expired_at_ms=None, events=[],
+        observed_at_ms=repo.clock(),
+    ))
+    settled = _read_view(runtime, gate, cash=800)
+    assert (_lines(settled)["Balance"], _lines(settled)["Released at stop"]) == ("200.00", "99.99")
+    assert (_lines(settled)["Came back since it stopped"], _lines(settled)["Still in entry orders"]) == ("100.01", "0.00")
+    # What the Stop released and what stayed claimed then are the Stop's own figures.
+    assert settled.detail.startswith("It released $99.99 when it stopped; $100.01 stayed claimed.")
+
+
+def test_a_bot_stopped_before_its_release_was_recorded_shows_an_estimate_so_labelled(authority: tuple) -> None:
+    """#2555: a Stop that recorded no release -- every Stop before #2555, or
+    one whose money could not be valued at that instant -- still renders, as
+    an estimate from the bot's money now and labelled so, never as a fact."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    held = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                        lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                        reference_price=100, envelope=gate)
+    _append_slice(repo, held, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+    # The account's fee evidence is stale at the Stop, so its money cannot be valued then.
+    _walk_clock_to(repo, repo.clock() + FEE_EVIDENCE_MAX_AGE_MS + 1)
+    _stop(repo)
+    stop = next(row for row in repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
+    assert "released_cents" not in stop["facts_json"]
+    record_fee_evidence(repo, [], checked_at_ms=repo.clock(), history_complete=True)
+
+    view = _read_view(runtime, gate, cash=900)
+
+    assert ("Released at stop (estimate)", "100.00", False) in _statement(view)
+    assert "estimate" in view.detail
+    assert view.segment is not None and (view.segment.released_usd, view.segment.released_estimated) == ("100.00", True)

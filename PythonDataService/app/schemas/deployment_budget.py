@@ -87,7 +87,9 @@ class MoneySegment(BaseModel):
     ``parts`` belong to a running bot, and ``shortfall_usd`` to one that spent
     beyond its balance -- absent, never "0.00", when nothing is short;
     ``released_usd`` and ``still_claimed_usd`` to a stopped bot that still
-    holds money.
+    holds money. ``released_usd`` is what its Stop released, as the Stop
+    recorded it (#2555); ``released_estimated`` marks a Stop that recorded
+    none, whose figure is an estimate from the bot's money now.
     ``palette_index`` is a bot's stable colour slot (its registration order
     on the account), the same on every surface that draws that bot.
     ``settling`` is sale proceeds on their way into cash: not yet free to
@@ -103,6 +105,7 @@ class MoneySegment(BaseModel):
     parts: MoneyParts | None = None
     shortfall_usd: str | None = None
     released_usd: str | None = None
+    released_estimated: bool = False
     still_claimed_usd: str | None = None
     palette_index: int | None = Field(default=None, ge=0)
 
@@ -119,6 +122,8 @@ class MoneySegment(BaseModel):
             raise ValueError("a shortfall is stated only when something is short")
         if (self.released_usd is not None, self.still_claimed_usd is not None) != (stopped, stopped):
             raise ValueError("released_usd and still_claimed_usd belong to a stopped bot's slice")
+        if self.released_estimated and not stopped:
+            raise ValueError("only a stopped bot's release can be an estimate")
         return self
 
 
@@ -251,9 +256,10 @@ class DeploymentBudgetView(BaseModel):
     owner's words -- holding a position is a normal state, never worded as a
     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
     it, in order: a running bot's budget, results, balance and where the
-    balance is; a stopped bot's balance and what was released and what is
-    still held, which add up to that balance. It is empty unless ``state``
-    is ``ready``.
+    balance is; a stopped bot's balance, what its Stop released (the Stop's
+    recorded figure, #2555), what has come back since and what is still
+    held, which add up to that balance. It is empty unless ``state`` is
+    ``ready``.
     ``segment`` is this bot's slice exactly as the account's money bar draws
     it (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of
     its own; ``None`` when the bot is finished and holds no money any more.

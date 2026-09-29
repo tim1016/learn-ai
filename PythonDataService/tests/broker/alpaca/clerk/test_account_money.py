@@ -23,16 +23,23 @@ from app.broker.alpaca.clerk.account_money import (
     bot_parts,
     bot_segment,
     money_bar,
+    release_at_stop,
     share_bps,
 )
-from app.broker.alpaca.clerk.budgets import AccountBudget, DeploymentBudget, account_budget, deployment_budget
+from app.broker.alpaca.clerk.budgets import (
+    AccountBudget,
+    DeploymentBudget,
+    ReleaseAtStop,
+    account_budget,
+    deployment_budget,
+)
 
 
 def _bot(sid: str, *, cents: int, position: str = "0", pending: str = "0", fees: str = "0",
-         realized: str = "0", active: bool = True) -> DeploymentBudget:
+         realized: str = "0", active: bool = True, release: ReleaseAtStop | None = None) -> DeploymentBudget:
     return deployment_budget(
         strategy_instance_id=sid, committed_cents=cents, active=active, realized_gross=realized,
-        fees=D(fees), position_cost=D(position), pending_orders=D(pending),
+        fees=D(fees), position_cost=D(position), pending_orders=D(pending), release=release,
     )
 
 
@@ -99,9 +106,34 @@ def test_stopped_bot_still_holding_keeps_its_shares_and_releases_its_free_budget
 
     bar = _drawn(money)
     assert _by_kind(bar) == [("stopped", "old", 76_471), ("free", None, 9_923_529)]
-    assert bar.segments[0].released_cents == 23_528
+    # Its Stop recorded no release, so the figure is estimated and says so.
+    assert (bar.segments[0].released_cents, bar.segments[0].released_estimated) == (23_528, True)
     assert bar.segments[0].still_claimed_cents == 0
     assert bar.total_cents == 10_000_000
+
+
+def test_a_stopped_bots_released_money_is_what_its_stop_recorded_whatever_its_money_does_after() -> None:
+    # #2555: $1,000 bot stopped holding $600 of shares; its Stop released and
+    # recorded $400. It has since sold half its shares for a $12.50 gain, which
+    # comes back as cash -- the release stays the Stop's $400.00, not today's
+    # $712.50 of free money.
+    stopped = _bot("old", cents=100_000, position="300", realized="12.50", active=False,
+                   release=ReleaseAtStop(released_cents=40_000, held_cents=60_000))
+    budget = account_budget(cash="712.50", deployments=[stopped], order_claims=D(0), fee_claims=D(0))
+
+    bar = _drawn(_money(budget))
+
+    segment = bar.segments[0]
+    assert (segment.kind, segment.cents, segment.still_claimed_cents) == ("stopped", 30_000, 0)
+    assert (segment.released_cents, segment.released_estimated) == (40_000, False)
+
+
+def test_release_at_stop_is_the_positive_free_budget_and_what_stays_held() -> None:
+    # The fractional-fee remainder rule below, from the running deployment the Stop ends.
+    assert release_at_stop(_bot("old", cents=100_000, position="600.005", fees="0.0049")) == ReleaseAtStop(40_000, 60_000)
+    assert release_at_stop(_bot("pending", cents=20_000, pending="100.01")) == ReleaseAtStop(9_999, 10_001)
+    # An overrun has no free budget to release; everything it holds stays claimed.
+    assert release_at_stop(_bot("over", cents=10_000, position="101")) == ReleaseAtStop(0, 10_100)
 
 
 def test_a_stopped_bots_released_money_is_the_remainder_of_its_balance() -> None:
@@ -144,6 +176,8 @@ def test_pre_budget_stopped_bot_and_its_working_order_stay_held() -> None:
     bar = _drawn(money)
     assert _by_kind(bar) == [("stopped", "legacy", 60_001), ("free", None, 939_999)]
     assert bar.segments[0].still_claimed_cents == 10_001 and bar.segments[0].released_cents == 0
+    # It reserved nothing, so it released nothing: a fact, not an estimate.
+    assert not bar.segments[0].released_estimated
     assert bar.total_cents == 1_000_000
 
 

@@ -124,8 +124,10 @@ def test_a_poll_at_an_unchanged_custody_revision_reuses_the_last_results(
     assert len(projections) == 1
 
     _stop(account, "d")
-    assert account.bot_results(["c"]) == first
+    # The Stop values what it releases with one projection of its own (#2555).
     assert len(projections) == 2
+    assert account.bot_results(["c"]) == first
+    assert len(projections) == 3
 
 
 def test_results_the_fee_evidence_cannot_vouch_for_are_refused_never_zero(account: ClerkSqliteRepository) -> None:

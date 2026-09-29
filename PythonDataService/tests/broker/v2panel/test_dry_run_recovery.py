@@ -268,13 +268,15 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     # Sold at IBKR's live bid when the flatten went out, never at the last bar the bot saw.
     assert [(fill.side, fill.quantity, fill.price) for fill in panel.recent_fills][:1] == [("sell", 1.0, 601.25)]
     money = await budget_deploy.budget_view(ACCT, SID)
-    # Flat with nothing claimed, the bot is finished: its whole balance, net of
-    # the sale's fees, is released at once and it has no slice left (review A1).
+    # Flat with nothing claimed, the bot is finished and has no slice left
+    # (review A1). Its Stop released only its free budget; the sale's proceeds,
+    # net of their fees, came back after it and are never released money (#2555).
     assert (money.state, money.headline) == ("ready", "Stopped · fully released")
     # $1,000 + the $1.25 gain on the sale - $0.04 of modelled fees.
-    assert _statement(money)[-4:] == [
+    assert _statement(money)[-5:] == [
         ("Balance", "1001.21"),
-        ("Released at stop", "1001.21"),
+        ("Released at stop", "399.99"),
+        ("Came back since it stopped", "601.22"),
         ("Still in shares, at cost", "0.00"),
         ("Still in entry orders", "0.00"),
     ]
@@ -283,7 +285,7 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     crashed_dry_run.clock.value = NEXT_SESSION_NOON
     money = await budget_deploy.budget_view(ACCT, SID)
     assert (money.state, money.headline) == ("ready", "Stopped · fully released")
-    assert _statement(money)[-3] == ("Released at stop", "1001.21")
+    assert _statement(money)[-4] == ("Released at stop", "399.99")
     assert crashed_dry_run.alpaca.calls == []
 
 

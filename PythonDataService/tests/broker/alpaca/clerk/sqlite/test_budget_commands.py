@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.budgets import ReleaseAtStop
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
@@ -15,8 +17,10 @@ from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_author
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.facts import RunStoppedFacts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -137,6 +141,11 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
     submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
     expected = budget_repo.account_budget(cash=1000, seen_before_ms=NOON)
     assert expected.available == Decimal("399.99")
+    # #2555: what the Stop released, and what stayed claimed then, are its own facts.
+    stop = next(row for row in budget_repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
+    facts = RunStoppedFacts.from_facts_json(stop["facts_json"])
+    assert (facts.released_cents, facts.held_cents) == (39_999, 60_001)
+    assert expected.deployments[0].release == ReleaseAtStop(released_cents=39_999, held_cents=60_001)
     database = budget_repo.db_path
     budget_repo.close()
     database.rename(database.with_suffix(".saved"))
@@ -146,6 +155,51 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
         assert not record_fee_evidence(rebuilt, [], checked_at_ms=NOON, history_complete=True)
         assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
         assert rebuilt.deployment_budget("a")["released_at_ms"] == NOON
+        verify_database(rebuilt.db_path, expected_account_id="BUDGET-PAPER")
+    finally:
+        rebuilt.close()
+
+
+def test_a_stop_that_records_no_release_keeps_the_facts_bytes_every_earlier_stop_has() -> None:
+    """Hash-chained schema evolution (#2555): a Stop of a run with no budget,
+    or one whose money could not be valued, is byte-identical to every Stop
+    recorded before releases were, so an old chain replays and verifies."""
+    unvalued = RunStoppedFacts(idempotency_key="k", payload_hash="h", kind="operator_lifecycle", action="STOP",
+                               intended_end_state="STOPPED", lifecycle_run_id="r")
+    earlier = '{"action":"STOP","idempotency_key":"k","intended_end_state":"STOPPED","kind":"operator_lifecycle","lifecycle_run_id":"r","operator_reason":null,"payload_hash":"h"}'
+    assert unvalued.to_facts_json() == earlier
+    assert RunStoppedFacts.from_facts_json(earlier) == unvalued
+    valued = replace(unvalued, released_cents=39_999, held_cents=60_001)
+    assert RunStoppedFacts.from_facts_json(valued.to_facts_json()) == valued
+    with pytest.raises(ValueError, match="both"):
+        RunStoppedFacts.from_facts_json(earlier[:-1] + ',"released_cents":1}')
+
+
+def test_a_chain_stopped_before_releases_were_recorded_replays_and_verifies(tmp_path: Path) -> None:
+    """#2555: a Stop the release could not be valued at (the fee evidence is
+    stale) records the earlier bytes; that chain rebuilds, verifies and reads
+    the same budget, its release unrecorded rather than invented."""
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
+    from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
+
+    budget_repo = _new_budget_repo(tmp_path)
+    _deploy(budget_repo)
+    _walk_clock_to(budget_repo, NOON + FEE_EVIDENCE_MAX_AGE_MS + 1)
+    submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
+    stop = next(row for row in budget_repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
+    assert RunStoppedFacts.from_facts_json(stop["facts_json"]).released_cents is None
+    now = budget_repo.clock()
+    record_fee_evidence(budget_repo, [], checked_at_ms=now, history_complete=True)
+    expected = budget_repo.account_budget(cash=1000, seen_before_ms=now)
+    assert expected.deployments[0].release is None and not expected.deployments[0].active
+    database = budget_repo.db_path
+    budget_repo.close()
+    database.rename(database.with_suffix(".saved"))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(now))
+    try:
+        record_fee_evidence(rebuilt, [], checked_at_ms=now, history_complete=True)
+        assert rebuilt.account_budget(cash=1000, seen_before_ms=now) == expected
+        verify_database(rebuilt.db_path, expected_account_id="BUDGET-PAPER")
     finally:
         rebuilt.close()
 

@@ -13,14 +13,28 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money, holdings_text, quantity_text
-from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
+from app.broker.alpaca.clerk.account_money import (
+    AccountMoney,
+    Holding,
+    account_money,
+    holdings_text,
+    quantity_text,
+    release_at_stop,
+)
+from app.broker.alpaca.clerk.budgets import (
+    AccountBudget,
+    DeploymentBudget,
+    ReleaseAtStop,
+    account_budget,
+    deployment_budget,
+)
 from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryCashClaim, entry_cash_claims
+from app.broker.alpaca.clerk.sqlite.facts import RunStoppedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
@@ -345,6 +359,70 @@ def read_bot_results(
         conn.close()
 
 
+# Each commitment with its run's state and its Stop's facts: the one
+# RUN_STOPPED that released it (``budget_folds.release_stopped_budget``).
+_COMMITMENTS = (
+    "SELECT b.*, r.state AS run_state, (SELECT t.facts_json FROM custody_transitions t "
+    "WHERE t.run_id=b.run_id AND t.transition_kind='RUN_STOPPED' ORDER BY t.sequence LIMIT 1) AS stop_facts "
+    "FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
+)
+
+
+def _deployment_budget(
+    commitment: sqlite3.Row, *, records: Sequence[FillRecord], claims: Sequence[EntryCashClaim], fees: BudgetFees,
+) -> DeploymentBudget:
+    """One commitment over its own FIFO, entry claims and attributed fees.
+
+    A stopped one carries its Stop's recorded release, when the Stop recorded
+    one (#2555). The caller holds the money context.
+    """
+    sid = commitment["strategy_instance_id"]
+    subject_id = bot_subject_id(sid)
+    fifo = compute_fifo_pnl([fill for fill in records if fill.sid == subject_id])
+    if any(lot.side != OrderSide.BUY for lot in fifo.open_lots):
+        raise BudgetUnavailable("Unexplained short exposure prevents a long-only deployment budget.")
+    return deployment_budget(
+        strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
+        active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
+        realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
+        position_cost=sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO),
+        pending_orders=sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO),
+        release=_recorded_release(commitment["stop_facts"]),
+    )
+
+
+def _recorded_release(stop_facts: str | None) -> ReleaseAtStop | None:
+    """The release a Stop recorded; ``None`` while running, or for a Stop that recorded none."""
+    facts = None if stop_facts is None else RunStoppedFacts.from_facts_json(stop_facts)
+    if facts is None or facts.released_cents is None or facts.held_cents is None:
+        return None
+    return ReleaseAtStop(released_cents=facts.released_cents, held_cents=facts.held_cents)
+
+
+def value_release(conn: sqlite3.Connection, *, run_id: str, fees: BudgetFees) -> ReleaseAtStop:
+    """What stopping budgeted run ``run_id`` releases now, for its Stop to record (#2555).
+
+    The deployment is valued exactly as every money read values it -- its own
+    FIFO, attributed fees and entry orders' unfilled remainder, none of which
+    depends on account cash -- so ``BudgetUnavailable`` (unresolved fee
+    evidence, an unexplained short) means its release cannot be known at this
+    instant.
+    Formula: ``account_money.release_at_stop`` over ``_deployment_budget``.
+    """
+    commitment = conn.execute(_COMMITMENTS + " WHERE b.run_id=?", (run_id,)).fetchone()
+    if commitment is None:
+        raise BudgetUnavailable("This run has no budget to release.")
+    if not fees.known:
+        raise BudgetUnavailable("Fee evidence is unresolved: " + "; ".join(fees.unresolved))
+    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
+    sid = commitment["strategy_instance_id"]
+    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=[sid])
+    # The unfilled remainder does not depend on which fills cash has seen.
+    claims = [claim for claim in entry_cash_claims(conn, seen_before_ms=0) if claim.strategy_instance_id == sid]
+    with money_context():
+        return release_at_stop(_deployment_budget(commitment, records=records, claims=claims, fees=fees))
+
+
 def _project(
     conn: sqlite3.Connection, *, cash: object, seen_before_ms: int, fees: BudgetFees,
     modelled_fees_seen_before_ms: int | None,
@@ -375,9 +453,7 @@ def _project(
     if unpriced_legacy:
         raise BudgetUnavailable("An earlier order has no retained cash estimate. Resolve its order evidence and wait for fresh cash.")
     account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
-    commitments = conn.execute(
-        "SELECT b.*, r.state AS run_state FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
-    ).fetchall()
+    commitments = conn.execute(_COMMITMENTS).fetchall()
     claims = entry_cash_claims(conn, seen_before_ms=seen_before_ms)
     records = effective_fill_records(conn, account_id=account_id)
     with money_context():
@@ -396,21 +472,7 @@ def _project(
                 manual_claim += normalize_money(fill.quantity) * normalize_money(fill.fill_price)
                 if fill.fee is not None:
                     manual_claim += normalize_money(fill.fee)
-        budgets = []
-        for commitment in commitments:
-            sid = commitment["strategy_instance_id"]
-            subject_id = bot_subject_id(sid)
-            fifo = compute_fifo_pnl([fill for fill in records if fill.sid == subject_id])
-            if any(lot.side != OrderSide.BUY for lot in fifo.open_lots):
-                raise BudgetUnavailable("Unexplained short exposure prevents a long-only deployment budget.")
-            position_cost = sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO)
-            pending_orders = sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO)
-            budgets.append(deployment_budget(
-                strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
-                active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
-                realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
-                position_cost=position_cost, pending_orders=pending_orders,
-            ))
+        budgets = [_deployment_budget(commitment, records=records, claims=claims, fees=fees) for commitment in commitments]
         budget = account_budget(
             cash=cash, deployments=budgets,
             order_claims=external_claim + manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),

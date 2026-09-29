@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
-    from app.broker.alpaca.clerk.budgets import AccountBudget
+    from app.broker.alpaca.clerk.budgets import AccountBudget, ReleaseAtStop
     from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
@@ -843,6 +843,19 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             fees = self.fee_attribution(now_ms=self.clock())
             return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
+
+    def release_at_stop(self: ClerkSqliteRepository, *, run_id: str) -> ReleaseAtStop | None:
+        """What stopping ``run_id`` releases now, valued as every money read values it (#2555).
+
+        ``None`` for a run with no budget, which releases nothing; only a
+        budgeted run pays for the lifetime fee projection.
+        """
+        from app.broker.alpaca.clerk.sqlite.budget_projection import value_release
+
+        with self._write_lock:
+            if self._conn.execute("SELECT 1 FROM deployment_budgets WHERE run_id=?", (run_id,)).fetchone() is None:
+                return None
+            return value_release(self._conn, run_id=run_id, fees=self.fee_attribution(now_ms=self.clock()))
 
     def account_money(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountMoney:
         """Where the account's money is, from the same read ``account_budget`` makes."""

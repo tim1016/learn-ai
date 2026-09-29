@@ -1297,7 +1297,7 @@ must round-trip through facts.
 | --- | --- |
 | `RUN_STARTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
 | `COMMAND_REJECTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `reason_code`, `operator_reason` |
-| `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
+| `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason`; for a budgeted run whose money could be valued at the Stop, `released_cents` and `held_cents` together — what it released and what stayed claimed (#2555). Both are omitted when absent, so every other Stop keeps the bytes earlier Stops have. |
 | `ENTER_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; complete immutable broker leg/captured order fields |
 | `MANUAL_ORDER_ACCEPTED` | immutable `ticket_id`/`leg_id`/manual-subject/operator identities; ticket-leg instruction hash; command idempotency key/hash/kind/action; effect idempotency key/kind; complete BUY/market/DAY broker leg. The outer strategy and run identities are null. |
 | `MANUAL_ORDER_FILLED` | none (`{}`). It may be appended only after the broker's terminal `filled` state and effective exact execution quantity both cover the immutable manual leg; its fold creates the shared terminal success receipt and completes the one-leg ticket. |

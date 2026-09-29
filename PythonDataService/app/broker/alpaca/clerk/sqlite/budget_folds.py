@@ -70,6 +70,8 @@ def release_stopped_budget(conn: sqlite3.Connection, payload: dict[str, Any]) ->
 
     It releases the active free-cash claim, never deletes an order/fill/fee.
     Their claims are reprojected from custody, including later corrections.
+    What it released, when the Stop could value it, is in its own facts
+    (#2555), where the budget projection reads it; nothing here re-derives it.
     """
     if conn.execute("SELECT schema_version FROM control_meta WHERE id=1").fetchone()[0] < 20:
         # The explicitly offline v9 historical replay precedes this feature.

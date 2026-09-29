@@ -75,6 +75,20 @@ unseen fills and unsettled fees retain separate, disjoint claims after Stop.
 A historical deficit cannot reserve future deposits. The immutable commitment
 and launch/release outcomes replay through the existing custody mirror.
 
+What a Stop released is a fact of the Stop, not a later derivation (#2555).
+Under the same lock as its append, `RUN_STOPPED` values the deployment exactly
+as every money read does (`budget_projection.value_release`) and records the
+display cents it released (`account_money.release_at_stop`: its positive free
+budget, as the remainder of its balance) and what stayed claimed in shares and
+entry orders. Money that comes back afterwards -- a sale, an entry order that
+ends unfilled, less any fee posted later -- is shown as having come back since
+the Stop and is never added to the released figure; what is still held shrinks
+only as its own orders and shares settle. A Stop is never refused for money:
+when the deployment cannot be valued at that instant (stale or unresolved fee
+evidence), the Stop records no amounts and keeps the byte-identical facts every
+earlier Stop has, and the bot's money shows a released figure estimated from
+its money now, labelled as an estimate.
+
 Independent conservation fixtures in `test_budgets.py` cover the $1,000/$600
 example, partial fills, observed cash, settlement replacement and historical
 deficits. Real repository tests in `sqlite/test_budget_commands.py` prove
