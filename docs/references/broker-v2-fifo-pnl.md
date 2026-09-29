@@ -37,13 +37,24 @@ accumulate in `Decimal` under `money.money_context`, where inexact arithmetic
 raises.  The `exact_*` fields (`PnLResult.exact_realized_pnl`,
 `PnLResult.exact_open_pnl` / `OpenPnLResult.exact_value`,
 `ClosedLot.exact_realized_pnl`, `OpenLot.exact_qty` / `exact_cost`) are the
-money authority that custody budgets and the simulated (Dry Run and Shadow)
-account equity read (#2556).  The float attributes (`qty`, `cost`,
-`realized_pnl`, `open_pnl`, `value`) are those values rounded once for
-display, so their only error is that single rounding — well inside the
-historical `1e-9` fixtures — but it can still cross a whole cent, so money
-never normalizes a float view back into `Decimal`.  The lot-closing threshold (a lot at or below `1e-9` shares
-closes) is the unchanged FIFO matching rule, now applied to exact quantities.
+money authority (#2556).  They are what custody budgets, the simulated (Dry
+Run and Shadow) account's equity, retained baseline and open P&L, and every
+owner-visible P&L dollar string read: the bot page's open P&L
+(`EconomicSnapshot.exact_open_pnl` through
+`panel_projection_service.open_pnl_fields`) and the Activity page's Today
+statement (`AccountPnlAttribution.exact_realized_pnl_total` /
+`exact_start_open_pnl_total` / `exact_open_pnl_total` through
+`account_activity.compose_today_statement`).  The float attributes (`qty`,
+`cost`, `realized_pnl`, `open_pnl`, and the projections' `open_pnl`,
+`realized_pnl_total`, `open_pnl_total`, `start_open_pnl_total`)
+are those values rounded once for display, so their only error is that single
+rounding — well inside the historical `1e-9` fixtures — but it can still
+cross a half cent, so no displayed cent is rounded from one:
+`money.display_cents` refuses anything but a `Decimal`.  The float views
+still feed charts, the catalog and gallery rows, the C2 attribution API and
+the C3 broker-curve comparison.  The lot-closing threshold (a lot at or below
+`1e-9` shares closes) is the unchanged FIFO matching rule, now applied to
+exact quantities.
 
 ## Test file
 
@@ -61,8 +72,18 @@ open valuation (long remainder and short lot, missing mark, flat), and
 `test_open_pnl_money_is_exact_at_a_whole_cent_boundary` pins why money reads
 the exact field: 0.048360857 shares from $100 to $100.3101682007 gain exactly
 $0.0149999999999999999 (1 cent), while the 17-digit float view 0.015 rounds
-half-even to 2 cents.  `test_no_money_normalizes_a_float_fifo_view` is the grep
-guard that no `normalize_money(...)` in the service takes a float view.
+half-even to 2 cents.  The same boundary is pinned on what the owner reads:
+the bot page's open P&L
+(`tests/broker/v2panel/test_panel_projection.py::test_bot_page_open_pnl_is_exact_fifo_at_a_whole_cent_boundary`),
+Today's realized and open-change figures
+(`tests/broker/alpaca/clerk/sqlite/test_fee_attribution_view.py::test_today_shows_fifos_exact_gains_at_a_whole_cent_boundary`)
+and the simulated account's equity and open P&L on the money view
+(`tests/broker/alpaca/clerk/sqlite/test_simulated_account.py`).
+`test_no_normalize_money_call_names_a_fifo_float_view_attribute` is only a
+tripwire: it flags `normalize_money(<x>.<float view>)` written directly, and
+cannot follow a float view through a variable or parameter; the guarantee is
+the `Decimal`-typed renderers and `display_cents`' refusal of a float
+(`tests/broker/alpaca/clerk/test_money.py`).
 
 ## Golden fixture location
 

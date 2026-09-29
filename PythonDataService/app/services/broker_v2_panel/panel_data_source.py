@@ -446,7 +446,7 @@ async def _get_panel_with_entries_from_authority(
         exposure=dict(economics.exposure),
         fills_today=economics.fills_today,
         realized_pnl_today=economics.realized_pnl_today,
-        open_pnl=economics.open_pnl,
+        exact_open_pnl=economics.exact_open_pnl,
         latest_decision=decision,
         last_bar_at_ms=economics.last_activity_at_ms,
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",

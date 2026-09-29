@@ -511,21 +511,33 @@ def test_open_pnl_money_is_exact_at_a_whole_cent_boundary() -> None:
     assert display_cents(normalize_money(result.open_pnl)) == 2
 
 
-# Display views of exact FIFO values; see ``fifo_pnl``'s module docstring.
-_FIFO_FLOAT_VIEWS = frozenset({"realized_pnl", "open_pnl", "value", "qty", "cost", "entry_price", "exit_price"})
+# Float display views of exact FIFO values, on FIFO's own results and on the
+# SQLite projections that carry them (``EconomicSnapshot``,
+# ``AccountPnlAttribution``); see ``fifo_pnl``'s module docstring.
+_FIFO_FLOAT_VIEWS = frozenset({
+    "realized_pnl", "open_pnl", "entry_price", "exit_price",
+    "realized_pnl_today", "realized_pnl_total", "start_open_pnl_total", "open_pnl_total",
+})
 
 
-def test_no_money_normalizes_a_float_fifo_view() -> None:
-    """#2556: money reads ``exact_*`` FIFO fields, never a rounded float view.
+def test_no_normalize_money_call_names_a_fifo_float_view_attribute() -> None:
+    """#2556: a direct-attribute grep guard -- a tripwire, not the guarantee.
 
-    Grep guard over the service: ``normalize_money`` applied directly to an
-    attribute named like a FIFO float view re-admits a multiplied float as
-    money, which ``money.normalize_money`` forbids.
+    It flags ``normalize_money(<x>.<float view>)`` written anywhere in the
+    service, which re-admits a rounded float as money. It cannot follow a
+    float view through a variable or a parameter (the bot page's open P&L and
+    Today's statement once did exactly that), so the guarantee is structural:
+    those renderers take FIFO's exact ``Decimal`` fields and
+    ``money.display_cents`` refuses a float -- pinned by the rendered-string
+    regressions in ``test_panel_projection.py``,
+    ``test_fee_attribution_view.py`` and ``test_simulated_account.py``.
     """
     app_root = Path(__file__).parents[4] / "app"
+    paths = sorted(app_root.rglob("*.py"))
+    assert len(paths) > 100, "the guard must scan the service, not an empty tree"
     offenders = [
         f"{path.relative_to(app_root.parent)}:{node.lineno}: {ast.unparse(node)}"
-        for path in sorted(app_root.rglob("*.py"))
+        for path in paths
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)

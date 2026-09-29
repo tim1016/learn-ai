@@ -691,7 +691,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
                     exposure={},
                     fills_today=0,
                     realized_pnl_today=0.0,
-                    open_pnl=None,
+                    exact_open_pnl=None,
                     last_activity_at_ms=None,
                 ),
             ),
@@ -808,7 +808,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
                 session_fills=(),
                 snapshot=SimpleNamespace(
                     exposure={}, fills_today=0, realized_pnl_today=0.0,
-                    open_pnl=None, last_activity_at_ms=None,
+                    exact_open_pnl=None, last_activity_at_ms=None,
                 ),
             ),
         )

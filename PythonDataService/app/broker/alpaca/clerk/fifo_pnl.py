@@ -205,11 +205,6 @@ class OpenPnLResult:
     marks_complete: bool
     open_lots: tuple[OpenLot, ...]
 
-    @property
-    def value(self) -> float | None:
-        """Display view of ``exact_value``, rounded once."""
-        return None if self.exact_value is None else float(self.exact_value)
-
 
 # ── FIFO engine ───────────────────────────────────────────────────────────────
 
@@ -332,8 +327,8 @@ def compute_open_pnl(
 
     ``exact_value`` is ``None`` until every symbol with an open lot has a
     mark.  Flat state is complete and has a value of exactly ``0``.  Each mark
-    is normalized once; ``exact_value`` is the exact sum and ``value`` its
-    display view, rounded once.
+    is normalized once; ``exact_value`` is the exact sum.  Its consumers
+    carry it as their own ``exact_open_pnl`` beside a float display view.
     """
     open_lots: list[OpenLot] = []
     symbols_with_open_lots: set[str] = set()
