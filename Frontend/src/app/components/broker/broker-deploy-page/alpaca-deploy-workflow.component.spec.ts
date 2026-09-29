@@ -23,6 +23,7 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent, SUBMISSION_KEY_RE } from './alpaca-deploy-workflow.component';
+import { DEPLOY_TYPING_SETTLE_MS } from './deploy-money-step.component';
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
@@ -46,6 +47,9 @@ const DEPLOY_TARGET = resourceTarget('alpaca', 'clrk_spec', {
   routingEpoch: 4,
 });
 const FENCE = { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch };
+/** These specs are not about the typing settle (the symbol-scope and money
+ * step specs run with the real one), so symbol and amount act on the next tick. */
+const INSTANT_SETTLE = { provide: DEPLOY_TYPING_SETTLE_MS, useValue: 0 };
 
 const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   strategy_key: 'rsi_mean_reversion',
@@ -186,6 +190,7 @@ async function renderWorkflow(service: ServiceDouble = mockService()) {
     providers: [
       ...fakePickerWorld().providers,
       provideFleetDirectory(),
+      INSTANT_SETTLE,
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
     ],
@@ -203,6 +208,7 @@ async function renderWithQuery(service: ServiceDouble, query: Record<string, str
     providers: [
       ...fakePickerWorld().providers,
       provideFleetDirectory(),
+      INSTANT_SETTLE,
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { queryParamMap, snapshot: { queryParamMap: initial } } },
       { provide: BrokerV2PanelService, useValue: service },
@@ -694,6 +700,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
@@ -1348,6 +1355,7 @@ describe('AlpacaDeployWorkflowComponent — the session draft (H9)', () => {
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
@@ -1383,6 +1391,7 @@ describe('AlpacaDeployWorkflowComponent — a lost Deploy across leaving and com
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
@@ -1418,6 +1427,7 @@ describe('AlpacaDeployWorkflowComponent — an unsettled key in the address', ()
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
@@ -1638,6 +1648,7 @@ describe('AlpacaDeployWorkflowComponent — strategy, world and settings', () =>
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         {
           provide: ActivatedRoute,
@@ -1906,6 +1917,7 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
       providers: [
         ...fakePickerWorld().providers,
         provideFleetDirectory(),
+        INSTANT_SETTLE,
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
