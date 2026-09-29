@@ -44,6 +44,7 @@ import {
   fakeCatalogBot,
   fakeChartFeed,
   fakePanelAction,
+  fakeSqliteStopAction,
 } from '../../../src/app/testing/bot-panel-fixtures';
 
 /**
@@ -114,9 +115,8 @@ const RECEIPT_NEXT_ACTION = 'Open the bot\'s page to watch it trade.';
 export const RUNNING_EXPLANATION = 'Running · holds 1 SPY';
 export const HOLDING_EXPLANATION = 'Stopped · still holds 1 SPY · no bot is managing it';
 const FINISHED_EXPLANATION = 'Off duty and flat.';
-/** `panel_data_source._stop`. */
-export const STOP_MESSAGE =
-  'Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched.';
+/** `sqlite_panel_source._outcome_message` for the Clerk's stop. */
+export const STOP_MESSAGE = 'Stop bot decisions completed.';
 /** `lane_summary._stopped_holding_item`. */
 export const HOLDING_ATTENTION = `${WALKED_BOT} is stopped but still holds 1 SPY. No bot is managing it.`;
 /** `sqlite_panel_source._outcome_message` for each flatten command. */
@@ -478,7 +478,7 @@ function walkedCatalogRow(phase: BotPhase): BotCatalogView | null {
   }
 }
 
-const STOP_ACTION = fakePanelAction('stop', { label: 'Stop', concurrency_token: 'stop-running' });
+const STOP_ACTION = fakeSqliteStopAction({ concurrency_token: 'stop-running' });
 const RECONCILE_ACTION = fakePanelAction('reconcile_now', {
   label: 'Reconcile now', explanation: 'Check this bot\'s position with Alpaca.', concurrency_token: 'reconcile-1',
 });
@@ -767,7 +767,7 @@ export class OwnerWalkWorld {
       mission_verdict: running
         ? { state: 'working', label: 'Working', explanation: 'The runtime is on duty.', next_action: 'Monitor decisions.', evaluated_at_ms: NOW_MS }
         : { state: 'off_duty', label: 'Off duty', explanation: 'The bot is stopped.', next_action: null, evaluated_at_ms: NOW_MS },
-      primary_action: running ? 'stop' : null,
+      primary_action: running ? 'stop_bot_decisions' : null,
       exposure: running || holding ? { SPY: 1 } : {},
       fills_today: running || holding ? 1 : 2,
     });
@@ -825,7 +825,7 @@ export class OwnerWalkWorld {
       recorded_at_ms: NOW_MS,
       revision: this.surfaceVersion,
     });
-    if (request.action_id === 'stop' && this.phase === 'running') {
+    if (request.action_id === 'stop_bot_decisions' && this.phase === 'running') {
       this.advance('holding');
       return result(STOP_ACTION, STOP_MESSAGE);
     }

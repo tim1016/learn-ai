@@ -11,6 +11,7 @@ import type {
   ChartFeedView,
   PanelAction,
 } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
+import { operatorBlockerFixture } from './operator-blocker-fixtures';
 
 const OBSERVED_AT_MS = 1_700_000_001_000;
 
@@ -158,6 +159,97 @@ export function fakePanelAction(
     concurrency_token: `${actionId}-token`,
     ...overrides,
   };
+}
+
+/** Why the Clerk does not allow a recovery action now, as
+ * `sqlite_panel_adapter._capability_blocker` authors it. */
+function sqliteBlockers(reason: { id: string; headline: string; detail: string }): PanelAction['blockers'] {
+  return [operatorBlockerFixture({
+    id: reason.id, scope: 'bot', severity: 'blocking', disposition: 'wait',
+    headline: reason.headline, detail: reason.detail, primaryMove: null, appliesTo: 'run',
+  })];
+}
+
+function unavailableSqliteAction(
+  actionId: PanelAction['action_id'],
+  label: string,
+  reason: { id: string; headline: string; detail: string },
+): PanelAction {
+  return fakePanelAction(actionId, { label, enabled: false, blockers: sqliteBlockers(reason) });
+}
+
+/** The stop the SQLite panel presents for a running bot: the Clerk's
+ * `stop_bot_decisions` (`recovery_policy`), with its confirmation. */
+export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): PanelAction {
+  return fakePanelAction('stop_bot_decisions', {
+    label: 'Stop bot decisions',
+    explanation: 'Stop new strategy decisions while leaving exposure under Clerk custody.',
+    confirmation: {
+      title: 'Stop this bot?',
+      body: 'Stop new strategy decisions while leaving exposure under Clerk custody.',
+      consequence: 'The bot will stop making decisions. Existing exposure is not flattened blindly.',
+      confirm_label: 'Stop bot decisions',
+      required_token: '',
+    },
+    ...overrides,
+  });
+}
+
+/**
+ * A bot's actions as the SQLite panel really presents them
+ * (`sqlite_panel_adapter.adapt_sqlite_panel`): the Clerk's recovery catalog
+ * (`recovery_policy._DESCRIPTORS`) in its order, with its labels and
+ * blockers — never a generic `stop`. A bot's stop is `stop_bot_decisions`,
+ * allowed only while the bot runs.
+ */
+export function fakeSqliteBotActions({ running = true }: { running?: boolean } = {}): PanelAction[] {
+  const noExposure = {
+    id: 'NO_ATTRIBUTED_EXPOSURE',
+    headline: 'No attributed exposure requires a flatten plan.',
+    detail: 'Run Reconcile now and refresh the custody snapshot.',
+  };
+  return [
+    unavailableSqliteAction('recover_exact_execution_evidence', 'Recover exact execution evidence', {
+      id: 'NO_EXECUTION_COVERAGE_CONFLICT',
+      headline: 'No active execution-coverage conflict requires historical evidence recovery.',
+      detail: 'No historical execution recovery is required.',
+    }),
+    unavailableSqliteAction('resolve_execution_coverage', 'Resolve execution coverage', {
+      id: 'NO_EXECUTION_COVERAGE_CONFLICT',
+      headline: 'No active execution-coverage conflict has a Clerk-owned resolution path.',
+      detail: 'No coverage resolution is required.',
+    }),
+    fakePanelAction('reconcile_now', {
+      label: 'Reconcile now',
+      explanation: 'Compare durable Clerk custody with a fresh Alpaca account observation.',
+    }),
+    unavailableSqliteAction('cancel_verified_working_orders', 'Cancel verified working orders', {
+      id: 'NO_VERIFIED_WORKING_ORDERS',
+      headline: 'No working order has both a durable Clerk reference and broker identity.',
+      detail: 'Run Reconcile now to refresh exact working-order identity.',
+    }),
+    unavailableSqliteAction('prepare_safe_flatten', 'Prepare safe flatten', noExposure),
+    unavailableSqliteAction('execute_safe_flatten', 'Execute safe flatten', noExposure),
+    unavailableSqliteAction('discharge_attributed_residue', 'Discharge stranded residue', {
+      id: 'RECOVERY_SCOPE_UNSUPPORTED',
+      headline: 'Discharge a residue from the single bot that holds one attributed symbol.',
+      detail: 'Open the bot that holds the residue.',
+    }),
+    running
+      ? fakeSqliteStopAction()
+      : fakeSqliteStopAction({
+        enabled: false,
+        blockers: sqliteBlockers({
+          id: 'NO_ACTIVE_BOT_RUN',
+          headline: 'Select a bot with an active run; no decision process is currently stoppable.',
+          detail: 'Choose an active bot or keep the current stopped state.',
+        }),
+      }),
+    fakePanelAction('open_custody_timeline', {
+      label: 'Open custody timeline',
+      explanation: 'Inspect the immutable operation-first evidence timeline.',
+    }),
+  ];
 }
 
 /**

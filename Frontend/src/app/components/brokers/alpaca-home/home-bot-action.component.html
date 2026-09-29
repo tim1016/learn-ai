@@ -1,13 +1,12 @@
 @switch (control()) {
   @case ('stop') {
     <button
-      #stopButton
       type="button"
       class="home-action home-action--stop"
-      [disabled]="pending() || confirming()"
+      [disabled]="pending()"
       [attr.aria-busy]="pending()"
       [attr.aria-label]="'Stop ' + bot().strategy_instance_id"
-      (click)="ask()"
+      (click)="stopRequested.emit(bot().strategy_instance_id)"
     >{{ pending() ? 'Stopping…' : 'Stop' }}</button>
   }
   @case ('flatten') {
@@ -17,14 +16,4 @@
       [attr.aria-label]="'Flatten ' + bot().strategy_instance_id + '…'"
     >Flatten…</a>
   }
-}
-
-@if (confirming()) {
-  <div class="home-action__confirm" role="group" [attr.aria-label]="'Confirm stop of ' + bot().strategy_instance_id">
-    <p><strong>Stop {{ bot().strategy_instance_id }}?</strong> {{ stopConsequence() }}</p>
-    <div class="home-action__confirm-buttons">
-      <button type="button" class="home-action home-action--stop" (click)="confirm()">Stop bot</button>
-      <button #cancelButton type="button" class="home-action" (click)="cancel()">Cancel</button>
-    </div>
-  </div>
 }
