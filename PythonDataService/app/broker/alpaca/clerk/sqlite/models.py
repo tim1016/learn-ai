@@ -10,14 +10,7 @@ connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    # Typing-only: ``from __future__ import annotations`` keeps every
-    # annotation a string and nothing here resolves them at runtime, so a
-    # shapes module does not need to import the live-envelope chain
-    # (``live_envelope`` → ``sealed_ledger`` → the live state sidecar).
-    from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -45,8 +38,6 @@ class TransitionInput:
     proof_reference: str | None = None
     source_event_at_ms: int | None = None
     facts_schema_version: int = 1
-    # Not part of the hashed payload — a sibling row, see envelope_reservations.py.
-    envelope_reservation: EnvelopeReservation | None = None
 
 
 @dataclass(frozen=True)

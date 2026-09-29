@@ -29,6 +29,10 @@ from app.broker.contract.models import OrderSide
 from app.utils.session_anchors import et_date_at_ms
 
 
+class BudgetUnavailable(ValueError):
+    """A named unknown prevents authorizing money; it is never a zero."""
+
+
 @dataclass(frozen=True)
 class DeploymentBudget:
     strategy_instance_id: str

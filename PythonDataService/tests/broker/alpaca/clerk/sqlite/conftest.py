@@ -309,7 +309,10 @@ ENVELOPE_SID = "spy-bot"
 ENVELOPE_SID_B = "qqq-bot"
 ENVELOPE_RUN_ID = "run-1"
 ENVELOPE_RUN_ID_B = "run-2"
-ENVELOPE_T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
+# A fixed int64 ms UTC; every stamp is repo.clock(). Saturday 2026-09-05
+# 17:46:40 ET: on or after 2026-09-01, so every regulatory fee a BUY owes is
+# pinned and an ENTER's recorded fee provision can be priced (#2553).
+ENVELOPE_T0 = 1_788_644_800_000
 
 
 @pytest.fixture

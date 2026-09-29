@@ -26,7 +26,11 @@ BUDGET_AUTHORIZATION = 2
 # is retried on the next decision clock until the operator resolves it with a
 # fresh Deploy.
 BUDGET_COMMITMENT_MISSING = "BUDGET_COMMITMENT_MISSING"
-BUDGET_ADMISSION_REASON_CODES: frozenset[str] = frozenset({BUDGET_COMMITMENT_MISSING})
+# An entry order reserved before fee provisions were recorded (#2553) still
+# has an unfilled remainder, so the fee it claims is unknown; never priced as
+# zero. Transient too: it ends when that order fills or is cancelled.
+ENTRY_FEE_PROVISION_UNRECORDED = "ENTRY_FEE_PROVISION_UNRECORDED"
+BUDGET_ADMISSION_REASON_CODES: frozenset[str] = frozenset({BUDGET_COMMITMENT_MISSING, ENTRY_FEE_PROVISION_UNRECORDED})
 SCHEMA_V21_STATEMENTS = (
     "ALTER TABLE control_meta ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1 CHECK(authorization_version IN (1,2))",
     "CREATE TRIGGER trg_budget_authority_monotonic BEFORE UPDATE OF authorization_version ON control_meta "

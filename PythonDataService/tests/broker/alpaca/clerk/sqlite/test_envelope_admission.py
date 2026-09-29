@@ -13,6 +13,7 @@ rather than of when the suite happens to run.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -98,7 +99,8 @@ def test_an_affordable_market_enter_is_admitted_and_reserved(
     sid, run_id = active_instance
     accepted = _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate())
     assert accepted.created
-    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == pytest.approx(10_000.0)
+    # The notional plus the recorded fee provision (100 shares of CAT, rounded up to the cent).
+    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == Decimal("10000.01")
 
 
 def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
@@ -109,9 +111,9 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1_001), envelope=_gate())
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    assert "100100.00 USD" in (exc_info.value.decision.why or "")
+    assert "100100.01 USD" in (exc_info.value.decision.why or "")
     assert envelope_repo.control_meta_snapshot().control_revision == before
-    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == 0
 
 
 def test_fractional_cent_shortage_is_refused_without_float_tolerance(
@@ -126,6 +128,25 @@ def test_fractional_cent_shortage_is_refused_without_float_tolerance(
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
 
 
+def test_the_entry_requirement_includes_the_fee_provision(
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+) -> None:
+    """Regression (#2553): cash that covers only the notional cannot admit the ENTER.
+
+    Before the budget cutover the requirement is still the one entry
+    requirement a budgeted ENTER is judged by: the notional plus its fee
+    provision, which the reservation then records and claims.
+    """
+    sid, run_id = active_instance
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate(cash=10_000.0))
+    assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
+    assert "10000.01 USD" in (exc_info.value.decision.why or "")
+    assert _accept(
+        envelope_repo, sid, run_id, decision_id="d2", leg=_leg(quantity=100), envelope=_gate(cash=10_000.01)
+    ).created
+
+
 def test_two_instances_cannot_spend_the_same_cash(
     envelope_repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
@@ -135,7 +156,8 @@ def test_two_instances_cannot_spend_the_same_cash(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=600), envelope=gate)
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=400), envelope=gate)
+    # 60,000.01 is claimed; 399 shares need 39,900.01 of the 39,999.99 left.
+    _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=399), envelope=gate)
 
 
 def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
@@ -230,7 +252,7 @@ def test_no_envelope_means_no_envelope_check(
         reference_price=None,
     )
     assert accepted.created
-    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == 0
 
 
 def test_a_sell_leg_cannot_be_an_envelope_enter(

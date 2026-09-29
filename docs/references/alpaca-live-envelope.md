@@ -145,11 +145,15 @@ notional cap, no symbol allowlist, no session restriction.
   `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
   *root* execution's `recorded_at_ms`, because the broker's cash at that
   instant already reflected the true quantity however late the Clerk recorded
-  the restatement. `reserved_cash_usd(seen_before_ms=...)`, which admission
-  hands `observation.fills_seen_before_ms`,
-  sums this across every accepted ENTER, and `cash_bound_admits`
-  (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) checks
-  `notional + reserved <= cash_available`.
+  the restatement. An unfilled remainder also claims its share of the fee
+  provision the ENTER recorded at admission, rounded up to the cent -- never a
+  re-quote from the fee model (#2553). `reserved_cash_decimal(seen_before_ms=...)`,
+  which admission hands `observation.fills_seen_before_ms`, sums this exactly
+  across every accepted ENTER, and `sqlite/envelope_admission.py` checks
+  `entry requirement + reserved <= cash_available`, the entry requirement
+  being `budgets.entry_requirement`: the notional plus the canonical BUY fee
+  provision. A reservation written before provisions were recorded refuses
+  with `ENTRY_FEE_PROVISION_UNRECORDED` while it has an unfilled remainder.
 - **The fill-visibility grace.** `FILL_VISIBILITY_GRACE_MS = 5_000`
   (`live_envelope.py`): a fill the Clerk recorded up to 5 s *before* the reads
   were issued stays reserved too, because nothing Alpaca publishes says its
@@ -424,17 +428,17 @@ it to every facade authority.
   `last_equity`, transfer activities, and cash describe the live account.
   Simulated fills affect the shadow rehearsal's available-cash
   subtraction but do not invent broker equity.
-- **A mirror rebuild loses the reservations of still-working ENTERs.** The
-  `envelope_reservations` side table is product evidence *outside* the custody
-  hash chain (plan R9), which is what makes it safe to write inside
-  `ENTER_ACCEPTED`'s transaction — and also means the mirror does not carry it
-  and a rebuild ceremony does not restore it. After a rebuild, `reserved` reads
-  0 while accepted-but-unfilled ENTERs are still working, so the cash bound
-  briefly admits against cash those ENTERs have already claimed. The window is
-  bounded by one sync cadence plus the life of those working orders: the next
-  15 s tick re-observes cash, and any fill recorded by then is already
-  subtracted through `account_net_cash_spent_usd`. An operator running a
-  rebuild while entries are working should expect it rather than discover it.
+- **A mirror rebuild loses only the oldest reservations.** Every reservation
+  is now folded from `ENTER_ACCEPTED`'s facts -- its exact price and recorded
+  fee provision (#2553) -- so a rebuild restores it. A reservation written
+  before that, as product evidence *outside* the custody hash chain (plan R9),
+  is not carried by the mirror and a rebuild ceremony does not restore it.
+  After a rebuild, such an accepted-but-unfilled ENTER reserves nothing, so
+  the pre-cutover cash bound briefly admits against cash it has already
+  claimed. The window is bounded by one sync cadence plus the life of that
+  working order: the next 15 s tick re-observes cash, and any fill recorded
+  by then is already subtracted through `account_net_cash_spent_usd`. (The
+  budget read refuses outright while an entry order has no reservation.)
 - **No Frontend button yet.** `Frontend/src/app/shell/alpaca-live-banner.component.ts`
   (Task 10) renders a `· loss hold` chip on the banner when
   `loss_hold === 'held'`; it carries no clear action. Clearing the hold is

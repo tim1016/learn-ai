@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money, holdings_text, quantity_text
-from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
+from app.broker.alpaca.clerk.budgets import AccountBudget, BudgetUnavailable, account_budget, deployment_budget
 from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
@@ -28,10 +28,6 @@ from app.broker.contract.models import OrderSide
 
 if TYPE_CHECKING:
     from app.services.alpaca_fee_attribution import FeeFill
-
-
-class BudgetUnavailable(ValueError):
-    """A named unknown prevents authorizing money; it is never a zero."""
 
 
 class BudgetFees(Protocol):
@@ -236,15 +232,17 @@ def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
     so Home can group its bots while the money bar cannot be drawn. Still
     claimed is exactly what the bar prices it as: ``entry_cash_claims``'
     unfilled remainder (nothing for a dead order, else its quantity less its
-    effective fills) and its fee -- the one definition, never a second copy
-    in SQL. Position cost is a nonzero attributed position. A stopped bot in
-    this set is holding; one outside it is finished.
+    effective fills) -- the one definition, never a second copy in SQL. Its
+    fee only ever accompanies that remainder, so the remainder's cost alone
+    decides, even while an earlier order's fee is unknown. Position cost is a
+    nonzero attributed position. A stopped bot in this set is holding; one
+    outside it is finished.
     """
     with money_context():
         claimed = {
             claim.strategy_instance_id
             for claim in entry_cash_claims(conn, seen_before_ms=0)
-            if claim.unfilled_cost + claim.unfilled_fee > ZERO
+            if claim.unfilled_cost > ZERO
         }
     positioned = {
         str(row[0])

@@ -216,8 +216,9 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     """The decision bar's close is the price the envelope bounds the ENTER at."""
     runtime, broker = shadow_runtime
     # 100 shares at the bar's close is the whole account; a program ENTER's
-    # quantity is capped at 100, so the bound is proved by moving the cash.
-    broker.cash = 5_000.0
+    # quantity is capped at 100, so the bound is proved by moving the cash:
+    # exactly 50 shares' notional plus their one-cent fee provision.
+    broker.cash = 5_000.01
     assert runtime.envelope_sync is not None
 
     assert await runtime.envelope_sync.tick() == "observed"
@@ -225,11 +226,12 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     refused = await _enter(runtime, registered_running_bot, quantity=51)
     assert refused.state.value == "rejected"
     assert refused.explanation.startswith("LIVE_ENVELOPE_CASH_EXCEEDED:")
-    # 51 × 100.00: the notional is priced at the *decision bar's* close, which
-    # is the whole point of the ``reference_price`` the facade now passes. A
-    # market ENTER with no price is refused UNOBSERVED, so a wrong wiring here
-    # cannot hide behind a plausible-looking refusal.
-    assert "ENTER needs 5100.00 USD" in refused.explanation, refused.explanation
+    # 51 × 100.00 plus the one-cent fee provision: the notional is priced at
+    # the *decision bar's* close, which is the whole point of the
+    # ``reference_price`` the facade now passes. A market ENTER with no price
+    # is refused UNOBSERVED, so a wrong wiring here cannot hide behind a
+    # plausible-looking refusal.
+    assert "ENTER needs 5100.01 USD" in refused.explanation, refused.explanation
 
     admitted = await _enter(
         runtime, registered_running_bot, quantity=50, decision_id="d2"
@@ -306,7 +308,7 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_attributed_
 ) -> None:
     """The deterministic Shadow fill is attributed before another ENTER can be admitted."""
     runtime, broker = shadow_runtime
-    broker.cash = 5_000.0
+    broker.cash = 5_000.01  # 50 shares at 100.00 and their one-cent fee provision
     assert runtime.envelope_sync is not None
     assert await runtime.envelope_sync.tick() == "observed"
 

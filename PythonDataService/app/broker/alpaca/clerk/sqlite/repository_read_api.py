@@ -804,15 +804,8 @@ class ClerkSqliteRepositoryReadApi:
                 subject_id=subject_id,
             )
 
-    def reserved_cash_usd(self: ClerkSqliteRepository, *, seen_before_ms: int) -> float:
-        """Cash the accepted ENTERs claim beyond the fills recorded before ``seen_before_ms``."""
-        with self._write_lock:
-            return envelope_reservations.reserved_cash_usd(
-                self._conn, seen_before_ms=seen_before_ms
-            )
-
     def reserved_cash_decimal(self: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
-        """Canonical exact claim total for cash admission, under the write fence."""
+        """Cash the accepted ENTERs claim beyond the fills recorded before ``seen_before_ms``, exactly."""
         with self._write_lock:
             return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)
 

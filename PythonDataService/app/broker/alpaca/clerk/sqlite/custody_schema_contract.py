@@ -225,9 +225,9 @@ WHERE reason_code IN ({_HOLD_REASON_CODE_SQL_LIST});
 ENVELOPE_RESERVATIONS_TABLE_DDL = """\
 -- ============================================================
 -- envelope_reservations — the cash one accepted ENTER claims until its
--- fills are observed (ADR 0059 D4). Product evidence outside the hash
--- chain, like decision_receipts: written in ENTER_ACCEPTED's transaction,
--- never in facts_json, never in the mirror.
+-- fills are observed (ADR 0059 D4). Folded from ENTER_ACCEPTED's facts:
+-- the exact price and the recorded fee provision (#2553). A row an earlier
+-- build wrote beside the transition carries neither and is not replayed.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS envelope_reservations (
     effect_operation_id      TEXT PRIMARY KEY REFERENCES effect_operations(effect_operation_id),

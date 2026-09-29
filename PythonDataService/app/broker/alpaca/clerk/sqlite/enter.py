@@ -200,10 +200,10 @@ def accept_enter(
     ``envelope`` is the ADR 0059 risk envelope (see
     :func:`~.envelope_admission.require_envelope_admission`). When supplied it
     bounds this ENTER against observed cash and yields the reservation that
-    cash claims until the fills are observed; the reservation rides the
-    ``TransitionInput`` so its row lands in the same transaction as
-    ``ENTER_ACCEPTED``, and never enters the hashed payload. ``None`` means no
-    envelope is configured for this authority and no envelope check runs.
+    cash claims until the fills are observed; its exact price and recorded fee
+    provision ride the ``ENTER_ACCEPTED`` facts, whose fold writes the row in
+    the same transaction. ``None`` means no envelope is configured for this
+    authority and no envelope check runs.
     ``reference_price`` is the decision-bar price a market leg is priced at; a
     limit leg is priced at its own limit and ignores it.
     """
@@ -278,9 +278,6 @@ def accept_enter(
             clerk_observed_at_ms=repo.clock(),
             summary_code="ENTER_ACCEPTED",
             facts_json=facts.to_facts_json(),
-            envelope_reservation=(
-                reservation if reservation is None or reservation.exact_reference_price is None else None
-            ),
         )
 
     outcome = repo.commit_first_transition(

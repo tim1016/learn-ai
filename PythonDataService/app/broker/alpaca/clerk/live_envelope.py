@@ -1,8 +1,10 @@
 """The ADR 0059 risk envelope, as pure values and rules (Decision 4).
 
-Formula: cash bound admits iff ``notional + reserved <= cash_available``;
-  loss limit ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached
-  iff ``day_pnl <= −L``.
+Formula: cash bound admits iff ``entry requirement + reserved <= cash_available``
+  (``budgets.entry_requirement``: notional plus the recorded fee provision,
+  judged by ``sqlite/envelope_admission.py``); loss limit
+  ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached iff
+  ``day_pnl <= −L``.
 Reference: ADR 0059 Decision 4; owner rulings 2026-09-08 (plan R1–R4).
 Canonical implementation: this file. Day P&L composition lives in
   ``app/broker/alpaca/clerk/sqlite/day_pnl.py``.
@@ -20,7 +22,6 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
-from app.broker.alpaca.clerk.money import cash_admits, notional
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
@@ -247,12 +248,8 @@ class EnvelopeReservation:
 
     quantity: float
     reference_price: float
-    exact_reference_price: str | None = None
-    fee_provision_cents: int = 0
-
-    @property
-    def notional_usd(self) -> float:
-        return float(notional(self.quantity, self.exact_reference_price or self.reference_price))
+    exact_reference_price: str
+    fee_provision_cents: int
 
 
 def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_age_ms: int) -> bool:
@@ -271,12 +268,6 @@ def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> flo
 
 def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:
     return day_pnl_usd <= -loss_limit_usd
-
-
-def cash_bound_admits(
-    *, cash_available_usd: float, reserved_usd: float, notional_usd: float
-) -> bool:
-    return cash_admits(cash=cash_available_usd, claims=reserved_usd, required=notional_usd)
 
 
 class LiveEnvelopeGate:
@@ -393,7 +384,6 @@ __all__ = [
     "LiveEnvelopeGate",
     "LiveEnvelopeIncomplete",
     "LiveEnvelopeValues",
-    "cash_bound_admits",
     "envelope_agreement",
     "loss_breached",
     "loss_limit_usd",

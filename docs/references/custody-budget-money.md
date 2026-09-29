@@ -60,13 +60,23 @@ advanced before the cash observation recognizes them. These facts never enter
 a bot's FIFO or commitment. `sqlite/test_budget_claims.py` covers those cases,
 historical serialization, and mirror rebuild with exact Decimal assertions.
 
-Pending entry fee quotes price only the unfilled remainder at the original
-reference price and quote date, through the canonical regulatory model. Filled
-shares belong exclusively to the canonical fee attribution. A remaining order
-quote rounds its prospective component settlement upward independently, so it
-can retain conservative cent headroom relative to a final combined day charge;
-it is not an exact forecast of that later settlement. Original zero-provision
-legacy reservations are preserved rather than silently rewritten.
+A pending entry's fee claim is the provision its entry requirement recorded
+at admission (`budgets.entry_requirement`, through the canonical regulatory
+model), never a re-quote: a later fee-model change cannot move a past claim
+(#2553). Filled shares belong exclusively to the canonical fee attribution, so
+the unfilled remainder claims its quantity's share of the recorded provision,
+`ceil(provision_cents × remaining / quantity)` cents, computed exactly with
+`Fraction` -- the whole provision while nothing has filled, never more. The
+upward rounding can retain conservative cent headroom relative to a final
+combined day charge; it is not an exact forecast of that later settlement.
+Both authorities record the provision: before and after the budget cutover an
+ENTER is priced by the same entry requirement. Reservations written before
+provisions were recorded are preserved rather than silently rewritten; their
+fills still price at actual cost, but while one has an unfilled remainder its
+fee is unknown, so every money read refuses (`ENTRY_FEE_PROVISION_UNRECORDED`,
+transient at ENTER) instead of pricing that fee at zero. Regressions:
+`sqlite/test_budget_claims.py` (recorded provision survives a fee-model change,
+partial fill), `sqlite/test_envelope_reservations.py` (legacy rows).
 
 The deployment projection is `clerk/budgets.py`, composed over canonical
 FIFO, effective fills and fee attribution by `sqlite/budget_projection.py`.

@@ -64,10 +64,13 @@
   subject-compatibility triggers and creates the view in the same
   transaction, so one vocabulary — the registry — decides what a hold is.
 - Schema-v13 adds `envelope_reservations`, the cash one accepted ENTER
-  claims until its fills are observed (ADR 0059 Decision 4). It is product
-  evidence outside the hash chain, like `decision_receipts`: written inside
-  `ENTER_ACCEPTED`'s transaction, never in `facts_json`, never in the mirror.
-  It also indexes `external_orders.observed_at_ms`: the day-P&L rule asks
+  claims until its fills are observed (ADR 0059 Decision 4). It was first
+  product evidence outside the hash chain, like `decision_receipts`: written
+  inside `ENTER_ACCEPTED`'s transaction, never in `facts_json`, never in the
+  mirror. Every reservation is now folded from `ENTER_ACCEPTED`'s facts (the
+  exact price and the recorded fee provision, #2553), so it replays; a row
+  written the earlier way carries no provision and refuses to price an
+  unfilled remainder's fee. It also indexes `external_orders.observed_at_ms`: the day-P&L rule asks
   that column one question on every 15 s envelope tick and the table's only
   index was on `broker_order_id`.
   The registered v12 → v13 migration is the same statement list the fresh
@@ -1129,9 +1132,9 @@ WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAI
 
 -- ============================================================
 -- envelope_reservations — the cash one accepted ENTER claims until its
--- fills are observed (ADR 0059 D4). Product evidence outside the hash
--- chain, like decision_receipts: written in ENTER_ACCEPTED's transaction,
--- never in facts_json, never in the mirror.
+-- fills are observed (ADR 0059 D4). Folded from ENTER_ACCEPTED's facts:
+-- the exact price and the recorded fee provision (#2553). A row an earlier
+-- build wrote beside the transition carries neither and is not replayed.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS envelope_reservations (
     effect_operation_id      TEXT PRIMARY KEY REFERENCES effect_operations(effect_operation_id),

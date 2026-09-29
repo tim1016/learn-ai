@@ -820,9 +820,10 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     two_active_instances: tuple[tuple[str, str], tuple[str, str]],
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    """Two instances share $1,000, and the first's $1,000 fill lands mid-read.
+    """Two instances share $1,000.01, and the first's $1,000 fill lands mid-read.
 
-    The broker answers $1,000 -- its snapshot predates the fill -- so only the
+    The first ENTER needs its $1,000 notional and its one-cent fee provision.
+    The broker answers $1,000.01 -- its snapshot predates the fill -- so only the
     first ENTER's reservation stands between the second instance and cash
     already spent. One account round trip is enough, because the fault was the
     stamp; the positions endpoint is no longer part of this equity-only verdict.
@@ -832,11 +833,11 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
         envelope_repo,
         first_instance,
         symbol="SPY",
-        envelope=_observed_gate(cash=1_000.0, simulated=False),
+        envelope=_observed_gate(cash=1_000.01, simulated=False),
     )
     read = _FillLandsMidRead(
         clock=envelope_clock,
-        cash=1_000.0,
+        cash=1_000.01,
         record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
     )
     sync = make_sync(envelope_repo, read, simulated=False)
@@ -870,7 +871,7 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     Alpaca promises no ordering between the two, so a fill the Clerk recorded
     up to ``FILL_VISIBILITY_GRACE_MS`` before the read was issued -- the
     boundary, inclusive -- is not trusted to be in the answer. Here the broker
-    still reports the pre-fill $1,000, and the second instance is refused
+    still reports the pre-fill $1,000.01, and the second instance is refused
     rather than admitted against it. The 1 ms case is the one a zero grace
     would release; the boundary case is the one a grace applied off by one
     would.
@@ -880,12 +881,12 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
         envelope_repo,
         first_instance,
         symbol="SPY",
-        envelope=_observed_gate(cash=1_000.0, simulated=False),
+        envelope=_observed_gate(cash=1_000.01, simulated=False),
     )
     _fill_all_ten(envelope_repo, envelope_clock, first)()
     envelope_clock.advance(recorded_before_read_ms)
     sync = make_sync(
-        envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=1_000.0), simulated=False
+        envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=1_000.01), simulated=False
     )
 
     reading = await sync.observe()
