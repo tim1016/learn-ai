@@ -51,11 +51,11 @@ class UnknownBrokerError(BrokerError):
 
 
 class BrokerAuthError(BrokerError):
-    """Vendor rejected our credentials (HTTP 401, or 403 on a read).
+    """Vendor rejected our credentials (HTTP 401, or a 403 on anything but an order submission).
 
     Surfaced as ``502`` — a broker misconfiguration on our side, not a client
-    authorization problem. A 403 on an order is the vendor refusing that
-    order, which is :class:`BrokerOrderRejected`.
+    authorization problem. A 403 on an order submission is the vendor refusing
+    that order, which is :class:`BrokerOrderNotPermitted`.
     """
 
     http_status: ClassVar[int] = 502
@@ -92,14 +92,24 @@ class BrokerRequestInvalid(BrokerError):
 class BrokerOrderRejected(BrokerError):
     """Vendor definitively refused an order mutation. Surfaced as ``409``.
 
-    Raised only on the write path (submit / cancel): the account may not place
-    this order (Alpaca's 403 -- buying power, shares, or its wash-trade
-    protection) or it conflicts with the order's state (a 409). Nothing reached
-    the book, so it is never the uncertain :class:`BrokerUnavailable`. Read
+    Raised only on the write path (submit / cancel), for an order conflict
+    (a duplicate client order id, an order-state conflict). The vendor
+    answered, so it is never the uncertain :class:`BrokerUnavailable`. Read
     paths never raise it.
     """
 
     http_status: ClassVar[int] = 409
+
+
+class BrokerOrderNotPermitted(BrokerOrderRejected):
+    """Vendor will not place this new order for this account.
+
+    Raised only on order submission, never on a cancel or a read: Alpaca's 403
+    on ``POST /v2/orders`` -- buying power or shares not sufficient, or its
+    wash-trade protection refusing an order that could trade against an
+    opposite-side order open on the same symbol in the account. The new order
+    never reached the book.
+    """
 
 
 class BrokerUnavailable(BrokerError):

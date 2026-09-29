@@ -3,14 +3,16 @@
 The mapping is asserted by tests:
 
 - 401       → :class:`BrokerAuthError`
-- 403, order mutation → :class:`BrokerOrderRejected` (Alpaca refusing this
-  order: buying power or shares not sufficient, or its wash-trade protection --
-  never our credentials; #2621)
-- 403, everywhere else → :class:`BrokerAuthError`
+- 403, order submission → :class:`BrokerOrderNotPermitted` (Alpaca refusing
+  this new order: buying power or shares not sufficient, or its wash-trade
+  protection -- never our credentials; #2621)
+- 403, everywhere else (a read, a cancel) → :class:`BrokerAuthError` (Alpaca
+  documents no 403 on a cancel)
 - 429       → :class:`BrokerRateLimited` (carries the Retry-After hint)
 - 400 / 422 → :class:`BrokerRequestInvalid`
-- 409, order mutation → :class:`BrokerOrderRejected` (definitive order conflict)
-- 409, everywhere else → :class:`BrokerUnavailable` (``BrokerOrderRejected`` is a
+- 409, order submission or cancel → :class:`BrokerOrderRejected` (definitive
+  order conflict)
+- 409, read → :class:`BrokerUnavailable` (``BrokerOrderRejected`` is a
   write-only error per its own contract docstring; a 409 from a read endpoint
   is unexpected, not a rejected order)
 - 5xx       → :class:`BrokerUnreachable` (the transient kind of ``BrokerUnavailable``)
@@ -30,18 +32,28 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 
 from alpaca.common.exceptions import APIError
 
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerOrderNotPermitted,
     BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
     BrokerUnreachable,
 )
+
+
+class AlpacaRequest(StrEnum):
+    """Which kind of request Alpaca answered: one status means different things per kind."""
+
+    READ = "read"
+    ORDER_SUBMIT = "order_submit"
+    ORDER_CANCEL = "order_cancel"
 
 
 def status_of(exc: APIError) -> int | None:
@@ -94,29 +106,32 @@ def _retry_after_ms(exc: APIError) -> int | None:
         return None
 
 
-def map_api_error(exc: APIError, *, broker: str, is_order_mutation: bool = False) -> BrokerError:
+def map_api_error(
+    exc: APIError, *, broker: str, request: AlpacaRequest = AlpacaRequest.READ
+) -> BrokerError:
     """Translate an alpaca-py ``APIError`` into a broker-contract error.
 
-    ``is_order_mutation`` scopes the 403 and 409 branches: ``BrokerOrderRejected``
-    is a write-only error (its own docstring promises read paths never raise
-    it), but ``map_api_error`` is invoked from the single shared ``_call`` every
-    read AND write goes through. Only ``submit_order`` / ``cancel_order`` pass
-    ``is_order_mutation=True``. There a 403 is Alpaca refusing the order and a
-    409 is an order conflict; anywhere else a 403 stays a credentials failure
-    and a 409 falls through to the generic ``BrokerUnavailable`` catch-all
-    below rather than misreporting a broker-read failure as an order rejection.
+    ``request`` scopes the 403 and 409 branches: ``BrokerOrderRejected`` is a
+    write-only error (its own docstring promises read paths never raise it),
+    but ``map_api_error`` is invoked from the single shared ``_call`` every
+    read AND write goes through. ``submit_order`` passes ``ORDER_SUBMIT`` and
+    ``cancel_order`` passes ``ORDER_CANCEL``. Only a submission's 403 is Alpaca
+    refusing a new order; a 403 anywhere else stays a credentials failure. A
+    409 on either order request is an order conflict; on a read it falls
+    through to the generic ``BrokerUnavailable`` catch-all below rather than
+    misreporting a broker-read failure as an order rejection.
     """
     status = status_of(exc)
     body = _error_body(exc)
     message = body.message
     detail = f"HTTP {status}" if status is not None else "no HTTP status"
 
-    if status == 403 and is_order_mutation:
-        # Alpaca's documented answer to an order it will not place for this
+    if status == 403 and request is AlpacaRequest.ORDER_SUBMIT:
+        # Alpaca's documented answer to a new order it will not place for this
         # account (buying power or shares not sufficient, wash-trade
-        # protection). Definitive -- nothing reached the book -- so the Clerk
-        # folds it failed, never uncertain.
-        return BrokerOrderRejected(
+        # protection). Definitive -- the order never reached the book -- so
+        # the Clerk folds it failed, never uncertain.
+        return BrokerOrderNotPermitted(
             f"Alpaca refused the order: {message}",
             broker=broker,
             detail=detail,
@@ -144,7 +159,7 @@ def map_api_error(exc: APIError, *, broker: str, is_order_mutation: bool = False
             detail=detail,
             code=body.code,
         )
-    if status == 409 and is_order_mutation:
+    if status == 409 and request is not AlpacaRequest.READ:
         # A definitive order conflict (duplicate client_order_id, order-state
         # conflict), NOT a transient outage. Kept distinct from
         # BrokerUnavailable so the Clerk classifies it as a clean SUBMIT_FAILED

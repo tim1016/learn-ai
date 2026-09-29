@@ -34,6 +34,7 @@ from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_t
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderNotPermitted,
     BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
@@ -219,6 +220,37 @@ async def test_cancel_order_non_cancelable_maps_to_contract_error(
     with pytest.raises(BrokerRequestInvalid) as excinfo:
         await _client(fake).cancel_order("broker-order-1")
     assert "not cancelable" in excinfo.value.message
+
+
+async def test_a_403_on_order_submission_is_alpaca_refusing_the_order(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    """#2621: ``submit_order`` maps its 403 as a refusal of the new order, keeping Alpaca's code."""
+    fake = _FakeAlpaca()
+
+    def refuse(path: str, data: Any = None) -> dict:
+        raise make_api_error(403, message="potential wash trade detected. use complex orders")
+
+    fake.post = refuse  # type: ignore[method-assign]
+
+    with pytest.raises(BrokerOrderNotPermitted) as excinfo:
+        await _client(fake).submit_order(_ORDER_BODY)
+    assert excinfo.value.code == 40010000
+
+
+async def test_a_403_on_order_cancel_stays_a_credentials_failure(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    """Alpaca documents no 403 on a cancel, so ``cancel_order`` never reads one as an order refusal."""
+    fake = _FakeAlpaca()
+
+    def forbid(path: str, data: Any = None) -> None:
+        raise make_api_error(403)
+
+    fake.delete = forbid  # type: ignore[method-assign]
+
+    with pytest.raises(BrokerAuthError):
+        await _client(fake).cancel_order("broker-order-1")
 
 
 async def test_get_order_by_client_order_id_returns_raw_payload() -> None:

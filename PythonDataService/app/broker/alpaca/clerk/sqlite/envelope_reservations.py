@@ -12,7 +12,7 @@ remainder is cancelled quantity, never cash. An order has ended when the
 broker ended it (canceled, expired, rejected, replaced), or when its ENTER
 ended before the broker ever knew it: the effect is terminal (refused before
 contact, failed outright, or proven absent) and the order has no broker
-identity and no fill (``ENTRY_ORDER_ENDED_SQL``, the one definition
+identity and no fill (``order_projection.ORDER_ENDED_SQL``, the one definition
 ``budget_projection`` also reads; the same three facts
 ``order_evidence.order_never_reached_broker`` reads). An ENTER whose outcome
 is still unknown keeps its whole claim until it is resolved. The shadow book
@@ -62,19 +62,7 @@ from decimal import Decimal
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED, EnvelopeReservation
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
-
-# An ENTRY order that can never fill further, over ``orders o`` joined to its
-# ``effect_operations e``: the broker ended it, or its effect is terminal while
-# nothing says the broker ever knew it -- no broker identity (set only by an
-# acknowledgement) and no fill (a fill can be recorded before its order's
-# acknowledgement). A refused, failed or proven-absent ENTER is the common
-# case (#2553); an ``unknown`` effect is not terminal. Never NULL, so it
-# composes under NOT.
-ENTRY_ORDER_ENDED_SQL = (
-    "(LOWER(COALESCE(o.broker_state, '')) IN ('canceled','expired','rejected','replaced') "
-    "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
-    "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
-)
+from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_ENDED_SQL
 
 
 class EntryFeeProvisionUnrecorded(BudgetUnavailable):
@@ -165,7 +153,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         "SELECT r.quantity AS quantity, COALESCE(r.exact_reference_price,r.reference_price) AS reference_price, "
         "r.exact_reference_price IS NOT NULL AS provision_recorded, r.fee_provision_cents, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
-        f"{ENTRY_ORDER_ENDED_SQL} AS ended, "
+        f"{ORDER_ENDED_SQL} AS ended, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
@@ -206,7 +194,6 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
 
 
 __all__ = [
-    "ENTRY_ORDER_ENDED_SQL",
     "EntryCashClaim",
     "EntryFeeProvisionUnrecorded",
     "append_envelope_reservation_row",

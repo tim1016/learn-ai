@@ -22,6 +22,26 @@ ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES = frozenset(
     {"filled", "canceled", "expired", "rejected", "replaced"}
 )
 
+# An order that can never fill further, over ``orders o`` joined to its
+# ``effect_operations e``: the broker ended it, or its effect is terminal while
+# nothing says the broker ever knew it -- no broker identity (set only by an
+# acknowledgement) and no fill (a fill can be recorded before its order's
+# acknowledgement). A refused, failed or proven-absent order is the common
+# case (#2553); an ``unknown`` effect is not terminal. Never NULL, so it
+# composes under NOT. The one definition every "has this order ended?" read
+# composes; the same three facts ``order_evidence.order_never_reached_broker``
+# reads.
+ORDER_ENDED_SQL = (
+    "(LOWER(COALESCE(o.broker_state, '')) IN ('canceled','expired','rejected','replaced') "
+    "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
+)
+
+# An order that may still fill: neither filled nor ended (:data:`ORDER_ENDED_SQL`).
+# One still being sent, or whose outcome is unknown, is open -- it may be
+# working at the broker.
+ORDER_OPEN_SQL = f"(LOWER(COALESCE(o.broker_state, '')) <> 'filled' AND NOT {ORDER_ENDED_SQL})"
+
 
 def signed_broker_position_quantity(position: BrokerPosition) -> float:
     """Normalize Alpaca's absolute quantity and side to a signed quantity."""
@@ -186,23 +206,16 @@ def read_open_opposite_side_orders(
     https://docs.alpaca.markets/us/docs/user-protection), whoever placed it.
     So this reads every custody subject's orders -- each bot's entries and
     exits and every manual ticket's -- from the Clerk's own records, never a
-    broker read.
-
-    An order is open unless its broker state is terminal, or it provably never
-    reached the broker (its operation ended with no broker identity and no
-    fill). One still being sent, or whose outcome is unknown, is open: it may
-    be working at the broker.
+    broker read. Open is :data:`ORDER_OPEN_SQL`: an order still being sent, or
+    whose outcome is unknown, counts; one that provably never reached the
+    broker does not.
     """
-    terminal = tuple(sorted(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES))
     rows = conn.execute(
         "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
         "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        f"WHERE LOWER(COALESCE(o.broker_state, '')) NOT IN ({', '.join('?' for _ in terminal)}) "
-        "AND NOT (e.state IN ('failed', 'rejected') AND o.broker_order_id IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref)) "
+        f"WHERE {ORDER_OPEN_SQL} "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
-        terminal,
     ).fetchall()
     other_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
     return tuple(
@@ -291,6 +304,8 @@ def _order_leg_from_facts(
 
 
 __all__ = [
+    "ORDER_ENDED_SQL",
+    "ORDER_OPEN_SQL",
     "OrderProjectionReadError",
     "ProjectedOrderDetails",
     "read_current_orders",

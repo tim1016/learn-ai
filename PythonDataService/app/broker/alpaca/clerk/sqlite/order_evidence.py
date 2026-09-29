@@ -13,6 +13,7 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
@@ -43,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
+from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -57,7 +59,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictOrder,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
-from app.broker.contract.errors import BrokerError, BrokerOrderRejected
+from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
 
@@ -99,7 +101,8 @@ falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
 __all__ = [
     "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
-    "describe_broker_refusal",
+    "BrokerRefusal",
+    "broker_refusal",
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fence_fills_on_terminal_enters",
@@ -922,35 +925,67 @@ def fold_uncertain(
     )
 
 
-def describe_broker_refusal(
+@dataclass(frozen=True)
+class BrokerRefusal:
+    """A definitive refusal of one order, as the Clerk records it (#2621).
+
+    ``why`` is the recorded reason. ``code`` is the broker's own numeric code,
+    kept as evidence only. ``opposite_open_order_refs`` are the orders the
+    Clerk's own records showed open on the other side of the symbol when the
+    broker would not place a new order -- ``()`` when it looked and found none,
+    ``None`` when it did not look (any other refusal) or could not read them.
+    """
+
+    why: str
+    code: int | None = None
+    opposite_open_order_refs: tuple[str, ...] | None = None
+
+
+def broker_refusal(
     repo: ClerkSqliteRepository,
     *,
     leg: BrokerOrderLeg,
     error: BrokerError,
-) -> str:
-    """The recorded reason the broker definitively refused ``leg``.
+) -> BrokerRefusal:
+    """What the Clerk records when the broker definitively refuses ``leg``.
 
-    The broker's own words always. An order refusal adds that another order on
-    the symbol was open only when the Clerk's own records show one open on the
-    other side as the refusal arrives -- what Alpaca's wash-trade protection
-    refuses. Never from the broker's numeric code: Alpaca documents none for
-    that refusal, and one code may also cover a buying-power or shares
-    refusal (#2621).
+    The broker's own words and code always. When the broker would not place a
+    new order (:class:`BrokerOrderNotPermitted`), the Clerk also reads its own
+    records for an order open on the other side of the symbol -- what Alpaca's
+    wash-trade protection refuses -- and names one only if it finds one.
+    Never from the numeric code: Alpaca documents none for that refusal, and
+    one code may also cover a buying-power or shares refusal. An order
+    conflict is never read this way.
+
+    The refusal is definitive whatever this read finds, so an unreadable order
+    record is logged and the refusal keeps only the broker's words.
     """
-    if not isinstance(error, BrokerOrderRejected):
-        return str(error)
-    opposite = repo.open_opposite_side_orders(symbol=leg.symbol, side=leg.side)
-    if not opposite:
-        return str(error)
+    if not isinstance(error, BrokerOrderNotPermitted):
+        return BrokerRefusal(why=str(error), code=error.code)
+    try:
+        opposite = repo.open_opposite_side_orders(symbol=leg.symbol, side=leg.side)
+    except OrderProjectionReadError:
+        logger.exception(
+            "Clerk could not read its open orders to explain a broker refusal",
+            extra={"action": "refusal_evidence_unreadable", "symbol": leg.symbol, "side": leg.side.value},
+        )
+        return BrokerRefusal(why=str(error), code=error.code)
+    refs = tuple(order.order_ref for order in opposite)
+    if not refs:
+        return BrokerRefusal(why=str(error), code=error.code, opposite_open_order_refs=refs)
     symbol, other_side = leg.symbol.upper(), opposite[0].side
     open_orders = (
-        f"an open {symbol} {other_side} order" if len(opposite) == 1
-        else f"{len(opposite)} open {symbol} {other_side} orders"
+        f"an open or pending {symbol} {other_side} order" if len(refs) == 1
+        else f"{len(refs)} open or pending {symbol} {other_side} orders"
     )
-    return (
-        f"This account still had {open_orders} when Alpaca refused this {leg.side.value}; "
-        "Alpaca refuses an order that could trade against another open order in the same account. "
-        f"{error}"
+    return BrokerRefusal(
+        why=(
+            f"This account had {open_orders} when Alpaca refused this {leg.side.value}; "
+            "Alpaca refuses an order that could trade against another open order in the same account. "
+            f"{error}"
+        ),
+        code=error.code,
+        opposite_open_order_refs=refs,
     )
 
 
@@ -963,7 +998,7 @@ def fold_failed(
     reason: str,
     why: str,
     transition_kind: str = "ORDER_SUBMIT_FAILED",
-    broker_error_code: int | None = None,
+    refusal: BrokerRefusal | None = None,
 ) -> None:
     """Record a terminal outcome, including an explicit pre-contact refusal.
 
@@ -971,12 +1006,18 @@ def fold_failed(
     confused with broker rejection or absence proven after the grace window.
     ``order_ref`` is ``None`` only for an effect-level outcome whose order
     evidence nests under another effect (``ENTER_UNFILLED`` during an EXIT).
-    ``broker_error_code`` is the broker's own code for the refusal that ended
-    the order, when it gave one (``BrokerError.code``).
+    ``refusal`` is the refusal that ended the order, when one did: its code and
+    the open opposite-side orders it found are recorded beside ``why``.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    facts = OrderSubmitFailedFacts(reason=reason, why=why, broker_error_code=broker_error_code)
+    opposite = None if refusal is None else refusal.opposite_open_order_refs
+    facts = OrderSubmitFailedFacts(
+        reason=reason,
+        why=why,
+        broker_error_code=None if refusal is None else refusal.code,
+        opposite_open_order_refs=None if opposite is None else list(opposite),
+    )
     repo.append_transition(
         TransitionInput(
             strategy_instance_id=effect.strategy_instance_id,

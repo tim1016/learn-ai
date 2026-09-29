@@ -68,7 +68,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FAILED_ENTER_FILLED_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
@@ -721,7 +721,7 @@ def _alpaca_order_refusal(message: str) -> BrokerError:
     return map_api_error(
         APIError(body, http_error=SimpleNamespace(response=response, request=None)),
         broker="alpaca",
-        is_order_mutation=True,
+        request=AlpacaRequest.ORDER_SUBMIT,
     )
 
 
@@ -749,6 +749,7 @@ async def test_a_manual_order_alpaca_refuses_fails_definitively_and_keeps_alpaca
     facts = OrderSubmitFailedFacts.from_facts_json(failed["facts_json"])
     assert facts.broker_error_code == 40310000
     assert facts.why == "Alpaca refused the order: insufficient buying power"
+    assert facts.opposite_open_order_refs == []
 
 
 @pytest.mark.asyncio
