@@ -517,6 +517,33 @@ async def test_unavailable_evidence_without_a_chained_cause_logs_no_cause(
     assert record.cause is None
 
 
+async def test_a_changed_cause_of_unavailable_evidence_is_logged_again(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unchanged cause stays quiet; a different one is a new diagnosis and is logged."""
+    read = _Read()
+    sync = make_sync(day_pnl_repo, read)
+
+    def fail_with(cause: Exception) -> None:
+        error = BrokerEvidenceUnavailable("Alpaca account evidence was malformed.")
+        error.__cause__ = cause
+        read.activity_error = error
+
+    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
+        fail_with(TypeError("Expected an Alpaca numeric, not a boolean"))
+        assert await sync.tick() == "unknown"
+        assert await sync.tick() == "unknown"
+        fail_with(ValueError("Alpaca account number was empty"))
+        assert await sync.tick() == "unknown"
+
+    assert [record.cause for record in _sync_records(caplog)] == [
+        "TypeError: Expected an Alpaca numeric, not a boolean",
+        "ValueError: Alpaca account number was empty",
+    ]
+
+
 async def test_rejected_cash_transfer_evidence_withdraws_on_direct_observe(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
