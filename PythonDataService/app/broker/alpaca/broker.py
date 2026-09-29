@@ -263,10 +263,7 @@ class AlpacaBroker:
             raise BrokerEvidenceUnavailable(
                 "Alpaca account evidence was malformed.",
                 broker=BROKER_ID,
-                detail=(
-                    "The account response could not be mapped to the broker "
-                    f"contract: {type(exc).__name__}: {exc}"
-                ),
+                detail="The account response could not be mapped to the broker contract.",
             ) from exc
 
     async def list_positions(self) -> list[BrokerPosition]:
@@ -324,10 +321,7 @@ class AlpacaBroker:
                     raise BrokerEvidenceUnavailable(
                         "Alpaca transfer activity evidence was malformed.",
                         broker=BROKER_ID,
-                        detail=(
-                            "A transfer row could not be mapped to the broker "
-                            f"contract: {type(exc).__name__}: {exc}"
-                        ),
+                        detail="A transfer row could not be mapped to the broker contract.",
                     ) from exc
                 page_oldest_ms = _activity_page_oldest_ms(
                     mapped,
