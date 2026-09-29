@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
+from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
@@ -44,6 +45,7 @@ from app.services.bot_lifecycle_projection import (
 from app.services.bot_start_admission import (
     AdmissionCustodyCut,
     StartAdmissionUnavailable,
+    default_reconciliation_covers,
     default_start_custody_guard,
     default_start_custody_projection,
 )
@@ -62,6 +64,14 @@ class BindingAuthority:
     def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         """Custody for a read: projects the sweep's verdict, never reconciles."""
         raise NotImplementedError
+
+    def reconciliation_covers(self, cut: ReconciliationCut) -> bool:
+        """Whether ``cut`` -- one pass of the account Clerk -- still proves this binding's custody.
+
+        Only the account's own authority can answer yes; any other authority
+        keeps its own ledger and reconciles for itself.
+        """
+        return False
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         raise NotImplementedError
@@ -125,6 +135,13 @@ class PrimaryAccountBindingAuthority(BindingAuthority):
         if self.external_start_guard is not None:
             return self.external_start_guard(self.binding.strategy_instance_id)
         return default_start_custody_projection(self.binding)
+
+    def reconciliation_covers(self, cut: ReconciliationCut) -> bool:
+        # An injected guard answers custody itself, so no pass of the account
+        # Clerk speaks for it.
+        if self.external_start_guard is not None:
+            return False
+        return default_reconciliation_covers(self.binding, cut)
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         return self.projector

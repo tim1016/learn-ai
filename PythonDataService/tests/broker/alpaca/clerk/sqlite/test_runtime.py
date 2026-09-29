@@ -214,6 +214,81 @@ async def test_custody_projection_is_unproven_before_the_first_sweep(tmp_path: P
     repo.close()
 
 
+def _finished_bot(repo: ClerkSqliteRepository, sid: str) -> None:
+    """A registered bot whose one run started and stopped: quiet, flat, nothing working."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="h1")
+    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+    submit_stop_run(repo, account_id="PA-TEST", strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+
+
+async def test_a_reconciliation_cut_covers_each_bot_until_that_bot_moves(tmp_path: Path) -> None:
+    """One pass proves every quiet bot's custody; a bot's own new transition ends that for it alone."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    _finished_bot(repo, "sid-2")
+
+    cut = await facade.reconcile_through()
+
+    assert broker.read_calls > 0, "the cut is a real reconciliation pass"
+    assert facade.reconciliation_covers(cut, "sid-1")
+    assert facade.reconciliation_covers(cut, "sid-2")
+
+    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
+
+    assert facade.reconciliation_covers(cut, "sid-1")
+    assert not facade.reconciliation_covers(cut, "sid-2")
+    repo.close()
+
+
+async def test_a_bot_that_moves_while_the_pass_runs_is_newer_than_its_cut(tmp_path: Path) -> None:
+    """The cut is the ledger point the pass began after, so the pass cannot vouch for a
+    transition written while it was observing the broker."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+
+    class _BotStartsMidPass(_CountingBroker):
+        started = False
+
+        async def list_positions(self) -> list:
+            if not self.started:
+                self.started = True
+                submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
+            return await super().list_positions()
+
+    broker = _BotStartsMidPass()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+
+    cut = await facade.reconcile_through()
+
+    assert not facade.reconciliation_covers(cut, "sid-1")
+    repo.close()
+
+
+async def test_a_reconciliation_cut_never_covers_another_ledger(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "one")
+    other_repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "two")
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    other = SqliteAlpacaClerkFacade(repo=other_repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    _finished_bot(other_repo, "sid-1")
+
+    cut = await facade.reconcile_through()
+
+    assert facade.reconciliation_covers(cut, "sid-1")
+    assert not other.reconciliation_covers(cut, "sid-1")
+    repo.close()
+    other_repo.close()
+
+
 async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()

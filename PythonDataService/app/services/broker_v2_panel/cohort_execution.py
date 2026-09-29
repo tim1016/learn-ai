@@ -19,6 +19,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.schemas.broker_v2_panel import (
     CohortLegResult,
     PanelActionErrorResponse,
@@ -88,6 +89,7 @@ async def execute_cohort_legs(
     reason: str | None,
     operator_identity: str,
     telemetry_kind: str,
+    reconciled: ReconciliationCut | None = None,
 ) -> list[CohortLegResult]:
     """Execute the named legs in order; a leg's own trouble never aborts its siblings.
 
@@ -103,6 +105,8 @@ async def execute_cohort_legs(
     ``account_id`` must already be resolved by the caller: every cohort
     surface validates scope before it presents, and re-validating per batch
     would let a leg run against a different account than the one presented.
+    ``reconciled`` is the batch's one account reconciliation pass, when the
+    caller ran one for its legs to share (``bot_clear``).
     """
     results: list[CohortLegResult] = []
     for leg in legs:
@@ -120,6 +124,7 @@ async def execute_cohort_legs(
                 leg.strategy_instance_id,
                 leg_request,
                 operator_identity=operator_identity,
+                reconciled=reconciled,
             )
         except ActionOutcomeUnknownError as error:
             results.append(

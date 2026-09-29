@@ -16,6 +16,12 @@ Orchestration only, in ADR 0051's shape (ADR 0052 §4):
   it writes ``STRATEGY_INSTANCE_RETIRED`` (ADR 0052 §3). A running or holding
   bot, or one whose fill landed after the owner looked, is refused with the
   guard's own reason and code; its siblings still clear.
+* **One account reconciliation per batch.** Fresh custody is the batch's one
+  pass, not one per leg: per leg, clearing 150 bots read Alpaca 600 times
+  against its 200-a-minute limit. Each leg's guard is still answered under
+  its lock, against that pass wherever it still proves the bot's custody
+  (``bot_runner._archive_custody`` says when), and against a pass of its own
+  otherwise.
 
 There is no presentation read. The Finished rows the owner chose from are the
 catalog's, and what each leg may do is decided per leg at execution, where the
@@ -24,6 +30,10 @@ guard's answer is fresh -- a presentation fetched first would only be older.
 
 from __future__ import annotations
 
+import logging
+
+from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.schemas.broker_v2_panel import (
     BotClearRequest,
     CohortActionResult,
@@ -39,6 +49,8 @@ from app.services.broker_v2_panel.cohort_execution import (
 from app.services.broker_v2_panel.panel_errors import PanelDataError
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 #: The one per-bot action a clear leg runs. Fixed here, never taken from the
 #: request, so this endpoint cannot be steered to a different mutation.
@@ -88,6 +100,25 @@ async def _prepare(broker: str, account_id: str, sid: str) -> CohortLegCommand |
     )
 
 
+async def _reconcile_once() -> ReconciliationCut | None:
+    """The batch's one account pass, or none -- then every leg reconciles for itself."""
+    clerk = get_alpaca_clerk()
+    if clerk is None:
+        return None
+    try:
+        return await clerk.reconcile_through()
+    except Exception:
+        # Whatever stopped this pass stops each leg's own the same way, and
+        # the batch owes every leg its own typed answer to it
+        # (``cohort_execution``) -- never one error for the whole batch.
+        logger.warning(
+            "clear batch could not reconcile once; each leg reconciles for itself",
+            exc_info=True,
+            extra={"action": "bots_clear_batch_reconcile_failed"},
+        )
+        return None
+
+
 async def clear_bots(
     broker: str,
     account_id: str,
@@ -101,6 +132,8 @@ async def clear_bots(
     is absent from the answer and safe to resend under the same key.
     """
     resolved = await validate_account(broker, account_id)
+    # Before the legs are prepared, so each presents from the fresh verdict.
+    reconciled = await _reconcile_once()
     prepared = [await _prepare(broker, resolved, sid) for sid in request.strategy_instance_ids]
     commands = [leg for leg in prepared if isinstance(leg, CohortLegCommand)]
     executed = {
@@ -115,6 +148,7 @@ async def clear_bots(
                 reason="Cleared from Home",
                 operator_identity=operator_identity,
                 telemetry_kind="clear",
+                reconciled=reconciled,
             )
             if commands
             else []

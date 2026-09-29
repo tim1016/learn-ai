@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.models import (
     EffectPurpose,
     HoldState,
     InstanceCustodyProof,
+    ReconciliationCut,
     ReconciliationVerdict,
     RecoveryEvaluationObservation,
 )
@@ -118,6 +119,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
 from app.broker.alpaca.clerk.sqlite.models import (
+    ControlMetaSnapshot,
     ExecutionCoverageResolutionReceipt,
     ManualOrderTicketResource,
     OrderResource,
@@ -738,11 +740,10 @@ class SqliteAlpacaClerkFacade:
     ) -> None:
         """Validate the explicit two-phase Start/Resume token at activation."""
         meta = self._repo.control_meta_snapshot()
-        expected_generation = f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"
         if (
             snapshot.account_id != self.account_id
             or snapshot.strategy_instance_id != binding.strategy_instance_id
-            or snapshot.clerk_generation != expected_generation
+            or snapshot.clerk_generation != _clerk_generation(meta)
             or snapshot.journal_sequence != meta.control_revision
             or not snapshot.reconciliation_fresh
             or snapshot.reconciliation_state != "clean"
@@ -1480,7 +1481,7 @@ class SqliteAlpacaClerkFacade:
                 account_id=self.account_id,
                 account_mode=self._account_mode,
                 strategy_instance_id=strategy_instance_id,
-                clerk_generation=(f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"),
+                clerk_generation=_clerk_generation(meta),
                 journal_sequence=meta.control_revision,
                 reconciliation_state=proof.reconciliation_verdict,
                 reconciliation_fresh=proof.reconciliation_verdict != "stale",
@@ -1518,6 +1519,40 @@ class SqliteAlpacaClerkFacade:
     ) -> AsyncIterator[ClerkCustodySnapshot]:
         """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2)."""
         yield await self.custody_snapshot_projection(strategy_instance_id)
+
+    async def reconcile_through(self) -> ReconciliationCut:
+        """Reconcile the account once and name the ledger point the pass began after.
+
+        The same pass :meth:`custody_snapshot` runs, so a caller acting on
+        many bots can reconcile once for all of them instead of once per bot
+        (clearing finished bots, #2567). The point is read before the pass
+        waits for the reconciliation lock: anything written after it --
+        including by this pass -- is newer than the cut.
+        """
+        after_sequence = self._repo.last_custody_sequence()
+        await self._reconcile()
+        return ReconciliationCut(
+            ledger=_clerk_generation(self._repo.control_meta_snapshot()),
+            after_sequence=after_sequence,
+        )
+
+    def reconciliation_covers(self, cut: ReconciliationCut, strategy_instance_id: str) -> bool:
+        """Whether ``cut``'s pass still proves this bot's custody, with no reconcile of its own.
+
+        True only on this same ledger, when the bot's newest custody
+        transition is no later than the point the pass began after: the bot's
+        orders, effects and fills are then exactly what the pass compared
+        against the broker. A bot order can only reach the broker after its
+        effect's transition is written, so nothing of the bot's could have
+        changed at the broker since without a newer transition. Reads project
+        the latest published verdict, which is this pass's or a later one:
+        passes are serialized and each publishes as it completes.
+        """
+        meta = self._repo.control_meta_snapshot()
+        return (
+            cut.ledger == _clerk_generation(meta)
+            and self._repo.last_custody_sequence(strategy_instance_id) <= cut.after_sequence
+        )
 
     async def discharge_attributed_residue(
         self,
@@ -1859,6 +1894,11 @@ def _count_fact(count: int, *, trusted: bool) -> CustodyCountFact:
     if not trusted:
         return CustodyCountFact(state="unknown")
     return CustodyCountFact(state="non_zero" if count else "zero", count=count)
+
+
+def _clerk_generation(meta: ControlMetaSnapshot) -> str:
+    """This ledger's identity: its authority generation and database token."""
+    return f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"
 
 
 __all__ = [

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.contract.capabilities import ExtendedHoursWindow
@@ -398,6 +398,11 @@ async def default_start_custody_projection(
     clerk = _admission_clerk(binding)
     async with clerk.start_admission_projection(binding.strategy_instance_id) as snapshot:
         yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(binding.strategy_instance_id)
+
+
+def default_reconciliation_covers(binding: BrokerBotBinding, cut: ReconciliationCut) -> bool:
+    """Whether the account Clerk's ``cut`` still proves this binding's custody."""
+    return _admission_clerk(binding).reconciliation_covers(cut, binding.strategy_instance_id)
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:

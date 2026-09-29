@@ -576,6 +576,23 @@ class ClerkCustodySnapshot(BaseModel):
     observed_at_ms: EpochMs
 
 
+class ReconciliationCut(BaseModel):
+    """One account reconciliation pass, named by the ledger point it began after.
+
+    ``ledger`` is the authority's ledger identity (its generation and database
+    token), so a cut is never read against another authority's ledger.
+    ``after_sequence`` is the newest custody transition written before the
+    pass began: a bot whose own newest transition is no later than it has not
+    moved since the pass observed the broker (see
+    ``SqliteAlpacaClerkFacade.reconciliation_covers``).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ledger: str
+    after_sequence: int = Field(ge=0)
+
+
 class InstanceCustodyProof(BaseModel):
     """Fresh Clerk proof used by STOP/Resume lifecycle custody."""
 

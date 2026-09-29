@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.models import (
     EffectOperationState,
     EffectPurpose,
     OrderJournalEntry,
+    ReconciliationCut,
 )
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -621,12 +622,19 @@ async def get_history_chart(
     return await build_history_chart_response(broker, account_id, sid, timeframe)
 
 
-def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[str, ActionPerformer]:
+def _action_performers(
+    broker: str,
+    sid: str,
+    *,
+    idempotency_key: str,
+    reconciled: ReconciliationCut | None = None,
+) -> dict[str, ActionPerformer]:
     """Map each executable action id to the coroutine that performs it (§11, §12).
 
     Only actions with production custody are wired. The remaining closed-set
     actions raise ``ActionNotAvailableError`` from the executor rather than
-    presenting a fake success.
+    presenting a fake success. ``reconciled`` is a clear batch's one account
+    pass, which archive's guard may answer against (``bot_runner.archive``).
     """
 
 
@@ -664,6 +672,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
                 # The operator's own words when they gave any; the generic line is
                 # a fallback, not a replacement for the audit context they typed.
                 reason=reason or f"Panel archive by {operator}",
+                reconciled=reconciled,
             )
         except BotRunnerError as error:
             # The commit-time guard refused under the bot's lock, before any
@@ -738,6 +747,7 @@ async def run_action(
     request: PanelActionRequest,
     *,
     operator_identity: str,
+    reconciled: ReconciliationCut | None = None,
 ) -> PanelActionResult:
     """Execute one presented action for a bot (§11).
 
@@ -758,7 +768,7 @@ async def run_action(
         )
     try:
         return await _run_action_under_live_authority(
-            broker, account_id, sid, request, operator_identity=operator_identity
+            broker, account_id, sid, request, operator_identity=operator_identity, reconciled=reconciled
         )
     except ExecutionLeaseLost as error:
         await _revive_lease_or_raise(broker, account_id, sid, request, error=error)
@@ -933,6 +943,7 @@ async def _run_action_under_live_authority(
     request: PanelActionRequest,
     *,
     operator_identity: str,
+    reconciled: ReconciliationCut | None,
 ) -> PanelActionResult:
     """Act in the one authority the bot's panel is read from.
 
@@ -995,7 +1006,9 @@ async def _run_action_under_live_authority(
         sid=sid,
         current_revision=panel.revision,
         current_concurrency_token=action.concurrency_token,
-        performers=_action_performers(broker, sid, idempotency_key=request.idempotency_key),
+        performers=_action_performers(
+            broker, sid, idempotency_key=request.idempotency_key, reconciled=reconciled
+        ),
         operator_identity=operator_identity,
         store=durable_idempotency_store_for(registry.artifacts_root, sid),
         availability_error=availability_error,

@@ -102,7 +102,7 @@ async def test_batch_derives_per_leg_identity_and_maps_outcomes(
 ) -> None:
     seen: list[tuple[str, str]] = []
 
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+    async def fake_run_action(broker, account_id, sid, request, *, operator_identity, reconciled=None):
         seen.append((sid, request.idempotency_key))
         return _applied(applied=(sid != _COHORT_SIDS[1]))
 
@@ -130,7 +130,7 @@ async def _accept_account(broker: str, account_id: str) -> str:
 async def test_a_refused_leg_does_not_abort_its_siblings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+    async def fake_run_action(broker, account_id, sid, request, *, operator_identity, reconciled=None):
         if sid == _COHORT_SIDS[1]:
             raise StaleRevisionError(
                 "This action changed since it was presented.",
@@ -161,7 +161,7 @@ async def test_a_refused_leg_does_not_abort_its_siblings(
 async def test_unknown_outcome_keeps_the_leg_receipt_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+    async def fake_run_action(broker, account_id, sid, request, *, operator_identity, reconciled=None):
         raise ActionOutcomeUnknownError(
             "The command did not return a terminal receipt.",
             detail="inspect Clerk evidence",
@@ -189,7 +189,7 @@ async def test_account_scoped_authority_loss_ends_the_batch_early(
 ) -> None:
     attempted: list[str] = []
 
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+    async def fake_run_action(broker, account_id, sid, request, *, operator_identity, reconciled=None):
         attempted.append(sid)
         if sid == _COHORT_SIDS[1]:
             raise ExecutionAuthorityLostError(

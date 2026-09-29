@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
 from app.engine.live.bot_lifecycle_state import (
@@ -939,6 +939,7 @@ class BotTaskRegistry:
         *,
         updated_by: str = "operator",
         reason: str | None = None,
+        reconciled: ReconciliationCut | None = None,
     ) -> BotStatusView:
         """Take a finished bot off the roster (ADR 0052).
 
@@ -953,6 +954,8 @@ class BotTaskRegistry:
         re-answers the shared rule against a freshly reconciled snapshot
         rather than the projected one the operator clicked on: a fill that
         landed in between must refuse the command, not be stranded by it.
+        ``reconciled`` is a batch's one reconciliation pass
+        (:meth:`_archive_custody` says when it stands in for this one's).
         """
         async with self._operation_lock(strategy_instance_id):
             binding = self._bindings.read(strategy_instance_id)
@@ -963,7 +966,7 @@ class BotTaskRegistry:
                 )
             status = self.status(broker, strategy_instance_id)
             try:
-                async with self._start_custody_guard(binding) as (custody, _policy, _terms):
+                async with self._archive_custody(binding, reconciled) as (custody, _policy, _terms):
                     # A count the Clerk could not take carries no number and is
                     # no proof of zero: with Alpaca unreadable, "nothing
                     # working" is the Clerk's ignorance, not the bot's state.
@@ -1002,6 +1005,43 @@ class BotTaskRegistry:
                 # mutation must too, or each archived Dry Run leaks an open
                 # SQLite authority for the rest of the process lifetime.
                 await self._authority_for(binding).release_if_unused()
+
+    @asynccontextmanager
+    async def _archive_custody(
+        self,
+        binding: BrokerBotBinding,
+        reconciled: ReconciliationCut | None,
+    ) -> AsyncIterator[AdmissionCustodyCut]:
+        """The custody archive's guard is re-answered against, under the bot's lock.
+
+        Alone, archive reconciles the whole account for its one bot. Clearing
+        many finished bots at once did that per bot: four Alpaca reads each,
+        600 for 150 bots against Alpaca's 200 a minute, and a throttled read
+        is a stale pass that puts the account on hold for every running bot
+        (#2567). So a batch reconciles once and hands each leg its ``cut``.
+
+        The leg's guard is unchanged -- not running, duty settled, provably
+        flat, no working order, no outstanding effect (ADR 0052 §1) -- and is
+        answered against the projection of the latest pass, which is the
+        batch's or a later one, with this bot's own orders, effects and fills
+        read now. That stands in for a fresh pass only while
+        ``reconciliation_covers`` holds: no custody transition of this bot
+        since the pass began. Then the pass saw every order the bot has, and
+        a bot the guard admits has none working and nothing outstanding, so
+        no fill can land for it: an order reaches the broker only after its
+        effect's transition is written, and starting the bot again takes
+        this lock. The check follows the read, so a transition landing
+        between them fails it. Anything else -- no cut, a bot that moved, a
+        Dry Run in its own ledger -- reconciles fresh, exactly as alone.
+        """
+        authority = self._authority_for(binding)
+        if reconciled is not None:
+            async with authority.start_custody_projection() as cut:
+                if authority.reconciliation_covers(reconciled):
+                    yield cut
+                    return
+        async with authority.start_custody_guard() as cut:
+            yield cut
 
     async def stop(
         self,

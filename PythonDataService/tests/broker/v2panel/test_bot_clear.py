@@ -9,12 +9,19 @@ guard's own reason while its siblings clear, and a resend replays.
 The guard itself -- re-proved against fresh custody under the bot's lock --
 is pinned where it lives (``test_registry_lifecycle``'s archive cases and
 ``test_archive_eligibility``); the catalog leaving cleared bots out is pinned
-in ``test_sqlite_roster_source``.
+in ``test_sqlite_roster_source``. The batch's one reconciliation pass is
+pinned at the owner's scale against the real stack at the end of this module,
+and the cut that pass hands each leg in ``test_runtime``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+import json
+import time
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,11 +31,27 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.models import ReconciliationCut
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.errors import BrokerError, BrokerRateLimited
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder, BrokerPosition
+from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
+from app.broker.fleet.internal_http import BOTS_CLEAR_READ_TIMEOUT_S
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest, PanelActionResult
-from app.services.bot_runner import BotTaskRegistry
-from app.services.broker_v2_panel import bot_clear, panel_data_source
-from app.services.broker_v2_panel.action_execution_service import ActionNotAvailableError
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.broker_v2_panel import bot_clear, panel_data_source, panel_scope
+from app.services.broker_v2_panel.action_execution_service import (
+    ActionNotAvailableError,
+    reset_idempotency_store_for_testing,
+)
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.conftest import _broker_position_fixture, _make_held_position
+from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT
 
 _FINISHED = "spy-done-1"
@@ -85,7 +108,14 @@ class _Lane:
         return _panel(sid, enabled=sid not in self.holding)
 
     async def run_action(
-        self, broker: str, account_id: str, sid: str, request: PanelActionRequest, *, operator_identity: str,
+        self,
+        broker: str,
+        account_id: str,
+        sid: str,
+        request: PanelActionRequest,
+        *,
+        operator_identity: str,
+        reconciled: ReconciliationCut | None = None,
     ) -> PanelActionResult:
         self.calls.append((sid, request.action_id, request.idempotency_key, request.concurrency_token))
         replay = request.idempotency_key in self.applied
@@ -290,7 +320,9 @@ async def test_the_commit_time_refusal_is_a_typed_refusal_not_an_unknown_outcome
     from app.services.bot_runner_errors import BotRunnerError
 
     class _Registry:
-        async def archive(self, broker: str, sid: str, *, updated_by: str, reason: str | None) -> None:
+        async def archive(
+            self, broker: str, sid: str, *, updated_by: str, reason: str | None, reconciled: ReconciliationCut | None,
+        ) -> None:
             raise BotRunnerError(_STRAND_HEADLINE, detail=_STRAND_WHY, reason_code="ARCHIVE_WOULD_STRAND_CUSTODY")
 
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
@@ -301,3 +333,238 @@ async def test_the_commit_time_refusal_is_a_typed_refusal_not_an_unknown_outcome
 
     assert (str(refused.value), refused.value.detail) == (_STRAND_HEADLINE, _STRAND_WHY)
     assert refused.value.reason_code == "ARCHIVE_WOULD_STRAND_CUSTODY"
+
+
+# ── the owner's scale, against the real stack ────────────────────────────────
+
+#: One REST round trip to Alpaca, as a lane sees it.
+_ALPACA_ROUND_TRIP_S = 0.1
+#: Alpaca's REST allowance per account (``rest_rate_limit_per_min``).
+_ALPACA_REQUESTS_PER_MINUTE = 200
+
+
+class _Alpaca:
+    """Alpaca's REST port as a clear feels it: a round trip per request, 200 a minute.
+
+    Past the allowance it answers 429, as Alpaca does -- which reconciliation
+    takes as unreadable broker truth, putting the account on hold.
+    """
+
+    broker_id = "alpaca"
+
+    def __init__(self) -> None:
+        self.positions: list[BrokerPosition] = []
+        self.requests = 0
+        self.unreachable = False
+        self._window: deque[float] = deque()
+
+    async def _request(self) -> None:
+        if self.unreachable:
+            self.requests += 1
+            raise BrokerError("Alpaca could not be reached.", broker="alpaca")
+        now = time.monotonic()
+        while self._window and now - self._window[0] >= 60:
+            self._window.popleft()
+        if len(self._window) >= _ALPACA_REQUESTS_PER_MINUTE:
+            raise BrokerRateLimited("Alpaca answered 429: too many requests.", broker="alpaca")
+        self._window.append(now)
+        self.requests += 1
+        await asyncio.sleep(_ALPACA_ROUND_TRIP_S)
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        await self._request()
+        return account_snapshot()
+
+    async def list_orders(self, **_kwargs: object) -> list[BrokerOrder]:
+        await self._request()
+        return []
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        await self._request()
+        return list(self.positions)
+
+    async def get_order_by_client_order_id(self, _client_order_id: str) -> BrokerOrder | None:
+        await self._request()
+        return None
+
+    async def submit(self, *_args: object, **_kwargs: object) -> BrokerOrder:
+        raise AssertionError("clearing never submits an order")
+
+    async def cancel(self, _order_id: str) -> None:
+        raise AssertionError("clearing never cancels an order")
+
+
+@dataclass(frozen=True)
+class _Account:
+    """One paper account's real Clerk ledger, bot runner and panel, behind a timed Alpaca."""
+
+    repo: ClerkSqliteRepository
+    alpaca: _Alpaca
+    facade: SqliteAlpacaClerkFacade
+    runner: BotTaskRegistry
+
+    def _deployed(self, sid: str) -> None:
+        self.repo.register_strategy_instance(
+            exit_terms=DEPLOY_EXIT_TERMS,
+            strategy_instance_id=sid,
+            symbol="SPY",
+            config_hash="config-1",
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
+        )
+        submit_start_run(self.repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        self.runner._bindings.record_launch(
+            BrokerBotBinding(
+                strategy_instance_id=sid,
+                strategy_key="deployment_validation",
+                broker="alpaca",
+                symbol="SPY",
+                mode="trade",
+                quantity=1,
+                action_plan=alpaca_v1_action_plan("SPY"),
+                run_id=f"run-{sid}",
+                created_at_ms=1,
+                sealed_account_id=ACCT,
+                exit_terms=DEPLOY_EXIT_TERMS,
+            ),
+            launch_reason="deploy",
+        )
+
+    def _stopped(self, sid: str) -> None:
+        submit_stop_run(
+            self.repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}", operator_reason="done"
+        )
+
+    def finished(self, *sids: str) -> None:
+        """Bots that ran and stopped flat, with nothing working."""
+        for sid in sids:
+            self._deployed(sid)
+            self._stopped(sid)
+
+    async def holding(self, sid: str) -> None:
+        """A bot stopped while it still holds 10 SPY, which Alpaca reports."""
+        self._deployed(sid)
+        await _make_held_position(self.repo, account_id=ACCT, strategy_instance_id=sid, run_id=f"run-{sid}")
+        self._stopped(sid)
+        self.alpaca.positions = [_broker_position_fixture("SPY", quantity=10.0)]
+
+    async def requests_per_pass(self) -> int:
+        """What one sweep pass costs at Alpaca -- and the verdict it leaves standing."""
+        before = self.alpaca.requests
+        await self.facade.reconcile_account(trigger="AUTOMATIC")
+        return self.alpaca.requests - before
+
+
+@pytest.fixture()
+async def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Account]:
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    alpaca = _Alpaca()
+    get_broker_registry().register(alpaca)  # type: ignore[arg-type]
+
+    async def _cached_account(_broker: str) -> BrokerAccountSnapshot:
+        return account_snapshot()
+
+    # The route's account is the cached snapshot's, never a fresh Alpaca call.
+    monkeypatch.setattr(panel_scope, "resolve_account_snapshot", _cached_account)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path / "clerk")
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=alpaca, trade=alpaca)  # type: ignore[arg-type]
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, _sqlite_repository=repo))
+    runner = BotTaskRegistry(tmp_path / "runner", feed_resolver=lambda: None, boot_recovery_required=False)
+    set_bot_task_registry(runner)
+    try:
+        yield _Account(repo=repo, alpaca=alpaca, facade=facade, runner=runner)
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
+
+
+async def test_clearing_150_finished_bots_reconciles_once_within_the_bound(account: _Account) -> None:
+    """The owner's case: a past profile ended with 142 stopped, flat bots (ADR 0052).
+
+    Per leg, each bot's own account pass made four Alpaca requests: 600 for
+    150 bots against Alpaca's 200 a minute, so a third of the way in Alpaca
+    answered 429, the pass went stale, the account went on hold and every
+    later bot was refused. One pass for the batch makes the clear four
+    requests at any size, and it finishes well inside the request's bound.
+    """
+    sids = [f"spy-done-{index:03d}" for index in range(150)]
+    account.finished(*sids)
+    per_pass = await account.requests_per_pass()
+    before = account.alpaca.requests
+
+    started = time.monotonic()
+    result = await bot_clear.clear_bots("alpaca", ACCT, _request(*sids, key="clear-all"), operator_identity="owner")
+    elapsed_s = time.monotonic() - started
+
+    assert result.applied_count == 150, [leg.error for leg in result.legs if leg.error][:2]
+    assert account.alpaca.requests - before == per_pass
+    assert elapsed_s < BOTS_CLEAR_READ_TIMEOUT_S
+
+
+async def test_a_bot_that_moved_since_the_batch_pass_is_reconciled_for_itself(
+    account: _Account, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch's pass vouches only for bots with no custody activity since it
+    began; one that ran again meanwhile is re-proved by a pass of its own."""
+    account.finished("spy-done-a", "spy-done-b", "spy-done-c")
+    per_pass = await account.requests_per_pass()
+    batch_pass = account.facade.reconcile_through
+
+    async def bot_b_runs_again_after_the_pass() -> ReconciliationCut:
+        cut = await batch_pass()
+        submit_start_run(account.repo, account_id=ACCT, strategy_instance_id="spy-done-b", lifecycle_run_id="again")
+        submit_stop_run(account.repo, account_id=ACCT, strategy_instance_id="spy-done-b", lifecycle_run_id="again")
+        return cut
+
+    monkeypatch.setattr(account.facade, "reconcile_through", bot_b_runs_again_after_the_pass)
+    before = account.alpaca.requests
+
+    result = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request("spy-done-a", "spy-done-b", "spy-done-c"), operator_identity="owner"
+    )
+
+    assert [leg.outcome for leg in result.legs] == ["applied", "applied", "applied"]
+    assert account.alpaca.requests - before == 2 * per_pass
+
+
+async def test_a_holding_bot_is_refused_from_the_batch_pass_while_its_siblings_clear(account: _Account) -> None:
+    account.finished("spy-done-a", "spy-done-c")
+    await account.holding("spy-holding-b")
+    per_pass = await account.requests_per_pass()
+    before = account.alpaca.requests
+
+    result = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request("spy-done-a", "spy-holding-b", "spy-done-c"), operator_identity="owner"
+    )
+
+    assert [(leg.strategy_instance_id, leg.outcome) for leg in result.legs] == [
+        ("spy-done-a", "applied"), ("spy-holding-b", "refused"), ("spy-done-c", "applied"),
+    ]
+    holding = result.legs[1].error
+    assert holding is not None
+    assert (holding.reason_code, holding.message) == (
+        "ARCHIVE_WOULD_STRAND_CUSTODY", "This bot still holds shares or has a working order.",
+    )
+    assert account.alpaca.requests - before == per_pass
+
+
+async def test_an_unreadable_alpaca_refuses_every_leg_as_unprovable_after_one_attempt(account: _Account) -> None:
+    """The batch's one pass cannot read Alpaca, so no bot can be proven flat: every
+    leg is refused with the guard's own unprovable reason -- never an unknown
+    outcome -- and Alpaca is asked once, not once per bot."""
+    account.finished("spy-done-a", "spy-done-b")
+    await account.requests_per_pass()
+    account.alpaca.unreachable = True
+    before = account.alpaca.requests
+
+    result = await bot_clear.clear_bots("alpaca", ACCT, _request("spy-done-a", "spy-done-b"), operator_identity="owner")
+
+    assert [leg.outcome for leg in result.legs] == ["refused", "refused"]
+    assert {leg.error.reason_code for leg in result.legs if leg.error} == {"ARCHIVE_CUSTODY_UNPROVABLE"}
+    assert account.alpaca.requests - before <= 2, "one pass's broker read, not one per bot"
+
