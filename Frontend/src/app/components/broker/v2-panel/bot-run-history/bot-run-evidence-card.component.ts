@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import type { BotRunView, RunHistoryMode } from '../lib/broker-v2-panel.types';
+import type { BotRunView } from '../lib/broker-v2-panel.types';
 
 @Component({
   selector: 'app-bot-run-evidence-card',
@@ -13,5 +13,4 @@ import type { BotRunView, RunHistoryMode } from '../lib/broker-v2-panel.types';
 })
 export class BotRunEvidenceCardComponent {
   readonly run = input.required<BotRunView>();
-  readonly mode = input.required<RunHistoryMode>();
 }

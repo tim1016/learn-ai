@@ -22,7 +22,7 @@ Two hooks consume this registry:
 * :mod:`app.broker.alpaca.client` (write path) — an armed write fault becomes a
   vendor-shaped :class:`~alpaca.common.exceptions.APIError` routed through the
   real :func:`~app.broker.alpaca.errors.map_api_error`, or the same
-  ``BrokerUnavailable('timed out')`` a real timeout maps to.
+  ``BrokerUnreachable('timed out')`` a real timeout maps to.
 * :mod:`app.broker.alpaca.trade_updates` (frame source) — an armed frame fault
   interleaves a crafted inbound frame through the real ``_handle_frame``.
 """
@@ -42,7 +42,7 @@ from alpaca.common.exceptions import APIError
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.alpaca.errors import map_api_error
-from app.broker.contract.errors import BrokerError, BrokerUnavailable
+from app.broker.contract.errors import BrokerError, BrokerUnreachable
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -265,7 +265,7 @@ def craft_write_error(kind: str) -> BrokerError:
 
     Reject / conflict / throttle route through the real ``map_api_error`` so the
     contract error is byte-identical to a genuine vendor failure (and the Clerk
-    classifies it identically). Timeout returns the same ``BrokerUnavailable``
+    classifies it identically). Timeout returns the same ``BrokerUnreachable``
     the real ``anyio.fail_after`` path produces, so the uncertain-submission
     handling is exercised without a real 15 s stall.
     """
@@ -288,7 +288,7 @@ def craft_write_error(kind: str) -> BrokerError:
             is_order_mutation=True,
         )
     if kind in (WriteFaultKind.TIMEOUT, WriteFaultKind.POST_SDK_TIMEOUT):
-        return BrokerUnavailable(
+        return BrokerUnreachable(
             "Alpaca timed out while completing the order mutation (injected).",
             broker=BROKER_ID,
             detail=(

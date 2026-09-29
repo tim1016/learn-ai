@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import logging
 from collections.abc import Callable
-from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -32,11 +31,11 @@ from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
 from app.services.dataset_service import (
     add_previous_close_column,
+    bar_minutes_for,
     build_csv_bytes,
     build_metadata_csv,
     build_metadata_json,
     build_zip_bytes,
-    compute_warmup_start_date,
     estimate_max_lookback,
     fetch_bars_chunked,
     fetch_rth_closes,
@@ -44,17 +43,14 @@ from app.services.dataset_service import (
     list_available_indicators,
     preprocess_and_calculate,
     project_output_columns,
+    resolve_indicator_window,
     select_output_columns,
 )
 from app.services.polygon_client import PolygonClientService
-from app.utils.session_anchors import et_midnight_ms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
-
-_EPOCH_DAY = date(1970, 1, 1)
-_MS_PER_DAY = 86_400_000
 
 
 def _projection_without_indicators(
@@ -114,36 +110,29 @@ def _fetch_and_process(
     Returns (df, column_meta, raw_bar_count).
     """
 
-    # Warm-up: fetch extra bars before from_date so indicators converge
-    fetch_from = request.from_date
-    trim_from_ts = None
-    if request.warmup and request.indicator_entries:
-        max_lookback = estimate_max_lookback(request.indicator_entries)
-        fetch_from = compute_warmup_start_date(
-            request.from_date,
-            max_lookback,
-            timespan=request.timespan,
-            multiplier=request.multiplier,
-        )
-        trim_from_ts = (
-            datetime.strptime(request.from_date, "%Y-%m-%d").date() - _EPOCH_DAY
-        ).days * _MS_PER_DAY
+    # Warm-up: fetch extra bars before from_date so indicators converge. The
+    # lead-in and the window start come from the one resolver the chart uses
+    # too, keyed on this export's own bar length (#2458), so the two surfaces
+    # warm the same indicator up on the same bars.
+    max_lookback = (
+        estimate_max_lookback(request.indicator_entries)
+        if request.warmup and request.indicator_entries
+        else 0
+    )
+    window = resolve_indicator_window(
+        request.from_date,
+        max_lookback=max_lookback,
+        bar_minutes=bar_minutes_for(request.timespan, request.multiplier),
+    )
+    fetch_from = window.fetch_from
+    if max_lookback:
         logger.info(
             f"[DATASET] Warm-up: fetching from {fetch_from} (requested {request.from_date}, lookback={max_lookback})"
         )
-    # The picked session begins at ET midnight of from_date: the prior
-    # session's 19:00–20:00 ET post-market bars carry timestamps from the
-    # picked date's UTC morning (00:00–01:00/01:00–02:00 UTC), so a
-    # UTC-midnight trim would retain up to two hours of the previous
-    # session the chart never shows (#2524 review). ET midnight is
-    # DST-safe through app.utils.session_anchors.
-    et_midnight = et_midnight_ms(datetime.strptime(request.from_date, "%Y-%m-%d").date())
-    trim_from_ts = et_midnight if trim_from_ts is None else max(trim_from_ts, et_midnight)
+    trim_from_ts = window.window_start_ms
     # The export trims to the requested start (#2457): the day-granular
     # fetch cannot split a session, so a mid-session numeric start would
-    # otherwise leak the bars before it into dataset.csv. The resolver
-    # floors start_ms_utc to from_date's UTC date, so it always bounds the
-    # warm-up trim from above.
+    # otherwise leak the bars before it into dataset.csv.
     if request.start_ms_utc is not None:
         trim_from_ts = max(trim_from_ts, request.start_ms_utc)
     # The requested end is exclusive by contract (DatasetGenerationRequest.

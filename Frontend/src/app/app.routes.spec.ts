@@ -227,12 +227,13 @@ describe('routes', () => {
     it('nests every tab — account-scoped and lane-scoped — under one workspace route', async () => {
       expect(await workspace?.loadComponent?.()).toBe(AlpacaAccountWorkspaceComponent);
       // The shell sits at the clerk level because a lane can be open without
-      // an account: Settings is lane-scoped (FR-092), and a lane with no
+      // an account: Settings is lane-scoped (FR-092), History is every
+      // account's bots and so belongs to none (#2574), and a lane with no
       // confirmed account still keeps its Home, which explains why (FR-096).
       // The retired `configuration` segment stays as a redirect for old
       // bookmarks.
       expect(workspace?.children?.map((child) => child.path)).toEqual([
-        'settings', 'configuration', 'home', 'bots', 'gallery', 'accounts/:accountId', '',
+        'settings', 'history', 'configuration', 'home', 'bots', 'gallery', 'accounts/:accountId', '',
       ]);
       // Home is the account's empty child, so the account's own URL opens it.
       // `bots/:sid` is declared before the retired `bots` tab it shares a

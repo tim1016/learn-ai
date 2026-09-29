@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -11,7 +11,7 @@ import type {
   SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
-import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.component';
 import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
@@ -177,6 +177,7 @@ const PANEL: BotPanelView = {
   actions: [],
   primary_action: null,
   exit_terms: null,
+  status: 'running',
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,
@@ -487,7 +488,6 @@ function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
     configuration_hash: 'a'.repeat(64),
     launch_reason: 'deploy',
     started_at_ms: 1_753_800_000_000,
-    is_current: true,
     process: {
       strategy_instance_id: 'sid-001',
       run_id: 'run-current',
@@ -556,24 +556,6 @@ const mockService = {
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
   getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
-  getRunHistory: vi.fn().mockResolvedValue({
-    runs: [
-      makeRun({
-        run_id: 'run-previous',
-        launch_reason: 'resume',
-        started_at_ms: 1_753_700_000_000,
-        is_current: false,
-        process: null,
-        terminal_outcome: {
-          kind: 'STOPPED',
-          reason_code: 'OPERATOR_STOP',
-          recorded_at_ms: 1_753_750_000_000,
-          run_id: 'run-previous',
-        },
-      }),
-    ],
-    next_cursor: null,
-  }),
   getLiveChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
@@ -670,6 +652,21 @@ function openDisclosure(label: string): void {
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
   details.open = true;
   fireEvent(details, new Event('toggle'));
+}
+
+/** The current-run poll's interval on a virtual clock, so a test lets one poll
+ * come due without waiting it out in wall-clock time (#2592). Only intervals
+ * are virtual: Angular's scheduler and the service promises keep real time. */
+function virtualRunPoll(): { elapse(): Promise<void> } {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  return {
+    async elapse() {
+      await vi.advanceTimersByTimeAsync(CURRENT_RUN_POLL_MS + 100);
+    },
+  };
 }
 
 function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
@@ -918,7 +915,6 @@ describe('BotPanelShellComponent', () => {
       '5s',
     );
     expect(screen.queryByText('run-current')).toBeNull();
-    expect(mockService.getRunHistory).not.toHaveBeenCalled();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     const runTimes = within(fixture.nativeElement.querySelector('.run-timing'));
     expect(runTimes.getByText(
@@ -1723,7 +1719,7 @@ describe('BotPanelShellComponent', () => {
     expect(within(tape).queryByText(/Polygon snapshot/)).toBeNull();
   });
 
-  it('loads previous runs only once the owner opens Runs', async () => {
+  it("shows the current run under Runs and sends earlier runs to History, narrowed to this bot", async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1734,94 +1730,18 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(mockService.getRunHistory).not.toHaveBeenCalled();
     openDisclosure('Runs');
     await fixture.whenStable();
     fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
 
-    expect(mockService.getRunHistory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
-      }),
-      'sid-001',
-      undefined,
-    );
-    expect(screen.getByText('run-previous')).toBeTruthy();
+    expect(screen.getByText('run-current')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    // The banner's own Started time is the current run's, never clobbered by
-    // the previous-run fetch the disclosure just made.
-    const bannerRunTimes = within(fixture.nativeElement.querySelector('.run-timing'));
-    expect(bannerRunTimes.getByText(
-      formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
-    )).toBeTruthy();
-    expect(bannerRunTimes.queryByText(
-      formatTimestampDisplay(1_753_700_000_000, { granularity: 'time' }),
-    )).toBeNull();
-
   });
 
-  it('requests one older run at a time with the server-issued cursor', async () => {
-    mockService.getRunHistory
-      .mockResolvedValueOnce({
-        runs: [
-          makeRun({
-            run_id: 'run-newest-previous',
-            launch_reason: 'resume',
-            started_at_ms: 1_753_700_000_000,
-            is_current: false,
-            process: null,
-          }),
-        ],
-        next_cursor: 'run-newest-previous',
-      })
-      .mockResolvedValueOnce({
-        runs: [
-          makeRun({
-            run_id: 'run-older',
-            started_at_ms: 1_753_600_000_000,
-            is_current: false,
-            process: null,
-          }),
-        ],
-        next_cursor: null,
-      });
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [
-        provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
-        { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService },
-      ],
-    });
-    await fixture.whenStable();
-    openDisclosure('Runs');
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Older run' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(mockService.getRunHistory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
-      }),
-      'sid-001',
-      'run-newest-previous',
-    );
-    expect(screen.getByText('run-older')).toBeTruthy();
-  });
-
-  it('keeps lifecycle actions bound to the current instance while viewing history', async () => {
+  it('keeps lifecycle actions bound to the current instance with Runs open', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
@@ -1850,9 +1770,6 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
     openDisclosure('Runs');
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -1899,11 +1816,12 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('refreshes current-run evidence during panel polling', async () => {
+    const runPoll = virtualRunPoll();
     mockService.getCurrentRun
       .mockResolvedValueOnce(makeRun())
       .mockResolvedValueOnce(
         makeRun({
-          process: null,
+          process: { ...makeRun().process, state: 'EXITED', observed_at_ms: 1_753_805_000_000 },
           terminal_outcome: {
             kind: 'STOPPED',
             reason_code: 'OPERATOR_STOP',
@@ -1928,15 +1846,16 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await runPoll.elapse();
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.getByText('Stopped')).toBeTruthy();
     fixture.destroy();
-  }, 10_000);
+  });
 
   it('does not poll immutable current-run evidence while the bot is off duty', async () => {
+    const runPoll = virtualRunPoll();
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: {
@@ -1967,10 +1886,10 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await runPoll.elapse();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     fixture.destroy();
-  }, 10_000);
+  });
 
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {

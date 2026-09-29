@@ -6,11 +6,11 @@ import hashlib
 from dataclasses import asdict
 from decimal import Decimal
 
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.money import MoneyInputError, cents_required, money_context
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_facts import DeployCommittedFacts
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError, reject_colon, require_strategy_instance

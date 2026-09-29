@@ -96,10 +96,21 @@ class BrokerOrderRejected(BrokerError):
 class BrokerUnavailable(BrokerError):
     """Vendor is unreachable or returned a server error (5xx / network).
 
-    Surfaced as ``503``.
+    Surfaced as ``503``. Also the vendor mapping's catch-all for an answer no
+    other error names (an unexpected 404 or 409 on a read), which a retry
+    cannot fix; :class:`BrokerUnreachable` is the kind that can pass.
     """
 
     http_status: ClassVar[int] = 503
+
+
+class BrokerUnreachable(BrokerUnavailable):
+    """Vendor did not answer: a network failure, a timeout, or its own server error (5xx).
+
+    The transient kind of ``BrokerUnavailable`` -- the same request can
+    succeed once the vendor answers again -- so a caller that retries on its
+    own may retry exactly this, never the catch-all above (#2582).
+    """
 
 
 class BrokerEvidenceUnavailable(BrokerUnavailable):

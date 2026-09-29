@@ -402,7 +402,10 @@ async def test_activated_recovery_timeout_installs_no_authority(
     assert runtime.authority_kind == "unavailable"
     assert runtime.clerk is None
     assert runtime.startup_failure is not None
-    assert runtime.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
+    # #2582: running out of time is Alpaca answering too slowly -- the startup
+    # reconnects on its own rather than waiting for a restart.
+    assert runtime.startup_failure.reason_code == "BROKER_UNREACHABLE_RECONNECTING"
+    assert "did not finish within 0.001 seconds" in runtime.startup_failure.recovery
 
 
 async def test_mode_disagreement_is_named_not_folded_into_unavailable(tmp_path: Path) -> None:

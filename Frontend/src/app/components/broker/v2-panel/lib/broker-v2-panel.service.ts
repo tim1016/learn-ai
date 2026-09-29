@@ -25,7 +25,6 @@ import type {
   CohortFlattenRequest,
   CohortFlattenView,
   BotPanelLiveSnapshot,
-  BotRunHistoryPage,
   BotRunView,
   ChartHistoryTimeframe,
   ChartHistoryResponse,
@@ -332,21 +331,6 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.get<BotRunView>(
         operationUrl('bot_run_current_read', { ...target, sid }),
-      ),
-    );
-  }
-
-  getRunHistory(
-    target: ResourceTarget,
-    sid: string,
-    cursor?: string,
-  ): Promise<BotRunHistoryPage> {
-    let params = new HttpParams().set('limit', '1');
-    if (cursor) params = params.set('cursor', cursor);
-    return firstValueFrom(
-      this.http.get<BotRunHistoryPage>(
-        operationUrl('bot_run_history_read', { ...target, sid }),
-        { params },
       ),
     );
   }

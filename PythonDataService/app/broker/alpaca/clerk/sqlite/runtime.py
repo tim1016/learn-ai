@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.account_authority import (
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
-from app.broker.alpaca.clerk.budgets import entry_requirement
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable, entry_requirement
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.exit_terms import (
     ExitTerms,
@@ -75,7 +75,6 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
 )
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -234,6 +233,23 @@ class StrategyAdmissionStaleError(ClerkAdmissionSnapshotStaleError):
     """A Start or Resume snapshot no longer matches SQLite Clerk authority."""
 
 
+class StartupBrokerTruthUnavailable(RuntimeError):
+    """Startup recovery's reconciliation could not read fresh broker truth.
+
+    ``broker_error`` is the broker's own error when the read failed -- the one
+    fact the startup selector needs to tell an unreachable Alpaca (retried)
+    from a read that answered but could not be proven (terminal) (#2582).
+    """
+
+    def __init__(self, broker_error: BrokerError | None) -> None:
+        self.broker_error = broker_error
+        super().__init__(
+            "Startup recovery could not prove this account's orders and positions against Alpaca."
+            if broker_error is None
+            else f"Startup recovery could not read this account's orders and positions from Alpaca: {broker_error}"
+        )
+
+
 class MissingEntryCustodyError(RuntimeError):
     """An EXIT decision has no SQLite-owned entry identity to target."""
 
@@ -298,12 +314,16 @@ class SqliteAlpacaClerkFacade:
         # from. Passed in, never read off the ports here — the composition root
         # owns which capabilities and which operator allowances apply.
         self._program_leg_policy = program_leg_policy or ProgramLegPolicy.regular_only()
-        # ADR 0059 D4: the risk envelope every live-world ENTER is bounded by,
-        # or ``None`` where no envelope is configured (paper, synthetic).
-        # Composed by the authority selector, never built here.
+        # ADR 0059 D4: the risk envelope every ENTER is judged by -- it
+        # refuses one on an account not switched to budgets (#2553) and bounds
+        # the rest by their deployment's budget. Every account authority
+        # composes one; ``None`` only on a store no authority composed
+        # (qualification rehearsals). Composed by the authority selector,
+        # never built here.
         self._live_envelope = live_envelope
-        # ADR 0059 D11: per-instance arming, consulted at ENTER on the live
-        # authority only; ``None`` on paper and under shadow.
+        # ADR 0059 D11: per-instance arming on the live authority only;
+        # ``None`` on paper and under shadow. It admits no ENTER (#2553: only a
+        # budgeted account does); the live verdict reads its mode hold.
         self._live_arming = live_arming
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
@@ -354,7 +374,7 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def live_arming(self) -> ArmingGate | None:
-        """The per-instance arming gate this authority admits ENTERs against, if it has one."""
+        """The per-instance arming gate the live verdict reads, if this authority has one."""
         return self._live_arming
 
     @property
@@ -1172,7 +1192,6 @@ class SqliteAlpacaClerkFacade:
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
-                        arming=self._live_arming,
                         # Preserve the recorded decision price through the
                         # canonical Decimal normalization boundary.
                         reference_price=(
@@ -1327,7 +1346,7 @@ class SqliteAlpacaClerkFacade:
                     )
         result = await self._reconcile()
         if result.verdict == "stale":
-            raise RuntimeError("SQLite Alpaca Clerk recovery could not obtain broker truth")
+            raise StartupBrokerTruthUnavailable(result.stale_cause)
 
     async def reconcile_once(self) -> ReconciliationVerdict:
         return _legacy_verdict((await self._reconcile()).verdict)
@@ -1780,6 +1799,18 @@ def _durable_decision_id(decision_id: str) -> str:
     return f"{_ENCODED_DECISION_PREFIX}{encoded.decode('ascii')}"
 
 
+def decision_id_from_durable(durable_decision_id: str) -> str:
+    """The decision id ``_durable_decision_id`` stored, as its caller named it.
+
+    A recovery EXIT's colon-free id (``recovery-flatten-…``) was never
+    encoded and comes back unchanged.
+    """
+    if not durable_decision_id.startswith(_ENCODED_DECISION_PREFIX):
+        return durable_decision_id
+    encoded = durable_decision_id.removeprefix(_ENCODED_DECISION_PREFIX)
+    return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+
+
 def _is_working_order(order: OrderResource) -> bool:
     return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
 
@@ -1959,5 +1990,6 @@ __all__ = [
     "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",
+    "StartupBrokerTruthUnavailable",
     "StrategyRegistrationConflictError",
 ]

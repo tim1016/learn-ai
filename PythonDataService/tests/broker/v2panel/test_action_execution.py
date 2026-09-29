@@ -715,6 +715,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     )
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
 
@@ -841,6 +842,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", _market_pulse)
+    monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
 

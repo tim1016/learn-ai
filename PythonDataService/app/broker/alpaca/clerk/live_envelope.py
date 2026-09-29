@@ -1,8 +1,11 @@
 """The ADR 0059 risk envelope, as pure values and rules (Decision 4).
 
-Formula: cash bound admits iff ``notional + reserved <= cash_available``;
-  loss limit ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached
-  iff ``day_pnl <= −L``.
+Formula: an ENTER is admitted by ``budgets.budget_entry_decision``: its entry
+  requirement (``budgets.entry_requirement``: notional plus the recorded fee
+  provision) against its deployment's free budget and the account's cash
+  after every other claim, judged by ``sqlite/envelope_admission.py``; loss limit
+  ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached iff
+  ``day_pnl <= −L``.
 Reference: ADR 0059 Decision 4; owner rulings 2026-09-08 (plan R1–R4).
 Canonical implementation: this file. Day P&L composition lives in
   ``app/broker/alpaca/clerk/sqlite/day_pnl.py``.
@@ -20,13 +23,13 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
-from app.broker.alpaca.clerk.money import ZERO, cash_admits, notional
+from app.broker.alpaca.clerk.money import ZERO
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
 # that declares every cause the Clerk can record, and it imports nothing from
 # the Clerk itself. It is re-exported below so the admission set can be stated
-# once, here, beside the three refusals this module does own.
+# once, here, beside the refusals this module does own.
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
@@ -37,16 +40,22 @@ if TYPE_CHECKING:
 
 LIVE_ENVELOPE_CASH_EXCEEDED = "LIVE_ENVELOPE_CASH_EXCEEDED"
 LIVE_ENVELOPE_DISAGREEMENT = "LIVE_ENVELOPE_DISAGREEMENT"
-# The composition refusal, defined here with the three admission codes so the
+# The composition refusal, defined here with the admission codes so the
 # arming ceremony imports it rather than repeating the literal (ADR 0059 D4).
 LIVE_ENVELOPE_MISSING = "LIVE_ENVELOPE_MISSING"
 LIVE_ENVELOPE_UNOBSERVED = "LIVE_ENVELOPE_UNOBSERVED"
+# Envelope evidence that cannot be judged, named apart from the unobserved
+# account: an entry order reserved before fee provisions were recorded (#2553)
+# is still open, so the fee it claims is unknown and is never priced as zero.
+# It ends when that order fills or ends (``sqlite/envelope_reservations.py``).
+ENTRY_FEE_PROVISION_UNRECORDED = "ENTRY_FEE_PROVISION_UNRECORDED"
 ENVELOPE_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ENVELOPE_CASH_EXCEEDED,
         LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
         LIVE_ENVELOPE_DISAGREEMENT,
         LIVE_ENVELOPE_UNOBSERVED,
+        ENTRY_FEE_PROVISION_UNRECORDED,
     }
 )
 ENVELOPE_SYNC_INTERVAL_S = 15.0
@@ -207,7 +216,11 @@ class AccountObservation:
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float | Decimal
-    last_equity_usd: float | None
+    # The broker's float, or simulated custody's exact retained prior-close
+    # baseline (#2586); on the loss-hold clearance path a sealed hold's float
+    # baseline replaces either. The loss rule reads it as a float; the owner's
+    # day figure normalizes it as recorded.
+    last_equity_usd: float | Decimal | None
     position_count: int | None
     # The broker's float under real custody; simulated custody's exact
     # ``Decimal`` (FIFO's exact fields, #2556), shown to the owner unchanged.
@@ -250,12 +263,8 @@ class EnvelopeReservation:
 
     quantity: float
     reference_price: float
-    exact_reference_price: str | None = None
-    fee_provision_cents: int = 0
-
-    @property
-    def notional_usd(self) -> float:
-        return float(notional(self.quantity, self.exact_reference_price or self.reference_price))
+    exact_reference_price: str
+    fee_provision_cents: int
 
 
 def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_age_ms: int) -> bool:
@@ -268,18 +277,13 @@ def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_ag
     return 0 <= now_ms - observation.observed_at_ms <= max_age_ms
 
 
-def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:
-    return min(values.loss_fraction * last_equity_usd, values.loss_usd)
+def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float | Decimal) -> float:
+    """Float arithmetic in every custody world: an exact simulated baseline enters as its nearest float."""
+    return min(values.loss_fraction * float(last_equity_usd), values.loss_usd)
 
 
 def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:
     return day_pnl_usd <= -loss_limit_usd
-
-
-def cash_bound_admits(
-    *, cash_available_usd: float, reserved_usd: float, notional_usd: float
-) -> bool:
-    return cash_admits(cash=cash_available_usd, claims=reserved_usd, required=notional_usd)
 
 
 class LiveEnvelopeGate:
@@ -380,6 +384,7 @@ class LiveEnvelopeGate:
 
 
 __all__ = [
+    "ENTRY_FEE_PROVISION_UNRECORDED",
     "ENVELOPE_ADMISSION_REASON_CODES",
     "ENVELOPE_SETTINGS_FIELDS",
     "ENVELOPE_SYNC_INTERVAL_S",
@@ -396,7 +401,6 @@ __all__ = [
     "LiveEnvelopeGate",
     "LiveEnvelopeIncomplete",
     "LiveEnvelopeValues",
-    "cash_bound_admits",
     "envelope_agreement",
     "loss_breached",
     "loss_limit_usd",

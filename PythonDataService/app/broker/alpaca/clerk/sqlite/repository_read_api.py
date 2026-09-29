@@ -12,10 +12,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
+from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
     from app.broker.alpaca.clerk.budgets import AccountBudget, ReleaseAtStop
+    from app.broker.alpaca.clerk.sqlite.bot_history import CustodyHistory
     from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
@@ -807,18 +808,6 @@ class ClerkSqliteRepositoryReadApi:
                 subject_id=subject_id,
             )
 
-    def reserved_cash_usd(self: ClerkSqliteRepository, *, seen_before_ms: int) -> float:
-        """Cash the accepted ENTERs claim beyond the fills recorded before ``seen_before_ms``."""
-        with self._write_lock:
-            return envelope_reservations.reserved_cash_usd(
-                self._conn, seen_before_ms=seen_before_ms
-            )
-
-    def reserved_cash_decimal(self: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
-        """Canonical exact claim total for cash admission, under the write fence."""
-        with self._write_lock:
-            return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)
-
     def deployment_budget(self: ClerkSqliteRepository, strategy_instance_id: str) -> dict | None:
         """Immutable consent and its durable launch/release outcome."""
         with self._write_lock:
@@ -909,4 +898,30 @@ class ClerkSqliteRepositoryReadApi:
         return read_bot_results(
             self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
             strategy_instance_ids=strategy_instance_ids, memo=self._bot_results_memo,
+        )
+
+    def neighbour_custody_file(self: ClerkSqliteRepository, account_id: str) -> Path:
+        """Where another authority's ``clerk.db`` lives beside this one, for a read-only snapshot.
+
+        The same account tree as this database (``writes.account_paths``), so a
+        Live account's Shadow database is found wherever its Clerk keeps its own.
+        """
+        from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
+
+        return writes.confined_account_file(self._account_dir.parents[2], account_id, DB_FILENAME)
+
+    def bot_history(
+        self: ClerkSqliteRepository, strategy_instance_ids: Sequence[str] | None = None,
+    ) -> CustodyHistory:
+        """Every bot this custody holds (or the named ones), run by run, on a query-only snapshot (#2574).
+
+        Never under the writer's lock, like ``bot_results``, and with this
+        process's own fee-evidence freshness. Blocking: an async caller runs
+        it in a worker thread.
+        """
+        from app.broker.alpaca.clerk.sqlite.bot_history import read_custody_history
+
+        return read_custody_history(
+            self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
+            strategy_instance_ids=strategy_instance_ids,
         )

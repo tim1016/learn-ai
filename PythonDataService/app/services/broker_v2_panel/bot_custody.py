@@ -94,8 +94,10 @@ def _account_runtime(broker: str) -> ActiveClerkRuntime | None:
 
 def _own_simulator(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
     if not isinstance(runtime.clerk, SqliteAlpacaClerkFacade) or runtime.authority_kind != "synthetic":
-        raise PanelUnavailableError(
-            "The Dry Run custody authority is unavailable.",
-            detail="This Dry Run's own simulated Clerk could not be opened.",
-        )
+        # The cause rides with the refusal (#2582): a Dry Run that failed to
+        # open says why on its own panel, not only in the lane's log.
+        detail = "This Dry Run's own simulated Clerk could not be opened."
+        if runtime.startup_failure is not None:
+            detail = f"{detail} {runtime.startup_failure.recovery}"
+        raise PanelUnavailableError("The Dry Run custody authority is unavailable.", detail=detail)
     return runtime

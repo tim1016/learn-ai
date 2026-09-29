@@ -1441,6 +1441,7 @@ def heartbeat_facts(
     effective_binding_generation: int,
     authority_kind: str,
     endpoint_mode: str,
+    reconnecting: bool = False,
 ) -> Mapping[str, object]:
     """What this lane reports on every beat, given its binding state.
 
@@ -1467,14 +1468,16 @@ def heartbeat_facts(
     than ``unreachable``, and keeps the configuration surface reachable. It
     still reports its pin and authority state — that is how the desk shows
     *why* the lane is unbound rather than merely that it is.
+
+    ``reconnecting`` is an ``unavailable`` authority whose startup could not
+    reach the broker and retries on its own (#2582), reported as such.
     """
-    authority_state = {
-        "sqlite": f"real_{endpoint_mode}",
-        "shadow": "shadow",
-        "synthetic": "synthetic",
-        "unavailable": "unavailable",
-    }.get(authority_kind, "unavailable")
-    summary = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
+    summary = {
+        "endpoint_mode": endpoint_mode,
+        "authority_state": _authority_state(
+            authority_kind, endpoint_mode=endpoint_mode, reconnecting=reconnecting
+        ),
+    }
     if binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
     ):
@@ -1492,6 +1495,44 @@ def heartbeat_facts(
     }
 
 
+def _authority_state(authority_kind: str, *, endpoint_mode: str, reconnecting: bool) -> str:
+    """The bounded authority token a beat reports for one installed authority kind."""
+    if reconnecting:
+        return "reconnecting"
+    return {
+        "sqlite": f"real_{endpoint_mode}",
+        "shadow": "shadow",
+        "synthetic": "synthetic",
+        "unavailable": "unavailable",
+    }.get(authority_kind, "unavailable")
+
+
+def report_authority_state(
+    boot: FleetLaneBoot, *, authority_kind: str, reconnecting: bool = False
+) -> None:
+    """Re-state the authority behind the binding this lane already reported.
+
+    A reconnect (#2582) replaces what installed at boot -- the binding, its
+    grant and its endpoint mode are unchanged, so nothing is re-confirmed;
+    only the authority state the beat carries moves, on the next beat.
+    """
+    summary = boot.reported_facts.get("reported_summary")
+    endpoint_mode = (
+        str(summary.get("endpoint_mode", "unidentified"))
+        if isinstance(summary, Mapping)
+        else "unidentified"
+    )
+    boot.reported_facts = {
+        **boot.reported_facts,
+        "reported_summary": {
+            "endpoint_mode": endpoint_mode,
+            "authority_state": _authority_state(
+                authority_kind, endpoint_mode=endpoint_mode, reconnecting=reconnecting
+            ),
+        },
+    }
+
+
 async def confirm_and_report(
     boot: FleetLaneBoot,
     *,
@@ -1501,6 +1542,7 @@ async def confirm_and_report(
     effective_revision: int | None,
     authority_kind: str,
     endpoint_mode: str,
+    reconnecting: bool = False,
 ) -> None:
     """Confirm the grant if there is one; report what installed either way.
 
@@ -1551,6 +1593,7 @@ async def confirm_and_report(
         effective_binding_generation=effective_binding_generation,
         authority_kind=authority_kind,
         endpoint_mode=endpoint_mode,
+        reconnecting=reconnecting,
     )
 
 
@@ -1702,6 +1745,7 @@ __all__ = [
     "lane_quiet_probe",
     "offline_boot_matches",
     "open_fleet_lane",
+    "report_authority_state",
     "reserve_account",
     "start_heartbeat",
     "stop_heartbeat",

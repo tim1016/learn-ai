@@ -18,9 +18,12 @@
  * the component that already holds the directory.
  */
 
+import type { components } from '../api/broker.types';
+
 /** The workspace's tabs, in the order they are presented. Home is the
- * account's money and its bots: Overview, Bots and Gallery merged (D1, D3). */
-export type AccountWorkspaceTab = 'home' | 'activity' | 'settings' | 'deploy';
+ * account's money and its bots: Overview, Bots and Gallery merged (D1, D3).
+ * History is every bot across every account (#2574). */
+export type AccountWorkspaceTab = 'home' | 'activity' | 'history' | 'settings' | 'deploy';
 
 /** One tab's identity and its operator-facing name. */
 export interface AccountWorkspaceTabDescriptor {
@@ -33,17 +36,19 @@ export interface AccountWorkspaceTabDescriptor {
 const ACCOUNT_WORKSPACE_TAB_LABELS: Readonly<Record<AccountWorkspaceTab, string>> = {
   home: 'Home',
   activity: 'Activity',
+  history: 'History',
   settings: 'Settings',
   deploy: 'Deploy a bot',
 };
 
-/** The presented tab order (ADR 0064 Decision 1). Activity — the account's
- * history and records (PRD #2560) — sits before Settings. Deploy is not in
- * the strip (PRD #2560 D3): it is the header's "Deploy a bot" button, and
+/** The presented tab order (ADR 0064 Decision 1): Home · Activity · History
+ * · Settings. Activity — the account's records (PRD #2560) — and History —
+ * every bot across every account (#2574) — sit before Settings. Deploy is not
+ * in the strip (PRD #2560 D3): it is the header's "Deploy a bot" button, and
  * keeps its routed `deploy` URL, its title and its explain-in-place
  * behaviour. */
 export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = (
-  ['home', 'activity', 'settings'] as const
+  ['home', 'activity', 'history', 'settings'] as const
 ).map((id) => ({ id, label: ACCOUNT_WORKSPACE_TAB_LABELS[id] }));
 
 /** Home's query parameter for how its bots are shown: `wall` as chart tiles,
@@ -57,6 +62,22 @@ export const HOME_WALL_VIEW = 'wall';
  * Deploy pre-filled from that bot's sealed settings, never its money or
  * consent. */
 export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
+
+type BotHistoryRow = components['schemas']['FleetBotHistoryRow'];
+
+/** History's filters, as its URL carries them (#2574) — the one shape every
+ * link to History, its filters and its page read. Opening the tab sets none;
+ * Home's Finished fold sets `status`, a bot's own page `account` and `bot`.
+ * `account` is one account's lane (its `clerkId`) and `bot` one bot's
+ * `strategy_instance_id`. */
+export interface BotHistoryUrl {
+  readonly account?: string;
+  readonly status?: BotHistoryRow['status'];
+  readonly world?: BotHistoryRow['world'];
+  readonly symbol?: string;
+  readonly bot?: string;
+  readonly page?: string;
+}
 
 /** One tab's operator-facing name. */
 export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
@@ -90,6 +111,9 @@ export type AccountWorkspaceAddress = Pick<
   'broker' | 'clerkId' | 'accountId'
 >;
 
+/** Just the lane: what a lane-scoped page (Settings, History) is built for. */
+export type LaneAddress = Pick<AccountWorkspaceAddress, 'broker' | 'clerkId'>;
+
 /** The same address, for a workspace whose account is confirmed — the only
  * kind a bot's page can have, because a bot runs on an account. */
 export interface BoundAccountWorkspaceAddress extends AccountWorkspaceAddress {
@@ -113,11 +137,12 @@ const ACCOUNT_WORKSPACE_URL =
 
 /**
  * The lane-scoped workspace URLs: Settings, which stays clerk-scoped
- * wherever it is opened from (FR-092), and the Home of a lane with no account
- * to serve it, which explains in place why it cannot open and never
+ * wherever it is opened from (FR-092); History, which is every account's bots
+ * and so belongs to no one account (#2574); and the Home of a lane with no
+ * account to serve it, which explains in place why it cannot open and never
  * redirects to another lane (FR-096).
  */
-const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(settings|home)$/;
+const LANE_WORKSPACE_URL = /^\/brokers\/([^/]+)\/clerks\/([^/]+)\/(settings|history|home)$/;
 
 /**
  * The workspace `url` is inside, or `null` when it is not a workspace URL at
@@ -147,7 +172,7 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
     broker: decodeURIComponent(broker),
     clerkId: decodeURIComponent(clerkId),
     accountId: null,
-    tab: surface === 'settings' ? 'settings' : 'home',
+    tab: surface === 'settings' || surface === 'history' ? surface : 'home',
     botSid: null,
     wall: false,
   };
@@ -159,17 +184,20 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
  *
  * Settings is always lane-scoped — it is the one tab a lane can serve
  * before it has a confirmed account, which is what makes it the way out of an
- * unbound lane. Home always has an address: on a lane with no confirmed
- * account it is the page that explains why it cannot open (FR-096). Activity
- * and Deploy are the account's own history and its own action — each needs a
- * confirmed account to target — so an accountless workspace offers neither:
- * Activity's tab is inert and the header shows no "Deploy a bot" button.
+ * unbound lane. History is lane-scoped too: it lists every account's bots, so
+ * no confirmed account is needed to open it (#2574). Home always has an
+ * address: on a lane with no confirmed account it is the page that explains
+ * why it cannot open (FR-096). Activity and Deploy are the account's own
+ * records and its own action — each needs a confirmed account to target — so
+ * an accountless workspace offers neither: Activity's tab is inert and the
+ * header shows no "Deploy a bot" button.
  */
 export function accountWorkspaceTabRoute(
   address: AccountWorkspaceAddress,
   tab: AccountWorkspaceTab,
 ): readonly string[] | null {
   if (tab === 'settings') return settingsRoute(address);
+  if (tab === 'history') return historyRoute(address);
   if (tab === 'home') return accountWorkspaceHomeRoute(address);
   return address.accountId === null ? null : [...workspaceRoute(address), tab];
 }
@@ -209,6 +237,22 @@ export function accountWorkspaceFixRoute(
     case 'settings':
       return { commands: settingsRoute(account), queryParams: {} };
   }
+}
+
+/**
+ * History opened with a filter already set — Home's Finished fold opens it on
+ * the cleared bots, a bot's own page on that one bot (#2574). The tab itself
+ * opens with none. History is lane-scoped, so only the lane is needed.
+ */
+export function accountWorkspaceHistoryLink(
+  lane: LaneAddress,
+  filters: Omit<BotHistoryUrl, 'page'>,
+): AccountWorkspaceLink {
+  const queryParams: Record<string, string> = {};
+  for (const [name, value] of Object.entries(filters)) {
+    if (value !== undefined) queryParams[name] = value;
+  }
+  return { commands: historyRoute(lane), queryParams };
 }
 
 /**
@@ -285,7 +329,8 @@ export function accountWorkspaceBadgeRoute(
  * `accountName` is the account's *name* (`laneDisplayNameText`), never its
  * Paper/Live mode. The two are separate facts that only coincide while a lane
  * has no nickname and its label happens to read like its mode. A bot's page
- * titles itself by the bot rather than by the tab it sits under.
+ * titles itself by the bot rather than by the tab it sits under. History is
+ * every account's bots, so it names no one account (#2574).
  */
 export function accountWorkspaceTitle(
   tab: AccountWorkspaceTab,
@@ -293,7 +338,7 @@ export function accountWorkspaceTitle(
   botLabel: string | null,
 ): string {
   const subject = botLabel ?? accountWorkspaceTabLabel(tab);
-  return accountName === null ? subject : `${subject} · ${accountName}`;
+  return accountName === null || tab === 'history' ? subject : `${subject} · ${accountName}`;
 }
 
 /** Every workspace URL's first four segments. */
@@ -313,6 +358,13 @@ function workspaceRoute(address: AccountWorkspaceAddress): string[] {
  * it is the one tab an address can always offer. */
 function settingsRoute(address: AccountWorkspaceAddress): string[] {
   return [...laneRoute(address.broker, address.clerkId), 'settings'];
+}
+
+/** History's URL — lane-scoped like Settings: it lists every account's bots,
+ * so it needs no confirmed account, and it is the same list from every
+ * workspace (#2574). */
+function historyRoute(lane: LaneAddress): string[] {
+  return [...laneRoute(lane.broker, lane.clerkId), 'history'];
 }
 
 /** `url` without its query string, fragment, or trailing slash — the part a

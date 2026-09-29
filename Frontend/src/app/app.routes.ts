@@ -378,6 +378,16 @@ export const routes: Routes = [
           ).then((m) => m.AlpacaSettingsPageComponent),
       },
       {
+        // History — every bot across every account (#2574). Lane-scoped like
+        // Settings: it is the same list from every workspace and needs no
+        // confirmed account. Its filters live in the query.
+        path: 'history',
+        loadComponent: () =>
+          import(
+            './components/brokers/alpaca-history/alpaca-history-page.component'
+          ).then((m) => m.AlpacaHistoryPageComponent),
+      },
+      {
         // Settings was the Configuration tab until PRD #2560; the redirect
         // keeps a bookmark's `?profileId&revision` review request with it.
         path: 'configuration',

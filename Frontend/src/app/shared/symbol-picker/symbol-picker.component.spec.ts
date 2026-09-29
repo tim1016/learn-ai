@@ -119,6 +119,20 @@ describe('SymbolPickerComponent', () => {
     expect(component.symbol()).toBe('TSLA');
   });
 
+  it("offers only a host's own universe, and emits its pick ungated", () => {
+    fixture.componentRef.setInput('universe', [{ symbol: 'QQQ', name: 'QQQ' }]);
+    fixture.detectChanges();
+    openDropdown(fixture);
+
+    const options = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')) as HTMLElement[];
+    expect(options.map((option) => option.textContent ?? '').join(' ')).not.toContain('TSLA');
+    options.find((option) => option.textContent?.includes('QQQ'))?.click();
+    fixture.detectChanges();
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.symbol()).toBe('QQQ');
+  });
+
   it('degrades visibly when the vendor catalog is dark', () => {
     vendor.entries.set(null);
     vendor.unavailable.set('catalog endpoint down');

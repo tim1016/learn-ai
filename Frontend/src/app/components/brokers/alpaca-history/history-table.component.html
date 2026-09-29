@@ -1,0 +1,93 @@
+<table class="history-table">
+  <caption class="history-table__sr-only">Every bot across every account, newest first</caption>
+  <thead>
+    <tr>
+      <th scope="col">Bot</th>
+      <th scope="col">Account</th>
+      <th scope="col">Started</th>
+      <th scope="col">Stopped</th>
+      <th scope="col">How it ended</th>
+      <th scope="col">Status</th>
+      <th scope="col" class="history-table__num">Transactions</th>
+      <th scope="col">Orders</th>
+      <th scope="col" class="history-table__num">Budget</th>
+      <th scope="col" class="history-table__num">Result after fees</th>
+      <th scope="col" class="history-table__num">Fees</th>
+    </tr>
+  </thead>
+  <tbody>
+    @for (row of rows(); track row.key) {
+      @let bot = row.bot;
+      <tr class="history-table__row" [class.history-table__row--dry-run]="bot.world === 'dry_run'">
+        <td>
+          <a class="history-table__sid" [routerLink]="row.page">{{ bot.strategy_instance_id }}</a>
+          <span class="history-table__meta">
+            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" /> · {{ bot.world_label }}
+          </span>
+          @if (row.expandable) {
+            <button type="button" class="history-table__toggle" [attr.aria-expanded]="row.open"
+                    (click)="toggle(row.key)">{{ row.toggleLabel }}</button>
+          }
+        </td>
+        <td>
+          <span class="history-table__account">{{ row.accountName }}</span>
+          <app-alpaca-lane-mode-chip [chip]="row.mode" />
+        </td>
+        <td><app-timestamp-display [value]="bot.started_at_ms" mode="local" fallback="never ran" /></td>
+        <td>
+          @if (bot.status === 'running') { Running }
+          @else { <app-timestamp-display [value]="bot.stopped_at_ms" mode="local" fallback="not recorded" /> }
+        </td>
+        <td>
+          @if (bot.outcome; as outcome) {
+            {{ outcome.headline }}
+            <span class="history-table__code">{{ outcome.reason_code | receiptLabel }}</span>
+          } @else if (bot.status !== 'running') { not recorded }
+        </td>
+        <td>{{ bot.status_label }}</td>
+        <td class="history-table__num">{{ bot.transaction_count }}</td>
+        <td class="history-table__orders">
+          {{ bot.orders.sent }} sent · {{ bot.orders.filled }} filled · {{ bot.orders.cancelled }} cancelled ·
+          {{ bot.orders.rejected }} rejected
+        </td>
+        <td class="history-table__num">{{ (bot.budget_usd | authoredUsd) ?? 'no budget' }}</td>
+        <td class="history-table__num">{{ (bot.result_usd | authoredUsd) ?? 'unknown' }}</td>
+        <td class="history-table__num">{{ (bot.fees_usd | authoredUsd) ?? 'unknown' }}</td>
+      </tr>
+      @if (row.open) {
+        <tr class="history-table__note">
+          <td colspan="11">
+            @if (bot.money_scope_note; as note) { <p>{{ note }}</p> }
+            @if (bot.money_unavailable_reason; as why) { <p>Result and fees unknown: {{ why }}</p> }
+          </td>
+        </tr>
+        @if (bot.runs.length > 1) {
+          @for (line of row.runs; track line.run.run_id) {
+            <tr class="history-table__run">
+              <td>{{ line.label }}</td>
+              <td></td>
+              <td><app-timestamp-display [value]="line.run.started_at_ms" mode="local" /></td>
+              <td>
+                @if (line.run.running) { Running }
+                @else { <app-timestamp-display [value]="line.run.stopped_at_ms" mode="local" fallback="not recorded" /> }
+              </td>
+              <td>
+                @if (line.run.outcome; as outcome) {
+                  {{ outcome.headline }}
+                  <span class="history-table__code">{{ outcome.reason_code | receiptLabel }}</span>
+                } @else if (!line.run.running) { not recorded }
+              </td>
+              <td></td>
+              <td class="history-table__num">{{ line.run.transaction_count }}</td>
+              <td class="history-table__orders">
+                {{ line.run.orders.sent }} sent · {{ line.run.orders.filled }} filled ·
+                {{ line.run.orders.cancelled }} cancelled · {{ line.run.orders.rejected }} rejected
+              </td>
+              <td colspan="3" class="history-table__muted">on the bot's line</td>
+            </tr>
+          }
+        }
+      }
+    }
+  </tbody>
+</table>

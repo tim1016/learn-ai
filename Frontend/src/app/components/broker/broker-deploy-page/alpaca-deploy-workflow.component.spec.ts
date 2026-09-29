@@ -196,7 +196,7 @@ async function renderWorkflow(service: ServiceDouble = mockService()) {
     ],
     componentInputs: { fence: FENCE, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
   });
-  await screen.findByRole('heading', { name: 'What' });
+  await formShown();
   await rendered.fixture.whenStable();
   return rendered;
 }
@@ -256,8 +256,20 @@ async function chooseMoney(amount = '1000.00'): Promise<void> {
   await screen.findByText(/would be set aside for this bot|of simulated starting cash for this bot/, {}, { timeout: 3000 });
 }
 
+// `formShown`, `deployButton`, `openStep` and `stepRegion` find the form's
+// parts by their words and structure, not by role and name. A named role query
+// computes the accessible name of every candidate on the page through jsdom's
+// slow getComputedStyle, and these helpers run hundreds of times, many inside
+// `vi.waitFor` polls (#2592). The first test pins that each part they find is
+// the one assistive technology finds by role and name.
+
+/** Waits for the form's four steps to render. */
+function formShown(): Promise<HTMLElement> {
+  return screen.findByText('What', { selector: 'h2' });
+}
+
 function deployButton(): HTMLButtonElement {
-  return screen.getByRole<HTMLButtonElement>('button', { name: /^Deploy/ });
+  return within(stepRegion('Confirm')).getByText<HTMLButtonElement>(/^Deploy/, { selector: 'button' });
 }
 
 /** The recovery read's answers for a claimed key that has not committed. */
@@ -293,7 +305,7 @@ async function lostThenEdited(service: ServiceDouble) {
 /** A $1,000 Deploy whose answer was lost, on a page opened with no query. */
 async function lostOnAPage(service: ServiceDouble) {
   const page = await openAt(service, {});
-  await screen.findByRole('heading', { name: 'What' });
+  await formShown();
   await page.fixture.whenStable();
   await chooseMoney('1000.00');
   fireEvent.click(deployButton());
@@ -306,14 +318,17 @@ function submittedBody(service: ServiceDouble, call = 0): DeploySubmissionBody {
 }
 
 async function openStep(name: 'What' | 'How'): Promise<void> {
-  const step = stepRegion(name);
-  const edit = within(step).queryByRole('button', { name: new RegExp(`^Edit step \\d, ${name}$`) });
+  const edit = within(stepRegion(name)).queryByLabelText(new RegExp(`^Edit step \\d, ${name}$`), { selector: 'button' });
   if (edit !== null) fireEvent.click(edit);
-  await vi.waitFor(() => expect(within(stepRegion(name)).getByRole('button', { name: /^Done/ })).toBeTruthy());
+  await vi.waitFor(() => expect(within(stepRegion(name)).getByLabelText(/^Done/, { selector: 'button' })).toBeTruthy());
 }
 
+/** A step: the section its `h2` heading labels. */
 function stepRegion(name: string): HTMLElement {
-  return screen.getByRole('region', { name });
+  const heading = screen.getByText(name, { selector: 'h2' });
+  const section = heading.closest<HTMLElement>(`section[aria-labelledby="${heading.id}"]`);
+  if (section === null) throw new Error(`No section is labelled by the step heading ${name}.`);
+  return section;
 }
 
 /** A window wide enough for the steps to stand side by side. The test setup's
@@ -338,6 +353,10 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
 
     const steps = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
     expect(steps).toEqual(['What', 'How', 'Money', 'Confirm']);
+    for (const name of ['What', 'How', 'Money', 'Confirm']) {
+      expect(screen.getByRole('region', { name })).toBe(stepRegion(name));
+    }
+    expect(screen.getByRole('button', { name: /^Deploy/ })).toBe(deployButton());
 
     const what = stepRegion('What');
     expect(within(what).getByText('Deployment Validation on SPY · Allowed on this Paper account')).toBeTruthy();
@@ -749,7 +768,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
         { provide: BrokerV2PanelService, useValue: service },
       ],
     });
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await fixture.whenStable();
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
@@ -759,7 +778,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     await fixture.whenStable();
     fixture.componentInstance.shown.set(true);
     await fixture.whenStable();
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
 
     const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
     expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
@@ -1002,7 +1021,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
   /** Deploy from the form. No `whenStable`: a read left unanswered keeps the
    * page's pending task open for good. */
   async function deployFromTheForm(service: ServiceDouble) {
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await chooseMoney('1000.00');
     await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
     fireEvent.click(deployButton());
@@ -1115,7 +1134,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     fireEvent.click(within(recovery).getByRole('button', { name: 'Prepare a new deployment' }));
     // The fresh form holds the reloaded Deploy's key, with its status read,
     // and the address a reload opens still names it.
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     expect(within(await screen.findByRole('alert', { name: 'Outcome unknown' }))
       .getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
     expect(url.query).toEqual({ submission: 'reloaded-submission-1' });
@@ -1176,7 +1195,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
     service.getDeploySubmission.mockResolvedValue({ ...IN_FLIGHT, submission_key: 'older-submission-1' });
     const { fixture, queryParamMap } = await renderWithQuery(service, {});
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await fixture.whenStable();
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
@@ -1404,7 +1423,7 @@ describe('AlpacaDeployWorkflowComponent — the session draft (H9)', () => {
         { provide: BrokerV2PanelService, useValue: service },
       ],
     });
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await fixture.whenStable();
     await openStep('What');
     fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
@@ -1418,7 +1437,7 @@ describe('AlpacaDeployWorkflowComponent — the session draft (H9)', () => {
     const previewsBefore = service.previewBudget.mock.calls.length;
     fixture.componentInstance.shown.set(true);
     await fixture.whenStable();
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
 
     expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value).toBe('ema_crossover_signal');
     expect(within(stepRegion('How')).getByRole<HTMLInputElement>('radio', { name: /Custom shares/ }).checked).toBe(true);
@@ -1440,7 +1459,7 @@ describe('AlpacaDeployWorkflowComponent — a lost Deploy across leaving and com
         { provide: BrokerV2PanelService, useValue: service },
       ],
     });
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await fixture.whenStable();
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
@@ -1450,7 +1469,7 @@ describe('AlpacaDeployWorkflowComponent — a lost Deploy across leaving and com
     await fixture.whenStable();
     fixture.componentInstance.shown.set(true);
     await fixture.whenStable();
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
 
     const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
     expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
@@ -1477,7 +1496,7 @@ describe('AlpacaDeployWorkflowComponent — an unsettled key in the address', ()
       ],
     });
     const router = fixture.debugElement.injector.get(Router);
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await fixture.whenStable();
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
@@ -1971,7 +1990,7 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
         accountId: 'PA9',
       },
     });
-    await screen.findByRole('heading', { name: 'What' });
+    await formShown();
     await chooseMoney();
 
     await fixture.componentInstance['submit']();

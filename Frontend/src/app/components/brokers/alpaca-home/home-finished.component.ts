@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import {
   accountWorkspaceBotRoute,
   accountWorkspaceDeployAgainRoute,
+  accountWorkspaceHistoryLink,
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -23,7 +24,8 @@ import { HomeClearOutcomeComponent } from './home-clear-outcome.component';
  * The owner clears them from here and only here (owner decision 2026-09-28):
  * tick bots, or clear them all, behind one plain confirmation. The fold owns
  * the selection and the confirmation; Home sends the clear, fenced to the lane
- * it was shown, and hands the outcome back.
+ * it was shown, and hands the outcome back. A cleared bot is looked up in
+ * History, which the fold links to filtered to cleared bots (#2574).
  */
 @Component({
   selector: 'app-home-finished',
@@ -46,6 +48,7 @@ export class HomeFinishedComponent {
   readonly outcomeDismissed = output();
 
   protected readonly copy = HOME_CLEAR_COPY;
+  protected readonly clearedHistory = computed(() => accountWorkspaceHistoryLink(this.account(), { status: 'cleared' }));
   private readonly outcomePanel = viewChild(HomeClearOutcomeComponent);
 
   protected readonly rows = computed(() =>

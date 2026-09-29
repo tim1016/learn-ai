@@ -27,6 +27,12 @@ from app.schemas.account_authority import (
 # ADR 0047: a failed custody authority is repaired by an offline ceremony, so
 # the lane's attention line states the failure and never offers a cure.
 AUTHORITY_FAILED_HEADLINE = "This account's custody authority has failed."
+# #2582: an authority whose startup could not reach Alpaca has not failed; it
+# reconnects on its own, and its line says exactly that.
+AUTHORITY_RECONNECTING_HEADLINE = (
+    "This account's Clerk could not reach Alpaca when it started. "
+    "It is reconnecting and will recover on its own."
+)
 
 
 @dataclass(frozen=True)

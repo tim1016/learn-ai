@@ -47,12 +47,13 @@ from app.research.indicator_reliability import (
     get_indicator_category,
 )
 from app.services.dataset_service import (
+    bar_minutes_for,
     calculate_dynamic_indicators,
-    compute_warmup_start_date,
     fetch_bars_chunked,
     filter_session,
     get_indicator_configs,
     list_available_indicators,
+    resolve_indicator_window,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -190,12 +191,12 @@ async def calculate_indicator_reliability(
 
         # Compute warmup period
         max_lookback = _estimate_max_lookback(request.indicator_params)
-        warmup_start = compute_warmup_start_date(
+        window = resolve_indicator_window(
             request.from_date,
-            max_lookback,
-            request.timespan,
-            request.multiplier,
+            max_lookback=max_lookback,
+            bar_minutes=bar_minutes_for(request.timespan, request.multiplier),
         )
+        warmup_start = window.fetch_from
 
         # Fetch bars (including warmup)
         bars = fetch_bars_chunked(
@@ -240,8 +241,7 @@ async def calculate_indicator_reliability(
         logger.info("[Reliability] Indicator column: %s", indicator_column)
 
         # Trim warmup period
-        from_ts = int(pd.Timestamp(request.from_date).timestamp() * 1000)
-        df = df[df["timestamp"] >= from_ts].reset_index(drop=True)
+        df = df[df["timestamp"] >= window.window_start_ms].reset_index(drop=True)
 
         if len(df) < 100:
             raise HTTPException(

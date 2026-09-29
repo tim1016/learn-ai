@@ -11,13 +11,18 @@ unclean duty outcome) — the attention-first sort (§5) reads this flag.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.v2panel.vocabulary import copy_for, duty_outcome_copy_key
 from app.schemas.account_authority import AuthorityKind
+from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 # Phase → the closed status label (§5). RUNNING/STOPPED desired-state overlays
 # the phase for the "Working" label so a stopped-but-on-duty bot reads honestly.
@@ -69,20 +74,60 @@ def bot_group(*, world: AuthorityKind, running: bool, holds_money: bool) -> BotG
     return "finished"
 
 
-def ended_at_ms(status: BotStatusView, *, latest_stop_ms: int | None) -> int | None:
-    """When a stopped bot's run ended; ``None`` while it runs or never ran.
+def bot_status(*, retired: bool, live_custody: bool, running: bool, holds_money: bool) -> BotHistoryStatus:
+    """Where a bot is now: the one answer History's rows and the bot's own page give (#2574).
 
-    The latest run's own stop instant is the answer. A run that ended without
-    one -- a crash leaves its run row open -- ended when its duty outcome was
+    Cleared is the catalog's inert terminal row (``roster_membership``):
+    retired, with nothing bot-scoped outstanding (``live_custody`` is
+    ``strategy_instances_with_live_custody``). Otherwise ``bot_group``'s rule,
+    without Dry Run's own Home group -- a Dry Run's world is its own column
+    there, not its status: running while it runs, holding while it holds
+    money (``bots_holding_money``), and finished once flat.
+    """
+    if retired and not live_custody:
+        return "cleared"
+    if running:
+        return "running"
+    return "holding" if holds_money else "finished"
+
+
+def custody_bot_status(repository: ClerkSqliteRepository, strategy_instance_id: str, *, running: bool) -> BotHistoryStatus:
+    """``bot_status`` for one bot, from its own custody file's facts."""
+    registration = repository.strategy_instance(strategy_instance_id)
+    return bot_status(
+        retired=registration is not None and registration.get("retired_at_ms") is not None,
+        live_custody=strategy_instance_id in repository.strategy_instances_with_live_custody(),
+        running=running,
+        holds_money=strategy_instance_id in repository.bots_holding_money(),
+    )
+
+
+def ended_at_ms(status: BotStatusView, *, latest_stop_ms: int | None) -> int | None:
+    """When a stopped bot's run ended; ``None`` while it runs or never ran (``run_ended_at_ms``)."""
+    return run_ended_at_ms(
+        running=status.running,
+        stop_ms=latest_stop_ms,
+        outcome_recorded_at_ms=None if status.duty_outcome is None else status.duty_outcome.recorded_at_ms,
+        retired_at_ms=status.last_transition_at_ms if status.phase == "RETIRED" else None,
+    )
+
+
+def run_ended_at_ms(
+    *, running: bool, stop_ms: int | None, outcome_recorded_at_ms: int | None, retired_at_ms: int | None,
+) -> int | None:
+    """When a run ended; ``None`` while it runs or never ran.
+
+    The run's own stop instant is the answer. A run that ended without one
+    -- a crash leaves its run row open -- ended when its duty outcome was
     recorded, and a retirement with no run ended when it retired.
     """
-    if status.running:
+    if running:
         return None
-    if latest_stop_ms is not None:
-        return latest_stop_ms
-    if status.duty_outcome is not None:
-        return status.duty_outcome.recorded_at_ms
-    return status.last_transition_at_ms if status.phase == "RETIRED" else None
+    if stop_ms is not None:
+        return stop_ms
+    if outcome_recorded_at_ms is not None:
+        return outcome_recorded_at_ms
+    return retired_at_ms
 
 
 class SqliteCatalogProjectionUnavailable(RuntimeError):

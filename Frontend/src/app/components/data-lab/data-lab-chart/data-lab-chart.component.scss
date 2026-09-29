@@ -220,10 +220,12 @@
   }
 }
 
-// ── Data-source notice ──
-// Informational, not a warning: the series is complete, only its provenance
-// is mixed. Sits above the chart so it reads once and stays out of the way.
-.source-notice {
+// ── Data-source and warm-up notices ──
+// Informational, not a warning: the source notice says the series' provenance
+// is mixed, the warm-up notice which indicator values had too little history.
+// Both sit above the chart so they read once and stay out of the way.
+.source-notice,
+.warmup-notice {
   padding: 8px 16px;
   margin: 8px 12px;
   background: $bg-elevated;
