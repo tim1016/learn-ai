@@ -412,8 +412,10 @@ held overnight.
 
 - The harness fills these decisions at the next session's first minute
   (T2b) or at the minute after it (T2a).
-- Live queues the ENTER to the next open. The EXIT instead goes out as an
-  extended-hours limit at the close, priced off the decision bar
+- Live should refuse that ENTER. Today a known bug,
+  [#2596](https://github.com/tim1016/learn-ai/issues/2596), can instead send it as a
+  market order that Alpaca fills at the next open; the fix refuses it. The EXIT goes
+  out as an extended-hours limit at the close, priced off the decision bar
   (`program_leg.py:508-513`).
 - So one exit in 81 is modelled differently from live. How the backtest
   should model session-close decisions is the question of
