@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.broker.fleet.delivery import SseEvent
 from app.broker.fleet.errors import (
     BrokerClerkCapabilityUnavailable,
@@ -31,16 +32,19 @@ from app.broker.fleet.errors import (
     FleetControlError,
     FleetControlPlaneNotInstalled,
 )
+from app.broker.fleet.internal_http import BOT_HISTORY_READ_TIMEOUT_S
 from app.broker.fleet.provider import (
     OperationIdempotency,
     OperationStream,
     ProviderOperation,
 )
 from app.broker.fleet.routing import CommandEnvelopeInvalid, LaneRouter
+from app.schemas.bot_history import BotHistoryStatus, BotHistoryWorld, FleetBotHistoryPage
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
+from app.services.fleet_bot_history import BotHistoryFilters, account_less_gap, merge_bot_history
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api", tags=["broker-clerks"])
@@ -250,6 +254,91 @@ async def aggregate_broker_clerks_attention(request: Request) -> Response:
         if clerk.get("broker") == "alpaca"
     ]
     return JSONResponse(await service.aggregate_lane_reads_async(lane_reads))
+
+
+@router.get(
+    "/broker-clerks/aggregate/bot-history",
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+    response_model=FleetBotHistoryPage,
+    summary="Every bot across every account, newest first; unreadable accounts named (#2574)",
+)
+async def aggregate_broker_clerks_bot_history(
+    request: Request,
+    clerk_id: str | None = Query(None, min_length=1, description="Only this account's lane."),
+    status: BotHistoryStatus | None = Query(None),
+    world: BotHistoryWorld | None = Query(None),
+    symbol: str | None = Query(None, pattern=US_EQUITY_SYMBOL_PATTERN),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> Response:
+    """One page of the History tab: each account's ``bot_history_read``, merged.
+
+    Each alpaca lane with a confirmed account is read through the lane
+    router and folded by ``aggregate_lane_reads_async`` (one lane's failure
+    or timeout is that lane's own ``ok: false``); ``merge_bot_history`` then
+    concatenates the rows with their provenance -- combining no value across
+    accounts -- and names every account it could not read. A lane with no
+    confirmed account is named too. Read on demand; the page never polls.
+    """
+    service = _fleet_service(request)
+    lane = _lane_router(request)
+    adapter = service.adapters().get("alpaca")
+    if adapter is None:
+        from app.broker.fleet.errors import BrokerNotSupported
+
+        return _refuse(BrokerNotSupported("No production adapter serves 'alpaca'."))
+    operation = next(
+        (op for op in adapter.operations() if op.operation_id == "bot_history_read"),
+        None,
+    )
+    if operation is None:
+        return _refuse(
+            FleetControlError("The Alpaca adapter declares no bot_history_read operation.")
+        )
+
+    async def read_lane(lane_clerk_id: str, account_id: str) -> dict[str, object]:
+        delivered = await lane.deliver_read(
+            broker="alpaca",
+            clerk_id=lane_clerk_id,
+            operation=operation,
+            path_params={"account_id": account_id},
+            query={},
+        )
+        if delivered.status_code >= 400:
+            raise ClerkUnreachable(
+                f"The lane refused its bot-history read with {delivered.status_code}.",
+                next_step="Refresh History to ask this account again.",
+            )
+        return dict(json.loads(delivered.body))
+
+    accounts: dict[str, str] = {}
+    account_less = []
+    for clerk in service.directory()["clerks"]:
+        lane_clerk_id = str(clerk["clerk_id"])
+        if clerk.get("broker") != "alpaca" or clerk_id not in (None, lane_clerk_id):
+            continue
+        summary = clerk.get("provider_summary")
+        confirmed = summary.get("confirmed_account_id") if isinstance(summary, Mapping) else None
+        if isinstance(confirmed, str) and confirmed:
+            accounts[lane_clerk_id] = confirmed
+        else:
+            account_less.append(account_less_gap("alpaca", lane_clerk_id))
+    aggregate = await service.aggregate_lane_reads_async(
+        [
+            ("alpaca", lane_clerk_id, partial(read_lane, lane_clerk_id, account_id))
+            for lane_clerk_id, account_id in accounts.items()
+        ],
+        lane_timeout_s=BOT_HISTORY_READ_TIMEOUT_S + 5.0,
+    )
+    history = merge_bot_history(
+        aggregate,
+        accounts=accounts,
+        extra_gaps=account_less,
+        filters=BotHistoryFilters(status=status, world=world, symbol=symbol),
+        page=page,
+        page_size=page_size,
+    )
+    return JSONResponse(history.model_dump(mode="json"))
 
 
 # ---- Audit read surface (#2104) --------------------------------------------

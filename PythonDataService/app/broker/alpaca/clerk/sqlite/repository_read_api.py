@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.account_money import AccountMoney
     from app.broker.alpaca.clerk.budgets import AccountBudget
+    from app.broker.alpaca.clerk.sqlite.bot_history import CustodyHistory
     from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.alpaca_fee_attribution import FeeAttribution
@@ -872,4 +873,17 @@ class ClerkSqliteRepositoryReadApi:
         return read_bot_results(
             self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
             strategy_instance_ids=strategy_instance_ids, memo=self._bot_results_memo,
+        )
+
+    def bot_history(self: ClerkSqliteRepository) -> CustodyHistory:
+        """Every bot this custody holds, run by run, on a query-only snapshot (#2574).
+
+        Never under the writer's lock, like ``bot_results``, and with this
+        process's own fee-evidence freshness. Blocking: an async caller runs
+        it in a worker thread.
+        """
+        from app.broker.alpaca.clerk.sqlite.bot_history import read_custody_history
+
+        return read_custody_history(
+            self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
         )

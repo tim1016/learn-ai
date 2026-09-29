@@ -460,6 +460,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/broker-clerks/aggregate/bot-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every bot across every account, newest first; unreadable accounts named (#2574)
+         * @description One page of the History tab: each account's ``bot_history_read``, merged.
+         *
+         *     Each alpaca lane with a confirmed account is read through the lane
+         *     router and folded by ``aggregate_lane_reads_async`` (one lane's failure
+         *     or timeout is that lane's own ``ok: false``); ``merge_bot_history`` then
+         *     concatenates the rows with their provenance -- combining no value across
+         *     accounts -- and names every account it could not read. A lane with no
+         *     confirmed account is named too. Read on demand; the page never polls.
+         */
+        get: operations["aggregate_broker_clerks_bot_history_api_broker_clerks_aggregate_bot_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker-clerks/aggregate/directory": {
         parameters: {
             query?: never;
@@ -1479,6 +1506,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bot-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every bot this account ran, with its Dry Runs: runs, outcomes, trades and money (#2574) */
+        get: operations["read_account_bot_history_api_brokers__broker__accounts__account_id__bot_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots": {
         parameters: {
             query?: never;
@@ -2299,6 +2343,26 @@ export interface paths {
          * @description Fleet-routed GET /account (account_read).
          */
         get: operations["fleet_account_read_api_brokers__broker__clerks__clerk_id__account_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bot-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot History Read
+         * @description Fleet-routed GET /accounts/{account_id}/bot-history (bot_panel_read).
+         */
+        get: operations["fleet_bot_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bot_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8091,6 +8155,20 @@ export interface components {
             strike: number;
         };
         /**
+         * AccountBotHistory
+         * @description Every bot one account's Clerk holds, with its Dry Runs (#2574).
+         */
+        AccountBotHistory: {
+            /** Account Id */
+            account_id: string;
+            /** Bots */
+            bots: components["schemas"]["BotHistoryBot"][];
+            /** Gaps */
+            gaps: components["schemas"]["BotHistoryGap"][];
+            /** Observed At Ms */
+            observed_at_ms: number;
+        };
+        /**
          * AccountFreezeState
          * @description The only two durable account-freeze outcomes allowed by ADR 0030.
          */
@@ -10069,6 +10147,122 @@ export interface components {
             running: boolean;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * BotHistoryBot
+         * @description One bot's line: identity, its runs, its trades and its money.
+         *
+         *     Since the budget cutover every bot has exactly one run. An older bot the
+         *     retired Resume ran several times lists each run, but its result and fees
+         *     are the bot's own, across all of them (``money_scope_note`` says so).
+         */
+        BotHistoryBot: {
+            /** Account Id */
+            account_id: string;
+            /** Budget Usd */
+            budget_usd: string | null;
+            /** Fees Usd */
+            fees_usd: string | null;
+            /** Money Scope Note */
+            money_scope_note: string | null;
+            /** Money Unavailable Reason */
+            money_unavailable_reason: string | null;
+            orders: components["schemas"]["BotHistoryOrders"];
+            outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Result Usd */
+            result_usd: string | null;
+            /** Runs */
+            runs: components["schemas"]["BotHistoryRun"][];
+            /** Started At Ms */
+            started_at_ms?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "holding" | "finished" | "cleared";
+            /** Status Label */
+            status_label: string;
+            /** Stopped At Ms */
+            stopped_at_ms?: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
+            /** Symbol */
+            symbol: string;
+            /** Transaction Count */
+            transaction_count: number;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "live" | "paper" | "shadow" | "dry_run";
+            /** World Label */
+            world_label: string;
+        };
+        /**
+         * BotHistoryGap
+         * @description Something that could not be read, named -- never a silently missing row.
+         */
+        BotHistoryGap: {
+            /** Reason */
+            reason: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+        };
+        /**
+         * BotHistoryOrders
+         * @description Orders by the broker's last reported state.
+         *
+         *     ``sent`` counts every order the broker reported at all; ``filled``,
+         *     ``cancelled`` (cancelled or expired) and ``rejected`` are subsets of it.
+         */
+        BotHistoryOrders: {
+            /** Cancelled */
+            cancelled: number;
+            /** Filled */
+            filled: number;
+            /** Rejected */
+            rejected: number;
+            /** Sent */
+            sent: number;
+        };
+        /**
+         * BotHistoryOutcome
+         * @description How one run ended: the durable outcome and its plain-words headline.
+         */
+        BotHistoryOutcome: {
+            /** Headline */
+            headline: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * BotHistoryRun
+         * @description One run of a bot. ``run_id`` is the run's own identity.
+         */
+        BotHistoryRun: {
+            orders: components["schemas"]["BotHistoryOrders"];
+            outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Run Id */
+            run_id: string;
+            /** Running */
+            running: boolean;
+            /** Started At Ms */
+            started_at_ms: number;
+            /** Stopped At Ms */
+            stopped_at_ms?: number | null;
+            /** Transaction Count */
+            transaction_count: number;
         };
         /**
          * BotPanelLiveSnapshot
@@ -15941,6 +16135,103 @@ export interface components {
             /** Status */
             status: string;
             tolerance: components["schemas"]["ToleranceResponse"];
+        };
+        /**
+         * FleetBotHistoryGap
+         * @description One account (or one of its Dry Runs) the all-accounts list could not read.
+         */
+        FleetBotHistoryGap: {
+            /** Account Id */
+            account_id: string | null;
+            /** Broker */
+            broker: string;
+            /** Clerk Id */
+            clerk_id: string;
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+        };
+        /**
+         * FleetBotHistoryPage
+         * @description One page of every bot across every account, newest first.
+         *
+         *     ``total`` counts the rows the filters match; ``symbols`` lists every
+         *     symbol any read row trades, so the symbol filter offers only real ones.
+         *     ``gaps`` always names every account that could not be read, whatever the
+         *     filters.
+         */
+        FleetBotHistoryPage: {
+            /** Gaps */
+            gaps: components["schemas"]["FleetBotHistoryGap"][];
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Rows */
+            rows: components["schemas"]["FleetBotHistoryRow"][];
+            /** Symbols */
+            symbols: string[];
+            /** Total */
+            total: number;
+        };
+        /**
+         * FleetBotHistoryRow
+         * @description One bot of the all-accounts list, naming the account's lane.
+         */
+        FleetBotHistoryRow: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /** Budget Usd */
+            budget_usd: string | null;
+            /** Clerk Id */
+            clerk_id: string;
+            /** Fees Usd */
+            fees_usd: string | null;
+            /** Money Scope Note */
+            money_scope_note: string | null;
+            /** Money Unavailable Reason */
+            money_unavailable_reason: string | null;
+            orders: components["schemas"]["BotHistoryOrders"];
+            outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Result Usd */
+            result_usd: string | null;
+            /** Runs */
+            runs: components["schemas"]["BotHistoryRun"][];
+            /** Started At Ms */
+            started_at_ms?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "holding" | "finished" | "cleared";
+            /** Status Label */
+            status_label: string;
+            /** Stopped At Ms */
+            stopped_at_ms?: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
+            /** Symbol */
+            symbol: string;
+            /** Transaction Count */
+            transaction_count: number;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "live" | "paper" | "shadow" | "dry_run";
+            /** World Label */
+            world_label: string;
         };
         /** FoldPlanResponse */
         FoldPlanResponse: {
@@ -29425,6 +29716,45 @@ export interface operations {
             };
         };
     };
+    aggregate_broker_clerks_bot_history_api_broker_clerks_aggregate_bot_history_get: {
+        parameters: {
+            query?: {
+                /** @description Only this account's lane. */
+                clerk_id?: string | null;
+                status?: ("running" | "holding" | "finished" | "cleared") | null;
+                world?: ("live" | "paper" | "shadow" | "dry_run") | null;
+                symbol?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetBotHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get: {
         parameters: {
             query?: never;
@@ -31341,6 +31671,40 @@ export interface operations {
             };
         };
     };
+    read_account_bot_history_api_brokers__broker__accounts__account_id__bot_history_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountBotHistory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     deploy_bot_scoped_api_brokers__broker__accounts__account_id__bots_post: {
         parameters: {
             query?: never;
@@ -33082,6 +33446,41 @@ export interface operations {
             path: {
                 broker: string;
                 clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bot_history_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
             };
             cookie?: never;
         };

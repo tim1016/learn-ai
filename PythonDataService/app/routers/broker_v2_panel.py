@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
+from app.schemas.bot_history import AccountBotHistory
 from app.schemas.broker_bots import (
     SUBMISSION_KEY_PATTERN,
     AlpacaDeploySubmission,
@@ -78,6 +79,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
     bot_clear,
+    bot_history,
     budget_deploy,
     cohort_flatten,
     panel_deploy,
@@ -401,6 +403,20 @@ async def preview_deployment_budget_scoped(broker: str, account_id: str, request
         return await panel_deploy.preview_alpaca_deployment_budget(broker, account_id, request)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bot-history",
+    response_model=AccountBotHistory,
+    summary="Every bot this account ran, with its Dry Runs: runs, outcomes, trades and money (#2574)",
+)
+async def read_account_bot_history(broker: str, account_id: str) -> AccountBotHistory:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Bot history is available on Alpaca accounts.")
+    try:
+        return await bot_history.account_bot_history(broker, account_id)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
 
 
 @router.get(

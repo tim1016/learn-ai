@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.fleet.history_batch import HISTORY_BATCH_OUTER_TIMEOUT_S
 from app.broker.fleet.internal_http import (
+    BOT_HISTORY_READ_TIMEOUT_S,
     BOTS_CLEAR_READ_TIMEOUT_S,
     DEFAULT_INTERNAL_TIMEOUT_S,
     LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S,
@@ -32,7 +33,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import LANE_COUNT_KEYS
 
-_ADAPTER_VERSION = "alpaca-fleet.11"
+_ADAPTER_VERSION = "alpaca-fleet.12"
 
 
 def _op(
@@ -60,8 +61,8 @@ def _op(
     ``read_timeout_s`` widens this operation's own outer coordinator -> agent
     delivery bound (``ProviderOperation.read_timeout_s``); every operation but
     ``bot_chart_history`` (issue #2204), ``lane_stop_all_bots`` (#2268),
-    ``lane_ibkr_bar_check`` (#2269) and ``bots_clear`` (#2567) leaves it at the
-    fleet default.
+    ``lane_ibkr_bar_check`` (#2269), ``bots_clear`` (#2567) and
+    ``bot_history_read`` (#2574) leaves it at the fleet default.
     """
     return ProviderOperation(
         operation_id=operation_id,
@@ -432,6 +433,16 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
         _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
         _op("account_money_read", "GET", "/accounts/{account_id}/money", capability=Capability.BOT_PANEL_READ, account=True),
+        # Every bot this account ran, with its Dry Runs (#2574). Read on
+        # demand by the History tab through the coordinator's fan-out.
+        _op(
+            "bot_history_read",
+            "GET",
+            "/accounts/{account_id}/bot-history",
+            capability=Capability.BOT_PANEL_READ,
+            account=True,
+            read_timeout_s=BOT_HISTORY_READ_TIMEOUT_S,
+        ),
         # A Deploy's recovery read is keyed by its submission: until the
         # backend answers, the browser does not know the bot's name (#2551).
         _op("bot_deploy_submission_read", "GET", "/accounts/{account_id}/deploy-submissions/{submission_key}", capability=Capability.BOT_PANEL_READ, account=True),
