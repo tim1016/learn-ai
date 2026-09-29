@@ -1135,7 +1135,9 @@ class SqliteAlpacaClerkFacade:
                     if policy.refusal(liveness) is not None:
                         return rejected(
                             reason_code="MARKET_LIVENESS_BLOCKED",
-                            explanation="Current market-liveness evidence does not permit new exposure.",
+                            # The fact's own plain words say which evidence
+                            # refused -- e.g. that the session has closed (#2596).
+                            explanation=liveness.reason,
                             next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
                         )
                     before_submit = policy.submission_guard(

@@ -506,8 +506,10 @@ def shape_program_leg(
     instants are deliberately different.
 
     A regular-hours run never needed its bar to shape an ENTER, and still does
-    not. Its EXIT is shaped by the bar's close exactly as an extended run's is
-    (#2440): inside the regular session that is the market DAY leg it always
+    not: an ENTER decided on the day's last bar is refused before it is sent,
+    because the entry gate reads the market closed once the close the
+    broker's clock named has passed (#2596). Its EXIT is shaped by the bar's
+    close exactly as an extended run's is (#2440): inside the regular session that is the market DAY leg it always
     was, and the day's last bar — which closes *at* the regular close, POST in
     the broker's declared window — gets the extended shape instead of a market
     DAY order Alpaca would queue for the next open. Where that shape cannot be

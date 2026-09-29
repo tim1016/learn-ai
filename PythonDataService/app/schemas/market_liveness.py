@@ -71,6 +71,10 @@ class MarketClockLivenessEvidence(BaseModel):
     This is deliberately not scheduled-session evidence: an ``OPEN`` result
     can only say that the broker currently considers the market open. It says
     nothing about whether an individual symbol is halted.
+
+    ``next_close_ms`` is the close the broker named with an ``OPEN`` answer:
+    the answer proves the market open only until then (#2596). It is absent on
+    any other answer, and on evidence no broker clock produced.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -79,7 +83,14 @@ class MarketClockLivenessEvidence(BaseModel):
     source: str
     observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     vendor_timestamp_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    next_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_close(self) -> MarketClockLivenessEvidence:
+        if self.next_close_ms is not None and self.state != "OPEN":
+            raise ValueError("Only an OPEN broker clock answer names the close it lasts until.")
+        return self
 
 
 class SymbolTradingStatusEvidence(BaseModel):
