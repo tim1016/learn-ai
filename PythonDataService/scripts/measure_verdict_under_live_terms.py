@@ -29,6 +29,16 @@ Two seams are replaced, and each replacement is the finding it measures:
   ``_build_backtest_engine`` is wrapped to install them through the engine's
   own ``sizing_model`` / ``fill_model`` seams.
 
+The script refuses to write numbers it cannot vouch for: it must reproduce
+Strategy Lab's recorded runs 18 and 33 exactly (``RECORDED_RUN_18``,
+``RECORDED_RUN_33``), and every run must show that each seam its terms replace
+was consulted (``_require_seams_used``) and, where a grade row can show it,
+took effect (``_require_terms_in_output``).
+
+It is committed rather than kept as a scratch file because the follow-ups to
+#2466 each end by rerunning it with one seam replacement deleted and the term
+expressed through a request parameter instead.
+
 Usage (host venv; no services, no vendor fetch)::
 
     POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python scripts/measure_verdict_under_live_terms.py \\
@@ -117,8 +127,30 @@ LIVE_QUANTITY = 1
 # (2026-09-28, #2550); the bots on 2026-09-17..24 traded one share.
 LIVE_BUDGET = 1_000.0
 # CAT is pinned only from 2026-09-01. Earlier fills are charged the first
-# pinned rate (an upper bound: at most one cent per trading day with fills).
+# pinned rate. For the one-share runs that is an upper bound (any rate below
+# half a cent a share rounds up to one cent per trading day with fills); for
+# research-size runs it assumes the unpinned earlier rate was no higher.
 CAT_BACKDATE_FROM = date(2026, 9, 1)
+
+# Strategy Lab's recorded grades of this configuration
+# (artifacts/strategy-lab-validation-2026-09-27, gitignored): run 18 is W3mo on
+# adjusted bars at $1 per order; run 33 is W6mo under us-equity-raw-ibkr-v1.
+# Sharpe is not pinned: #2525 (236829fb) changed the daily-return convention
+# after both were recorded.
+RECORDED_RUN_18: dict[str, Any] = {
+    "trades": 11,
+    "net_profit": 136.3804,
+    "total_fees": 22.0,
+    "grade": "B",
+    "composite": 59,
+}
+RECORDED_RUN_33: dict[str, Any] = {
+    "trades": 20,
+    "net_profit": 2696.8751,
+    "total_fees": 40.0,
+    "grade": "A",
+    "composite": 81,
+}
 
 FillTiming = Literal["signal_bar_close", "next_bar_open", "decision_minute_open"]
 FeeSchedule = Literal["flat_per_order", "alpaca_regulatory", "none"]
@@ -146,8 +178,9 @@ class Terms:
 
 
 LIVE_FILL: FillTiming = "decision_minute_open"
+RESEARCH = Terms("research", "Research defaults (100% equity, signal-bar close, $1/order, no spread, $100k)")
 VARIANTS: tuple[Terms, ...] = (
-    Terms("research", "Research defaults (100% equity, signal-bar close, $1/order, no spread, $100k)"),
+    RESEARCH,
     Terms(
         "qty_1sh_1k",
         "T1: fixed 1 share on the $1,000 live budget",
@@ -192,6 +225,15 @@ VARIANTS: tuple[Terms, ...] = (
         initial_cash=LIVE_BUDGET,
     ),
     Terms(
+        "live_2c_next_bar_open",
+        "Combined live terms with $0.02/share, engine next_bar_open instead of the decision-minute open",
+        fill="next_bar_open",
+        fees="alpaca_regulatory",
+        slippage_per_share=0.02,
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
         "qty_1sh_1k_alpaca",
         "T1 + T3: fixed 1 share on $1,000 with Alpaca fees (no flat commission)",
         fees="alpaca_regulatory",
@@ -220,28 +262,65 @@ VARIANTS: tuple[Terms, ...] = (
 # ── Live terms the engine has no parameter for ───────────────────────────
 
 
-@dataclass(frozen=True)
+class MeasurementRefused(RuntimeError):
+    """A run did not measure what its variant claims; no numbers are written."""
+
+
+@dataclass
+class SeamUse:
+    """How often each replaced seam was consulted since the counts were last taken.
+
+    A replacement the engine never consulted would leave a variant measuring
+    the research terms under a live-terms label, so every run takes these
+    counts and refuses a zero (``_require_seams_used``).
+    """
+
+    sized: int = 0
+    minute_open_fills: int = 0
+    alpaca_fee_fills: int = 0
+
+    def take(self) -> SeamUse:
+        """These counts, zeroed for the next run."""
+        taken = SeamUse(self.sized, self.minute_open_fills, self.alpaca_fee_fills)
+        self.sized = self.minute_open_fills = self.alpaca_fee_fills = 0
+        return taken
+
+
+@dataclass
 class FixedQuantitySizing:
     """``SetHoldings`` to a fixed share count — the live binding's ``quantity``."""
 
     quantity: int
+    use: SeamUse
     name: str = "fixed_quantity"
 
     def target_quantity(
         self, *, portfolio_value: Decimal, price: Decimal, target_fraction: Decimal, order_fee: Decimal
     ) -> int:
+        self.use.sized += 1
         return self.quantity if target_fraction > 0 else 0
 
 
 class LiveTermsFillModel(FillModel):
     """The research fill model plus the two fill terms it cannot express.
 
-    ``decision_minute_open``: the consolidator emits the 15-minute bar on the
-    first minute bar at or after its end, which is the minute a live bot
-    decides and sends its market order in; fill at that minute's open.
+    ``decision_minute_open``: a live run decides a 15-minute bucket on the
+    minute bar that closes it and prices the order at that instant, so the
+    order goes out early in the minute after the bucket. The backtest's lazy
+    consolidator emits the bucket on that same minute; fill at its open. That
+    is the zero-latency (optimistic) bound; ``next_bar_open`` is the
+    one-minute (pessimistic) bound.
     ``alpaca_fees``: price each fill with the canonical Alpaca regulatory
     model, settled per ET trade date and component (rounded up to the cent),
     charged incrementally so each date's charges sum to its settlement.
+
+    Only fills priced by ``fill_market_order`` see either term. The engine's
+    force-flat, end-of-algorithm and bracket exits call ``compute_fee``
+    directly (``engine.py:245``, ``:817``), which charges the flat commission —
+    $0 in the Alpaca-fee variants. Force-flat is off and the strategy places no
+    brackets, so that is at most the one end-of-algorithm exit per run. A
+    market order from the final consolidated bar has no current minute
+    (``engine.py:681``) and fills at the signal bar's close.
     """
 
     def __init__(
@@ -252,10 +331,12 @@ class LiveTermsFillModel(FillModel):
         commission_per_order: Decimal,
         decision_minute_open: bool,
         alpaca_fees: bool,
+        use: SeamUse,
     ) -> None:
         super().__init__(mode=mode, commission_per_order=commission_per_order, slippage_per_share=slippage_per_share)
         self.decision_minute_open = decision_minute_open
         self.alpaca_fees = alpaca_fees
+        self.use = use
         self._accrued: dict[date, list[FillFees]] = {}
 
     def fill_market_order(
@@ -274,6 +355,7 @@ class LiveTermsFillModel(FillModel):
         return event
 
     def _fill_at_decision_minute_open(self, order: Order, current_bar: TradeBar) -> OrderEvent:
+        self.use.minute_open_fills += 1
         price = current_bar.open
         if order.direction == Direction.LONG:
             price += self.slippage_per_share
@@ -291,6 +373,7 @@ class LiveTermsFillModel(FillModel):
         )
 
     def _alpaca_fee(self, event: OrderEvent) -> Decimal:
+        self.use.alpaca_fee_fills += 1
         trade_date = et_date_at_ms(event.filled_at_ms)
         side = OrderSide.BUY if event.direction == Direction.LONG else OrderSide.SELL
         accrual = fees_for_fill(
@@ -307,10 +390,11 @@ class LiveTermsFillModel(FillModel):
 
 
 @contextmanager
-def live_terms(terms: Terms, roots: dict[bool, list[Path]]) -> Iterator[None]:
+def live_terms(terms: Terms, roots: dict[bool, list[Path]]) -> Iterator[SeamUse]:
     """Point the engine at the staged roots and install the terms it has no parameter for."""
     original_roots = engine_backtest_service._resolve_lean_data_roots
     original_build = engine_backtest_service._build_backtest_engine
+    use = SeamUse()
 
     def _roots(*, adjusted: bool) -> list[Path]:
         return roots[adjusted]
@@ -325,15 +409,16 @@ def live_terms(terms: Terms, roots: dict[bool, list[Path]]) -> Iterator[None]:
                 commission_per_order=config.commission_per_order,
                 decision_minute_open=terms.fill == "decision_minute_open",
                 alpaca_fees=terms.fees == "alpaca_regulatory",
+                use=use,
             )
         if terms.fixed_quantity is not None:
-            engine.sizing_model = FixedQuantitySizing(terms.fixed_quantity)
+            engine.sizing_model = FixedQuantitySizing(terms.fixed_quantity, use)
         return engine
 
     engine_backtest_service._resolve_lean_data_roots = _roots  # type: ignore[assignment]
     engine_backtest_service._build_backtest_engine = _build  # type: ignore[assignment]
     try:
-        yield
+        yield use
     finally:
         engine_backtest_service._resolve_lean_data_roots = original_roots  # type: ignore[assignment]
         engine_backtest_service._build_backtest_engine = original_build  # type: ignore[assignment]
@@ -405,27 +490,74 @@ def _grade_row(response: Any) -> dict[str, Any]:
     }
 
 
-def grade_runs(terms: Terms, manifest: dict[str, str]) -> dict[str, Any]:
-    rows: dict[str, Any] = {}
-    for window, (start, end) in GRADE_WINDOWS.items():
-        request = EngineBacktestRequest(
-            strategy_name=STRATEGY,
-            params={"symbol": SYMBOL},
-            from_date=start.isoformat(),
-            to_date=end.isoformat(),
-            fill_mode=terms.request_fill_mode,
-            commission_per_order=terms.commission_per_order,
-            slippage_per_share=terms.slippage_per_share,
-            initial_cash=terms.initial_cash,
-            save_study=False,
-            auto_fetch=False,
-            summary_only=False,
+# ── Guards: refuse numbers the run cannot vouch for ─────────────────────
+
+
+def _require_reproduced(name: str, row: dict[str, Any], recorded: dict[str, Any]) -> None:
+    drift = {key: {"got": row[key], "recorded": want} for key, want in recorded.items() if row[key] != want}
+    if drift:
+        raise MeasurementRefused(f"{name} no longer reproduces its recorded run: {drift}")
+
+
+def _require_seams_used(terms: Terms, use: SeamUse, *, trades: int, where: str) -> None:
+    """Every seam ``terms`` replaces was consulted by a run that traded."""
+    taken = use.take()
+    replaced = {
+        "sized": terms.fixed_quantity is not None,
+        "minute_open_fills": terms.fill == "decision_minute_open",
+        "alpaca_fee_fills": terms.fees == "alpaca_regulatory",
+    }
+    unused = [seam for seam, installed in replaced.items() if installed and getattr(taken, seam) == 0]
+    if trades > 0 and unused:
+        raise MeasurementRefused(f"{terms.name} {where}: {trades} trades, but the engine never consulted {unused}")
+
+
+def _require_terms_in_output(terms: Terms, row: dict[str, Any], window: str) -> None:
+    """The live terms a grade row shows directly: the share count, and a fee charged with no flat commission."""
+    if not row["trades"]:
+        return
+    if terms.fixed_quantity is not None and row["max_quantity"] != terms.fixed_quantity:
+        raise MeasurementRefused(
+            f"{terms.name} {window}: traded up to {row['max_quantity']} shares, not the fixed {terms.fixed_quantity}"
         )
+    flat_total = 2 * row["trades"] * RESEARCH_COMMISSION_PER_ORDER
+    if terms.fees == "alpaca_regulatory" and (row["total_fees"] <= 0 or row["total_fees"] == flat_total):
+        raise MeasurementRefused(
+            f"{terms.name} {window}: fees {row['total_fees']} over {row['trades']} trades are not Alpaca's "
+            f"regulatory fees (the flat commission is $0 here, and $1 per order would be {flat_total})"
+        )
+
+
+# ── Runs ─────────────────────────────────────────────────────────────────
+
+
+def _grade_request(terms: Terms, window: str) -> EngineBacktestRequest:
+    start, end = GRADE_WINDOWS[window]
+    return EngineBacktestRequest(
+        strategy_name=STRATEGY,
+        params={"symbol": SYMBOL},
+        from_date=start.isoformat(),
+        to_date=end.isoformat(),
+        fill_mode=terms.request_fill_mode,
+        commission_per_order=terms.commission_per_order,
+        slippage_per_share=terms.slippage_per_share,
+        initial_cash=terms.initial_cash,
+        save_study=False,
+        auto_fetch=False,
+        summary_only=False,
+    )
+
+
+def grade_runs(terms: Terms, use: SeamUse, manifest: dict[str, str]) -> dict[str, Any]:
+    rows: dict[str, Any] = {}
+    for window in GRADE_WINDOWS:
         started = time.monotonic()
         response = engine_backtest_service.execute_engine_backtest(
-            request=request, on_phase=_no_op, on_log=_no_op, data_manifest=manifest
+            request=_grade_request(terms, window), on_phase=_no_op, on_log=_no_op, data_manifest=manifest
         )
         rows[window] = {**_grade_row(response), "seconds": round(time.monotonic() - started, 1)}
+        _require_seams_used(terms, use, trades=response.total_trades, where=window)
+        _require_terms_in_output(terms, rows[window], window)
         if terms.name == "research" or window == "W3mo":
             rows[window]["trade_log"] = [
                 {
@@ -484,13 +616,13 @@ def launch_study(terms: Terms, roots: list[Path]) -> tuple[StudySpec, NewStudy]:
     return spec, studies.prepare_launch(spec, job_id=None, roots=roots)
 
 
-def walk_forward(spec: StudySpec, study: NewStudy, roots: list[Path]) -> dict[str, Any]:
+def walk_forward(terms: Terms, use: SeamUse, spec: StudySpec, study: NewStudy, roots: list[Path]) -> dict[str, Any]:
     """Train, select by the ranking contract, test, then the frozen verdict — the study's loop minus its writes."""
     grid = spec.grid
     snapshot = DataSnapshot.from_dict(study.receipt["data_snapshot"])
     identity = CodeIdentity(**study.receipt["code_identity"])
 
-    def _cell(start_ms: int, end_ms: int) -> tuple[CellResult, dict[str, Any]]:
+    def _cell(start_ms: int, end_ms: int, where: str) -> tuple[CellResult, dict[str, Any]]:
         record = sweeps.prepare_launch(
             spec.sweep_spec(start_ms, end_ms), job_id=None, roots=roots, snapshot=snapshot, identity=identity
         )
@@ -500,14 +632,16 @@ def walk_forward(spec: StudySpec, study: NewStudy, roots: list[Path]) -> dict[st
             expand_grid([StrategyGridConfig(sweep_spec.strategy_key, dict(sweep_spec.param_ranges))], [SYMBOL])
         )
         assert len(candidates) == 1, "the study sweeps the sealed point only"
-        return engine_adapter.default_execute_cell(row, sweep_spec)(candidates[0]), record.receipt["interval_table"]
+        cell = engine_adapter.default_execute_cell(row, sweep_spec)(candidates[0])
+        _require_seams_used(terms, use, trades=cell.total_trades, where=where)
+        return cell, record.receipt["interval_table"]
 
     folds: list[dict[str, Any]] = []
     evidence: list[FoldEvidence] = []
     for fold in study.folds:
-        train, train_window = _cell(fold.train_start_ms, fold.train_end_ms)
+        train, train_window = _cell(fold.train_start_ms, fold.train_end_ms, f"fold {fold.fold_index} training")
         winner = leader([train], grid.measure, min_trades=grid.min_trades)
-        test, test_window = _cell(fold.test_start_ms, fold.test_end_ms)
+        test, test_window = _cell(fold.test_start_ms, fold.test_end_ms, f"fold {fold.fold_index} test")
         status: Literal["completed", "failed"] = (
             "completed" if winner is not None and test.status == "completed" else "failed"
         )
@@ -546,10 +680,10 @@ def walk_forward(spec: StudySpec, study: NewStudy, roots: list[Path]) -> dict[st
     return {"data_snapshot_digest": study.receipt["data_snapshot_digest"], "folds": folds, "verdict": verdict.as_dict()}
 
 
-def reproduce_recorded_run_33(manifest_roots: dict[bool, list[Path]]) -> dict[str, Any]:
-    """Recorded Strategy Lab run 33: W6mo, raw bars, the pinned us-equity-raw-ibkr-v1 profile (grade A)."""
+def _run_33_request() -> EngineBacktestRequest:
+    """Recorded Strategy Lab run 33: W6mo, raw bars, the pinned us-equity-raw-ibkr-v1 profile."""
     start, end = GRADE_WINDOWS["W6mo"]
-    request = EngineBacktestRequest.model_validate(
+    return EngineBacktestRequest.model_validate(
         {
             "strategy_name": STRATEGY,
             "params": {"symbol": SYMBOL},
@@ -569,19 +703,32 @@ def reproduce_recorded_run_33(manifest_roots: dict[bool, list[Path]]) -> dict[st
             "auto_fetch": False,
         }
     )
-    with live_terms(Terms("recorded_run_33", "recorded run 33"), manifest_roots):
-        response = engine_backtest_service.execute_engine_backtest(request=request, on_phase=_no_op, on_log=_no_op)
-    return _grade_row(response)
+
+
+def reproduce_recorded_runs(roots: dict[bool, list[Path]]) -> dict[str, dict[str, Any]]:
+    """Rerun Strategy Lab's recorded runs 18 and 33 on the research terms; refuse on any drift."""
+    rows: dict[str, dict[str, Any]] = {}
+    with live_terms(RESEARCH, roots):
+        for name, request, recorded in (
+            ("recorded_run_18", _grade_request(RESEARCH, "W3mo"), RECORDED_RUN_18),
+            ("recorded_run_33", _run_33_request(), RECORDED_RUN_33),
+        ):
+            response = engine_backtest_service.execute_engine_backtest(request=request, on_phase=_no_op, on_log=_no_op)
+            rows[name] = _grade_row(response)
+            _require_reproduced(name, rows[name], recorded)
+    return rows
 
 
 def run_variant(terms: Terms, staged: dict[str, Any]) -> dict[str, Any]:
     logging.basicConfig(level=logging.WARNING)
     roots = {True: [Path(staged["polygon_split_adjusted"]["root"])], False: [Path(staged["raw"]["root"])]}
     started = time.monotonic()
-    with live_terms(terms, roots):
+    with live_terms(terms, roots) as use:
         spec, study = launch_study(terms, roots[True])
-        wf = walk_forward(spec, study, roots[True])
-        grades = grade_runs(terms, study.receipt["data_snapshot"]["artifacts"])
+        wf = walk_forward(terms, use, spec, study, roots[True])
+        grades = grade_runs(terms, use, study.receipt["data_snapshot"]["artifacts"])
+    if terms == RESEARCH:
+        _require_reproduced("research W3mo (recorded run 18)", grades["W3mo"], RECORDED_RUN_18)
     return {
         "terms": asdict(terms),
         "grades": grades,
@@ -607,7 +754,12 @@ def main() -> None:
     parser.add_argument("--workdir", type=Path, required=True, help="scratch directory for the staged LEAN trees")
     parser.add_argument("--out", type=Path, required=True, help="JSON results path")
     parser.add_argument("--variants", nargs="*", default=[v.name for v in VARIANTS])
-    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="variants run in parallel processes; pass 1 under the macOS command sandbox, which refuses the pool",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -615,11 +767,13 @@ def main() -> None:
     sealed = _check_sealed_point()
     staged = stage_minute_archives(args.lake_volume, args.workdir)
     roots = {True: [Path(staged["polygon_split_adjusted"]["root"])], False: [Path(staged["raw"]["root"])]}
-    recorded_33 = reproduce_recorded_run_33(roots)
-    logger.info(
-        "recorded run 33 reproduction: %s",
-        json.dumps({k: recorded_33[k] for k in ("trades", "net_profit", "total_fees", "sharpe", "grade")}),
-    )
+    recorded = reproduce_recorded_runs(roots)
+    for name, row in recorded.items():
+        logger.info(
+            "%s reproduced: %s",
+            name,
+            json.dumps({k: row[k] for k in ("trades", "net_profit", "total_fees", "sharpe", "grade", "composite")}),
+        )
 
     selected = [v for v in VARIANTS if v.name in set(args.variants)]
     results: dict[str, Any] = {}
@@ -649,7 +803,7 @@ def main() -> None:
             {
                 "sealed_point": sealed,
                 "staged": staged,
-                "recorded_run_33": recorded_33,
+                "recorded_runs": recorded,
                 "variants": results,
                 "wall_seconds": round(time.monotonic() - started, 1),
             },
