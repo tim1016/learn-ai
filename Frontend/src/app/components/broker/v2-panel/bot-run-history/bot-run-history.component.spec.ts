@@ -1,13 +1,15 @@
+import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type {
-  BotRunView,
-  FeedContinuityView,
-  RunHistoryNavigation,
-  RunHistoryState,
-} from '../lib/broker-v2-panel.types';
+import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
+import type { BotRunView, CurrentRunState, FeedContinuityView } from '../lib/broker-v2-panel.types';
 import { BotRunHistoryComponent } from './bot-run-history.component';
+
+const HISTORY: AccountWorkspaceLink = {
+  commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history'],
+  queryParams: { account: 'clrk_spec' },
+};
 
 const CONTINUITY: FeedContinuityView = {
   provider_label: 'IBKR market data',
@@ -68,28 +70,23 @@ const CURRENT_RUN: BotRunView = {
   terminal_outcome: null,
 };
 
-function state(overrides: Partial<RunHistoryState> = {}): RunHistoryState {
-  return {
-    mode: 'current',
-    current: CURRENT_RUN,
-    history: null,
-    currentLoading: false,
-    historyLoading: false,
-    currentFailed: false,
-    historyFailed: false,
-    canViewNewer: false,
-    ...overrides,
-  };
+function state(overrides: Partial<CurrentRunState> = {}): CurrentRunState {
+  return { run: CURRENT_RUN, loading: false, failed: false, ...overrides };
+}
+
+function renderRuns(inputs: Record<string, unknown>) {
+  return render(BotRunHistoryComponent, {
+    inputs: { historyLink: HISTORY, ...inputs },
+    providers: [provideRouter([])],
+  });
 }
 
 describe('BotRunHistoryComponent', () => {
   it('shows the backend-owned current process evidence without inferring terminal state', async () => {
-    await render(BotRunHistoryComponent, {
-      inputs: {
-        state: state(),
-        botRunning: true,
-        feedContinuity: CONTINUITY,
-      },
+    await renderRuns({
+      state: state(),
+      botRunning: true,
+      feedContinuity: CONTINUITY,
     });
 
     expect(screen.getByText('run-current')).toBeTruthy();
@@ -97,19 +94,14 @@ describe('BotRunHistoryComponent', () => {
     expect(screen.getByText('process-7')).toBeTruthy();
     expect(screen.getByText('registry-2')).toBeTruthy();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Current Run' }).getAttribute('aria-pressed'),
-    ).toBe('true');
     expect(screen.getByText('Evidence is updating')).toBeTruthy();
   });
 
   it('keeps cached idle evidence visible during a background refresh', async () => {
-    await render(BotRunHistoryComponent, {
-      inputs: {
-        state: state({ currentLoading: true }),
-        botRunning: false,
-        feedContinuity: CONTINUITY,
-      },
+    await renderRuns({
+      state: state({ loading: true }),
+      botRunning: false,
+      feedContinuity: CONTINUITY,
     });
 
     expect(screen.getByText('run-current')).toBeTruthy();
@@ -117,79 +109,28 @@ describe('BotRunHistoryComponent', () => {
     expect(screen.queryByText('Loading run evidence…')).toBeNull();
   });
 
-  it('labels historical evidence and makes the live-control target explicit', async () => {
-    const previousRun: BotRunView = {
-      ...CURRENT_RUN,
-      run_id: 'run-previous',
-      launch_reason: 'resume',
-      is_current: false,
-      process: null,
-      terminal_outcome: {
-        kind: 'CLOCKED_OUT_FLAT',
-        reason_code: 'SESSION_COMPLETE',
-        recorded_at_ms: 1_753_900_000_000,
-        run_id: 'run-previous',
-      },
-    };
+  it('sends earlier runs to History instead of paging through them one at a time', async () => {
+    await renderRuns({ state: state(), feedContinuity: CONTINUITY });
 
-    await render(BotRunHistoryComponent, {
-      inputs: {
-        state: state({
-          mode: 'history',
-          history: { runs: [previousRun], next_cursor: null },
-        }),
-        feedContinuity: CONTINUITY,
-      },
-    });
-
-    expect(screen.getByText('run-previous')).toBeTruthy();
-    expect(screen.getByText('Clocked Out Flat')).toBeTruthy();
-    expect(
-      screen.getByText('Viewing history — controls apply to the current run.'),
-    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec');
+    expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Older run' })).toBeNull();
   });
 
-  it('emits navigation requests without owning command state', async () => {
-    const { fixture } = await render(BotRunHistoryComponent, {
-      inputs: { state: state(), feedContinuity: CONTINUITY },
-    });
-    const requests: RunHistoryNavigation[] = [];
-    fixture.componentInstance.navigationRequested.subscribe((request) =>
-      requests.push(request),
-    );
+  it('offers a retry when the current run could not be read', async () => {
+    const { fixture } = await renderRuns({ state: state({ run: null, failed: true }), feedContinuity: CONTINUITY });
+    let retried = 0;
+    fixture.componentInstance.retryRequested.subscribe(() => retried++);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    expect(screen.getByRole('alert').textContent).toContain('Run evidence is unavailable.');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
-    expect(requests).toEqual(['history']);
-  });
-
-  it('keeps newer-page navigation available when the current history request fails', async () => {
-    const { fixture } = await render(BotRunHistoryComponent, {
-      inputs: {
-        state: state({
-          mode: 'history',
-          historyFailed: true,
-          canViewNewer: true,
-        }),
-        feedContinuity: CONTINUITY,
-      },
-    });
-    const requests: RunHistoryNavigation[] = [];
-    fixture.componentInstance.navigationRequested.subscribe((request) =>
-      requests.push(request),
-    );
-
-    const newerRun = screen.getByRole('button', { name: 'Newer run' });
-    expect(newerRun.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(newerRun);
-
-    expect(requests).toEqual(['newer']);
+    expect(retried).toBe(1);
   });
 
   it('shows current-run IBKR interruption and recovery evidence', async () => {
-    await render(BotRunHistoryComponent, {
-      inputs: { state: state(), feedContinuity: CONTINUITY },
-    });
+    await renderRuns({ state: state(), feedContinuity: CONTINUITY });
 
     expect(screen.getByText('IBKR market-data continuity')).toBeTruthy();
     expect(screen.getByText('Feed interrupted')).toBeTruthy();
@@ -198,19 +139,17 @@ describe('BotRunHistoryComponent', () => {
   });
 
   it('does not turn unavailable continuity evidence into zero incidents', async () => {
-    await render(BotRunHistoryComponent, {
-      inputs: {
-        state: state(),
-        feedContinuity: {
-          ...CONTINUITY,
-          state: 'not_recorded',
-          state_label: 'Continuity not recorded',
-          explanation: 'Run-scoped continuity evidence is unavailable.',
-          interruption_count: 0,
-          recovery_count: 0,
-          decision_impact_count: 0,
-          events: [],
-        },
+    await renderRuns({
+      state: state(),
+      feedContinuity: {
+        ...CONTINUITY,
+        state: 'not_recorded',
+        state_label: 'Continuity not recorded',
+        explanation: 'Run-scoped continuity evidence is unavailable.',
+        interruption_count: 0,
+        recovery_count: 0,
+        decision_impact_count: 0,
+        events: [],
       },
     });
 

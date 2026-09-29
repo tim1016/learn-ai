@@ -111,10 +111,9 @@ export function feedContinuityFor(panel: BotPanelView): FeedContinuityView {
   return panel.feed_continuity ?? FEED_CONTINUITY_NOT_RECORDED;
 }
 
-// ── Run navigation ──────────────────────────────────────────────────────────
+// ── Current run ─────────────────────────────────────────────────────────────
 
 export type BotRunView = components['schemas']['BotRunView'];
-export type BotRunHistoryPage = components['schemas']['BotRunHistoryPage'];
 export interface CurrentRunState {
   readonly run: BotRunView | null;
   readonly loading: boolean;
@@ -125,35 +124,6 @@ export const EMPTY_CURRENT_RUN_STATE: CurrentRunState = Object.freeze({
   run: null,
   loading: false,
   failed: false,
-});
-
-export type RunHistoryMode = 'current' | 'history';
-export type RunHistoryNavigation =
-  | 'current'
-  | 'history'
-  | 'newer'
-  | 'older';
-
-export interface RunHistoryState {
-  readonly mode: RunHistoryMode;
-  readonly current: BotRunView | null;
-  readonly history: BotRunHistoryPage | null;
-  readonly currentLoading: boolean;
-  readonly historyLoading: boolean;
-  readonly currentFailed: boolean;
-  readonly historyFailed: boolean;
-  readonly canViewNewer: boolean;
-}
-
-export const EMPTY_RUN_HISTORY_STATE: RunHistoryState = Object.freeze({
-  mode: 'current',
-  current: null,
-  history: null,
-  currentLoading: false,
-  historyLoading: false,
-  currentFailed: false,
-  historyFailed: false,
-  canViewNewer: false,
 });
 
 // ── §11 Action execution ─────────────────────────────────────────────────────

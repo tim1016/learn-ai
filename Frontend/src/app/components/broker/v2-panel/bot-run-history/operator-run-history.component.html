@@ -1,14 +1,15 @@
 <app-operator-disclosure-card
   title="Runs"
-  hint="Current and previous runs"
-  (expandedChange)="onExpandedChange($event)"
+  hint="Current run; earlier runs are in History"
+  (expandedChange)="expanded.set($event)"
 >
   @if (expanded()) {
     <app-bot-run-history
-      [state]="state()"
+      [state]="currentRunState()"
       [botRunning]="botRunning()"
       [feedContinuity]="feedContinuity()"
-      (navigationRequested)="navigate($event)"
+      [historyLink]="historyLink()"
+      (retryRequested)="runRefreshRequested.emit()"
     />
   }
 </app-operator-disclosure-card>
