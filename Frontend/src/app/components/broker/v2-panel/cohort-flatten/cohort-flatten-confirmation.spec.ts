@@ -96,7 +96,7 @@ describe('the cohort-flatten operator-copy map (owner decision 2026-09-23)', () 
     );
   });
 
-  it('keeps the per-bot flatten_stop confirmation token', () => {
+  it('asks the operator to type FLATTEN', () => {
     expect(COHORT_FLATTEN_COPY.confirmToken).toBe('FLATTEN');
   });
 

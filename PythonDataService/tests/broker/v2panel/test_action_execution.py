@@ -11,18 +11,19 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
     RepositoryPoisoned,
 )
-from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.broker.v2panel.vocabulary import RetiredActionId
+from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult, PanelQuiesceActionRequest
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
@@ -35,14 +36,14 @@ from app.services.broker_v2_panel.action_execution_service import (
     durable_idempotency_store_for,
     execute_action,
 )
-from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
+from app.services.broker_v2_panel.panel_data_source import run_action
 
 _SID = "bot-alpha"
 
 
 def _request(
     *,
-    action_id: str = "stop",
+    action_id: str = "archive",
     revision: int = 42,
     key: str = "k1",
     token: str = "token",
@@ -62,7 +63,7 @@ async def test_action_applies_and_records_identity() -> None:
 
     async def _perform(operator: str, reason: str | None) -> str:
         seen_identity.append(operator)
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
     result = await execute_action(
@@ -70,7 +71,7 @@ async def test_action_applies_and_records_identity() -> None:
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="desk-operator",
         store=store,
     )
@@ -79,8 +80,8 @@ async def test_action_applies_and_records_identity() -> None:
     assert result.outcome == "success"
     assert result.receipt_id == "k1"
     assert result.recorded_at_ms > 0
-    assert result.action_id == "stop"
-    assert result.message == "stopped"
+    assert result.action_id == "archive"
+    assert result.message == "archived"
     # Identity came from the channel, not the request.
     assert seen_identity == ["desk-operator"]
 
@@ -95,7 +96,7 @@ async def test_execute_action_forwards_request_reason_to_performer() -> None:
 
     async def _perform(operator: str, reason: str | None) -> str:
         seen.append((operator, reason))
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
     await execute_action(
@@ -103,7 +104,7 @@ async def test_execute_action_forwards_request_reason_to_performer() -> None:
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="desk-operator",
         store=store,
     )
@@ -121,7 +122,7 @@ async def test_stale_revision_is_409() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=IdempotencyStore(),
         )
@@ -134,7 +135,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
     async def _perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
     first = await execute_action(
@@ -142,7 +143,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=store,
     )
@@ -151,7 +152,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=store,
     )
@@ -174,13 +175,13 @@ async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=store,
         )
 
     assert "Inspect Clerk evidence" in (exc.value.detail or "")
-    assert store._records[(_SID, "stop", "unknown")].state == "failed"
+    assert store._records[(_SID, "archive", "unknown")].state == "failed"
 
 
 async def test_performer_raised_action_execution_error_burns_key_not_released(
@@ -206,12 +207,12 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=store,
         )
 
-    assert store._records[(_SID, "stop", "mid-flight")].state == "failed"
+    assert store._records[(_SID, "archive", "mid-flight")].state == "failed"
     assert "panel_action_rejected" not in caplog.text
 
 
@@ -379,13 +380,13 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
             revision=7,
             actions=[
                 SimpleNamespace(
-                    action_id="stop",
-                    label="Stop",
+                    action_id="archive",
+                    label="Clear",
                     enabled=False,
                     blockers=[SimpleNamespace(
-                        headline="The bot is not running.",
-                        detail="Start the bot before Stop.",
-                        condition=SimpleNamespace(id="BOT_NOT_RUNNING"),
+                        headline="Stop the bot before clearing it.",
+                        detail="A running bot still evaluates bars and can place orders.",
+                        condition=SimpleNamespace(id="BOT_STILL_RUNNING"),
                     )],
                     concurrency_token="token",
                 )
@@ -420,9 +421,9 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
         )
 
     # The refusal is the guard's own: its headline, its why and its code.
-    assert str(exc.value) == "The bot is not running."
-    assert exc.value.detail == "Start the bot before Stop."
-    assert exc.value.reason_code == "BOT_NOT_RUNNING"
+    assert str(exc.value) == "Stop the bot before clearing it."
+    assert exc.value.detail == "A running bot still evaluates bars and can place orders."
+    assert exc.value.reason_code == "BOT_STILL_RUNNING"
 
 
 
@@ -431,7 +432,7 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
     """A retry of an applied action stays a no-op even after the panel advances."""
 
     async def _perform(operator: str, reason: str | None) -> str:
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
     await execute_action(
@@ -439,7 +440,7 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=store,
     )
@@ -450,7 +451,7 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=store,
     )
@@ -464,7 +465,7 @@ async def test_unrelated_panel_revision_does_not_stale_an_action_token() -> None
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": lambda _operator, _reason: _noop()},
+        performers={"archive": lambda _operator, _reason: _noop()},
         operator_identity="op",
         store=IdempotencyStore(),
     )
@@ -477,7 +478,7 @@ async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path
     async def _perform(_operator: str, _reason: str | None) -> str:
         nonlocal calls
         calls += 1
-        return "stopped"
+        return "archived"
 
     path = tmp_path / "panel_action_receipts.json"
     first = await execute_action(
@@ -485,7 +486,7 @@ async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=DurableIdempotencyStore(path),
     )
@@ -494,7 +495,7 @@ async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=DurableIdempotencyStore(path),
     )
@@ -507,18 +508,18 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "panel_action_receipts.json"
-    compound = "\u001f".join((_SID, "stop", "legacy"))
+    compound = "\u001f".join((_SID, "archive", "legacy"))
     path.write_text(
         json.dumps(
             {
                 compound: {
                     "state": "succeeded",
                     "result": {
-                        "action_id": "stop",
+                        "action_id": "archive",
                         "applied": True,
                         "revision": 42,
                         "concurrency_token": "token",
-                        "message": "stopped",
+                        "message": "archived",
                     },
                     "error_detail": None,
                 }
@@ -533,7 +534,7 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": lambda _operator, _reason: _noop()},
+        performers={"archive": lambda _operator, _reason: _noop()},
         operator_identity="op",
         store=DurableIdempotencyStore(path),
     )
@@ -543,14 +544,14 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.recorded_at_ms == legacy_observed_at_ms
 
 
-@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire"])
-async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
+@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire", "flatten_stop", "stop"])
+async def test_retired_action_receipts_stay_history_and_never_block_the_next_command(
     tmp_path: Path, retired_action_id: str,
 ) -> None:
     """#2550 review: a bot's ledger written before Resume/Pause/Continue (and,
-    since #2578, Retire) were retired must still load. Those receipts remain
-    readable history, and the bot's next command -- Stop included -- runs
-    instead of failing the load."""
+    since #2578, Retire; since #2595, Flatten & stop; since #2605, the generic
+    Stop) were retired must still load. Those receipts remain readable history,
+    and the bot's next command runs instead of failing the load."""
     path = tmp_path / "panel_action_receipts.json"
     compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
     history = {
@@ -576,7 +577,7 @@ async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": lambda _operator, _reason: _noop()},
+        performers={"archive": lambda _operator, _reason: _noop()},
         operator_identity="op",
         store=DurableIdempotencyStore(path),
     )
@@ -587,18 +588,29 @@ async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
     assert len(persisted) == 2
 
 
+@pytest.mark.parametrize("retired_action_id", get_args(RetiredActionId))
+@pytest.mark.parametrize("model", [PanelActionRequest, PanelQuiesceActionRequest])
+def test_a_retired_action_id_is_refused_at_the_request_schema(
+    model: type[PanelActionRequest], retired_action_id: str,
+) -> None:
+    """A retired id -- the generic Stop included (#2605) -- is history only: no
+    request may name it, so it is refused before any performer is reached."""
+    with pytest.raises(ValidationError):
+        model(action_id=retired_action_id, revision=1, concurrency_token="t", idempotency_key="k")  # type: ignore[arg-type]
+
+
 async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:
     """A load failure must not mark the ledger loaded: the next command would
     start from an empty ledger and overwrite the bot's receipt history."""
     path = tmp_path / "panel_action_receipts.json"
-    compound = "\u001f".join((_SID, "stop", "truncated"))
-    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "stop"}}}), encoding="utf-8")
+    compound = "\u001f".join((_SID, "archive", "truncated"))
+    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "archive"}}}), encoding="utf-8")
     original = path.read_text(encoding="utf-8")
     store = DurableIdempotencyStore(path)
 
     for _ in range(2):
         with pytest.raises(ValidationError):
-            await store.reserve_or_get(_SID, "stop", "next-command")
+            await store.reserve_or_get(_SID, "archive", "next-command")
 
     assert path.read_text(encoding="utf-8") == original
 
@@ -609,7 +621,7 @@ async def test_durable_store_keeps_receipts_beside_the_instance_artifacts(tmp_pa
     replays them instead of re-firing a completed command."""
     store = durable_idempotency_store_for(tmp_path, _SID)
 
-    assert await store.reserve_or_get(_SID, "stop", "first") is None
+    assert await store.reserve_or_get(_SID, "archive", "first") is None
 
     assert (tmp_path / "live_state" / _SID / "panel_action_receipts.json").is_file()
 
@@ -638,7 +650,7 @@ async def test_unwired_action_is_typed_not_available() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op, reason: _noop()},  # cancel_order not wired
+            performers={"archive": lambda op, reason: _noop()},  # cancel_order not wired
             operator_identity="op",
             store=IdempotencyStore(),
         )
@@ -713,7 +725,6 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         "read_sqlite_decision_receipts",
         lambda *_args, **_kwargs: [],
     )
-    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
@@ -840,7 +851,6 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])
-    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", _market_pulse)
     monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
@@ -853,69 +863,6 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
 
     [liveness] = evaluated
     assert (liveness.state, liveness.reason_code) == ("TRADABLE", "MARKET_TRADABLE")
-
-
-
-
-async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -> None:
-    events: list[str] = []
-    binding = SimpleNamespace(run_id="run-1", action_plan=object(), quantity=1)
-
-    class _Registry:
-        def binding_for_control(self, broker: str, sid: str):
-            assert (broker, sid) == ("alpaca", _SID)
-            return binding
-
-        def status(self, broker: str, sid: str):
-            assert (broker, sid) == ("alpaca", _SID)
-            return SimpleNamespace(running=True)
-
-        async def stop(self, broker: str, sid: str, *, reason: str) -> None:
-            assert (broker, sid) == ("alpaca", _SID)
-            events.append("stop")
-
-    class _Clerk:
-        async def execute_for_instance(self, **kwargs):
-            assert kwargs["strategy_instance_id"] == _SID
-            events.append("execute")
-            return SimpleNamespace(state=EffectOperationState.UNPROVABLE)
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers("alpaca", _SID, idempotency_key="flatten-1")["flatten_stop"](
-        "desk-operator", None
-    )
-
-    assert events == ["stop", "execute"]
-    assert "cannot prove" in message
-
-
-async def test_reconcile_performer_ignores_operator_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``reconcile_now`` has no operator-authored reason to journal; it ignores one."""
-
-    class _Clerk:
-        async def reconcile_once(self) -> str:
-            return "clean"
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="reconcile-1"
-    )["reconcile_now"]("desk-operator", "this should be ignored")
-
-    assert message == "Reconciliation sweep complete: clean."
 
 
 async def _noop() -> str:
@@ -934,7 +881,7 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
     async def _perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
 
@@ -944,20 +891,20 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=store,
         )
 
     # Nothing was applied → no dangling in_flight reservation for the key.
-    assert (_SID, "stop", "retry") not in store._records
+    assert (_SID, "archive", "retry") not in store._records
 
     result = await execute_action(
         _request(key="retry", revision=42),
         sid=_SID,
         current_revision=42,
         current_concurrency_token="token",
-        performers={"stop": _perform},
+        performers={"archive": _perform},
         operator_identity="op",
         store=store,
     )
@@ -975,7 +922,7 @@ async def test_not_available_action_releases_key() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op, reason: _noop()},  # cancel_order not wired
+            performers={"archive": lambda op, reason: _noop()},  # cancel_order not wired
             operator_identity="op",
             store=store,
         )
@@ -992,7 +939,7 @@ async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
         calls += 1
         # Yield briefly so the second coroutine can reach reserve_or_get before we finish.
         await asyncio.sleep(0)
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore()
 
@@ -1003,7 +950,7 @@ async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
                 sid=_SID,
                 current_revision=42,
                 current_concurrency_token="token",
-                performers={"stop": _slow_perform},
+                performers={"archive": _slow_perform},
                 operator_identity="op",
                 store=store,
             )
@@ -1029,7 +976,7 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
         calls += 1
         performer_started.set()
         await release_performer.wait()
-        return "stopped"
+        return "archived"
 
     store = IdempotencyStore(wait_timeout_s=0.01)
     first_post = asyncio.create_task(
@@ -1038,7 +985,7 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _blocked_perform},
+            performers={"archive": _blocked_perform},
             operator_identity="op",
             store=store,
         )
@@ -1051,13 +998,13 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": _blocked_perform},
+            performers={"archive": _blocked_perform},
             operator_identity="op",
             store=store,
         )
 
     assert calls == 1
-    assert store._records[(_SID, "stop", "slow-race")].state == "in_flight"
+    assert store._records[(_SID, "archive", "slow-race")].state == "in_flight"
 
     release_performer.set()
     result = await first_post

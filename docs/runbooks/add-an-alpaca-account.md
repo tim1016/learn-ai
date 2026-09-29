@@ -538,8 +538,8 @@ host CLI, in order:
 #       iii. flatten every open position, including any opened by hand;
 #       iv.  wait for the flatten orders THEMSELVES to reach a terminal state
 #            at the broker — a cancel can lose the race to a fill.
-#     On a reachable lane use its panel controls (`stop`,
-#     `cancel_verified_working_orders`, `flatten_stop`) so its custody records
+#     On a reachable lane use its panel controls (`stop_bot_decisions`,
+#     `cancel_verified_working_orders`, `execute_safe_flatten`) so its custody records
 #     follow along. Those controls deliberately refuse legs no bot opened: a
 #     position or order opened by hand is closed in the Alpaca dashboard.
 #

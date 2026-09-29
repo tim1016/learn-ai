@@ -25,12 +25,13 @@ import {
 } from '../../../services/lane-attention.service';
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
-import { fakeBotPanelView, fakeCatalogBot, fakePanelAction } from '../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakeCatalogBot, fakeSqliteBotActions } from '../../../testing/bot-panel-fixtures';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
 import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import type {
   BotCatalogView,
   BotClearRequest,
+  BotPanelView,
   CohortActionResult,
   CohortLegResult,
 } from '../../broker/v2-panel/lib/broker-v2-panel.types';
@@ -122,6 +123,7 @@ function attentionItem(overrides: Partial<LaneAttentionItem> = {}): LaneAttentio
 async function renderHome(overrides: {
   url?: string;
   attention?: LaneAttentionState;
+  getPanel?: () => Promise<BotPanelView>;
   runBotAction?: () => Promise<{ message: string }>;
   getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
   clearBots?: (target: ResourceTarget, request: BotClearRequest) => Promise<CohortActionResult>;
@@ -130,7 +132,11 @@ async function renderHome(overrides: {
   const panel = {
     getCatalog: vi.fn(overrides.getCatalog ?? (() => Promise.resolve(catalog()))),
     getAccountMoney: vi.fn(() => Promise.resolve(overrides.money ?? fakeAccountMoney({ account_id: TEST_ACCOUNT_ID }))),
-    getPanel: vi.fn(() => Promise.resolve(fakeBotPanelView({ actions: [fakePanelAction('stop')] }))),
+    // The panel as the SQLite Clerk presents a running bot: its stop is the
+    // recovery catalog's `stop_bot_decisions`, never a generic `stop` (#2605).
+    getPanel: vi.fn(overrides.getPanel ?? (() => Promise.resolve(fakeBotPanelView({
+      actions: fakeSqliteBotActions(), primary_action: 'stop_bot_decisions',
+    })))),
     runBotAction: vi.fn(overrides.runBotAction ?? (() => Promise.resolve({ message: 'Stop requested for spy-ema-20260929-0931.' }))),
     clearBots: vi.fn(overrides.clearBots ?? ((_target: ResourceTarget, request: BotClearRequest) =>
       Promise.resolve(clearResult(request.strategy_instance_ids.map((sid) => clearedLeg(sid)))))),
@@ -537,33 +543,114 @@ describe('AlpacaHomeComponent', () => {
     }
   });
 
-  it('asks before Stop, then lands the keyboard on the outcome', async () => {
+  it('stops a running bot through the stop its Clerk really offers (#2605)', async () => {
     const { panel } = await renderHome();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
-    const cancel = await screen.findByRole('button', { name: 'Cancel' });
-    await vi.waitFor(() => expect(document.activeElement).toBe(cancel));
-    fireEvent.click(screen.getByRole('button', { name: 'Stop bot' }));
+    // The owner confirms, in whatever words the Stop is asked in.
+    fireEvent.click(await screen.findByRole('button', { name: /^Stop bot/ }));
 
+    await vi.waitFor(() => expect(panel.runBotAction).toHaveBeenCalledWith(
+      expect.objectContaining({ clerkId: TEST_CLERK_ID, accountId: TEST_ACCOUNT_ID }),
+      'spy-ema-20260929-0931',
+      expect.objectContaining({ action_id: 'stop_bot_decisions' }),
+    ));
     const outcome = await screen.findByText('Stop requested for spy-ema-20260929-0931.');
     await vi.waitFor(() => expect(document.activeElement).toBe(outcome));
     expect(outcome.getAttribute('role')).toBe('status');
-    expect(panel.runBotAction).toHaveBeenCalledWith(
-      expect.objectContaining({ clerkId: TEST_CLERK_ID, accountId: TEST_ACCOUNT_ID }),
-      'spy-ema-20260929-0931',
-      expect.objectContaining({ action_id: 'stop' }),
+  });
+
+  it('asks with the Clerk’s own confirmation, and sends nothing until the owner confirms', async () => {
+    const { panel } = await renderHome();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
+    expect(within(dialog).getByText('Stop the bot making new decisions. Stopping doesn\'t sell its shares.')).toBeTruthy();
+    expect(within(dialog).getByText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.')).toBeTruthy();
+    await vi.waitFor(() => expect(document.activeElement).toBe(within(dialog).getByTestId('typed-halt-confirm-cancel')));
+    expect(panel.runBotAction).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop bot decisions' }));
+
+    await vi.waitFor(() => expect(panel.runBotAction).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('sends nothing when the owner cancels, and hands the keyboard back to Stop', async () => {
+    const { panel } = await renderHome();
+    const stop = screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' });
+    stop.focus();
+    fireEvent.click(stop);
+    const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
+
+    fireEvent.click(within(dialog).getByTestId('typed-halt-confirm-cancel'));
+
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(stop));
+    expect(panel.runBotAction).not.toHaveBeenCalled();
+  });
+
+  it('says a bot the Clerk no longer lets stop cannot be stopped, without asking', async () => {
+    const { panel } = await renderHome({
+      getPanel: () => Promise.resolve(fakeBotPanelView({ actions: fakeSqliteBotActions({ running: false }) })),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+
+    const outcome = await screen.findByText(
+      'spy-ema-20260929-0931 can no longer be stopped from here. Its current state is shown below.',
     );
+    await vi.waitFor(() => expect(document.activeElement).toBe(outcome));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(panel.runBotAction).not.toHaveBeenCalled();
   });
 
   it('says a refused Stop in the backend’s words, and lands the keyboard there too', async () => {
     await renderHome({ runBotAction: () => Promise.reject(new Error('The lane refused the stop.')) });
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop bot' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop bot decisions' }));
 
     const outcome = await screen.findByText('The lane refused the stop.');
     await vi.waitFor(() => expect(document.activeElement).toBe(outcome));
     expect(outcome.getAttribute('role')).toBe('alert');
+  });
+
+  it('never asks a Stop on another account when its read answers after the owner switched', async () => {
+    let answer: (panel: BotPanelView) => void = () => undefined;
+    const { view, router, panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((resolve) => { answer = resolve; }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    answer(fakeBotPanelView({ actions: fakeSqliteBotActions(), primary_action: 'stop_bot_decisions' }));
+    // Let the late answer reach Home, then let Home render what it made of it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(panel.runBotAction).not.toHaveBeenCalled();
+  });
+
+  it('never says a Stop refusal on another account when its read fails after the owner switched', async () => {
+    let refuse: (error: Error) => void = () => undefined;
+    const { view, router, panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((_resolve, reject) => { refuse = reject; }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    refuse(new Error('The lane refused the read.'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByText('The lane refused the read.')).toBeNull();
   });
 
   it('keeps cohort Flatten reachable from the Bots section’s menu', async () => {

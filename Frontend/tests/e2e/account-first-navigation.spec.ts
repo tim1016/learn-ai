@@ -221,7 +221,6 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
           attention_required: false,
           last_error: null,
         },
-        primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
       },
     ],
     symbols: [
@@ -259,10 +258,9 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
 const PANEL_PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['stop'],
+  supported_action_ids: ['deploy', 'archive'],
 };
 
 /** The running bot's own page: its panel and an empty live chart. A bot's

@@ -598,11 +598,6 @@ def _decision_last_bar_at_ms(decision: DecisionReceipt | None) -> int | None:
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
-    authorities = {
-        "stop": "Bot lifecycle registry",
-        "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
-        "reconcile_now": "Alpaca Clerk reconciliation sweep",
-    }
     for action in actions:
         blocker = action.blockers[0] if action.blockers else None
         checks.append(
@@ -611,7 +606,7 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
                 label=action.label,
                 ready=action.enabled,
                 scope=(blocker.condition.scope if blocker else "bot"),
-                authority=authorities.get(action.action_id, "Panel action policy"),
+                authority="Panel action policy",
                 explanation=(
                     action.explanation
                     if action.enabled
@@ -687,10 +682,9 @@ def _mission_verdict(
     )
 
 
-#: A running bot's stop command, most specific first: the runner's plain
-#: ``stop``, or -- on a SQLite-activated bot, where only the recovery
-#: executor's stop survives activation while running -- ``stop_bot_decisions``.
-_RUNNING_STOP_ACTION_IDS: tuple[ActionId, ...] = ("stop", "stop_bot_decisions")
+#: A running bot's stop command: the SQLite recovery executor's
+#: ``stop_bot_decisions`` (#2605 retired the runner's generic ``stop``).
+_RUNNING_STOP_ACTION_ID: ActionId = "stop_bot_decisions"
 
 
 def select_primary_action(
@@ -721,7 +715,7 @@ def select_primary_action(
         return recovery_primary_action_id
     if not health.running:
         return None
-    return next((action_id for action_id in _RUNNING_STOP_ACTION_IDS if action_id in action_ids), None)
+    return _RUNNING_STOP_ACTION_ID if _RUNNING_STOP_ACTION_ID in action_ids else None
 
 
 def open_pnl_fields(exact_open_pnl: Decimal | None) -> dict[str, object]:
@@ -756,7 +750,6 @@ def build_panel(
     last_bar_at_ms: int | None,
     journal_tail_ref: str,
     journal_tail_seq: int | None,
-    flatten_supported: bool,
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
@@ -855,7 +848,6 @@ def build_panel(
         status,
         clerk,
         revision=revision,
-        flatten_supported=flatten_supported,
         channel_fresh=channel_health.ready,
         exposure=exposure,
         account_id=account_id,

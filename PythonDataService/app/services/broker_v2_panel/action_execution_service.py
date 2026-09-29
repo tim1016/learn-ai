@@ -11,9 +11,9 @@ backend capability that performs the action:
 3. **Identity from the channel.** The operator identity is the configured
    ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
 
-The dispatch wires Stop, flatten-and-stop,
-reconciliation, clear-hold, and guarded inventory recovery. Unsupported
-closed-set actions such as Cancel order are not presented and raise
+The dispatch wires Archive (Clear); every other presented action is the
+SQLite recovery catalog's (``sqlite_panel_source.execute_sqlite_panel_action``).
+Unsupported closed-set actions such as Cancel order are not presented and raise
 ``ActionNotAvailableError`` if called directly.
 """
 
@@ -687,12 +687,9 @@ async def execute_action(
         # subclass a performer raises (e.g. ``UnknownActionError``) falls
         # through to the ``except Exception`` branch below and burns the key,
         # since the performer ran and its outcome is unknown.
-        # Instrument which 409-class subclass fired so a Stop-409 in the field
-        # is attributable — a stale action token (running flipped) vs the
-        # action being not-available — instead of an ambiguous bare 409
-        # (defect #10: the documented "whole-panel revision" cause is
-        # architecturally impossible for Stop, so the real trigger must be
-        # disambiguated from live evidence).
+        # Instrument which 409-class subclass fired so a 409 in the field is
+        # attributable — a stale action token vs the action being
+        # not-available — instead of an ambiguous bare 409 (defect #10).
         logger.info(
             "panel action rejected before execution",
             extra={

@@ -66,7 +66,6 @@ function requiredRevision(index: number): number {
 export const PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: false,
   live_bars_supported: false,
   stations: [],
   supported_action_ids: [],

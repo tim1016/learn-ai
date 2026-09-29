@@ -43,7 +43,6 @@ class ActionGuardContext:
     reconciliation_verdict: str | None
     outstanding_intents: int
     has_exposure: bool
-    flatten_supported: bool
     account_id: str
     strategy_instance_id: str
     exposure: dict[str, float]
@@ -102,52 +101,6 @@ def _disabled(*blockers: OperatorBlocker) -> tuple[bool, list[OperatorBlocker]]:
 def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     # deploy is a list-page action; the per-bot panel always presents it disabled.
     return _disabled()
-
-
-def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    if ctx.running:
-        return True, []
-    return _disabled(
-        _blocker(
-            "BOT_NOT_RUNNING",
-            scope="bot",
-            headline="The bot is already off duty.",
-            detail="Open Deploy again to review a fresh deployment.",
-        )
-    )
-
-
-def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    blockers: list[OperatorBlocker] = []
-    if not ctx.flatten_supported:
-        blockers.append(
-            _blocker(
-                "FLATTEN_UNSUPPORTED",
-                scope="broker",
-                headline="This broker does not support panel flattening.",
-                detail="Use the broker's custody surface to reduce exposure safely.",
-            )
-        )
-    if ctx.freeze_active:
-        blockers.append(
-            _blocker(
-                "ACCOUNT_CUSTODY_UNPROVABLE",
-                scope="account",
-                headline="The Clerk cannot prove the exposure to flatten.",
-                detail="Restore broker observation and run Reconcile now before flattening.",
-                evidence={"account_id": ctx.account_id},
-            )
-        )
-    if not ctx.running and not ctx.has_exposure:
-        blockers.append(
-            _blocker(
-                "BOT_ALREADY_FLAT_AND_STOPPED",
-                scope="bot",
-                headline="The bot is already stopped with no attributed exposure.",
-                detail="No flatten command is necessary.",
-            )
-        )
-    return (not blockers), blockers
 
 
 ArchiveBlockedCause = Literal[
@@ -290,10 +243,6 @@ def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlo
     return _disabled()
 
 
-def _guard_reconcile_now(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return True, []
-
-
 ACTION_REGISTRY: dict[str, ActionPolicy] = {
     # deploy is a list-page action (broker/bots list), not a per-bot panel action.
     # The profile advertises it; the per-bot build skips it (list_page_only=True).
@@ -303,27 +252,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         list_page_only=True,
         guard=_guard_deploy,
         revision_inputs=lambda ctx: (),
-    ),
-    "stop": ActionPolicy(
-        action_id="stop",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_stop,
-        revision_inputs=lambda ctx: (ctx.running,),
-    ),
-    "flatten_stop": ActionPolicy(
-        action_id="flatten_stop",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_flatten_stop,
-        revision_inputs=lambda ctx: (
-            ctx.running,
-            ctx.has_exposure,
-            tuple(sorted(ctx.exposure.items())),
-            ctx.working_order_count,
-            ctx.flatten_supported,
-            ctx.freeze_active,
-        ),
     ),
     "archive": ActionPolicy(
         action_id="archive",
@@ -345,13 +273,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         list_page_only=False,
         guard=_guard_cancel_order,
         revision_inputs=lambda ctx: (ctx.phase,),
-    ),
-    "reconcile_now": ActionPolicy(
-        action_id="reconcile_now",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_reconcile_now,
-        revision_inputs=lambda ctx: (),
     ),
 }
 
@@ -380,28 +301,6 @@ def _confirmation_for_action(
 
     if not enabled:
         return None
-    if action_id == "flatten_stop":
-        return OperatorConfirmationCopy(
-            title="Flatten attributed exposure and stop?",
-            body=(
-                f"This command targets {ctx.strategy_instance_id} on account "
-                f"{ctx.account_id}. Attributed exposure: "
-                + (
-                    ", ".join(
-                        f"{symbol} {quantity:g}"
-                        for symbol, quantity in sorted(ctx.exposure.items())
-                    )
-                    or "none"
-                )
-                + f". Working orders: {ctx.working_order_count}."
-            ),
-            consequence=(
-                "The runtime stops first. The Clerk then cancels working entry "
-                "orders and submits reducing orders; fills may complete later."
-            ),
-            confirm_label="Flatten & stop",
-            required_token="FLATTEN",
-        )
     if action_id == "archive":
         # State the custody the operator is archiving *on*, not just the bot's
         # name. Archive's enabling proof is that this bot holds nothing, so the
@@ -456,9 +355,9 @@ def build_actions_from_registry(
             continue
         enabled, blockers = policy.guard(ctx)
         copy = copy_for(action_id)
-        # Each action owns its own compare-and-set domain.  In particular STOP
-        # depends only on whether this instance is still running; Clerk journal
-        # activity and other panel changes cannot manufacture a Stop-409.
+        # Each action owns its own compare-and-set domain: only the state its
+        # guard reads can change its token, so unrelated panel changes cannot
+        # manufacture a 409.
         token_payload = {
             "action_id": action_id,
             "inputs": policy.revision_inputs(ctx),

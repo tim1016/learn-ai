@@ -8,28 +8,10 @@ import pytest
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
-from app.broker.v2panel.vocabulary import ActionId
-from app.schemas.broker_v2_panel import PanelAction
 from app.services.broker_v2_panel import catalog_projection_service, gallery_hub
 from app.services.broker_v2_panel.chart_projection_service import markers_in_window
 from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
 from app.services.live_bar_aggregator import LiveLineStatus
-
-
-def _row_action(action_id: ActionId, *, enabled: bool, explanation: str = "") -> PanelAction:
-    """A real ``PanelAction`` — the roster's authoritative per-row action
-    ``GalleryHub._primary_action`` reuses when present (see that method's
-    docstring for why enablement isn't unconditional for a stopped bot)."""
-    return PanelAction(
-        action_id=action_id,
-        label=action_id,
-        explanation=explanation,
-        enabled=enabled,
-        blockers=[],
-        confirmation=None,
-        revision=1,
-        concurrency_token="tok-1",
-    )
 
 # A Saturday (market closed) so ``live_window`` takes its deterministic
 # calendar-day fallback instead of a real NYSE session lookup — mirrors
@@ -163,7 +145,6 @@ class _Cat2:
         strategy_label: str = "",
         needs_attention: bool = False,
         phase: str = "ON_DUTY",
-        row_action: PanelAction | None = None,
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
@@ -174,7 +155,6 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
-        self.row_action = row_action
 
     @property
     def status_label(self) -> str:
@@ -296,10 +276,10 @@ async def test_build_snapshot_uses_the_five_second_buffer_when_configured() -> N
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_includes_stopped_bot_with_deploy_again_navigation_and_its_bars() -> None:
+async def test_build_snapshot_includes_stopped_bot_and_its_bars() -> None:
     """A stopped (non-retired) bot stays on the wall — projected with
-    ``running=False`` and a Resume primary action — and its symbol's bars
-    are fetched even though nothing running holds that symbol."""
+    ``running=False`` — and its symbol's bars are fetched even though
+    nothing running holds that symbol."""
     rows = [
         _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
         _Cat2("Aug11-03", "QQQ", False, 5.0, 0.0, 1, phase="OFF_DUTY"),
@@ -319,8 +299,6 @@ async def test_build_snapshot_includes_stopped_bot_with_deploy_again_navigation_
     assert sorted(aggregator.subscribed) == ["QQQ", "SPY"]
     stopped = next(b for b in snap.bots if b.sid == "Aug11-03")
     assert stopped.running is False
-    assert stopped.primary_action.action_id == "deploy_again"
-    assert stopped.primary_action.label == "Deploy again"
 
 
 @pytest.mark.asyncio
@@ -406,7 +384,6 @@ async def test_build_update_stopped_bot_survives_not_removed() -> None:
     assert {b.sid for b in upd.bots_delta} == {"Aug11-02", "Aug11-03"}
     stopped = next(b for b in upd.bots_delta if b.sid == "Aug11-03")
     assert stopped.running is False
-    assert stopped.primary_action.action_id == "deploy_again"
 
 
 @pytest.mark.asyncio
@@ -734,53 +711,6 @@ async def test_build_update_does_not_drop_a_same_millisecond_fill(
     )
 
     assert [m.event_key for m in upd.markers_delta["Aug11-02"]] == ["exec-2"]
-
-
-def _hub_with_rows(
-    rows: list[_Cat2],
-) -> GalleryHub:
-    return GalleryHub(
-        broker="alpaca",
-        account_id="PA3",
-        catalog_source=_FakeCatalogSource(rows),
-        aggregator=_FakeAggregator(),
-    )
-
-
-@pytest.mark.asyncio
-async def test_primary_action_uses_row_action_enabled_true_for_running_bot() -> None:
-    row = _Cat2(
-        "Aug11-02", "SPY", True, None, None, None,
-        row_action=_row_action("stop", enabled=True, explanation="Stop this bot."),
-    )
-    snap = await _hub_with_rows([row]).build_snapshot()
-
-    action = snap.bots[0].primary_action
-    assert action.action_id == "stop"
-    assert action.enabled is True
-    assert action.disabled_reason is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("row_action", [None, _row_action("reconcile_now", enabled=False)])
-async def test_running_tile_keeps_stop_entry_point_when_roster_only_has_recovery(row_action: PanelAction | None) -> None:
-    row = _Cat2("Aug11-02", "SPY", True, None, None, None, row_action=row_action)
-    snapshot = await _hub_with_rows([row]).build_snapshot()
-
-    assert snapshot.bots[0].primary_action.action_id == "stop"
-    assert snapshot.bots[0].primary_action.enabled is True
-
-
-@pytest.mark.asyncio
-async def test_deploy_again_is_navigation_without_a_resume_projection() -> None:
-    """Opening Deploy never requires or grants permission to trade."""
-    row = _Cat2("Aug11-02", "SPY", False, None, None, None)  # row_action=None
-    snap = await _hub_with_rows([row]).build_snapshot()
-
-    action = snap.bots[0].primary_action
-    assert action.action_id == "deploy_again"
-    assert action.enabled is True
-    assert action.disabled_reason is None
 
 
 @pytest.mark.asyncio

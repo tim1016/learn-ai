@@ -34,10 +34,11 @@ import {
 import { openLaneFence } from '../../../fleet/open-lane-fence';
 import { resourceTarget, withCommand, withEntity, type ResourceTarget } from '../../../fleet/resource-target';
 import { LaneAttentionService } from '../../../services/lane-attention.service';
+import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import { CohortFlattenDrawerComponent } from '../../broker/v2-panel/cohort-flatten/cohort-flatten-drawer.component';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
-import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.types';
+import type { ActionId, BotCatalogView, PanelAction } from '../../broker/v2-panel/lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../../broker/v2-panel/lib/panel-action-outcome';
 import { AlpacaAccountCardComponent } from '../alpaca-desk/alpaca-account-card.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
@@ -56,6 +57,18 @@ const CATALOG_POLL_MS = 5_000;
 interface Outcome {
   readonly tone: 'success' | 'danger';
   readonly message: string;
+}
+
+/** The stop a bot's Clerk offers: the recovery catalog's, the same action
+ * the bot page presents (`recovery_policy`, #2605). */
+const STOP_ACTION_ID: ActionId = 'stop_bot_decisions';
+
+/** One Stop as the owner is asked it: the action the bot's Clerk offered when
+ * Stop was pressed, and the command target it was read against. */
+interface StopAsk {
+  readonly sid: string;
+  readonly target: ResourceTarget;
+  readonly action: PanelAction;
 }
 
 /** One roster read, stamped with the account it was read for. */
@@ -103,6 +116,7 @@ function rosterKey(target: ResourceTarget): string {
     HomeFinishedComponent,
     HomeMoneyComponent,
     RouterLink,
+    TypedHaltConfirmComponent,
   ],
   templateUrl: './alpaca-home.component.html',
   styleUrl: './alpaca-home.component.scss',
@@ -192,6 +206,12 @@ export class AlpacaHomeComponent {
   // ── Actions ──────────────────────────────────────────────────────────────
 
   protected readonly pendingSids = signal<ReadonlySet<string>>(new Set());
+  /** The Stop the owner is being asked to confirm, in its action's own words. */
+  protected readonly stopAsk = signal<StopAsk | null>(null);
+  protected readonly stopConfirmation = computed(() => this.stopAsk()?.action.confirmation ?? null);
+  /** A Stop's action is being read; the button stays enabled, and keeps the
+   * keyboard, until the owner is asked. */
+  private readingStop = false;
   protected readonly outcome = signal<Outcome | null>(null);
   protected readonly flattenOpen = signal(false);
   private readonly outcomeNotice = viewChild<ElementRef<HTMLElement>>('outcomeNotice');
@@ -215,11 +235,12 @@ export class AlpacaHomeComponent {
     effect(() => {
       if (this.catalog.hasValue()) this.lastCatalog.set(this.catalog.value());
     });
-    // A Stop's outcome belongs to the account it was said on: a switch to
-    // another account clears it.
+    // A Stop's question and outcome belong to the account they were said on:
+    // a switch to another account clears them.
     effect(() => {
       this.key();
       untracked(() => {
+        this.stopAsk.set(null);
         this.outcome.set(null);
         this.dismissClear();
       });
@@ -288,31 +309,68 @@ export class AlpacaHomeComponent {
   }
 
   /**
-   * Stop one bot through the action its panel presents now, against the lane
-   * the owner was shown. The outcome is announced and the keyboard moves to it.
+   * Stop one bot through the stop its Clerk offers now, against the lane the
+   * owner was shown, asked with that action's own confirmation exactly as the
+   * bot page asks it (#2605). The outcome is announced and the keyboard moves
+   * to it.
    */
   protected async stop(sid: string): Promise<void> {
-    if (this.pendingSids().has(sid)) return;
+    if (this.pendingSids().has(sid) || this.stopAsk() !== null || this.readingStop) return;
+    this.readingStop = true;
+    try {
+      const ask = await this.readStop(sid);
+      if (ask === null) return;
+      if (ask.action.confirmation === null) await this.sendStop(ask);
+      else this.stopAsk.set(ask);
+    } finally {
+      this.readingStop = false;
+    }
+  }
+
+  protected confirmStop(): void {
+    const ask = this.stopAsk();
+    this.stopAsk.set(null);
+    if (ask !== null) void this.sendStop(ask);
+  }
+
+  protected cancelStop(): void {
+    this.stopAsk.set(null);
+  }
+
+  /** The stop this bot's Clerk offers now, or `null` once why not is said. */
+  private async readStop(sid: string): Promise<StopAsk | null> {
     const lane = this.shownLane();
     if (!lane.ok) {
       this.announce({ tone: 'danger', message: lane.message });
-      return;
+      return null;
     }
     const target = withCommand(withEntity(lane.target, sid), 'bot_action', crypto.randomUUID());
+    const account = this.key();
+    const read = await this.panelService.getPanel(target, sid).then(
+      (panel) => ({ panel, error: null }),
+      (error: unknown) => ({ panel: null, error }),
+    );
+    // The owner moved to another account while this was read: its answer
+    // belongs to the account they left, so it is neither asked nor said here.
+    if (this.key() !== account) return null;
+    if (read.panel === null) {
+      this.announceStopRefusal(sid, read.error);
+    } else {
+      const action = read.panel.actions.find((candidate) => candidate.action_id === STOP_ACTION_ID);
+      if (action !== undefined && action.enabled) return { sid, target, action };
+      this.announce({ tone: 'danger', message: `${sid} can no longer be stopped from here. Its current state is shown below.` });
+    }
+    this.refresh();
+    return null;
+  }
+
+  private async sendStop({ sid, target, action }: StopAsk): Promise<void> {
     this.pendingSids.update((current) => new Set(current).add(sid));
     try {
-      const panel = await this.panelService.getPanel(target, sid);
-      const action = panel.actions.find((candidate) => candidate.action_id === 'stop');
-      if (action === undefined || !action.enabled) {
-        this.announce({ tone: 'danger', message: `${sid} can no longer be stopped from here. Its current state is shown below.` });
-        return;
-      }
       const result = await this.panelService.runBotAction(target, sid, action);
       this.announce({ tone: 'success', message: result.message });
     } catch (error) {
-      const rejection = deriveActionRejection(error, `${sid} could not be stopped.`);
-      this.announce({ tone: 'danger', message: rejection.why ? `${rejection.message} ${rejection.why}` : rejection.message });
-      this.refreshDirectoryAfterFenceRefusal(rejection.reasonCode);
+      this.announceStopRefusal(sid, error);
     } finally {
       this.pendingSids.update((current) => {
         const next = new Set(current);
@@ -321,6 +379,12 @@ export class AlpacaHomeComponent {
       });
       this.refresh();
     }
+  }
+
+  private announceStopRefusal(sid: string, error: unknown): void {
+    const rejection = deriveActionRejection(error, `${sid} could not be stopped.`);
+    this.announce({ tone: 'danger', message: rejection.why ? `${rejection.message} ${rejection.why}` : rejection.message });
+    this.refreshDirectoryAfterFenceRefusal(rejection.reasonCode);
   }
 
   /**

@@ -17,13 +17,11 @@ not a poll loop.
 from __future__ import annotations
 
 import logging
-from typing import cast
 
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
     CohortActionResult,
-    CohortFlattenActionId,
     CohortFlattenCohort,
     CohortFlattenLeg,
     CohortFlattenRequest,
@@ -41,33 +39,14 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-#: Presentation preference order. Where a surface presents both, the
-#: lifecycle ``flatten_stop`` wins; under the active SQLite authority only
-#: the recovery ladder's ``execute_safe_flatten`` reaches the panel, and a
-#: running member presents it disabled — the ladder is stop first, then
-#: flatten, which is exactly T3's stop-wave-then-flatten sequence.
-_FLATTEN_ACTION_IDS: tuple[CohortFlattenActionId, ...] = (
-    "flatten_stop",
-    "execute_safe_flatten",
-)
-
 
 def _presented_flatten(actions: list[PanelAction]) -> PanelAction | None:
-    """The member's presented flatten-class action, preferring an armed one."""
-    by_id = {
-        action.action_id: action
-        for action in actions
-        if action.action_id in _FLATTEN_ACTION_IDS
-    }
-    for action_id in _FLATTEN_ACTION_IDS:
-        action = by_id.get(action_id)
-        if action is not None and action.enabled:
-            return action
-    for action_id in _FLATTEN_ACTION_IDS:
-        action = by_id.get(action_id)
-        if action is not None:
-            return action
-    return None
+    """The member's presented flatten: the recovery ladder's ``execute_safe_flatten``.
+
+    A running member presents it disabled -- the ladder is stop first, then
+    flatten, which is exactly T3's stop-wave-then-flatten sequence.
+    """
+    return next((action for action in actions if action.action_id == "execute_safe_flatten"), None)
 
 
 def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFlattenLeg:
@@ -76,11 +55,7 @@ def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFl
         blocker_headline = action.blockers[0].headline
     return CohortFlattenLeg(
         strategy_instance_id=panel.strategy_instance_id,
-        # Narrowing is proven by construction: ``_presented_flatten`` only
-        # returns actions whose id is in the closed flatten pair.
-        action_id=(
-            None if action is None else cast(CohortFlattenActionId, action.action_id)
-        ),
+        action_id=None if action is None else "execute_safe_flatten",
         enabled=action is not None and action.enabled,
         revision=None if action is None else action.revision,
         concurrency_token=None if action is None else action.concurrency_token,

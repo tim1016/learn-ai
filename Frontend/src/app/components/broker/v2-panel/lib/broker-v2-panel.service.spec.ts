@@ -11,6 +11,7 @@ import { resourceTarget } from '../../../../fleet/resource-target';
 import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
 import type { PanelAction, PanelActionRequest } from './broker-v2-panel.types';
 import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import { fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 
 const CLERK = 'clrk_spec';
 const target = (accountId: string, entityId?: string) =>
@@ -346,19 +347,16 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  // Stop's token is a pure function of `running` (action_policy.py:362) — a
-  // single boolean. `enabled` already IS `running`, so a real "Stop, enabled"
-  // action can only ever recompute to the SAME token; there is no reachable
-  // backend state where it is re-offered enabled with a DIFFERENT token. The
-  // two tests below cover Stop's only two real post-409 outcomes (disabled,
-  // or unchanged token) and both correctly bail — Stop cannot productively
-  // retry through this mechanism (see runBotAction's docstring).
-  const staleStop: PanelAction = {
-    action_id: 'stop',
+  // Reconcile now asks for no confirmation and travels on the quiesce
+  // operation, so after a 409 it is re-offered only when it is still enabled
+  // with a new token; the two tests below cover the post-409 outcomes where
+  // it must bail instead (disabled, or unchanged token).
+  const staleReconcile: PanelAction = {
+    action_id: 'reconcile_now',
     revision: 1,
     concurrency_token: 'tok-stale',
     enabled: true,
-    label: 'Stop',
+    label: 'Reconcile now',
     explanation: '',
     blockers: [],
     confirmation: null,
@@ -371,26 +369,26 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     label: 'Resolve execution coverage', explanation: '', blockers: [], confirmation: null,
   };
 
-  const staleFlattenStop: PanelAction = {
-    action_id: 'flatten_stop',
+  const staleSafeFlatten: PanelAction = {
+    action_id: 'execute_safe_flatten',
     revision: 1,
     concurrency_token: 'tok-stale',
     enabled: true,
-    label: 'Flatten & stop',
+    label: 'Execute safe flatten',
     explanation: '',
     blockers: [],
     confirmation: {
-      title: 'Flatten attributed exposure and stop?',
+      title: 'Flatten attributed exposure?',
       body: 'Attributed exposure: AAPL 10.',
-      consequence: 'The runtime stops first.',
-      confirm_label: 'Flatten & stop',
-      required_token: 'FLATTEN',
+      consequence: 'The Clerk will submit reduction-only orders for the exact attributed quantities.',
+      confirm_label: 'Flatten now',
+      required_token: '',
     },
   };
 
   const ACTIONS_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/actions';
-  // Stop and flatten-and-stop travel on their own operation, which a draining
-  // lane still routes (#2351).
+  // The Clerk's stop, reconcile and safe flatten travel on their own
+  // operation, which a draining lane still routes (#2351).
   const QUIESCE_URL = `${ACTIONS_URL}/quiesce`;
   const PANEL_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/panel';
 
@@ -432,7 +430,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry when the action is disabled after the 409 (state truly changed)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
 
     http
       .expectOne(QUIESCE_URL)
@@ -440,32 +438,31 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await tick();
 
     http.expectOne(PANEL_URL).flush({
-      actions: [{ ...staleStop, concurrency_token: 'tok-fresh', enabled: false }],
+      actions: [{ ...staleReconcile, concurrency_token: 'tok-fresh', enabled: false }],
     });
 
     await expect(promise).rejects.toMatchObject({ status: 409 });
   });
 
   it('does NOT retry when the fresh token is unchanged (an availability 409)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
 
     http
       .expectOne(QUIESCE_URL)
       .flush(conflict(), { status: 409, statusText: 'Conflict' });
     await tick();
 
-    http.expectOne(PANEL_URL).flush({ actions: [staleStop] });
+    http.expectOne(PANEL_URL).flush({ actions: [staleReconcile] });
 
     await expect(promise).rejects.toMatchObject({ status: 409 });
   });
 
   it('does NOT retry an action that requires operator confirmation, even if its token changed and it is still enabled', async () => {
-    // flatten_stop's token derives from live exposure/working-order state,
-    // and its confirmation text quotes exact numbers back to the operator. A
-    // silent retry after a 409 could flatten a materially different position
-    // than the one the operator confirmed — so confirmed actions always
-    // re-throw and let the operator re-confirm explicitly.
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleFlattenStop);
+    // A safe flatten's token is bound to the reduction plan its confirmation
+    // was shown for. A silent retry after a 409 could flatten a materially
+    // different position than the one the operator confirmed — so confirmed
+    // actions always re-throw and let the operator re-confirm explicitly.
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleSafeFlatten);
 
     http
       .expectOne(QUIESCE_URL)
@@ -476,7 +473,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('re-throws a non-409 error without refetching the panel', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
 
     http
       .expectOne(QUIESCE_URL)
@@ -487,11 +484,11 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('sends a stop on the quiesce operation a draining lane routes, and recovery on /actions', async () => {
-    const stop = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
+    const stop = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', fakeSqliteStopAction());
     const stopRequest = http.expectOne(QUIESCE_URL);
     expect(stopRequest.request.method).toBe('POST');
-    expect(stopRequest.request.body.action_id).toBe('stop');
-    stopRequest.flush({ action_id: 'stop', receipt_id: 'r-stop', recorded_at_ms: 1, applied: true });
+    expect(stopRequest.request.body.action_id).toBe('stop_bot_decisions');
+    stopRequest.flush({ action_id: 'stop_bot_decisions', receipt_id: 'r-stop', recorded_at_ms: 1, applied: true });
     await expect(stop).resolves.toMatchObject({ receipt_id: 'r-stop' });
 
     const recovery = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleRecovery);
@@ -517,8 +514,6 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it.each([
-    'stop',
-    'flatten_stop',
     'stop_bot_decisions',
     'cancel_verified_working_orders',
     'execute_safe_flatten',
@@ -539,7 +534,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   );
 
   it('falls back to /actions under a derived key when the quiesce route is not deployed yet', async () => {
-    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop'));
+    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop_bot_decisions'));
     http
       .expectOne(QUIESCE_URL)
       .flush({ detail: 'Not Found' }, { status: 404, statusText: 'Not Found' });
@@ -548,15 +543,15 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     const fallback = http.expectOne(ACTIONS_URL);
     expect(fallback.request.body.idempotency_key).toBe('command-key-1:actions');
     expect(fallback.request.body.command_context.idempotency_key).toBe('command-key-1:actions');
-    fallback.flush(done('stop'));
-    await expect(pending).resolves.toMatchObject({ receipt_id: 'r-stop' });
+    fallback.flush(done('stop_bot_decisions'));
+    await expect(pending).resolves.toMatchObject({ receipt_id: 'r-stop_bot_decisions' });
   });
 
   it.each([
     ['a typed fleet refusal', { reason: 'clerk_not_found', message: 'No clerk carries this identity.' }],
     ['a typed panel refusal', { detail: { message: 'Unknown bot.' } }],
   ])('never falls back on %s', async (_label, body) => {
-    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop'));
+    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop_bot_decisions'));
     http.expectOne(QUIESCE_URL).flush(body, { status: 404, statusText: 'Not Found' });
 
     await expect(pending).rejects.toMatchObject({ status: 404 });

@@ -68,7 +68,7 @@ _LEASE_COHORT_SIDS = ("lease-cohort-1", "lease-cohort-2")
 def _leg(sid: str, token: str = "token-1") -> CohortFlattenLegRequest:
     return CohortFlattenLegRequest(
         strategy_instance_id=sid,
-        action_id="flatten_stop",
+        action_id="execute_safe_flatten",
         revision=1,
         concurrency_token=token,
     )
@@ -82,7 +82,7 @@ def _request(*sids: str) -> CohortFlattenRequest:
     )
 
 
-def _applied(action_id: str = "flatten_stop", *, applied: bool = True) -> PanelActionResult:
+def _applied(action_id: str = "execute_safe_flatten", *, applied: bool = True) -> PanelActionResult:
     return PanelActionResult(
         action_id=action_id,  # type: ignore[arg-type]
         receipt_id="receipt-1",
@@ -567,8 +567,8 @@ async def test_presentation_groups_multi_member_cohorts_with_real_leg_facts(
             assert panel.status_code == 200
             actions = {a["action_id"]: a for a in panel.json()["actions"]}
             if leg["action_id"] is None:
-                assert not (
-                    set(actions) & {"flatten_stop", "execute_safe_flatten"}
+                assert (
+                    "execute_safe_flatten" not in actions
                 ), "a presented panel flatten action was dropped from the leg"
                 assert leg["enabled"] is False
                 continue

@@ -199,17 +199,16 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(row).toContainText('balance $1,000.00 · free $500.00');
     await expect(home.getByText('1 running · 0 stopped, still holding')).toBeVisible();
 
-    // ── Stop, with its confirmation. ─────────────────────────────────────────
+    // ── Stop, asked in the Clerk's own words, as the bot page asks it. ───────
     await row.getByRole('button', { name: `Stop ${WALKED_BOT}` }).click();
-    const askStop = row.getByRole('group', { name: `Confirm stop of ${WALKED_BOT}` });
-    await expect(askStop).toContainText(`Stop ${WALKED_BOT}?`);
-    await expect(askStop).toContainText('Its free budget returns to free to deploy; any shares it holds stay until you sell them.');
+    const askStop = page.getByRole('dialog', { name: 'Stop this bot?' });
+    await expect(askStop).toContainText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.');
     await expect(askStop.getByRole('button', { name: 'Cancel' })).toBeFocused();
-    await askStop.getByRole('button', { name: 'Stop bot' }).click();
+    await askStop.getByRole('button', { name: 'Stop bot decisions' }).click();
     const stopOutcome = home.getByRole('status').filter({ hasText: STOP_MESSAGE });
     await expect(stopOutcome).toBeFocused();
     const [stop] = world.commandsTo(`/bots/${WALKED_BOT}/actions/quiesce`);
-    expect((stop.body as PanelActionRequest).action_id).toBe('stop');
+    expect((stop.body as PanelActionRequest).action_id).toBe('stop_bot_decisions');
     expect(envelopeOf(stop.body).target).toEqual({ account_id: PAPER_ACCOUNT, entity_id: WALKED_BOT });
 
     // ── The stopped bot still holds 1 SPY: it stays on the list, with its fix. ─
@@ -255,7 +254,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // Every command was aimed at this bot, in the sequence's order.
     const botCommands = world.sent.filter((command) => command.path.includes(`/bots/${WALKED_BOT}/`));
     expect(botCommands.map((command) => `${command.path.split('/').slice(-2).join('/')} ${(command.body as { action_id: string }).action_id}`)).toEqual([
-      'actions/quiesce stop',
+      'actions/quiesce stop_bot_decisions',
       'actions/quiesce reconcile_now',
       'recovery-actions/check prepare_safe_flatten',
       'actions/quiesce execute_safe_flatten',

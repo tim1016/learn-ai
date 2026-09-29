@@ -8,12 +8,12 @@ stale POST is a 409.
 
 Lifecycle semantics (§12) drive the enablement:
 
-- ``stop``   — running bot; stops signals + cancels working entries, exposure
-               untouched.
-- ``flatten_stop`` — running/exposed bot, only when the broker supports flatten.
 - ``archive`` — stopped, settled, flat bot; terminal (Clear on Home, ADR 0052).
 - ``cancel_order`` — a working order exists.
-- ``reconcile_now`` — always available (triggers a sweep).
+
+A bot's stop, reconcile and flatten are the SQLite Clerk's recovery catalog
+(``recovery_policy``), which ``sqlite_panel_adapter`` presents in place of this
+set; only ``archive`` survives from it (#2605).
 
 Enablement logic lives in ``app.broker.v2panel.action_policy.ACTION_REGISTRY``
 (the single canonical location per decision #18). This module is the stable
@@ -33,7 +33,6 @@ def build_actions(
     clerk: ClerkCard,
     *,
     revision: int,
-    flatten_supported: bool,
     channel_fresh: bool,
     exposure: dict[str, float],
     account_id: str,
@@ -44,8 +43,7 @@ def build_actions(
     """Build the closed presented-action set for one bot (§11, §12).
 
     ``exposure`` is the bot's attributed net exposure per symbol (from the S0
-    rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
-    a position.
+    rollup) — it gates ``archive`` while the bot still holds a position.
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     del channel_fresh, account_working_order_count, account_expected_exposure
@@ -57,7 +55,6 @@ def build_actions(
         reconciliation_verdict=clerk.reconciliation_verdict,
         outstanding_intents=clerk.outstanding_intents,
         has_exposure=has_exposure,
-        flatten_supported=flatten_supported,
         account_id=account_id,
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
@@ -65,59 +62,3 @@ def build_actions(
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 
-
-def build_roster_action(
-    status: BotStatusView,
-    clerk: ClerkCard | None,
-    *,
-    revision: int,
-    flatten_supported: bool,
-    channel_fresh: bool,
-    exposure: dict[str, float],
-    account_id: str,
-) -> PanelAction | None:
-    """Present Stop in the roster; new trading goes through Deploy.
-    """
-    if status.phase == "RETIRED":
-        return None
-    if not status.running:
-        return None
-    if clerk is None:
-        if not status.running:
-            return None
-        ctx = ActionGuardContext(
-            running=True,
-            phase=status.phase,
-            hold_active=True,
-            freeze_active=True,
-            reconciliation_verdict=None,
-            outstanding_intents=0,
-            has_exposure=False,
-            flatten_supported=flatten_supported,
-            account_id=account_id,
-            strategy_instance_id=status.strategy_instance_id,
-            exposure=exposure,
-            working_order_count=0,
-        )
-        actions = build_actions_from_registry(
-            ctx,
-            revision=revision,
-            broker="alpaca",
-        )
-    else:
-        actions = build_actions(
-            status,
-            clerk,
-            revision=revision,
-            flatten_supported=flatten_supported,
-            channel_fresh=channel_fresh,
-            exposure=exposure,
-            account_id=account_id,
-            working_order_count=0,
-            account_working_order_count=0,
-            account_expected_exposure={},
-        )
-    return next(
-        (action for action in actions if action.action_id == "stop"),
-        None,
-    )

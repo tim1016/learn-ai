@@ -5391,8 +5391,6 @@
               {
                 "enum": [
                   "deploy",
-                  "stop",
-                  "flatten_stop",
                   "archive",
                   "cancel_order",
                   "reconcile_now",
@@ -11246,11 +11244,7 @@
           "action_id": {
             "anyOf": [
               {
-                "enum": [
-                  "flatten_stop",
-                  "execute_safe_flatten"
-                ],
-                "type": "string"
+                "const": "execute_safe_flatten"
               },
               {
                 "type": "null"
@@ -11324,12 +11318,8 @@
         "description": "One leg the operator confirmed \u2014 echoes the presented action facts.",
         "properties": {
           "action_id": {
-            "enum": [
-              "flatten_stop",
-              "execute_safe_flatten"
-            ],
-            "title": "Action Id",
-            "type": "string"
+            "const": "execute_safe_flatten",
+            "title": "Action Id"
           },
           "concurrency_token": {
             "maxLength": 128,
@@ -19676,9 +19666,6 @@
             "title": "Phase",
             "type": "string"
           },
-          "primary_action": {
-            "$ref": "#/components/schemas/GalleryPrimaryAction"
-          },
           "realized_pnl_today": {
             "anyOf": [
               {
@@ -19727,7 +19714,6 @@
           "day_pnl",
           "session_change_pct",
           "fills_today",
-          "primary_action",
           "feed"
         ],
         "title": "GalleryBotView",
@@ -19840,45 +19826,6 @@
           "symbols"
         ],
         "title": "GalleryLiveSnapshot",
-        "type": "object"
-      },
-      "GalleryPrimaryAction": {
-        "description": "The single most relevant action for a gallery tile (\u00a7 gallery spec).",
-        "properties": {
-          "action_id": {
-            "enum": [
-              "stop",
-              "deploy_again"
-            ],
-            "title": "Action Id",
-            "type": "string"
-          },
-          "disabled_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Disabled Reason"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          }
-        },
-        "required": [
-          "action_id",
-          "label",
-          "enabled"
-        ],
-        "title": "GalleryPrimaryAction",
         "type": "object"
       },
       "GallerySymbolBars": {
@@ -30259,8 +30206,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30340,8 +30285,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30427,8 +30370,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30489,8 +30430,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -30564,10 +30503,6 @@
             "title": "Fee Fidelity",
             "type": "string"
           },
-          "flatten_supported": {
-            "title": "Flatten Supported",
-            "type": "boolean"
-          },
           "live_bars_supported": {
             "title": "Live Bars Supported",
             "type": "boolean"
@@ -30583,8 +30518,6 @@
             "items": {
               "enum": [
                 "deploy",
-                "stop",
-                "flatten_stop",
                 "archive",
                 "cancel_order",
                 "reconcile_now",
@@ -30606,7 +30539,6 @@
         "required": [
           "broker",
           "fee_fidelity",
-          "flatten_supported",
           "live_bars_supported",
           "stations",
           "supported_action_ids"
@@ -30620,8 +30552,6 @@
         "properties": {
           "action_id": {
             "enum": [
-              "stop",
-              "flatten_stop",
               "stop_bot_decisions",
               "cancel_verified_working_orders",
               "execute_safe_flatten",
@@ -32908,8 +32838,6 @@
           "operation": {
             "enum": [
               "deploy",
-              "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",

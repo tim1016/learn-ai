@@ -1,15 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  ElementRef,
-  Injector,
-  afterNextRender,
   computed,
-  inject,
   input,
   output,
-  signal,
-  viewChild,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -26,11 +20,12 @@ type BotControl = 'stop' | 'flatten' | null;
 /**
  * One bot's command on Home, the same on a List row and a Wall tile.
  *
- * Stop asks once, inline, and then hands the bot back to the page, which owns
- * the one action path and the outcome's focus. Flatten… opens the bot's page,
- * where the stopped-but-holding warning, the prepared plan and its
- * confirmation live: a flatten is prepared from fresh evidence, never fired
- * from a list.
+ * Stop hands the bot to the page, which owns the one action path: it reads
+ * the stop the bot's Clerk offers now and asks with that action's own
+ * confirmation — the dialog the bot page shows — before anything is sent
+ * (#2605). Flatten… opens the bot's page, where the stopped-but-holding
+ * warning, the prepared plan and its confirmation live: a flatten is
+ * prepared from fresh evidence, never fired from a list.
  */
 @Component({
   selector: 'app-home-bot-action',
@@ -38,7 +33,6 @@ type BotControl = 'stop' | 'flatten' | null;
   imports: [RouterLink],
   templateUrl: './home-bot-action.component.html',
   styleUrl: './home-bot-action.component.scss',
-  host: { '(keydown.escape)': 'cancel()' },
 })
 export class HomeBotActionComponent {
   readonly bot = input.required<BotCatalogView>();
@@ -46,11 +40,6 @@ export class HomeBotActionComponent {
   /** The page's Stop for this bot is in flight. */
   readonly pending = input(false);
   readonly stopRequested = output<string>();
-
-  private readonly injector = inject(Injector);
-  protected readonly confirming = signal(false);
-  private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
-  private readonly stopButton = viewChild<ElementRef<HTMLButtonElement>>('stopButton');
 
   protected readonly control = computed<BotControl>(() => {
     const bot = this.bot();
@@ -61,36 +50,4 @@ export class HomeBotActionComponent {
   protected readonly botLink = computed(
     () => accountWorkspaceBotRoute(this.account(), this.bot().strategy_instance_id).commands,
   );
-
-  /** What Stop hands back, said before it happens. A Dry Run never used the
-   * account's money, so it hands back nothing. */
-  protected readonly stopConsequence = computed(() =>
-    this.bot().group === 'dry_run'
-      ? 'It makes no new decisions. A Dry Run never used this account’s money.'
-      : 'It makes no new decisions. Its free budget returns to free to deploy; any shares it holds stay until you sell them.',
-  );
-
-  protected ask(): void {
-    this.confirming.set(true);
-    // After the render that draws Cancel, never before it: zoneless change
-    // detection runs after a microtask would (review B2).
-    this.focusAfterRender(() => this.cancelButton()?.nativeElement);
-  }
-
-  protected confirm(): void {
-    this.confirming.set(false);
-    this.stopRequested.emit(this.bot().strategy_instance_id);
-  }
-
-  cancel(): void {
-    if (!this.confirming()) return;
-    this.confirming.set(false);
-    // The Cancel button leaves the DOM with the confirmation; hand the
-    // keyboard back to the control that opened it, once it is enabled again.
-    this.focusAfterRender(() => this.stopButton()?.nativeElement);
-  }
-
-  private focusAfterRender(target: () => HTMLElement | undefined): void {
-    afterNextRender({ write: () => target()?.focus() }, { injector: this.injector });
-  }
 }

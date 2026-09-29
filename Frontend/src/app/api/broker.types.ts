@@ -10266,7 +10266,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -12474,7 +12474,7 @@ export interface components {
          */
         CohortFlattenLeg: {
             /** Action Id */
-            action_id: ("flatten_stop" | "execute_safe_flatten") | null;
+            action_id: "execute_safe_flatten" | null;
             /** Blocker Headline */
             blocker_headline: string | null;
             /** Concurrency Token */
@@ -12497,9 +12497,9 @@ export interface components {
         CohortFlattenLegRequest: {
             /**
              * Action Id
-             * @enum {string}
+             * @constant
              */
-            action_id: "flatten_stop" | "execute_safe_flatten";
+            action_id: "execute_safe_flatten";
             /** Concurrency Token */
             concurrency_token: string;
             /** Revision */
@@ -16327,7 +16327,6 @@ export interface components {
             open_pnl: number | null;
             /** Phase */
             phase: string;
-            primary_action: components["schemas"]["GalleryPrimaryAction"];
             /** Realized Pnl Today */
             realized_pnl_today: number | null;
             /** Running */
@@ -16390,23 +16389,6 @@ export interface components {
             surface_version: number;
             /** Symbols */
             symbols: components["schemas"]["GallerySymbolBars"][];
-        };
-        /**
-         * GalleryPrimaryAction
-         * @description The single most relevant action for a gallery tile (§ gallery spec).
-         */
-        GalleryPrimaryAction: {
-            /**
-             * Action Id
-             * @enum {string}
-             */
-            action_id: "stop" | "deploy_again";
-            /** Disabled Reason */
-            disabled_reason?: string | null;
-            /** Enabled */
-            enabled: boolean;
-            /** Label */
-            label: string;
         };
         /**
          * GallerySymbolBars
@@ -21162,7 +21144,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -21195,7 +21177,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -21224,7 +21206,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -21247,7 +21229,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21283,14 +21265,12 @@ export interface components {
              * @enum {string}
              */
             fee_fidelity: "per_fill" | "aggregate" | "none";
-            /** Flatten Supported */
-            flatten_supported: boolean;
             /** Live Bars Supported */
             live_bars_supported: boolean;
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
+            supported_action_ids: ("deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * PanelQuiesceActionRequest
@@ -21306,7 +21286,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "stop" | "flatten_stop" | "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue";
+            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -22265,7 +22245,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "stop" | "flatten_stop" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**

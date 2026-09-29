@@ -100,8 +100,6 @@ class PanelProfile(BaseModel):
     # Fee-reporting fidelity for this broker's fills (§10). "none" → the panel
     # renders "Fees not reported", never $0.00.
     fee_fidelity: Literal["per_fill", "aggregate", "none"]
-    # Whether Flatten & stop is available (§12). Alpaca paper: True.
-    flatten_supported: bool
     # Whether the broker has a native live-bar strain for the LIVE chart pane
     # (§8). Alpaca phase-1: False — the LIVE pane uses the IBKR bridge +
     # Polygon fallback (ADR 0032 amendment).
@@ -799,14 +797,12 @@ class PanelActionErrorResponse(BaseModel):
 
 # ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
 
-#: The flatten-class action ids a cohort leg may execute. Under the active
-#: SQLite authority the presented flatten surface is the recovery ladder's
-#: ``execute_safe_flatten`` (the SQLite panel adapter retains only
-#: archive from generic lifecycle actions, so ``flatten_stop`` never
-#: reaches those panels); ``flatten_stop`` stays in the closed pair for the
-#: surfaces that do present it. A closed subset on purpose: the cohort
-#: wrapper composes existing per-bot mutations; it never introduces one.
-CohortFlattenActionId = Literal["flatten_stop", "execute_safe_flatten"]
+#: The flatten-class action ids a cohort leg may execute: the recovery
+#: ladder's ``execute_safe_flatten``, the one flatten a bot's panel presents
+#: (the panel's Flatten & stop was never presented under the SQLite authority
+#: and was removed, #2595). A closed subset on purpose: the cohort wrapper
+#: composes existing per-bot mutations; it never introduces one.
+CohortFlattenActionId = Literal["execute_safe_flatten"]
 
 
 class CohortFlattenLeg(BaseModel):

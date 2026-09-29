@@ -14,7 +14,6 @@ from app.schemas.broker_v2_gallery import (
     GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
-    GalleryPrimaryAction,
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import ChartBar
@@ -62,9 +61,6 @@ def test_snapshot_round_trips_and_is_snake_case() -> None:
                 session_change_pct=0.05,
                 fills_today=12,
                 last_bar_at_ms=1_700_000_060_000,
-                primary_action=GalleryPrimaryAction(
-                    action_id="stop", label="Stop", enabled=True, disabled_reason=None
-                ),
                 feed=_LIVE_FEED,
             )
         ],
@@ -104,9 +100,6 @@ def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:
         session_change_pct=0.02,
         fills_today=13,
         last_bar_at_ms=1_700_000_120_000,
-        primary_action=GalleryPrimaryAction(
-            action_id="stop", label="Stop", enabled=True, disabled_reason=None
-        ),
         feed=_LIVE_FEED,
     )
     assert delta.symbol == "SPY"

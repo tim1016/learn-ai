@@ -32,7 +32,6 @@
     "deploy",
     "discharge_attributed_residue",
     "execute_safe_flatten",
-    "flatten_stop",
     "healthy",
     "missing_intent",
     "not_applicable",
@@ -43,7 +42,6 @@
     "resolve_execution_coverage",
     "satisfied",
     "stale",
-    "stop",
     "stop_bot_decisions",
     "unexplained_order",
     "unhealthy",
@@ -160,10 +158,6 @@
       "label": "Execute safe flatten",
       "explanation": "Submit the prepared reduction as recovery EXIT custody with exact attributed quantities."
     },
-    "flatten_stop": {
-      "label": "Flatten & stop",
-      "explanation": "Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping."
-    },
     "healthy": {
       "label": "Healthy",
       "explanation": "The channel is connected and current."
@@ -204,13 +198,9 @@
       "label": "Stale",
       "explanation": "The last sweep could not reach the broker; the verdict is out of date."
     },
-    "stop": {
-      "label": "Stop",
-      "explanation": "Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched."
-    },
     "stop_bot_decisions": {
       "label": "Stop bot decisions",
-      "explanation": "Stop new decisions while existing exposure remains under Clerk custody."
+      "explanation": "Stop the bot making new decisions. Stopping doesn't sell its shares."
     },
     "unexplained_order": {
       "label": "Unexplained order",

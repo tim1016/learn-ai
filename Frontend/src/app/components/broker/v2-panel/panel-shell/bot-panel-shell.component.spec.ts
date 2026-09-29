@@ -76,10 +76,9 @@ beforeEach(() => {
 const PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['stop'],
+  supported_action_ids: ['deploy', 'archive'],
 };
 
 const PANEL: BotPanelView = {
@@ -252,7 +251,7 @@ const OPEN_CUSTODY_TIMELINE_ACTION = {
 } satisfies PanelAction;
 
 const STOP_ACTION = {
-  action_id: 'stop',
+  action_id: 'stop_bot_decisions',
   revision: 1,
   concurrency_token: 'stop-token',
   enabled: true,
@@ -602,7 +601,7 @@ const mockService = {
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({
-    action_id: 'stop',
+    action_id: 'stop_bot_decisions',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
@@ -671,7 +670,7 @@ function virtualRunPoll(): { elapse(): Promise<void> } {
 
 function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
   return {
-    action_id: 'stop',
+    action_id: 'stop_bot_decisions',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
@@ -702,7 +701,7 @@ async function renderShell(
     getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
       ...PANEL,
       actions: [STOP_ACTION],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
   };
@@ -785,7 +784,7 @@ describe('BotPanelShellComponent', () => {
         health: { ...PANEL.health, running: false },
         actions: [
           {
-            action_id: 'stop',
+            action_id: 'stop_bot_decisions',
             label: 'Stop',
             explanation: 'Stop evaluating bars.',
             enabled: true,
@@ -795,7 +794,7 @@ describe('BotPanelShellComponent', () => {
             concurrency_token: 'start-token',
           },
         ],
-        primary_action: 'stop',
+        primary_action: 'stop_bot_decisions',
       });
     }
 
@@ -1747,7 +1746,7 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'stop',
+          action_id: 'stop_bot_decisions',
           label: 'Stop',
           explanation: 'Stop evaluating bars.',
           enabled: true,
@@ -1757,7 +1756,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1781,7 +1780,7 @@ describe('BotPanelShellComponent', () => {
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
       }),
       'sid-001',
-      expect.objectContaining({ action_id: 'stop' }),
+      expect.objectContaining({ action_id: 'stop_bot_decisions' }),
       null,
     );
   });
@@ -1951,7 +1950,7 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'stop',
+          action_id: 'stop_bot_decisions',
           label: 'Stop',
           explanation: 'Stop evaluating bars.',
           enabled: true,
@@ -1961,7 +1960,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1988,7 +1987,7 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'stop',
+          action_id: 'stop_bot_decisions',
           label: 'Stop',
           explanation: 'Stop evaluating bars.',
           enabled: true,
@@ -1998,14 +1997,14 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'stop',
+            action_id: 'stop_bot_decisions',
             outcome: 'unknown',
             receipt_id: 'receipt-unknown',
             recorded_at_ms: 1_753_800_000_000,
@@ -2053,7 +2052,7 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'stop',
+          action_id: 'stop_bot_decisions',
           label: 'Stop',
           explanation: 'Stop evaluating bars.',
           enabled: true,
@@ -2063,14 +2062,14 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
         error: {
           detail: {
-            action_id: 'stop',
+            action_id: 'stop_bot_decisions',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
@@ -2106,7 +2105,7 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'stop',
+          action_id: 'stop_bot_decisions',
           label: 'Stop',
           explanation: 'Stop evaluating bars.',
           enabled: true,
@@ -2116,14 +2115,14 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-      primary_action: 'stop',
+      primary_action: 'stop_bot_decisions',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'stop',
+            action_id: 'stop_bot_decisions',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
@@ -2312,7 +2311,7 @@ describe('BotPanelShellComponent', () => {
 
     it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
       await renderPage({
-        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop',
+        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop_bot_decisions',
         open_pnl: -3.254, open_pnl_usd: '-3.25', open_pnl_direction: 'loss',
       });
       await screen.findByText('Holding its position');
@@ -2361,7 +2360,7 @@ describe('BotPanelShellComponent', () => {
     });
 
     it('moves the keyboard to the outcome after Stop (story 48)', async () => {
-      await renderPage({ ...PANEL, mode: 'trade', actions: [STOP_ACTION], primary_action: 'stop' });
+      await renderPage({ ...PANEL, mode: 'trade', actions: [STOP_ACTION], primary_action: 'stop_bot_decisions' });
 
       await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
@@ -2491,7 +2490,7 @@ describe('BotPanelShellComponent', () => {
     });
 
     it.each([
-      ['running', { ...PANEL, mode: 'trade' as const, actions: [STOP_ACTION], primary_action: 'stop' as const }],
+      ['running', { ...PANEL, mode: 'trade' as const, actions: [STOP_ACTION], primary_action: 'stop_bot_decisions' as const }],
       ['stopped and holding', strandedPanel()],
     ])('has no detectable accessibility violations (%s)', async (_name, panel) => {
       await renderPage(panel);

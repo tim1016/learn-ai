@@ -69,10 +69,9 @@ const originalEventSource = globalThis.EventSource;
 const PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['stop'],
+  supported_action_ids: ['deploy', 'archive'],
 };
 
 const PANEL: BotPanelView = {

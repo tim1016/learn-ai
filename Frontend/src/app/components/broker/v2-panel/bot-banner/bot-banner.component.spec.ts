@@ -3,7 +3,7 @@ import { provideRouter } from '@angular/router';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakePanelAction, fakeSqliteBotActions, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import {
   AlpacaLiveVerdictService,
@@ -109,23 +109,26 @@ describe('BotBannerComponent', () => {
     expect(screen.queryByText(LANE_MODE_WORDING.live)).toBeNull();
   });
 
-  it('renders the backend primary action for a running bot and no Deploy again', async () => {
+  it('renders the backend primary action for a running bot, asks its confirmation, and no Deploy again', async () => {
     const requested: unknown[] = [];
+    const stop = fakeSqliteStopAction();
     await renderBanner(
-      { actions: [fakePanelAction('stop')], primary_action: 'stop' },
+      { actions: [stop], primary_action: 'stop_bot_decisions' },
       EMPTY_CURRENT_RUN_STATE,
       { actionRequested: (event) => requested.push(event) },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(requested).toEqual([{ action: fakePanelAction('stop'), reason: null }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop bot decisions' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop bot decisions' }));
+    expect(requested).toEqual([{ action: stop, reason: null }]);
     expect(screen.queryByRole('link', { name: 'Deploy again' })).toBeNull();
   });
 
   it('renders no primary action when the backend names one it did not present', async () => {
-    await renderBanner({ actions: [], primary_action: 'stop' });
+    await renderBanner({ actions: [], primary_action: 'stop_bot_decisions' });
 
-    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop bot decisions' })).toBeNull();
   });
 
   it('offers Deploy again for a stopped bot, carrying the bot it came from, and sends nothing', async () => {
@@ -189,8 +192,8 @@ describe('BotBannerComponent', () => {
     await renderBanner(stopped({
       health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
       status: 'holding',
-      actions: [fakePanelAction('flatten_stop', { label: 'Flatten' })],
-      primary_action: 'flatten_stop',
+      actions: [fakePanelAction('execute_safe_flatten', { label: 'Flatten' })],
+      primary_action: 'execute_safe_flatten',
     }));
 
     expect(screen.queryByRole('note')).toBeNull();
@@ -227,7 +230,7 @@ describe('BotBannerComponent', () => {
   });
 
   it.each([
-    ['running', { actions: [fakePanelAction('stop'), fakePanelAction('archive', { label: 'Archive' })], primary_action: 'stop' as const }],
+    ['running', { actions: fakeSqliteBotActions(), primary_action: 'stop_bot_decisions' as const }],
     ['stopped Dry Run', stopped({ mode: 'dry_run' })],
   ])('has no detectable accessibility violations (%s)', async (_name, overrides) => {
     await renderBanner(overrides);

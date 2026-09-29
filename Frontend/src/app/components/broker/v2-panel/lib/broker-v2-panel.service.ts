@@ -42,8 +42,6 @@ import type {
  * `QuiesceActionId`), so a set the backend widens or narrows fails to compile
  * here instead of drifting (#2351). */
 const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
-  stop: true,
-  flatten_stop: true,
   stop_bot_decisions: true,
   cancel_verified_working_orders: true,
   execute_safe_flatten: true,
@@ -398,31 +396,24 @@ export class BrokerV2PanelService {
    * otherwise the original error is re-thrown so the operator sees an honest
    * message instead of a silent re-post.
    *
-   * The confirmation guard is load-bearing, not incidental: `flatten_stop`'s
-   * token is derived from live exposure/working-order state
-   * (`action_policy.py`'s `revision_inputs`), and its confirmation text quotes
-   * those exact numbers back to the operator. Silently resubmitting a
-   * refreshed action after that text was shown would let the operator
+   * The confirmation guard is load-bearing, not incidental: a safe flatten's
+   * token is bound to the reduction plan its confirmation was shown for (the
+   * recovery catalog's evidence token). Silently resubmitting a refreshed
+   * action after that confirmation was shown would let the operator
    * unknowingly flatten a materially different position than the one they
    * confirmed. Confirmed actions therefore always re-throw on a 409 — the
    * operator sees the state changed and must re-confirm explicitly.
    *
-   * Stop's token, by contrast, is a pure function of `running`
-   * (`action_policy.py:362`) — a single boolean. `enabled` already IS
-   * `running`, so a presented "Stop, enabled" action can only ever recompute
-   * to the SAME token. There is no reachable state where Stop is both
-   * re-offered enabled AND carries a different token, so this retry can never
-   * fire for Stop; it is eligible only because it carries no confirmation, not
-   * because it benefits. Defect #10's fix for the 2026-07-30 Stop-409 storm is
-   * the backend's `panel_action_rejected` log line naming the 409 subclass
-   * (`StaleRevisionError` vs `ActionNotAvailableError`), not this retry —
-   * making Stop itself recoverable needs a real design change (e.g. treating
-   * "refetch shows Stop disabled because already-stopped" as an idempotent
-   * success), tracked separately.
+   * The Clerk's stop (`stop_bot_decisions`) carries a confirmation too, so it
+   * is never resubmitted either: its token names the run it was confirmed
+   * for, and a 409 means that run changed underneath the owner. Defect #10's
+   * fix for the 2026-07-30 Stop-409 storm is the backend's
+   * `panel_action_rejected` log line naming the 409 subclass
+   * (`StaleRevisionError` vs `ActionNotAvailableError`), not this retry.
    *
-   * This is the single public action entry point, so every caller (the panel
-   * shell AND the fleet list) shares the same policy and there is no bare,
-   * dead-ending variant to reach by accident.
+   * This is the single public action entry point, so every caller (the bot
+   * page AND Home) shares the same policy and there is no bare, dead-ending
+   * variant to reach by accident.
    */
   async runBotAction(
     target: ResourceTarget,

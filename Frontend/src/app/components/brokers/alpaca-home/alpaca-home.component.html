@@ -99,6 +99,18 @@
   </details>
 </main>
 
+@if (stopConfirmation(); as confirmation) {
+  <app-typed-halt-confirm
+    [heading]="confirmation.title"
+    [message]="confirmation.body"
+    [consequence]="confirmation.consequence"
+    [requiredToken]="confirmation.required_token ?? ''"
+    [confirmLabel]="confirmation.confirm_label"
+    (confirmed)="confirmStop()"
+    (cancelled)="cancelStop()"
+  />
+}
+
 <app-cohort-flatten-drawer
   [visible]="flattenOpen()"
   broker="alpaca"

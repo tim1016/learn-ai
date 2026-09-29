@@ -291,10 +291,10 @@ a defect.
   re-projection inside `run_action`; #1776 removed it — `_run_action` now
   defers via `schedule_live_projection_refresh`
   (`app/routers/broker_v2_panel.py:516-530`). **Residual:** two surfaces still
-  produce different receipts for the same operator intent, and the wire ids
-  differ (panel `stop_bot_decisions`; the performer map's `stop` is not the
-  wire id — 2026-08-26 ops lore §7). Re-measure the latency claim before
-  citing it.
+  produce different receipts for the same operator intent. The wire-id split
+  is gone: the performer map's generic `stop` was removed (#2605), so the
+  panel's one stop is `stop_bot_decisions`, which Home and the bot page both
+  send. Re-measure the latency claim before citing it.
 - **F4 — post-restart feed warmup presents as a fault (low).** ~45 s
   feed-readiness cold start refuses Resume with copy that reads like a
   failure (market-data gate, `app/services/run_admission.py:286-297`; study

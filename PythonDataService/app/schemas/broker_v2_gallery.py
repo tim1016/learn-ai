@@ -21,17 +21,6 @@ from app.services.live_chart_window import ChartFeedState
 GalleryResolution = Literal["5s", "1m"]
 
 
-class GalleryPrimaryAction(BaseModel):
-    """The single most relevant action for a gallery tile (§ gallery spec)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    action_id: Literal["stop", "deploy_again"]
-    label: str
-    enabled: bool
-    disabled_reason: str | None = None
-
-
 # The tile states are the chart-line states: one classifier owns both (#2330).
 GalleryFeedState = ChartFeedState
 
@@ -88,7 +77,6 @@ class GalleryBotView(BaseModel):
     session_change_pct: float | None
     fills_today: int | None
     last_bar_at_ms: int | None = None
-    primary_action: GalleryPrimaryAction
     # Required, never defaulted: a tile with no feed fact must not render as live.
     feed: GalleryFeedView
 
