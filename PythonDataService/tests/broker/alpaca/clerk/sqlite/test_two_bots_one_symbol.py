@@ -4,17 +4,17 @@ What the Clerk does today when two strategy instances hold and trade the same
 symbol in one account. Findings note:
 ``docs/references/two-bots-one-symbol-2469.md``.
 
-Passing tests pin current behaviour. ``xfail(strict=True)`` tests state the
-behaviour a named follow-up must deliver; they flip to passing when it lands.
-Every fixture comes from the existing Clerk suites (``conftest``,
-``test_budget_commands``, ``test_envelope_reservations``, ``test_exit``,
-``test_exit_send_session``, ``test_reconcile``); the only new object is
-Alpaca's wash-trade rejection, built the way alpaca-py raises it.
+Passing tests pin current behaviour. Every fixture comes from the existing
+Clerk suites (``conftest``, ``test_budget_commands``,
+``test_envelope_reservations``, ``test_exit``, ``test_exit_send_session``,
+``test_reconcile``); the only new object is Alpaca's wash-trade rejection,
+built the way alpaca-py raises it.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -27,11 +27,13 @@ from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_accepted_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
+from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryStatus
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import plan_account_reconciliation, reconcile_account
@@ -46,9 +48,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
 )
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.alpaca.marketable_limit import marketable_limit_price
-from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerOrderRejected
+from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.services.session_authority import et_minute_of_day_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -78,29 +80,27 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     clocked_repo,  # noqa: F401 -- pytest fixture, used by name
 )
 
-# Placeholder the orchestrator replaces with the filed issue number.
-_NAME_ORDER_REJECTIONS = "#2621: Alpaca's order-level 403 (wash trade) reads as a credentials failure"
-
 # Alpaca's documented wash-trade refusal: HTTP 403 on POST /v2/orders
 # (https://docs.alpaca.markets/us/docs/user-protection). The page states only
 # the status. The message is the one quoted in the title of an Alpaca community
 # forum thread; Alpaca documents no numeric code for this refusal, so the code
-# below is illustrative. The Clerk maps on the status alone.
+# below is illustrative. The Clerk maps on the status alone, keeps the code, and
+# names another open order only from its own records (#2621).
 _ILLUSTRATIVE_CODE = 40310000
 _WASH_TRADE_MESSAGE = "potential wash trade detected. use complex orders"
 _ET_0400_NEXT_MORNING = et_minute_of_day_ms(date(2023, 11, 16), 4 * 60)
 """The first instant after ``WATCHDOG_POST_T0``'s session that an exit allowance can price."""
 
 
-def _wash_trade_api_error() -> APIError:
-    body = json.dumps({"code": _ILLUSTRATIVE_CODE, "message": _WASH_TRADE_MESSAGE})
+def _wash_trade_rejection(code: int | None = _ILLUSTRATIVE_CODE) -> BrokerError:
+    """The error the Clerk's broker port raises for the rejection (``client.submit_order``).
+
+    Built the way alpaca-py raises it, with ``code`` (or no code) in the body.
+    """
+    body = {"message": _WASH_TRADE_MESSAGE} if code is None else {"code": code, "message": _WASH_TRADE_MESSAGE}
     response = SimpleNamespace(status_code=403, headers={})
-    return APIError(body, http_error=SimpleNamespace(response=response, request=None))
-
-
-def _wash_trade_rejection() -> BrokerError:
-    """The error the Clerk's broker port raises for the rejection (``client.submit_order``)."""
-    return map_api_error(_wash_trade_api_error(), broker="alpaca", is_order_mutation=True)
+    raw = APIError(json.dumps(body), http_error=SimpleNamespace(response=response, request=None))
+    return map_api_error(raw, broker="alpaca", request=AlpacaRequest.ORDER_SUBMIT)
 
 
 # ── Attribution: whose shares are whose ───────────────────────────────────────
@@ -254,25 +254,22 @@ def test_account_fifo_lets_one_bots_sale_close_the_other_bots_lot() -> None:
 # ── Alpaca's wash-trade refusal ───────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason=_NAME_ORDER_REJECTIONS)
-def test_a_wash_trade_refusal_is_an_order_rejection_not_a_credentials_failure() -> None:
+def test_a_wash_trade_refusal_is_an_order_rejection_that_keeps_alpacas_code() -> None:
+    """A 403 on an order submission is Alpaca refusing that order, not our credentials (#2621)."""
     error = _wash_trade_rejection()
 
-    assert isinstance(error, BrokerOrderRejected)
-    assert "credentials" not in str(error)
-
-
-def test_a_wash_trade_refusal_reads_today_as_a_credentials_failure() -> None:
-    """Current mapping: every 403 is ``BrokerAuthError``; Alpaca's code is dropped."""
-    error = _wash_trade_rejection()
-
-    assert isinstance(error, BrokerAuthError)
-    assert error.message == f"Alpaca rejected our credentials: {_WASH_TRADE_MESSAGE}"
+    assert isinstance(error, BrokerOrderNotPermitted)
+    assert error.message == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
     assert error.detail == "HTTP 403"
+    assert error.code == _ILLUSTRATIVE_CODE
 
 
 async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again(tmp_path: Path) -> None:
-    """The refusal is definitive: the ENTER folds failed, nothing is left uncertain."""
+    """The refusal is definitive: the ENTER folds failed, nothing is left uncertain.
+
+    Its record keeps Alpaca's code. No other order is open on SPY, so the
+    record repeats only Alpaca's own words and never names another order.
+    """
     repo = _new_budget_repo(tmp_path)
     try:
         _deploy(repo, "b", 50_000)
@@ -285,15 +282,220 @@ async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_agai
 
         effect = repo.effect_operation(result.effect_operation_id)
         assert effect is not None and effect.state == "failed"
+        assert repo.uncertain_orders() == []
         [failed] = [row for row in repo.transitions_for_order(accepted.order_ref)
                     if row["transition_kind"] == "ORDER_SUBMIT_FAILED"]
-        assert _WASH_TRADE_MESSAGE in failed["facts_json"]
-        assert str(_ILLUSTRATIVE_CODE) not in failed["facts_json"]
+        facts = OrderSubmitFailedFacts.from_facts_json(failed["facts_json"])
+        assert facts.broker_error_code == _ILLUSTRATIVE_CODE
+        assert facts.why == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
+        assert facts.opposite_open_order_refs == []
         again = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-2",
                              lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=_gate())
         assert again.created
     finally:
         repo.close()
+
+
+def _register_spy_lane(repo: ClerkSqliteRepository, sid: str) -> str:
+    run_id = f"{sid}-run"
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"{sid}-h")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    return run_id
+
+
+def test_a_refusals_facts_omit_an_absent_code_so_every_earlier_row_hashes_the_same() -> None:
+    """``broker_error_code`` joins the hash-chained facts only when Alpaca gave one.
+
+    Every row written before #2621 -- and every failure no broker answer
+    caused -- re-serializes byte-identically, so no sealed receipt moves.
+    """
+    plain = OrderSubmitFailedFacts(reason="The order did not reach the broker.", why="Alpaca refused the order: x")
+    earlier_row = '{"reason":"The order did not reach the broker.","why":"Alpaca refused the order: x"}'
+    coded = OrderSubmitFailedFacts(
+        reason="The order did not reach the broker.", why="Alpaca refused the order: x", broker_error_code=40310000,
+    )
+
+    assert plain.to_facts_json() == earlier_row
+    assert OrderSubmitFailedFacts.from_facts_json(earlier_row) == plain
+    assert coded.to_facts_json() == (
+        '{"broker_error_code":40310000,"reason":"The order did not reach the broker.",'
+        '"why":"Alpaca refused the order: x"}'
+    )
+    assert OrderSubmitFailedFacts.from_facts_json(coded.to_facts_json()) == coded
+    looked = OrderSubmitFailedFacts(
+        reason="The order did not reach the broker.", why="Alpaca refused the order: x", opposite_open_order_refs=[],
+    )
+    assert looked.to_facts_json() == (
+        '{"opposite_open_order_refs":[],"reason":"The order did not reach the broker.",'
+        '"why":"Alpaca refused the order: x"}'
+    )
+    assert OrderSubmitFailedFacts.from_facts_json(looked.to_facts_json()) == looked
+
+
+async def _a_sells(repo: ClerkSqliteRepository, *, fills: bool) -> str:
+    """A holds 10 SPY and sends its 10-share sell, which Alpaca accepts and then fills or leaves working.
+
+    Returns the sell's order reference.
+    """
+    ref_a = await _held_position(repo)
+    accepted = accept_exit(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+                           decision_id="a-sell", lifecycle_run_id=WATCHDOG_RUN, entry_order_ref=ref_a)
+    sent = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(),
+                              pricing=UNPRICEABLE_RECOVERY)
+    assert sent.reducing_order_ref is not None
+    if fills:
+        fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=_broker_order(
+            sent.reducing_order_ref, order_id="bo-a-sell", side="sell", status="filled", quantity=10.0,
+            filled_quantity=10.0, filled_avg_price=100.0))
+    return sent.reducing_order_ref
+
+
+async def _refused_enter_facts(
+    repo: ClerkSqliteRepository, sid: str, run_id: str, refusal: BrokerError,
+) -> OrderSubmitFailedFacts:
+    """``sid`` sends a 5-share SPY buy that Alpaca refuses with ``refusal``; its durable record."""
+    result = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=f"{sid}-buy",
+                                lifecycle_run_id=run_id, leg=_leg(quantity=5),
+                                trade=_FakeTradePort(submit_error=refusal))
+    assert result.effect_operation_id is not None and result.order_ref is not None
+    effect = repo.effect_operation(result.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    [failed] = [row for row in repo.transitions_for_order(result.order_ref)
+                if row["transition_kind"] == "ORDER_SUBMIT_FAILED"]
+    return OrderSubmitFailedFacts.from_facts_json(failed["facts_json"])
+
+
+async def test_an_enter_refused_while_another_bots_sell_is_open_names_that_order(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """The Clerk's own records show A's sell working when B's buy is refused, so the record says so."""
+    repo, _clock = clocked_repo
+    a_sell = await _a_sells(repo, fills=False)
+    run_b = _register_spy_lane(repo, "b")
+
+    facts = await _refused_enter_facts(repo, "b", run_b, _wash_trade_rejection())
+
+    assert facts.broker_error_code == _ILLUSTRATIVE_CODE
+    assert facts.opposite_open_order_refs == [a_sell]
+    assert facts.why == (
+        "This account had an open or pending SPY sell order when Alpaca refused this buy; "
+        "Alpaca refuses an order that could trade against another open order in the same account. "
+        f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
+    )
+
+
+def _alpaca_answer(status: int, code: int, message: str) -> BrokerError:
+    """Alpaca's answer with ``status`` to an order submission, as the broker port raises it."""
+    raw = APIError(
+        json.dumps({"code": code, "message": message}),
+        http_error=SimpleNamespace(response=SimpleNamespace(status_code=status, headers={}), request=None),
+    )
+    return map_api_error(raw, broker="alpaca", request=AlpacaRequest.ORDER_SUBMIT)
+
+
+async def test_an_order_conflict_never_names_another_order_even_with_one_open(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """#2621: only a 403 on a submission is read for an open opposite order.
+
+    A's sell is working when Alpaca answers B's buy with a 409 conflict. That
+    is a duplicate-id or order-state conflict, never its wash-trade
+    protection, so the record keeps Alpaca's words and code and records no
+    look at the other orders.
+    """
+    repo, _clock = clocked_repo
+    await _a_sells(repo, fills=False)
+    run_b = _register_spy_lane(repo, "b")
+
+    facts = await _refused_enter_facts(
+        repo, "b", run_b, _alpaca_answer(409, 40910000, "client_order_id must be unique"),
+    )
+
+    assert facts.why == "Alpaca rejected the order as a conflict: client_order_id must be unique"
+    assert facts.broker_error_code == 40910000
+    assert facts.opposite_open_order_refs is None
+
+
+@pytest.mark.parametrize(("b_buy", "counted"), [("refused", False), ("outcome_unknown", True)])
+async def test_an_opposite_order_is_open_unless_it_provably_never_reached_alpaca(
+    clocked_repo,  # noqa: F811
+    b_buy: str,
+    counted: bool,
+) -> None:
+    """B's buy Alpaca refused (failed, no broker id, no fill) is not open; one whose outcome is unknown is.
+
+    #2622 re-sends A's refused exit once the other order ends, so B's order
+    that never reached the book must never hold it back, while one that may
+    be working at the broker must.
+    """
+    repo, _clock = clocked_repo
+    run_b = _register_spy_lane(repo, "b")
+    lost = BrokerUnavailable("response lost", broker="alpaca")
+    refused = _alpaca_answer(422, 42210000, "qty must be > 0")
+    sent = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="b", decision_id="b-buy",
+                              lifecycle_run_id=run_b, leg=_leg(quantity=5),
+                              trade=_FakeTrade(submit_error=refused if b_buy == "refused" else lost, lookup_error=lost))
+    assert sent.effect_operation_id is not None and sent.order_ref is not None
+    b_order, b_effect = repo.order(sent.order_ref), repo.effect_operation(sent.effect_operation_id)
+    assert b_order is not None and b_order.broker_order_id is None and b_order.broker_state is None
+    assert b_effect is not None and b_effect.state == ("failed" if b_buy == "refused" else "unknown")
+
+    opposite = repo.open_opposite_side_orders(symbol="SPY", side=OrderSide.SELL)
+
+    assert [order.order_ref for order in opposite] == ([b_order.order_ref] if counted else [])
+
+
+@pytest.mark.parametrize("code", [_ILLUSTRATIVE_CODE, 40310001, None])
+@pytest.mark.parametrize("other_order", ["none", "same_side_working", "opposite_side_filled"])
+async def test_a_refusal_with_no_opposite_order_open_never_names_another_order(
+    clocked_repo,  # noqa: F811
+    code: int | None,
+    other_order: str,
+) -> None:
+    """#2621: a 403 is described by the Clerk's evidence, never by Alpaca's code.
+
+    Whatever the code, and even with Alpaca's wash-trade words, a refused buy
+    names another order only while one on the other side is open: C's buy
+    working on the same side, or A's sell that already filled, is not one.
+    """
+    repo, _clock = clocked_repo
+    if other_order == "same_side_working":
+        run_c = _register_spy_lane(repo, "c")
+        await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="c", decision_id="c-buy",
+                           lifecycle_run_id=run_c, leg=_leg(quantity=3), trade=_FakeTrade())
+    elif other_order == "opposite_side_filled":
+        await _a_sells(repo, fills=True)
+    run_b = _register_spy_lane(repo, "b")
+
+    facts = await _refused_enter_facts(repo, "b", run_b, _wash_trade_rejection(code))
+
+    assert facts.why == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
+    assert facts.broker_error_code == code
+    assert facts.opposite_open_order_refs == []
+
+
+async def test_a_refusal_whose_order_records_cannot_be_read_still_folds_definitively(
+    clocked_repo,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The refusal is definitive whatever the evidence read finds: an unreadable record only drops the naming."""
+    repo, _clock = clocked_repo
+    run_b = _register_spy_lane(repo, "b")
+
+    def unreadable(*, symbol: str, side: OrderSide) -> tuple:
+        raise OrderProjectionReadError("SQLite order 'x' has malformed ENTER_ACCEPTED facts")
+
+    monkeypatch.setattr(repo, "open_opposite_side_orders", unreadable)
+
+    with caplog.at_level(logging.ERROR, logger="app.broker.alpaca.clerk.sqlite.order_evidence"):
+        facts = await _refused_enter_facts(repo, "b", run_b, _wash_trade_rejection())
+
+    assert facts.why == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
+    assert facts.broker_error_code == _ILLUSTRATIVE_CODE
+    assert facts.opposite_open_order_refs is None
+    [logged] = [record for record in caplog.records if getattr(record, "action", None) == "refusal_evidence_unreadable"]
+    assert logged.exc_info is not None
 
 
 @pytest.mark.parametrize("refusal", ["broker_wash_trade", "preflight"])
@@ -367,6 +569,26 @@ async def _a_sells_into_bs_working_buy(
     assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
                                    strategy_instance_id=WATCHDOG_SID) is not None
     return working_b
+
+
+async def test_a_refused_exit_keeps_alpacas_code_and_names_the_other_bots_open_buy(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """A's refused sell is recorded with Alpaca's code, beside B's buy the Clerk still shows working."""
+    repo, _clock = clocked_repo
+    working_b = await _a_sells_into_bs_working_buy(repo)
+
+    refused = repo.last_strategy_transition(strategy_instance_id=WATCHDOG_SID, transition_kind="EXIT_NOT_FLAT")
+
+    assert refused is not None
+    facts = OrderSubmitFailedFacts.from_facts_json(refused["facts_json"])
+    assert facts.broker_error_code == _ILLUSTRATIVE_CODE
+    assert facts.opposite_open_order_refs == [working_b.order_ref]
+    assert facts.why == (
+        "This account had an open or pending SPY buy order when Alpaca refused this sell; "
+        "Alpaca refuses an order that could trade against another open order in the same account. "
+        f"Alpaca refused the order: {_WASH_TRADE_MESSAGE} attributed_qty=10.0 remains for 'SPY'."
+    )
 
 
 async def test_a_refused_exit_is_sent_again_two_minutes_later_once_the_other_bots_buy_fills(

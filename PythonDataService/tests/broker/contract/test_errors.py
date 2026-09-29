@@ -8,6 +8,7 @@ from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
     BrokerEvidenceUnavailable,
+    BrokerOrderNotPermitted,
     BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
@@ -62,3 +63,15 @@ def test_rate_limited_carries_retry_after() -> None:
 
 def test_rate_limited_retry_after_optional() -> None:
     assert BrokerRateLimited("Throttled.").retry_after_ms is None
+
+
+def test_error_carries_the_vendors_numeric_code_when_it_gave_one() -> None:
+    """#2621: the vendor's own code is a typed field, never folded into free text."""
+    assert BrokerOrderNotPermitted("Refused.", code=40310000).code == 40310000
+    assert BrokerRateLimited("Throttled.", code=42910000).code == 42910000
+    assert BrokerError("Failed.").code is None
+
+
+def test_a_not_permitted_order_is_an_order_rejection_surfaced_as_409() -> None:
+    assert issubclass(BrokerOrderNotPermitted, BrokerOrderRejected)
+    assert BrokerOrderNotPermitted.http_status == 409

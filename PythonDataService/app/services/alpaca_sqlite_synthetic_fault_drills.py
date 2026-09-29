@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.client import AlpacaTradingClient
+from app.broker.alpaca.errors import AlpacaRequest
 from app.broker.alpaca.fault_injection import (
     WriteFaultKind,
     craft_write_error,
@@ -171,7 +172,7 @@ async def lost_submit(artifacts_root: Path) -> SyntheticScenarioObservation:
                 trade=seam_broker,
             )
         else:
-            broker.submit_error = craft_write_error(WriteFaultKind.TIMEOUT.value)
+            broker.submit_error = craft_write_error(WriteFaultKind.TIMEOUT.value, request=AlpacaRequest.ORDER_SUBMIT)
             first = await submit_enter(
                 repo,
                 account_id=account_id,
@@ -285,7 +286,7 @@ async def lost_cancel(artifacts_root: Path) -> SyntheticScenarioObservation:
                 seam_broker=seam_broker,
             )
         else:
-            broker.cancel_error = craft_write_error(WriteFaultKind.TIMEOUT.value)
+            broker.cancel_error = craft_write_error(WriteFaultKind.TIMEOUT.value, request=AlpacaRequest.ORDER_CANCEL)
             trade = broker
         accepted = accept_exit(
             repo,

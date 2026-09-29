@@ -37,12 +37,14 @@ from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, 
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError, effective_fill_records
 from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
-    ENTRY_ORDER_ENDED_SQL,
     EntryCashClaim,
     entry_cash_claims,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
-from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+    ORDER_OPEN_SQL,
+)
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.models import OrderSide
@@ -457,7 +459,7 @@ def _project(
         "SELECT 1 FROM orders o JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
         "LEFT JOIN envelope_reservations r ON r.effect_operation_id=o.effect_operation_id "
         "WHERE o.role='ENTRY' AND r.effect_operation_id IS NULL AND "
-        f"((LOWER(COALESCE(o.broker_state, ''))<>'filled' AND NOT {ENTRY_ORDER_ENDED_SQL}) "
+        f"({ORDER_OPEN_SQL} "
         "OR EXISTS (SELECT 1 FROM fills f WHERE f.order_ref=o.order_ref AND f.recorded_at_ms>=?)) LIMIT 1",
         (seen_before_ms,),
     ).fetchone()
