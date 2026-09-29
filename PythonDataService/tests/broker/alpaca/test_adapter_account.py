@@ -113,19 +113,20 @@ def test_malformed_pattern_day_trader_is_rejected(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "cause"),
+    ("field", "value", "cause_type", "cause"),
     [
-        pytest.param("cash", True, "not a boolean", id="boolean-cash"),
-        pytest.param("equity", False, "not a boolean", id="boolean-equity"),
-        pytest.param("last_equity", True, "not a boolean", id="boolean-last-equity"),
-        pytest.param("cash", "not-a-number", "'not-a-number'", id="unparseable-cash"),
-        pytest.param("equity", None, "NoneType", id="null-equity"),
+        pytest.param("cash", True, TypeError, "not a boolean", id="boolean-cash"),
+        pytest.param("equity", False, TypeError, "not a boolean", id="boolean-equity"),
+        pytest.param("last_equity", True, TypeError, "not a boolean", id="boolean-last-equity"),
+        pytest.param("cash", "not-a-number", ValueError, "'not-a-number'", id="unparseable-cash"),
+        pytest.param("equity", None, TypeError, "NoneType", id="null-equity"),
     ],
 )
 async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(
     load_alpaca_fixture: AlpacaFixtureLoader,
     field: str,
     value: object,
+    cause_type: type[Exception],
     cause: str,
 ) -> None:
     payload = dict(load_alpaca_fixture("account", "account.json"))
@@ -135,10 +136,12 @@ async def test_broker_names_a_malformed_account_response_as_unavailable_evidence
         await _paper_broker(payload).get_account()
 
     assert info.value.http_status == 503
-    # The plain message stays plain; the underlying cause rides on ``detail`` so
-    # the operator's log line can say what was wrong with the answer (#2606).
+    # The plain message and ``detail`` stay owner copy: a router returns both.
+    # The technical reason rides on the exception chain for the operator's log.
     assert info.value.detail is not None
-    assert cause in info.value.detail
+    assert type(info.value.__cause__).__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, cause_type)
+    assert cause in str(info.value.__cause__)
 
 
 async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
@@ -151,7 +154,9 @@ async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
         await _paper_broker(payload).get_account()
 
     assert info.value.detail is not None
-    assert "KeyError: 'equity'" in info.value.detail
+    assert "KeyError" not in info.value.detail
+    assert isinstance(info.value.__cause__, KeyError)
+    assert info.value.__cause__.args == ("equity",)
 
 
 def test_live_mode_maps_live_and_a_non_pa_account_number(

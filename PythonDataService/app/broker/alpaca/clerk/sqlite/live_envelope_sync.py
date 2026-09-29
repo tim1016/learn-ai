@@ -194,6 +194,16 @@ def _cash_flow_snapshots_match(
     )
 
 
+def _cause_text(exc: BaseException) -> str | None:
+    """What the broker adapter choked on, for the log only.
+
+    The exception's own text is owner copy (a router returns it), so the
+    technical reason rides on the ``raise ... from`` chain instead.
+    """
+    cause = exc.__cause__
+    return None if cause is None else f"{type(cause).__name__}: {cause}"
+
+
 def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     """Which fact left the account unjudgeable — the operator's whole diagnosis."""
     day_pnl = reading.day_pnl
@@ -629,7 +639,7 @@ class LiveEnvelopeSync:
             # of the invalid evidence under the same fence as policy Apply.
             return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
         except BrokerEvidenceUnavailable as exc:
-            return self._acted("unknown", {"why": str(exc), "detail": exc.detail})
+            return self._acted("unknown", {"why": str(exc), "cause": _cause_text(exc)})
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.

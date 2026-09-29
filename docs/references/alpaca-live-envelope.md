@@ -260,10 +260,11 @@ notional cap, no symbol allowlist, no session restriction.
   `last_equity` would otherwise be a $1 prior close. An account response the
   adapter cannot map (a boolean, null, non-numeric or missing `cash` or
   `equity`, or a boolean or non-numeric `last_equity`) makes
-  `AlpacaBroker.get_account` raise `BrokerEvidenceUnavailable`, carrying the
-  underlying cause in its `detail`. That withdraws the prior envelope
-  observation immediately, like rejected transfer evidence above, and the
-  sync's warning line names the cause.
+  `AlpacaBroker.get_account` raise `BrokerEvidenceUnavailable`, with the
+  underlying error chained as its cause. That withdraws the prior envelope
+  observation immediately, like rejected transfer evidence above. The sync's
+  warning line logs the chained cause; the exception's own message and
+  `detail` stay plain owner copy.
 - **Positions are not a loss input.** Current equity already includes every
   open position. The sync therefore does not call the positions endpoint for
   this verdict; `AccountObservation.position_count` remains `None` rather

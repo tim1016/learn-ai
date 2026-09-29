@@ -465,7 +465,9 @@ async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidenc
         )
 
     assert info.value.detail is not None
-    assert "KeyError: 'activity_type'" in info.value.detail
+    assert "KeyError" not in info.value.detail
+    assert isinstance(info.value.__cause__, KeyError)
+    assert info.value.__cause__.args == ("activity_type",)
 
 
 async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_evidence() -> None:
@@ -481,7 +483,9 @@ async def test_transfer_cursor_translates_a_non_object_row_to_unavailable_eviden
         )
 
     assert info.value.detail is not None
-    assert "must be an object" in info.value.detail
+    assert "TypeError" not in info.value.detail
+    assert isinstance(info.value.__cause__, TypeError)
+    assert "must be an object" in str(info.value.__cause__)
 
 
 @pytest.mark.parametrize("invalid_id", [None, "", "   "])
