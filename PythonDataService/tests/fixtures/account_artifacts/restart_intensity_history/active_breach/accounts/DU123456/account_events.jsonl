@@ -1,0 +1,1 @@
+{"account_id":"DU123456","affected_instance_ids":["spy-1"],"event_type":"account_restart_intensity_breached","observed_count":3,"operator_next_step":"STOP_RESTARTING_AND_RECOVER_ACCOUNT","seq":1,"threshold":3,"ts_ms":1700000020001,"window_end_ms":1700000020001,"window_ms":60000,"window_start_ms":1699999960001}

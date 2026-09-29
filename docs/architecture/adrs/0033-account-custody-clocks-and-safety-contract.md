@@ -6,7 +6,10 @@
 > [ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path).
 > The runner's per-bot restart-intensity refusal in Start admission is retired
 > with them: every Deploy is a fresh identity and nothing restarts on its own,
-> so no restart remains to throttle.
+> so no restart remains to throttle. The account-level restart-intensity gate
+> and its policy are deleted too (#2558). Freeze, clearance and history files
+> they wrote earlier still load and are read as history; an active freeze of
+> that kind stays a freeze until an operator clears it with a recovery proof.
 
 **Status:** Accepted
 
@@ -230,7 +233,7 @@ appends to `account_events.jsonl` or allocates `account_events.seq`.
 | --- | --- | --- | --- |
 | `account_registry.py`, `host_daemon.py` | binding, retirement, daemon lifecycle | `daemon` | Binding ledger / host daemon artifacts; history is display-only |
 | `account_clerk.py`, `account_clerk_reconciler.py`, `account_epoch.py`, `account_epoch_observer.py`, `account_owner.py` | supervisor, reconnect, stream, reconciliation, epoch observations | `clerk_supervisor` | Clerk journal and fenced epoch/lease artifacts; history is display-only |
-| `account_artifacts.py` | freezes, recovery proof, audited override, generation, restart intensity | `data_plane` or `clerk_supervisor` by event family | Their typed account artifacts; history is display-only |
+| `account_artifacts.py` | freezes, recovery proof, audited override, generation | `data_plane` or `clerk_supervisor` by event family | Their typed account artifacts; history is display-only |
 | `account_reconciliation.py`, `account_journal_authority.py`, `account_crash_recovery.py`, `account_gate_promotion.py`, `journal_recovery.py`, `legacy_stale_claim_retirement.py` | reconciliation, policy, recovery and compatibility evidence | `data_plane` | Typed reconciliation/recovery artifacts and Clerk journal where applicable |
 | `routers/account_reconciliation.py` | Clerk restore presentation evidence | `data_plane` | Host/Clerk restore receipt, not the display row |
 | `live_engine.py` | observation-lease shadow comparisons | `bot` | Account Truth and observation-lease artifacts |
@@ -350,6 +353,9 @@ consume the same typed policy decision in the next control-plane slice; this
 read-only seam does not independently permit or block a command.
 
 ## Shared Start admission and execution-fence amendment (2026-08-02)
+
+> **Retired 2026-09-27 (#2550, #2558):** the restart-intensity fact and its
+> Start refusal described below no longer exist. Kept as the 2026-08-02 record.
 
 Start projection and Start execution now call the same pure typed
 `evaluate_run_admission(bot, clerk)` policy. The bot argument contains the
