@@ -360,6 +360,39 @@ describe('AlpacaHomeComponent', () => {
     );
   });
 
+  it('re-reads where the money is when it opens, so a bot deployed on another page shows its own slice at once', async () => {
+    const { view, router, panel } = await renderHome();
+    // The owner leaves Home; meanwhile a Deploy commits and the money moves.
+    await router.navigateByUrl(`${ACCOUNT_URL}/bots/spy-ema-20260929-0931`);
+    await view.fixture.whenStable();
+    const deployed = 'spy-ema-20260930-1015';
+    panel.getCatalog.mockResolvedValue([...catalog(), fakeCatalogBot({ strategy_instance_id: deployed })]);
+    const before = fakeAccountMoney({ account_id: TEST_ACCOUNT_ID });
+    panel.getAccountMoney.mockResolvedValue(fakeAccountMoney({
+      account_id: TEST_ACCOUNT_ID,
+      segments: [
+        {
+          kind: 'bot', strategy_instance_id: deployed, label: deployed, amount_usd: '1000.00', share_bps: 100,
+          parts: {
+            in_shares_usd: '0.00', in_shares_bps: 0, pending_usd: '0.00', pending_bps: 0,
+            free_usd: '1000.00', free_bps: 10_000,
+          },
+          palette_index: 2,
+        },
+        ...(before.segments ?? []),
+      ],
+    }));
+
+    await router.navigateByUrl(ACCOUNT_URL);
+    await view.fixture.whenStable();
+
+    // Its row joins the money as it is now, never a read from before its Deploy.
+    const row = (await screen.findByRole('link', { name: deployed })).closest('li');
+    if (row === null) throw new Error('The deployed bot has no row.');
+    await vi.waitFor(() => expect(within(row).getByText(/balance \$1,000\.00 · free \$1,000\.00/)).toBeTruthy());
+    expect(within(row).queryByText(/Money not shown/)).toBeNull();
+  });
+
   it('folds Finished away, newest first, with each result as Python wrote it and Deploy again', async () => {
     await renderHome();
 

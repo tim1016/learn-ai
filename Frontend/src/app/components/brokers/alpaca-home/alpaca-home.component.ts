@@ -207,6 +207,11 @@ export class AlpacaHomeComponent {
   private readonly finished = viewChild(HomeFinishedComponent);
 
   constructor() {
+    // Home opens on the account's money as it is now. The read belongs to the
+    // workspace and is polled only every 15 s, so a Deploy or a sale made on
+    // another page would otherwise leave its bot's row joined to a read from
+    // before it — "Money not shown" beside a bar that still claims the money.
+    if (!this.accountData.money.isLoading()) this.accountData.money.reload();
     effect(() => {
       if (this.catalog.hasValue()) this.lastCatalog.set(this.catalog.value());
     });
