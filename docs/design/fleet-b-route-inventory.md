@@ -133,7 +133,9 @@ compatibility routes until Delivery E.
 | Operation id | Method | Public | Agent path today | Capability | Idempotency |
 |---|---|---|---|---|---|
 | `bot_run_current_read` | GET | `/accounts/{account_id}/bots/{sid}/runs/current` | `/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/current` | `bot_panel_read` | read |
-| `bot_run_history_read` | GET | `/accounts/{account_id}/bots/{sid}/runs/history` | `/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history` | `bot_panel_read` | read |
+| `bot_history_read` | GET | `/accounts/{account_id}/bot-history` | `/api/brokers/alpaca/accounts/{account_id}/bot-history` | `bot_panel_read` | read |
+
+`bot_run_history_read` (the bot page's one-run-at-a-time pager) was removed by #2574: `bot_history_read` lists every run of every bot on the account, and the coordinator's `GET /api/broker-clerks/aggregate/bot-history` merges it across every account.
 
 ## Custody family (catalog) — new home for `/api/alpaca-clerk-sqlite` + `/api/accounts`
 

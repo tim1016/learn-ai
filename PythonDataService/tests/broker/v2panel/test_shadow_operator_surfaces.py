@@ -520,6 +520,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
                 explanation="This instance has no complete Signal Program seal.",
             ),
             market_pulse=_MARKET_PULSE,
+            bot_status="finished",
         )
 
     [fill] = panel.recent_fills

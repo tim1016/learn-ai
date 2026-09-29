@@ -406,36 +406,6 @@ class BotBindingRepository:
                 bindings.append(binding)
         return bindings
 
-    def list_runs(self, strategy_instance_id: str) -> list[BotRunRecord]:
-        """Return newest-first append-only launch evidence for one instance."""
-        instance_dir = self._instance_dir_for(strategy_instance_id)
-        instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
-        if not instance_path.is_file():
-            legacy = self._read_legacy_binding(instance_dir)
-            return (
-                [self._run_from_binding(legacy, launch_reason="legacy")]
-                if legacy is not None
-                else []
-            )
-        instance = StrategyInstanceRecord.model_validate_json(instance_path.read_text(encoding="utf-8"))
-        if instance.strategy_instance_id != strategy_instance_id:
-            raise ValueError("strategy-instance evidence belongs to another identity")
-        runs_dir = instance_dir / RUNS_DIRECTORY
-        if not runs_dir.is_dir():
-            return []
-        runs = [BotRunRecord.model_validate_json(path.read_text(encoding="utf-8")) for path in runs_dir.glob("*.json")]
-        for run in runs:
-            if (
-                run.strategy_instance_id != instance.strategy_instance_id
-                or run.configuration_hash != instance.configuration_hash
-            ):
-                raise ValueError("run history evidence does not match its strategy instance")
-        return sorted(
-            runs,
-            key=lambda run: (run.started_at_ms, run.run_id),
-            reverse=True,
-        )
-
     def read_run(
         self,
         strategy_instance_id: str,

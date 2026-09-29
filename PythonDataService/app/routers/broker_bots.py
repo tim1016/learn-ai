@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import NoReturn
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
@@ -22,8 +22,6 @@ from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
 from app.schemas.broker_bots import (
-    BotRunHistoryPage,
-    BotRunHistoryUnprocessableResponse,
     BotRunReadNotFoundResponse,
     BotRunReadRunnerErrorResponse,
     BotRunView,
@@ -185,65 +183,3 @@ async def get_current_run_scoped(
         return registry.current_run(broker, strategy_instance_id)
     except BotRunnerError as error:
         _raise_runner_error(error)
-
-
-@router.get(
-    "/{broker}/bots/{strategy_instance_id}/runs/history",
-    response_model=BotRunHistoryPage,
-    summary="Read one bounded page of previous runs",
-    responses={
-        404: {
-            "model": BotRunReadNotFoundResponse,
-            "description": "The broker or strategy-instance run is unknown.",
-        },
-        422: {
-            "model": BotRunHistoryUnprocessableResponse,
-            "description": "The history cursor, limit, or strategy-instance identifier is invalid.",
-        },
-    },
-)
-async def get_run_history(
-    broker: str,
-    strategy_instance_id: str,
-    cursor: str | None = None,
-    limit: int = Query(default=1, ge=1, le=25),
-) -> BotRunHistoryPage:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return registry.run_history(
-            broker,
-            strategy_instance_id,
-            cursor=cursor,
-            limit=limit,
-        )
-    except BotRunnerError as error:
-        _raise_runner_error(error)
-
-
-@router.get(
-    "/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/history",
-    response_model=BotRunHistoryPage,
-    summary="Account-scoped alias of the bot run history",
-)
-async def get_run_history_scoped(
-    broker: str,
-    account_id: str,
-    strategy_instance_id: str,
-    cursor: str | None = None,
-    limit: int = Query(default=1, ge=1, le=25),
-) -> BotRunHistoryPage:
-    """Validate the durable account binding before reading run history."""
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        _require_account_binding(registry, broker, account_id, strategy_instance_id)
-        return registry.run_history(
-            broker,
-            strategy_instance_id,
-            cursor=cursor,
-            limit=limit,
-        )
-    except BotRunnerError as error:
-        _raise_runner_error(error)
-

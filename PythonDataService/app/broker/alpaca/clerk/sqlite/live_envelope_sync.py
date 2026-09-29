@@ -140,14 +140,14 @@ def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
         day_start_ms=day_pnl.day_start_ms,
         day_pnl_usd=day_pnl.total_usd,
         loss_limit_usd=limit,
-        last_equity_usd=last_equity,
+        last_equity_usd=float(last_equity),
         observed_at_ms=reading.observation.observed_at_ms,
         policy_revision=reading.policy_revision,
     )
 
 
 def _non_finite_risk_fields(
-    *, cash: float, last_equity: float | None, equity: float | Decimal | None
+    *, cash: float, last_equity: float | Decimal | None, equity: float | Decimal | None
 ) -> tuple[str, ...]:
     """Which risk inputs the broker reported as NaN or infinity.
 

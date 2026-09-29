@@ -61,6 +61,7 @@ from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerRateLimited,
     BrokerUnavailable,
+    BrokerUnreachable,
 )
 
 _DEFAULT_TIMEOUT_S = 15.0
@@ -286,7 +287,7 @@ class AlpacaTradingClient:
                     limiter=self._thread_limiter,
                 )
         except TimeoutError as exc:
-            raise BrokerUnavailable(
+            raise BrokerUnreachable(
                 f"Alpaca timed out while fetching {describe}.",
                 broker=self.broker_id,
                 detail=f"The broker did not respond within {self._timeout_s:g} seconds.",
@@ -296,7 +297,7 @@ class AlpacaTradingClient:
                 exc, broker=self.broker_id, is_order_mutation=is_order_mutation
             ) from exc
         except RequestException as exc:
-            raise BrokerUnavailable(
+            raise BrokerUnreachable(
                 f"Could not reach Alpaca while fetching {describe}.",
                 broker=self.broker_id,
                 detail=str(exc),

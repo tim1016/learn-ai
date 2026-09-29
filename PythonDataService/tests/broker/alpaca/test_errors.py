@@ -13,6 +13,7 @@ from app.broker.contract.errors import (
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
+    BrokerUnreachable,
 )
 from tests.broker.alpaca.conftest import ApiErrorFactory
 
@@ -89,6 +90,25 @@ def test_unknown_status_defaults_to_unavailable(make_api_error: ApiErrorFactory)
     error = map_api_error(make_api_error(None), broker="alpaca")
 
     assert isinstance(error, BrokerUnavailable)
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_a_server_error_is_the_transient_kind(make_api_error: ApiErrorFactory, status: int) -> None:
+    """#2582: Alpaca failing on its own side can pass, so a startup may retry it."""
+    error = map_api_error(make_api_error(status), broker="alpaca")
+
+    assert isinstance(error, BrokerUnreachable)
+
+
+@pytest.mark.parametrize("status", [404, 409, None])
+def test_an_unrecognized_answer_is_not_the_transient_kind(
+    make_api_error: ApiErrorFactory, status: int | None
+) -> None:
+    """#2582: the catch-all answer a retry cannot fix never promises a reconnect."""
+    error = map_api_error(make_api_error(status), broker="alpaca")
+
+    assert isinstance(error, BrokerUnavailable)
+    assert not isinstance(error, BrokerUnreachable)
 
 
 def test_status_access_failure_is_not_suppressed() -> None:

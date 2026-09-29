@@ -38,6 +38,7 @@ from app.broker.contract.errors import (
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
+    BrokerUnreachable,
 )
 from tests.broker.alpaca.conftest import ApiErrorFactory
 
@@ -504,6 +505,8 @@ async def test_hung_sdk_call_maps_to_broker_unavailable() -> None:
         await client.get_account()
 
     assert excinfo.value.detail == "The broker did not respond within 0.001 seconds."
+    # #2582: a timeout is the transient kind a startup reconnects on.
+    assert isinstance(excinfo.value, BrokerUnreachable)
 
 
 def test_session_timeout_defaults_connect_and_read_timeouts() -> None:
@@ -779,6 +782,29 @@ async def test_account_read_recovers_from_a_stale_pooled_connection(tmp_path: Pa
 
     assert payload["account_number"] == "PA1"
     assert len(responses.calls) == 2
+
+
+@responses.activate
+async def test_an_account_read_that_cannot_connect_is_the_transient_kind(tmp_path: Path) -> None:
+    """#2582: Alpaca not reachable at all is what a startup reconnects on."""
+    for _attempt in range(2):
+        responses.add(
+            responses.GET,
+            f"{_BASE}/v2/account",
+            body=RequestsConnectionError(
+                ProtocolError(
+                    "Connection aborted.",
+                    RemoteDisconnected("Remote end closed connection without response"),
+                )
+            ),
+        )
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+
+    with pytest.raises(BrokerUnreachable, match="Could not reach Alpaca while fetching account"):
+        await client.get_account()
 
 
 @responses.activate
