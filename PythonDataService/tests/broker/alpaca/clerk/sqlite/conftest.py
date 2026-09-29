@@ -39,7 +39,20 @@ from app.broker.contract.models import (
 )
 from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
+from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+
+
+@pytest.fixture
+def wall_clock_in_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Clerk on the default clock reads a regular session, whatever the host's hour (#2596).
+
+    The Clerk sends a market ENTER only while it could reach the broker inside
+    the regular session, so a suite that sends one off the wall clock opts in
+    (``pytestmark = pytest.mark.usefixtures("wall_clock_in_session")``). A test
+    that pins its own clock is unaffected.
+    """
+    pin_wall_clock_in_session(monkeypatch)
 
 
 class _TestClock:

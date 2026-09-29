@@ -13,19 +13,24 @@ directly instead of importing a fixture to trigger it by side effect.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_runner as bot_runner
 import app.services.bot_trade_strategy as bot_trade_strategy
 import app.services.feed_continuity_policy as feed_continuity_policy
+from app.broker.contract.models import BrokerClockEvidence
 from app.engine.data.trade_bar import TradeBar
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
+    MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import StrategyValidationAdmissionFact
-from app.services.market_liveness import compose_market_liveness
+from app.services.market_liveness import MarketLivenessStore, compose_market_liveness
+from tests._helpers.session_clock import pin_wall_clock_in_session
 
 
 def _tradable_market_liveness(symbol: str, observed_at_ms: int):
@@ -48,6 +53,38 @@ def _tradable_market_liveness(symbol: str, observed_at_ms: int):
             source_timestamp_ms=observed_at_ms,
         ),
     )
+
+
+def clock_read_before_the_close(
+    close_ms: int, *, read_lag_ms: int = 400,
+) -> Callable[[str, int], MarketLivenessFact]:
+    """Alpaca's once-a-second market clock as every entry gate reads it across the close (#2596).
+
+    Each read composes the newest OPEN answer the poller could hold at ``now``:
+    stamped ``read_lag_ms`` before it, never after ``close_ms``. The last answer
+    before the close names that close and stays inside the 5-second freshness
+    bound for the first seconds after it, so a decision just past the close
+    still reads a fresh OPEN clock. The answer goes through the real store, so
+    the gates see exactly what the adapter captured.
+    """
+
+    def fact(symbol: str, now_ms: int) -> MarketLivenessFact:
+        observed_at_ms = min(now_ms, close_ms) - read_lag_ms
+        store = MarketLivenessStore()
+        store.mark_stream_connected(observed_at_ms=observed_at_ms)
+        store.observe_clock(
+            BrokerClockEvidence(
+                broker="alpaca",
+                is_open=True,
+                vendor_timestamp_ms=observed_at_ms,
+                next_open_ms=None,
+                next_close_ms=close_ms,
+                observed_at_ms=observed_at_ms,
+            )
+        )
+        return store.fact(symbol, now_ms=now_ms)
+
+    return fact
 
 
 def _verified_validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
@@ -84,21 +121,12 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
-    from datetime import date
-    from time import monotonic
-    from types import SimpleNamespace
-
-    from app.lean_sidecar.trading_calendar import session_open_ms_utc
-    from app.utils import timestamps
-
     # One controllable source backs imported/default clock callables too.
-    start = session_open_ms_utc(date(2026, 9, 25)) + 60_000
-    started = monotonic()
-    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: start / 1000 + monotonic() - started))
+    pin_wall_clock_in_session(monkeypatch)
 
 
 def patch_wall_clock_to_the_fed_bar(
-    monkeypatch: pytest.MonkeyPatch, *, start_ms: int | None = None,
+    monkeypatch: pytest.MonkeyPatch, *, start_ms: int | None = None, decision_delay_ms: int = 0,
 ) -> None:
     """Pin the staleness gate's wall clock to the close of the bar just fed (#2303/#2345).
 
@@ -113,6 +141,9 @@ def patch_wall_clock_to_the_fed_bar(
     the execution lease, then share that initial instant and advance together.
     The caller chooses a lease TTL covering its replayed span. Other mechanics
     tests may keep their explicitly pinned admission clock.
+    ``decision_delay_ms`` reads "now" that long after the fed bar's close: a
+    live decision lands a fraction of a second after its bar closes, which is
+    what puts the session's last decision after the regular close (#2596).
     A test that needs a late decision pins ``feed_continuity_policy.now_ms_utc``
     itself after this fixture ran.
     """
@@ -122,7 +153,7 @@ def patch_wall_clock_to_the_fed_bar(
 
     initial_ms = timestamps.now_ms_utc() if start_ms is None else start_ms
     def replay_now() -> int:
-        return fed_bar_end_ms[0] if fed_bar_end_ms else initial_ms
+        return fed_bar_end_ms[0] + decision_delay_ms if fed_bar_end_ms else initial_ms
 
     if start_ms is not None:
         from types import SimpleNamespace

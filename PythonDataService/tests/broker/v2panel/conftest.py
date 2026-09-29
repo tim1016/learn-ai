@@ -221,16 +221,9 @@ def deploy_app(
 
 @pytest.fixture(autouse=True)
 def _deploy_clock_in_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import date
-    from time import monotonic
-    from types import SimpleNamespace
+    from tests._helpers.session_clock import pin_wall_clock_in_session
 
-    from app.lean_sidecar.trading_calendar import session_open_ms_utc
-    from app.utils import timestamps
-
-    instant = session_open_ms_utc(date(2026, 9, 25)) + 60_000
-    started = monotonic()
-    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: instant / 1000 + monotonic() - started))
+    pin_wall_clock_in_session(monkeypatch)
 
 
 #: The bot the deploy route names for ``_BODY`` at the pinned clock below

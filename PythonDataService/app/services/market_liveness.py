@@ -207,7 +207,8 @@ def compose_market_liveness(
             reason_code=("MARKET_DATA_STARTING" if market_data is None else market_data.reason_code if market_data.state != "READY" else "MARKET_DATA_RECOVERING"),
             reason=(market_data.reason if market_data is not None and market_data.state != "READY" else "Waiting for current live market data for this symbol."),
         )
-    if market_clock.state == "CLOSED":
+    closed_reason = _clock_closed_reason(market_clock, now_ms=now_ms)
+    if closed_reason is not None:
         return MarketLivenessFact(
             symbol=normalized_symbol,
             state="CLOSED", market_data=market_data,
@@ -215,7 +216,7 @@ def compose_market_liveness(
             market_clock=market_clock,
             symbol_status=symbol_status,
             reason_code="MARKET_CLOSED",
-            reason="Fresh broker clock evidence reports the market closed.",
+            reason=closed_reason,
         )
     if market_clock.state != "OPEN":
         return _unknown(
@@ -258,6 +259,31 @@ def compose_market_liveness(
             "and no negative evidence prove this symbol tradable."
         ),
     )
+
+
+def _clock_closed_reason(clock: MarketClockLivenessEvidence, *, now_ms: int) -> str | None:
+    """Why the broker clock shows the market closed at ``now_ms``, or ``None`` if it does not.
+
+    An OPEN answer lasts only until the close it named (#2596). The session's
+    last bar is decided a fraction of a second after the close, while the last
+    answer read before it is still fresh; read by its flag alone, that answer
+    carried a regular-hours ENTER out as a market order Alpaca holds for the
+    next open. Every entry gate — the strategy's, the Clerk's recheck, and the
+    check before broker contact — reads the fact composed here, so this is the
+    one place the broker's close is applied. It carries no send margin on
+    purpose: an EXIT reads CLOSED inside the scheduled session as an emergency
+    close and holds, so a margin here would hold every EXIT in the session's
+    last seconds. The Clerk gives a market ENTER that margin from the calendar
+    instead (``runtime._market_enter_session_refusal``).
+    """
+    if clock.state == "CLOSED":
+        return "Fresh broker clock evidence reports the market closed."
+    if clock.state == "OPEN" and clock.next_close_ms is not None and now_ms >= clock.next_close_ms:
+        return (
+            "The regular session has closed. The broker clock was last read before the close, "
+            "so it no longer shows the market open."
+        )
+    return None
 
 
 def market_data_bars_live(health: FeedHealth | None) -> bool:
@@ -355,12 +381,18 @@ class MarketEntryPolicy:
 
 
 def clock_liveness_evidence(clock: BrokerClockEvidence) -> MarketClockLivenessEvidence:
-    """Translate the narrow broker clock input without giving it symbol authority."""
+    """Translate the narrow broker clock input without giving it symbol authority.
+
+    An OPEN answer keeps the close the broker named with it: the clock is read
+    about once a second and stays fresh for five, so its last answer before
+    the close is still in use just after it (#2596).
+    """
     return MarketClockLivenessEvidence(
         state="OPEN" if clock.is_open else "CLOSED",
         source=f"{clock.broker}.clock",
         observed_at_ms=clock.observed_at_ms,
         vendor_timestamp_ms=clock.vendor_timestamp_ms,
+        next_close_ms=clock.next_close_ms if clock.is_open else None,
     )
 
 

@@ -524,12 +524,20 @@ def from_alpaca_clock(
     This is only a market-wide live liveness input. The canonical calendar
     remains the scheduled-session authority, and an open clock cannot prove a
     particular symbol tradable or not halted; that needs symbol-status evidence.
+
+    An open answer must name its close: liveness reads it as the instant the
+    answer stops proving the market open (#2596), so one without it raises
+    rather than proving the market open with no end.
     """
+    is_open = bool(payload["is_open"])
+    next_close_ms = opt_rfc3339_to_ms(payload.get("next_close"))
+    if is_open and next_close_ms is None:
+        raise ValueError("Alpaca clock reports the market open but names no next close.")
     return BrokerClockEvidence(
         broker=BROKER_ID,
-        is_open=bool(payload["is_open"]),
+        is_open=is_open,
         vendor_timestamp_ms=rfc3339_to_ms(str(payload["timestamp"])),
         next_open_ms=opt_rfc3339_to_ms(payload.get("next_open")),
-        next_close_ms=opt_rfc3339_to_ms(payload.get("next_close")),
+        next_close_ms=next_close_ms,
         observed_at_ms=_observed(observed_at_ms),
     )

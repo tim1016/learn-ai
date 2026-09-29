@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
+from app.broker.contract.models import BrokerClockEvidence
 from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -11,6 +13,7 @@ from app.schemas.market_liveness import (
 )
 from app.services.market_liveness import (
     MARKET_CLOCK_MAX_AGE_MS,
+    MarketLivenessStore,
     compose_market_liveness,
     liveness_blocks_entry,
     market_data_bars_live,
@@ -226,6 +229,82 @@ def test_future_dated_market_clock_fails_closed_and_logs_loudly(caplog: pytest.L
     assert (fact.state, fact.reason_code) == ("UNKNOWN", "MARKET_CLOCK_INVALID")
     [record] = [r for r in caplog.records if getattr(r, "action", None) == "market_liveness_clock_future_dated"]
     assert (record.now_ms, record.observed_at_ms, record.lead_ms) == (_NOW, _NOW + 40, 40)
+
+
+_CLOSED_AFTER_CLOCK_READ = (
+    "The regular session has closed. The broker clock was last read before the close, "
+    "so it no longer shows the market open."
+)
+
+
+def test_an_open_clock_answer_stops_proving_the_market_open_at_the_close_it_named() -> None:
+    """#2596: the last OPEN answer before the close is still fresh just after it."""
+    close_ms = _NOW + 400
+    answer = MarketClockLivenessEvidence(
+        state="OPEN",
+        source="alpaca.clock",
+        observed_at_ms=_NOW,
+        vendor_timestamp_ms=_NOW,
+        next_close_ms=close_ms,
+    )
+
+    def at(now_ms: int):
+        return compose_market_liveness(
+            "SPY",
+            now_ms=now_ms,
+            market_clock=answer,
+            connected=True,
+            connection_changed_at_ms=_NOW,
+            symbol_status=_status(),
+        )
+
+    assert at(close_ms - 1).state == "TRADABLE"
+    for now_ms in (close_ms, close_ms + 600):
+        fact = at(now_ms)
+        assert (fact.state, fact.reason_code, fact.reason) == ("CLOSED", "MARKET_CLOSED", _CLOSED_AFTER_CLOCK_READ)
+        assert liveness_blocks_entry(
+            fact, use_rth=True, extended_phase_proven=lambda: True, extended_session_live=lambda: True
+        ) is True
+
+
+def test_the_store_keeps_the_close_the_broker_clock_named_with_an_open_answer() -> None:
+    """The adapter captured it; the store used to drop it before any gate could read it."""
+    store = MarketLivenessStore()
+    store.mark_stream_connected(observed_at_ms=_NOW)
+    store.observe_clock(
+        BrokerClockEvidence(
+            broker="alpaca",
+            is_open=True,
+            vendor_timestamp_ms=_NOW,
+            next_open_ms=None,
+            next_close_ms=_NOW + 400,
+            observed_at_ms=_NOW,
+        )
+    )
+
+    assert store.fact("SPY", now_ms=_NOW + 1).market_clock.next_close_ms == _NOW + 400
+    assert store.fact("SPY", now_ms=_NOW + 1_000).state == "CLOSED"
+
+
+def test_only_an_open_clock_answer_names_a_close() -> None:
+    """A closed answer's next close is the next session's; it proves nothing here."""
+    store = MarketLivenessStore()
+    store.observe_clock(
+        BrokerClockEvidence(
+            broker="alpaca",
+            is_open=False,
+            vendor_timestamp_ms=_NOW,
+            next_open_ms=_NOW + 60_000,
+            next_close_ms=_NOW + 120_000,
+            observed_at_ms=_NOW,
+        )
+    )
+
+    assert store.fact("SPY", now_ms=_NOW).market_clock.next_close_ms is None
+    with pytest.raises(ValidationError, match="Only an OPEN broker clock answer"):
+        MarketClockLivenessEvidence(
+            state="CLOSED", source="alpaca.clock", observed_at_ms=_NOW, next_close_ms=_NOW
+        )
 
 
 def _health(*, connected: bool, stale: bool) -> FeedHealth:

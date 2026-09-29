@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -155,7 +155,7 @@ from app.broker.alpaca.clerk.stream_health import (
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
@@ -183,6 +183,12 @@ _BAR_BOUND_AUTHORITIES: Final = frozenset({"synthetic", "shadow"})
 _LIVE_MARKET_CLOCK_AUTHORITIES: Final = frozenset({"sqlite", "shadow"})
 # An EXIT reduces the program's own position, so its leg is the opposite side.
 _REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
+# A refused entry is dropped, never queued: the bot's next bar decides afresh.
+_ENTRY_NOT_RETRIED: Final = "No order was sent. The bot decides again on its next bar."
+_MARKET_ENTRY_AFTER_THE_CLOSE: Final = (
+    "The regular session has closed, or closes within seconds. A market order sent now "
+    "could reach the broker after the close and wait there until the next open."
+)
 logger = logging.getLogger(__name__)
 
 
@@ -1023,7 +1029,6 @@ class SqliteAlpacaClerkFacade:
                 next_step=next_step,
             )
 
-        before_submit = None
         async with self._intake:
             if self.binds_decision_bar and retained_source_bar is None:
                 return rejected(
@@ -1143,6 +1148,7 @@ class SqliteAlpacaClerkFacade:
                 # reach the broker — the same shared predicate
                 # bot_trade_strategy.py's own gate uses, so the two can
                 # never silently diverge.
+                liveness_guard: Callable[[], str | None] | None = None
                 if self.authority_kind in _LIVE_MARKET_CLOCK_AUTHORITIES:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
                     policy = MarketEntryPolicy(
@@ -1155,13 +1161,27 @@ class SqliteAlpacaClerkFacade:
                     if policy.refusal(liveness) is not None:
                         return rejected(
                             reason_code="MARKET_LIVENESS_BLOCKED",
-                            explanation="Current market-liveness evidence does not permit new exposure.",
-                            next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
+                            # The fact's own plain words say which evidence
+                            # refused -- e.g. that the session has closed (#2596).
+                            explanation=liveness.reason,
+                            next_step=_ENTRY_NOT_RETRIED,
                         )
-                    before_submit = policy.submission_guard(
+                    liveness_guard = policy.submission_guard(
                         lambda: market_liveness_fact(entry.instrument.underlying, self._repo.clock()),
                         admitted=liveness,
                     )
+                # #2596: every authority, a Dry Run's included -- the calendar
+                # needs no live evidence, and the sandbox must predict this.
+                session_refusal = _market_enter_session_refusal(operation_leg, self._repo.clock())
+                if session_refusal is not None:
+                    return rejected(
+                        reason_code="MARKET_CLOSED",
+                        explanation=session_refusal,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
+                before_submit = _enter_submission_guard(
+                    operation_leg, clock=self._repo.clock, liveness=liveness_guard
+                )
                 try:
                     accepted_enter = accept_enter(
                         self._repo,
@@ -1737,6 +1757,38 @@ def _append_pre_custody_refusal(
             }
         ),
     )
+
+
+def _market_enter_session_refusal(leg: BrokerOrderLeg, now_ms: int) -> str | None:
+    """Why a market ENTER leg may not be sent at ``now_ms``, or ``None`` when it may (#2596).
+
+    The rule every reducing market leg already obeys
+    (``recovery_reduction.market_leg_sendable``): Alpaca holds a market DAY
+    order that arrives after the close until the next open, so the leg must
+    reach the broker inside the canonical calendar's regular session, early
+    closes included, judged a few seconds ahead. The broker clock's close in
+    the liveness fact cannot give that margin: a Clerk clock running behind,
+    or a send a tenth of a second before the close, still reads it open. A
+    priced leg is an extended-hours limit, bounded where it is shaped.
+    """
+    if leg.order_type is OrderType.MARKET and not market_leg_sendable(now_ms):
+        return _MARKET_ENTRY_AFTER_THE_CLOSE
+    return None
+
+
+def _enter_submission_guard(
+    leg: BrokerOrderLeg,
+    *,
+    clock: Callable[[], int],
+    liveness: Callable[[], str | None] | None,
+) -> Callable[[], str | None]:
+    """The check just before broker contact: the intake's two refusals, asked again."""
+
+    def refusal() -> str | None:
+        refused = None if liveness is None else liveness()
+        return refused if refused is not None else _market_enter_session_refusal(leg, clock())
+
+    return refusal
 
 
 def _durable_decision_id(decision_id: str) -> str:

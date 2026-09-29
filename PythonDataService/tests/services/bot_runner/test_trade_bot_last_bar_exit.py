@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_trade_strategy as bot_trade_strategy
 import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
@@ -36,7 +37,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
-from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
+from tests._helpers.bot_runner.market import clock_read_before_the_close, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _green_bar, _trade_bar
@@ -130,11 +131,22 @@ def _regular_hours_binding() -> BrokerBotBinding:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stale_snapshot", [False, True])
 @pytest.mark.parametrize("day", [date(2024, 1, 2), date(2024, 11, 29)])
+@pytest.mark.parametrize("clock_read_before_close", [False, True])
 async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_hours_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool, day: date
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool, day: date,
+    clock_read_before_close: bool,
 ) -> None:
-    """The last bar's EXIT is the extended-hours DAY limit, never a market order queued for the open."""
+    """The last bar's EXIT is the extended-hours DAY limit, never a market order queued for the open.
+
+    ``clock_read_before_close`` pins #2596's boundary for exits: the last clock
+    answer read before the close shows the market closed once the close has
+    passed, and the EXIT leaves exactly as it does on a fresh closed answer.
+    """
     close_ms = session_close_ms_utc(day)
+    if clock_read_before_close:
+        liveness = clock_read_before_the_close(close_ms)
+        monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
+        monkeypatch.setattr(clerk_runtime, "market_liveness_fact", liveness)
     first_green_end_ms = close_ms - 17 * 60_000
     enter_end_ms = close_ms - 16 * 60_000
     # Seed before acquiring the lease: no future-dated lease can mask expiry.
