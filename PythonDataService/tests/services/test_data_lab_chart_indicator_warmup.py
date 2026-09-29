@@ -362,10 +362,7 @@ def test_the_lead_in_changes_indicator_values_only(served: None, session: str, t
     warm = _chart(session, _EMAS, timeframe)
 
     assert warm["bars"] == bare["bars"]
-    # raw_bar_count counts what was fetched, lead-in included, by design.
-    warm_quality = {key: value for key, value in warm["quality"].items() if key != "raw_bar_count"}
-    bare_quality = {key: value for key, value in bare["quality"].items() if key != "raw_bar_count"}
-    assert warm_quality == bare_quality
+    assert warm["quality"] == bare["quality"]
     assert warm["quality"]["missing_session_dates"] == []
     assert warm["quality"]["session_coverage_pct"] == 100.0
 
@@ -405,6 +402,19 @@ def test_the_quality_report_counts_flat_and_malformed_bars_in_the_window_only(
 
     assert chart["quality"]["flat_bars_detected"] == 1
     assert chart["quality"]["ohlc_violations_detected"] == 1
+
+
+@pytest.mark.parametrize("session", ["rth", "extended"])
+def test_raw_bars_counts_the_window_only(served: None, session: str) -> None:
+    """The quality panel's Raw Bars sits beside cards that describe the picked
+    window, so it counts the provider minutes of that window — the warm-up
+    lead-in fetched before it is never shown and never counted."""
+    window_minutes = len(_provider(_FROM, _TO))
+
+    chart = _chart(session, _EMAS)
+
+    assert chart["indicator_warmup"]["lead_in_bars"] > 0
+    assert chart["quality"]["raw_bar_count"] == window_minutes
 
 
 def test_forward_fill_reports_only_the_windows_synthetic_bars(
@@ -484,6 +494,28 @@ def test_a_daily_chart_says_which_values_the_held_history_could_not_warm_up(serv
     )
     ema_20 = next(indicator for indicator in chart["indicators"] if indicator["id"] == "ema_20")
     assert all(point["value"] is not None for point in ema_20["data"])
+
+
+def test_a_single_held_bar_before_the_range_is_said_in_the_singular(
+    served: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The note is backend-authored prose: one bar of lead-in "is" available."""
+    monkeypatch.setattr(
+        chart_service,
+        "_fetch_chart_bars",
+        lambda _ticker, fetch_from, to_date, *_rest: (_provider(max(fetch_from, "2026-01-09"), to_date), None),
+    )
+
+    chart = _chart("rth", _EMAS[:1], "1D", _WINDOWS["monday"])
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert warmup.lead_in_bars == 1
+    assert warmup.note == (
+        "Indicator values on all 2 bars are not fully warmed up: the chart warms its indicators up on "
+        "1,000 bars of earlier history, and only 1 bar is available before this range. "
+        "Not shown: EMA (length=20) could not be computed from the 3 bars available."
+    )
 
 
 # ── The one resolver ────────────────────────────────────────────

@@ -556,7 +556,7 @@ def _preprocess_minute_bars(
     dropped it. The quality report describes only the visible window, the
     bars stamped at or after ``window.window_start_ms``.
     """
-    quality = QualityReport(raw_bar_count=len(bars))
+    quality = QualityReport()
 
     df = pd.DataFrame(bars)
     if df.empty:
@@ -564,9 +564,10 @@ def _preprocess_minute_bars(
 
     assert_canonical_bar_stream(bars, "chart")
 
-    # Detect flat bars and OHLC violations in the visible window (count only,
-    # don't remove); the lead-in before it is never shown.
+    # Count the raw bars, flat bars and OHLC violations of the visible window
+    # (count only, don't remove); the lead-in before it is never shown.
     raw_visible = df[df["timestamp"] >= window.window_start_ms]
+    quality.raw_bar_count = len(raw_visible)
     flat_mask = (
         (raw_visible["volume"] == 0)
         & (raw_visible["open"] == raw_visible["high"])
@@ -907,7 +908,7 @@ def _indicator_warmup_report(
         notes.append(
             f"Indicator values on {span} are not fully warmed up: the chart warms its indicators up on "
             f"{_bar_count(window.warmup_bars)} of earlier history, and only {_bar_count(lead_in_bars)} "
-            "are available before this range."
+            f"{'is' if lead_in_bars == 1 else 'are'} available before this range."
         )
     if uncomputed:
         names = ", ".join(
