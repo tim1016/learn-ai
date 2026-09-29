@@ -780,6 +780,23 @@ class AccountReconciliationResult:
     indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
     receipt_id: str | None = None
     recorded_at_ms: int | None = None
+    # The broker's own error when a ``stale`` pass could not read fresh
+    # broker truth (#2582); ``None`` for every other verdict and for a stale
+    # pass whose read answered but could not be proven. In-process only --
+    # never persisted, never part of what the verdict compares equal on.
+    stale_cause: BrokerError | None = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
+class _StaleSnapshot:
+    """A pass that could not read fresh broker truth, with the broker's error when it had one."""
+
+    broker_error: BrokerError | None = None
+
+    def result(self, *, resolved_count: int = 0) -> AccountReconciliationResult:
+        return AccountReconciliationResult(
+            verdict="stale", resolved_count=resolved_count, stale_cause=self.broker_error
+        )
 
 
 async def read_account_open_work(
@@ -806,16 +823,24 @@ async def _read_account_snapshot(
     read: BrokerReadPort,
     *,
     intake: ReentrantAsyncLock,
-) -> tuple[list[BrokerOrder], list[BrokerPosition]] | None:
+) -> tuple[list[BrokerOrder], list[BrokerPosition]] | _StaleSnapshot:
     try:
         broker_orders, broker_positions = await read_account_open_work(read)
     except BrokerError as exc:
         await _under_intake(intake, _raise_stale_snapshot_uncertainty, repo, str(exc))
+        # The broker's own words go to the log as well as to the uncertainty:
+        # a line saying truth could not be read must say why (#2582).
         logger.warning(
-            "alpaca sqlite reconciliation could not read fresh broker truth",
-            extra={"action": "reconcile_account_stale", "account_id": repo.account_id},
+            "alpaca sqlite reconciliation could not read fresh broker truth: %s",
+            exc,
+            extra={
+                "action": "reconcile_account_stale",
+                "account_id": repo.account_id,
+                "error": str(exc),
+                "error_detail": exc.detail,
+            },
         )
-        return None
+        return _StaleSnapshot(broker_error=exc)
     if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
         await _under_intake(
             intake,
@@ -823,7 +848,7 @@ async def _read_account_snapshot(
             repo,
             "The open-order snapshot reached the 500-row boundary; completeness cannot be proven.",
         )
-        return None
+        return _StaleSnapshot()
     return broker_orders, broker_positions
 
 
@@ -1076,8 +1101,8 @@ async def _reconcile_account_serialized(
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
     snapshot = await _read_account_snapshot(repo, read, intake=intake)
-    if snapshot is None:
-        return AccountReconciliationResult(verdict="stale")
+    if isinstance(snapshot, _StaleSnapshot):
+        return snapshot.result()
     broker_orders, broker_positions = snapshot
 
     await _refresh_external_order_evidence(repo, broker_orders=broker_orders, trade=trade, intake=intake)
@@ -1115,8 +1140,8 @@ async def _reconcile_account_serialized(
     # broker's remaining position and working-order set after that proof.
     if await _under_intake(intake, has_ready_replacement, repo):
         snapshot = await _read_account_snapshot(repo, read, intake=intake)
-        if snapshot is None:
-            return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
+        if isinstance(snapshot, _StaleSnapshot):
+            return snapshot.result(resolved_count=resolved_count)
         broker_orders, broker_positions = snapshot
 
     # The re-drive is sized from attribution, so it may only send what this
@@ -1166,8 +1191,8 @@ async def _reconcile_account_serialized(
     )
     for _attempt in range(2):
         final_snapshot = await _read_account_snapshot(repo, read, intake=intake)
-        if final_snapshot is None:
-            return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
+        if isinstance(final_snapshot, _StaleSnapshot):
+            return final_snapshot.result(resolved_count=resolved_count)
         broker_orders, broker_positions = final_snapshot
         finalized = await _under_intake(
             intake,

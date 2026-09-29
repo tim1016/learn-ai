@@ -51,6 +51,7 @@ from app.broker.fleet.provider import (
 from app.broker.fleet.records import (
     AccountAssignmentRecord,
     ClerkSessionRecord,
+    ProviderSummaryObservation,
     RoutingReceiptState,
 )
 from app.broker.fleet.service import FleetControlService
@@ -68,6 +69,39 @@ _RECEIPT_BODY_KEYS = (
     "cancel_request_id",
     "ticket_id",
 )
+
+
+def _lane_server_error(
+    clerk_id: str,
+    session: ClerkSessionRecord,
+    *,
+    failed: str,
+    cannot: str,
+    next_step: str,
+) -> ClerkUnreachable:
+    """A lane's own 5xx on a read, told as truthfully as its last beat allows (#2582).
+
+    Every beat reports the lane's account authority (``authority_state`` in
+    its summary), and that decides the copy: a lane reconnecting to its
+    broker recovers on its own, and a bound lane whose authority is
+    ``unavailable`` did not start and needs a restart, never a retry. Any
+    other 5xx keeps the generic copy, with ``next_step``.
+    """
+    summary = ProviderSummaryObservation.parse(session.reported_summary_json)
+    authority_state = None if summary is None else summary.authority_state
+    if authority_state == "reconnecting":
+        return ClerkUnreachable(
+            f"Clerk {clerk_id} {cannot} yet: it could not reach its broker when it "
+            "started and is reconnecting.",
+            next_step="It will recover on its own once its broker answers; no restart is needed.",
+        )
+    if authority_state == "unavailable" and session.reported_state == "binding_confirmed":
+        return ClerkUnreachable(
+            f"Clerk {clerk_id} {cannot}: its account did not start, and it will not "
+            "retry on its own.",
+            next_step="The Clerk's log names the cause; restart the Clerk once that is fixed.",
+        )
+    return ClerkUnreachable(f"Clerk {clerk_id} {failed}", next_step=next_step)
 
 
 def _refusal_excerpt(body: bytes | None) -> str:
@@ -270,9 +304,11 @@ class LaneRouter:
                 operation.operation_id,
                 _refusal_excerpt(result.body),
             )
-            raise ClerkUnreachable(
-                f"Clerk {clerk_id} failed serving {operation.operation_id} "
-                f"with {result.status_code}.",
+            raise _lane_server_error(
+                clerk_id,
+                session,
+                failed=f"failed serving {operation.operation_id} with {result.status_code}.",
+                cannot=f"cannot serve {operation.operation_id}",
                 next_step="Retry once the lane recovers from the reported "
                 "server error; the lane's own log names the cause.",
             )
@@ -359,9 +395,11 @@ class LaneRouter:
                 operation.operation_id,
                 _refusal_excerpt(result.error_body),
             )
-            raise ClerkUnreachable(
-                f"Clerk {clerk_id} failed opening {operation.operation_id} "
-                f"with {result.status_code}.",
+            raise _lane_server_error(
+                clerk_id,
+                session,
+                failed=f"failed opening {operation.operation_id} with {result.status_code}.",
+                cannot=f"cannot open {operation.operation_id}",
                 next_step="Retry opening the stream once the lane recovers "
                 "from the reported server error; the lane's own log names "
                 "the cause.",

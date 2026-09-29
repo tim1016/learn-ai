@@ -36,6 +36,9 @@ from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
 )
+from app.broker.alpaca.clerk.sqlite.account_eligibility import (
+    AUTHORITY_RECONNECTING_HEADLINE as _AUTHORITY_RECONNECTING_HEADLINE,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
@@ -161,6 +164,14 @@ def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
     custody authority left Home quiet. Recovery is an offline step the
     account's order records and recovery explain.
     """
+    if failure.reconnecting:
+        # Not a failure (#2582): the authority installs on its own once Alpaca
+        # answers, and this line clears with it.
+        return LaneAttentionItem(
+            condition_id="account:authority-reconnecting", reason_code=failure.reason_code,
+            kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE,
+            action=_ORDER_RECORDS,
+        )
     return LaneAttentionItem(
         condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
         kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,

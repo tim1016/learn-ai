@@ -658,9 +658,9 @@ async def _pin_reobservation_refusal(context: AlpacaRuntimeContext) -> str | Non
     **Only a definite contradiction refuses.** A broker that cannot be reached
     at startup is not a mismatch, and treating it as one would turn a transient
     network blip into a worker with no broker for the life of the process —
-    strictly worse than today, where the boot proceeds and authority selection
-    reports ``BROKER_ACCOUNT_UNAVAILABLE`` and can recover. Every non-mismatch
-    failure therefore falls through to that existing path.
+    strictly worse than letting the boot proceed, where authority selection
+    reports the broker unreachable and reconnects on its own (#2582). Every
+    non-mismatch failure therefore falls through to that existing path.
     """
     if context.account_pin is None:
         return None

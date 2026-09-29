@@ -136,12 +136,16 @@ async def observe_account_quiet(
         first = await _read_once(repo, read)
         second = await _read_once(repo, read) if all(first) else first
     except BrokerError as exc:
+        # The broker's own words, in the message as well as the fields: a
+        # line saying the broker could not be read must say why (#2582).
         logger.warning(
-            "lane-quiet observation could not read the broker",
+            "lane-quiet observation could not read the broker: %s",
+            exc,
             extra={
                 "action": "lane_quiet_broker_unreadable",
                 "account_id": repo.account_id,
                 "error": str(exc),
+                "error_detail": exc.detail,
             },
         )
         return None

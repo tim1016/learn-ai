@@ -196,6 +196,27 @@ class BotBootRecovery:
         )
         return report
 
+    async def repair_restored_dry_run(
+        self, candidates: Iterable[BotRecoveryCandidate]
+    ) -> tuple[str, ...]:
+        """Repair one Dry Run's candidates once boot has restored its own authority (#2582).
+
+        A Dry Run is never in the account's sweep: its custody lives in its
+        own ``sim:`` account, which boot restores off the serving path, one
+        bot at a time. Each candidate gets the sweep's own repair; a Dry Run
+        is never foreign (``_foreign_binding``), so that check has nothing to
+        say here. Returns the bots that received interrupted evidence.
+        """
+        interrupted: list[str] = []
+        for candidate in sorted(
+            set(candidates), key=lambda candidate: (candidate.strategy_instance_id, candidate.run_id)
+        ):
+            if not self._manages_instance(candidate.strategy_instance_id):
+                continue
+            if await self._repair_candidate(candidate, BOOT_SWEEP_PROVENANCE):
+                interrupted.append(candidate.strategy_instance_id)
+        return tuple(interrupted)
+
     async def _repair_lifecycle_artifacts(
         self, provenance: RecoverySweepProvenance
     ) -> tuple[list[str], list[str], list[str]]:

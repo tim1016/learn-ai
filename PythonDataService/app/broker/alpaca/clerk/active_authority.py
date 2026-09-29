@@ -42,6 +42,10 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     developer_reset_refusal,
     open_repository,
+    open_repository_after_lease_expiry,
+    reconnecting_refusal,
+    terminal_startup_recovery,
+    transient_startup_failure,
     unavailable_runtime,
 )
 from app.broker.alpaca.clerk.live_authority import (
@@ -147,14 +151,18 @@ async def select_active_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Alpaca account identity could not be resolved; Clerk unavailable",
-            extra={"action": "active_clerk_account_resolution_failed"},
+            "Alpaca account identity could not be resolved; Clerk unavailable: %s",
+            exc,
+            extra={"action": "active_clerk_account_resolution_failed", "error": str(exc)},
             exc_info=True,
         )
+        transient = transient_startup_failure(exc)
+        if transient is not None:
+            return reconnecting_refusal(transient, account_id=None)
         return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=None,
-            recovery=f"Restore the Alpaca account identity probe: {exc}",
+            recovery=terminal_startup_recovery(f"Alpaca did not identify the account ({exc})"),
         )
     # This read is the identity used to open custody. A separate verification
     # may have been unavailable, or observed different upstream state, so its
@@ -274,10 +282,12 @@ async def select_active_clerk_runtime(
         )
     except Exception as exc:
         logger.warning(
-            "Activated SQLite Alpaca Clerk failed startup; no writer installed",
+            "Activated SQLite Alpaca Clerk failed startup; no writer installed: %s",
+            exc,
             extra={
                 "action": "sqlite_active_clerk_startup_failed",
                 "account_id": account.account_id,
+                "error": str(exc),
             },
             exc_info=True,
         )
@@ -312,11 +322,16 @@ async def activate_synthetic_clerk_authority(
     artifacts_root: Path,
     activation_store: SyntheticActivationStore | None = None,
     clock: Clock = now_ms_utc,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
 ) -> SyntheticActivationRecord:
     """Explicitly initialize and durably activate one isolated ``sim:`` account.
 
-    No startup path calls this helper.  A synthetic account has no authority
-    until a caller deliberately performs this one-time activation step.
+    A synthetic account has no authority until a caller deliberately performs
+    this one-time activation step; the Dry Run's Deploy is that caller. Boot
+    recovery re-enters it for each Dry Run binding it restores, where an
+    existing activation is re-proven against its repository and returned,
+    never appended twice.
     """
     require_synthetic_account_id(account_id)
     record = await activate_isolated_authority(
@@ -324,6 +339,8 @@ async def activate_synthetic_clerk_authority(
         artifacts_root=artifacts_root,
         store=activation_store or SyntheticActivationStore(artifacts_root),
         clock=clock,
+        execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+        execution_lease_retry_interval_s=execution_lease_retry_interval_s,
     )
     assert isinstance(record, SyntheticActivationRecord)
     return record
@@ -338,6 +355,8 @@ async def select_synthetic_clerk_runtime(
     activation_store: SyntheticActivationStore | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    execution_lease_wait_timeout_s: float = 0.0,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     simulation_initial_cash: Decimal | None = None,
     projection_only: bool = False,
 ) -> ActiveClerkRuntime:
@@ -347,6 +366,8 @@ async def select_synthetic_clerk_runtime(
     the opened repository must agree before a Clerk is returned.
     A projection-only opening retains existing custody recovery, but never
     samples simulated financial state or starts its observation cadence.
+    The execution-lease wait is a single attempt unless the caller asks for
+    one; boot asks, because a restart meets its dead predecessor's lease.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -382,7 +403,13 @@ async def select_synthetic_clerk_runtime(
     sweep: ReconciliationSweep | None = None
     envelope_sync: LiveEnvelopeSync | None = None
     try:
-        repository = repository_opener(account_id, artifacts_root)
+        repository = await open_repository_after_lease_expiry(
+            repository_opener,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
+        )
         meta = repository.control_meta_snapshot()
         if (
             meta.authority_generation != activation.authority_generation
@@ -443,13 +470,17 @@ async def select_synthetic_clerk_runtime(
             envelope_sync.start()
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
-    except Exception as exc:
+    except BaseException as exc:
+        # A cancelled opening -- boot's Dry Run restoration interrupted by
+        # shutdown (#2582) -- releases its lease and heartbeat like a failed one.
         if envelope_sync is not None:
             await envelope_sync.stop()
         if sweep is not None:
             await sweep.stop()
         if repository is not None:
             repository.close()
+        if not isinstance(exc, Exception):
+            raise
         return unavailable_runtime(
             "SYNTHETIC_CLERK_STARTUP_FAILED",
             account_id=account_id,
@@ -553,6 +584,25 @@ def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
         _authority_registry.register(runtime)
 
 
+def install_primary_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
+    """Make ``runtime`` the primary authority, keeping every other registered one.
+
+    The composition root installs every selection here: the boot's first one,
+    and the authority a reconnect selects once Alpaca answers again (#2582).
+    By a reconnect, boot recovery has registered the Dry Runs' own authorities
+    and their bots may be running; ``set_active_clerk_runtime`` would drop
+    those registrations unclosed, still holding their execution leases.
+    """
+    global _runtime
+    previous = _runtime
+    previous_id = None if previous is None else previous.selected_account_id
+    if previous_id is not None and _authority_registry.resolve(previous_id) is previous:
+        _authority_registry.unregister(previous_id)
+    _runtime = runtime
+    if runtime.clerk is not None and runtime.selected_account_id is not None:
+        _authority_registry.register(runtime)
+
+
 def register_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
     """Add an authority without replacing the real-paper compatibility selection."""
     _authority_registry.register(runtime)
@@ -621,6 +671,7 @@ __all__ = [
     "get_active_clerk_runtime",
     "get_alpaca_clerk",
     "get_clerk_runtime",
+    "install_primary_clerk_runtime",
     "primary_custody_world",
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",
