@@ -13,22 +13,19 @@ import pytest
 from app.broker.alpaca.clerk.sqlite import qualification_shadow_trace
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import run_shadow_trace_evaluation
 from app.engine.data.trade_bar import TradeBar
+from app.engine.engine import BacktestEngine
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.services.run_replay_proof import engine_parity_over_bars, to_trade_bar
 from app.services.source_bar_ledger import RetainedSourceBar
+from app.services.spec_strategy_runner import InMemoryDataReader
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 from tests._helpers.bot_runner.ema_parity import (
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
     lean_cell_bars,
 )
-
-#: The first session after every registered Signal Program's built-in backtest
-#: window: EMA, SMA, RSI and the SPY strategies end theirs on 2026-03-27,
-#: Deployment Validation on 2026-04-15. Every live run since then is dated here.
-_AFTER_EVERY_BUILTIN_WINDOW = date(2026, 4, 16)
 
 _SIGNAL_PROGRAM_KEYS = sorted(
     key for key, registration in _STRATEGY_REGISTRY.items() if registration.signal_program_factory is not None
@@ -64,14 +61,28 @@ def _fixture_trade_bars() -> list[TradeBar]:
     return _trade_bars(_ema_parity_bars_through_first_exit())
 
 
-def _bars_after_every_builtin_window() -> list[TradeBar]:
-    """SPY's retained LEAN minutes from 2026-04-16 through 2026-04-30."""
+def _builtin_window_end(strategy_key: str) -> date:
+    """The last date of ``strategy_key``'s built-in backtest window.
+
+    Read after the strategy's own ``initialize()``, which the engine calls at
+    the start of a run, so a window moved there is picked up here too.
+    """
+    registration = _STRATEGY_REGISTRY[strategy_key]
+    strategy = registration.build(registration.param_schema(symbol="SPY"))
+    BacktestEngine(InMemoryDataReader([])).run(strategy)
+    assert strategy.end_date is not None
+    return strategy.end_date.date()
+
+
+def _bars_after_builtin_window(strategy_key: str) -> list[TradeBar]:
+    """SPY's retained LEAN minutes dated after ``strategy_key``'s built-in window."""
+    window_end = _builtin_window_end(strategy_key)
     market_bars = lean_cell_bars(
         "SPY_W3mo_2026-02-02_to_2026-04-30", symbol="SPY", stop_after_ms=MAX_TIMESTAMP_MS
     )
-    return _trade_bars(
-        [bar for bar in market_bars if et_date_at_ms(bar.start_ms) >= _AFTER_EVERY_BUILTIN_WINDOW]
-    )
+    late_bars = [bar for bar in market_bars if et_date_at_ms(bar.start_ms) > window_end]
+    assert late_bars, f"the SPY fixture holds no minute after {strategy_key}'s built-in window ({window_end})"
+    return _trade_bars(late_bars)
 
 
 def test_engine_parity_over_bars_proves_the_shared_seam_on_real_bars() -> None:
@@ -92,7 +103,7 @@ def test_engine_parity_over_bars_compares_every_trace_of_a_run_after_the_builtin
     """#2608: the reference backtest used to read only its strategy's built-in
     window, so a run dated after it was compared with an empty reference and
     diverged at index 0 ("reference sequence exhausted")."""
-    bars = _bars_after_every_builtin_window()
+    bars = _bars_after_builtin_window(strategy_key)
 
     result = engine_parity_over_bars(strategy_key, "SPY", None, bars)
 
@@ -109,7 +120,7 @@ def test_engine_parity_over_bars_reports_a_live_side_divergence_at_its_trace(
     Only the live side's feed is perturbed: perturbing the shared bar list
     would change both seams alike and hide the divergence.
     """
-    bars = _bars_after_every_builtin_window()
+    bars = _bars_after_builtin_window("ema_crossover_signal")
     perturbed_close_ms = session_close_ms_utc(_PERTURBED_SESSION)
     baseline = asyncio.run(run_shadow_trace_evaluation("ema_crossover_signal", "SPY", None, bars))
     expected_index = next(

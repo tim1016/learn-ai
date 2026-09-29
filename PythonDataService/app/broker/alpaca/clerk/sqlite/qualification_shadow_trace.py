@@ -217,11 +217,11 @@ def _reference_backtest_traces(
     """Recompute the already-qualified trace via the sole Backtest seam.
 
     The backtest runs over exactly ``bars``: its window is the New York dates
-    of the first and last bar, never the strategy's built-in default. That
-    default ends in March or April 2026, and the reader drops every bar
-    outside the window, so a later run used to be compared with an empty
-    reference (#2608). Raises ``IncompleteReferenceReplayError`` when the
-    engine still processed fewer bars than it was handed.
+    of the first and last bar, never the strategy's built-in default. The
+    reader drops every bar outside the window, so a run dated after that
+    default used to be compared with an empty reference (#2608). Raises
+    ``IncompleteReferenceReplayError`` when the engine still processed fewer
+    bars than it was handed.
     """
     registration = _registered_signal_program(strategy_key)
     strategy = registration.build(params)

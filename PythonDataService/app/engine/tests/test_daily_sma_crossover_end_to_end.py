@@ -44,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from app.engine.data.lean_format import LeanDailyDataReader
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.sma_crossover import (
@@ -97,15 +97,7 @@ def run_end_to_end() -> None:
 
     # Override the strategy's default (intraday) date range with a window
     # that both fits the AAPL reference coverage and produces crosses.
-    original_initialize = strategy.initialize
-
-    def _wrapped_initialize() -> None:
-        original_initialize()
-        strategy.set_start_date(2018, 1, 1)
-        strategy.set_end_date(2021, 3, 31)
-        strategy.set_cash(100000)
-
-    strategy.initialize = _wrapped_initialize  # type: ignore[assignment]
+    pin_strategy_window(strategy, date(2018, 1, 1), date(2021, 3, 31), cash=100000)
 
     reader = LeanDailyDataReader(LEAN_DATA_ROOT)
     engine = BacktestEngine(

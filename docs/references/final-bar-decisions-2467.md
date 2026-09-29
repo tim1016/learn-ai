@@ -163,10 +163,12 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 
 **Why the receipts never showed this.** The production version of this very check compared **zero traces in all 24 runs**. It stopped at index 0 with "reference sequence exhausted". The cause:
 
-- `qualification_shadow_trace._reference_backtest_traces` runs the strategy over its built-in default window (`qualification_shadow_trace.py:202-216`). For EMA that window is 2024-03-28 to 2026-03-27 (`ema_crossover_signal.py:204-205`); for Deployment Validation it ends 2026-04-15.
+- `qualification_shadow_trace._reference_backtest_traces` ran the strategy over its built-in default window (`qualification_shadow_trace.py:202-216` at `f25eb718`, before #2608). For EMA that window is 2024-03-28 to 2026-03-27 (`ema_crossover_signal.py:204-205`); for Deployment Validation it ends 2026-04-15.
 - `InMemoryDataReader` drops every bar outside that window (`app/services/spec_strategy_runner.py:65-71`).
-- So every run replay receipt after March 2026 fails its engine-parity leg. The saved receipt for `sh-ema-spy-0910` shows exactly this divergence. [Known gaps](../known-gaps.md) calls it "an uninvestigated engine-parity sequence-exhaustion failure".
-- With the window set to the bars' own dates, the same check passes on every held ledger (#2608).
+- So every run replay receipt after March 2026 failed its engine-parity leg. The saved receipt for `sh-ema-spy-0910` shows exactly this divergence. [Known gaps](../known-gaps.md) called it "an uninvestigated engine-parity sequence-exhaustion failure" until #2608 recorded the cause.
+- With the window set to the bars' own dates, the same check passes on every held ledger. Since #2608 (2026-09-29) that is the production check: the reference takes its window from the bars it is handed.
+
+**The committed JSON predates #2608.** [final-bar-decisions-2467.json](final-bar-decisions-2467.json) was produced before #2608 changed the script's output. Its `grouping_parity` rows carry `production_check_*` (the receipt's check, still reading the default window) and `windowed_*` (the same check over the bars' own dates). The script now runs only the production check and reports `compared`, `final_bar_traces` and `divergence`.
 
 ## Recommendation, with the numbers behind it
 
@@ -233,7 +235,7 @@ Filed as #2596 (P1) after the first draft of this note; a fix is in progress. Th
 | `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. This settles #2602's `LiveConfig.sizing` criterion by removal: no code outside the dead module constructs a `LiveConfig`, so no run id hashes one today. (#2609) |
 | `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Decide inside #2607: derive them from the calendar, or remove them with the contract regenerated |
 | `FinalBarPolicyEngine` in this note's script | It overrides the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). The script checks the hook exists and ran, so a rename fails loudly. | Delete it inside #2607, once the engine models final bars itself |
-| The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replace it when #2608 lands |
+| The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replaced with the cause and fix by #2608 (2026-09-29) |
 
 ## Follow-ups
 

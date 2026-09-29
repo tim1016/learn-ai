@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
@@ -242,14 +242,7 @@ def run_parity_test() -> None:
     )
     # The strategy's initialize() sets a SPY date range by default; override
     # it post-hoc to match our synthetic data window.
-    orig_init = strategy.initialize
-
-    def _init_override() -> None:
-        orig_init()
-        strategy.set_start_date(2024, 1, 2)
-        strategy.set_end_date(2024, 1, 31)
-
-    strategy.initialize = _init_override  # type: ignore[assignment]
+    pin_strategy_window(strategy, date(2024, 1, 2), date(2024, 1, 31))
 
     reader = _FakeDataReader(bars=minute_bars)
     engine = BacktestEngine(
