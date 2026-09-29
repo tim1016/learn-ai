@@ -1059,7 +1059,7 @@ class ClerkSqliteRepository(
 
     def record_deploy_launched(self, *, strategy_instance_id: str, lifecycle_run_id: str) -> None:
         """Idempotently record process launch while the consent's run is active."""
-        from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+        from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 
         with self._write_lock:
             budget = self.deployment_budget(strategy_instance_id)

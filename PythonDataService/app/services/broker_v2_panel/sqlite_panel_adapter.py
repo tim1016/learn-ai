@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.program_leg import LegRefusal
@@ -21,7 +22,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_bps,
     realized_slippage_cost,
 )
-from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult, BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero

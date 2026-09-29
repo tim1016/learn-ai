@@ -28,7 +28,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
 from app.schemas.broker_bots import (

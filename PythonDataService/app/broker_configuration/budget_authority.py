@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker_configuration.errors import BrokerConfigurationError, RevisionConflict
