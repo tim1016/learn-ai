@@ -96,9 +96,15 @@ class _HistoryFloor:
     GTC working across genesis). Those executions never move the floor: the
     walk continues until they explain the order's filled quantity, and they
     reach only the external cash claim, never a fee day.
+
+    ``began_at_ms`` is the genesis instant itself. The floor is a day because
+    fees post per session; which executions are inside the cash custody
+    started from is decided by the instant, so an outside sale earlier on
+    genesis day is as old as one the day before (H35).
     """
 
     day: date | None
+    began_at_ms: int | None
     # Broker order ids of the external orders custody tracks.
     tracked: frozenset[str]
     # Every tracked external order's filled quantity is witnessed. Until then
@@ -129,7 +135,9 @@ def _history_floor(
         if row.activity_type in {"FILL", "PARTIAL_FILL"} and row.native_order_id in required and row.occurred_at_ms is not None:
             witnessed[row.native_order_id] += _normalized_or_none(row.quantity) or 0
     explained = all(quantity is not None and witnessed[order] >= quantity for order, quantity in required.items())
-    return _HistoryFloor(min(days, default=None), frozenset(required), explained)
+    return _HistoryFloor(
+        min(days, default=None), None if genesis is None else int(genesis[0]), frozenset(required), explained
+    )
 
 
 def _evidence_window(snapshots: Sequence[FeeEvidenceFacts]) -> _EvidenceWindow:
@@ -396,10 +404,11 @@ def custody_fee_attribution(
     }
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
+    pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
     from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
 
-    # ``None`` marks the pre-floor executions: claimed, never priced.
+    # ``None`` marks the pre-floor executions: they open no fee day.
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
@@ -433,7 +442,13 @@ def custody_fee_attribution(
             )
             if day is not None:
                 grouped[day].append(external)
-            external_fills.append(external)
+            # Before custody began, the execution is inside the cash custody
+            # started from (H35): it proves its order's filled quantity and
+            # nothing else -- never a lot, a price, or a sale still settling.
+            if floor.began_at_ms is not None and row.occurred_at_ms < floor.began_at_ms:
+                pre_custody_quantities[row.native_order_id] += external.quantity
+            else:
+                external_fills.append(external)
     population_complete = population_complete and external_orders <= witnessed_external
     shares = []
     unresolved = []
@@ -503,5 +518,6 @@ def custody_fee_attribution(
         observed if observed_known else None,
         predicted if predicted_known else None,
         external_fills=tuple(external_fills),
+        pre_custody_quantities=dict(pre_custody_quantities),
         unattributed_charges=tuple(unattributed_charges),
     )

@@ -28,7 +28,10 @@ export type CohortFlattenView = components['schemas']['CohortFlattenView'];
 export type CohortFlattenCohort = components['schemas']['CohortFlattenCohort'];
 export type CohortFlattenLeg = components['schemas']['CohortFlattenLeg'];
 export type CohortFlattenRequest = components['schemas']['CohortFlattenRequest'];
-/** The batch outcome both cohort actions report. */
+/** Clear finished bots from Home: one per-bot archive leg each (owner decision
+ * 2026-09-28; ADR 0052 §4). */
+export type BotClearRequest = components['schemas']['BotClearRequest'];
+/** The batch outcome both cohort actions and the bulk clear report. */
 export type CohortActionResult = components['schemas']['CohortActionResult'];
 export type CohortLegResult = components['schemas']['CohortLegResult'];
 

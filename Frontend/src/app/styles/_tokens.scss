@@ -313,8 +313,19 @@ $container-lg: 1400px;
   // lane colour: it is dashed and says "DRY RUN".
   --lane-live:        var(--bear);
   --lane-live-soft:   var(--bear-soft);
-  --lane-paper:       #26c6da;
+  --lane-paper:       #{$chart-series-teal};
   --lane-paper-soft:  rgba(38, 198, 218, 0.14);
-  --lane-shadow:      #a78bfa;
+  --lane-shadow:      #{$chart-series-violet};
   --lane-shadow-soft: rgba(167, 139, 250, 0.14);
+  // Loud fills for the two worlds that must never read as calm: Live, and a
+  // lane whose world is undetermined ("assume real money"). Text on either
+  // fill is --lane-on-fill (≥ 7:1).
+  --lane-live-fill:         rgba(90, 12, 20, 0.72);
+  --lane-undetermined:      #ffb020;
+  --lane-undetermined-fill: rgba(122, 61, 0, 0.85);
+  --lane-on-fill:           #fff;
+  // The mode word's tint on the calm pills (≥ 7:1 on the pill background).
+  --lane-paper-text:  #b9edff;
+  --lane-live-text:   #ffd0cf;
+  --lane-shadow-text: #d9caff;
 }

@@ -1,9 +1,13 @@
+import { DOCUMENT } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  effect,
+  DestroyRef,
   ElementRef,
+  EnvironmentInjector,
+  inject,
+  afterNextRender,
   input,
   output,
   signal,
@@ -16,6 +20,12 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
  * An optional exact token preserves deliberate friction for destructive
  * actions; an empty token provides the same accessible surface for ordinary
  * confirmation.
+ *
+ * The dialog is open for exactly as long as it is mounted: every host renders
+ * it under its own `@if` and removes it on `confirmed` or `cancelled`. So the
+ * keyboard enters it when it is created and, after a cancel, goes back to
+ * what opened it when it is destroyed (PRD #2560 story 80). A confirm leaves
+ * the keyboard to its host, which moves it to the outcome.
  */
 @Component({
   selector: 'app-typed-halt-confirm',
@@ -36,8 +46,6 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
   styleUrl: './typed-halt-confirm.component.scss',
 })
 export class TypedHaltConfirmComponent {
-  /** When ``true`` the dialog is open; toggle to ``false`` on confirm or cancel. */
-  readonly open = input.required<boolean>();
   /** Heading shown above the message. */
   readonly heading = input.required<string>();
   /** Body copy explaining what the action does.  Operator-language. */
@@ -69,6 +77,11 @@ export class TypedHaltConfirmComponent {
   readonly confirmed = output();
   readonly cancelled = output();
 
+  private readonly _document = inject(DOCUMENT);
+  /** What had the keyboard when the dialog opened: a cancel hands it back. */
+  private readonly _opener: HTMLElement | null;
+  private _cancelled = false;
+
   private readonly _typed = signal<string>('');
   private readonly _input = viewChild<ElementRef<HTMLInputElement>>('tokenInput');
   private readonly _cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
@@ -78,18 +91,26 @@ export class TypedHaltConfirmComponent {
   );
 
   constructor() {
-    effect(() => {
-      // Reset the typed field whenever the dialog re-opens so a prior
-      // value cannot bleed into a fresh confirmation flow.
-      if (this.open()) {
-        this._typed.set('');
-        // Focus the token input when present, otherwise (tokenless plain-confirm
-        // mode) the Cancel control, so keyboard focus enters the dialog instead
-        // of resting on the toolbar action behind the modal.
-        queueMicrotask(() =>
-          (this._input()?.nativeElement ?? this._cancelButton()?.nativeElement)?.focus(),
-        );
-      }
+    const active = this._document.activeElement;
+    this._opener = active instanceof HTMLElement ? active : null;
+    // Focus the token input when present, otherwise (tokenless plain-confirm
+    // mode) the Cancel control, so keyboard focus enters the dialog instead
+    // of resting on the toolbar action behind the modal.
+    afterNextRender({
+      write: () => (this._input()?.nativeElement ?? this._cancelButton()?.nativeElement)?.focus(),
+    });
+    // Hand the keyboard back once the host's render settles, not mid-render:
+    // a host may re-enable its opener only after removing the dialog (the
+    // cohort drawer's Review). The app injector outlives this component,
+    // whose own render hooks die with it.
+    const appInjector = inject(EnvironmentInjector);
+    inject(DestroyRef).onDestroy(() => {
+      const opener = this._opener;
+      if (!this._cancelled || opener === null) return;
+      afterNextRender(
+        { write: () => { if (opener.isConnected) opener.focus(); } },
+        { injector: appInjector },
+      );
     });
   }
 
@@ -109,13 +130,14 @@ export class TypedHaltConfirmComponent {
     this.confirmed.emit(undefined);
   }
 
+  /** Cancel; the host then removes the dialog, and its destruction hands
+   * the keyboard back to whatever opened it. */
   onCancel(): void {
+    this._cancelled = true;
     this.cancelled.emit(undefined);
   }
 
   onEscape(): void {
-    if (this.open()) {
-      this.onCancel();
-    }
+    this.onCancel();
   }
 }

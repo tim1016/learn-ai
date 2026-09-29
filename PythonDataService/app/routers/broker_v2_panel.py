@@ -43,6 +43,7 @@ from app.schemas.broker_bots import (
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotClearRequest,
     BotPanelLiveSnapshot,
     BotPanelView,
     ChartHistoryResponse,
@@ -76,6 +77,7 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
+    bot_clear,
     budget_deploy,
     cohort_flatten,
     panel_deploy,
@@ -830,6 +832,32 @@ async def run_cohort_flatten_scoped(
 ) -> CohortActionResult:
     try:
         result = await cohort_flatten.run_cohort_flatten(
+            broker,
+            account_id,
+            request,
+            operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+        )
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+    for leg in result.legs:
+        if leg.outcome in ("applied", "replayed"):
+            schedule_live_projection_refresh(broker, account_id, leg.strategy_instance_id)
+    return result
+
+
+# ── §11c Clear finished bots (owner decision 2026-09-28, ADR 0052 §4) ────────
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots/clear",
+    response_model=CohortActionResult,
+    summary="Clear finished bots from Home: one per-bot archive leg each, with per-leg outcomes (ADR 0052)",
+)
+async def clear_bots_scoped(
+    broker: str, account_id: str, request: BotClearRequest
+) -> CohortActionResult:
+    try:
+        result = await bot_clear.clear_bots(
             broker,
             account_id,
             request,

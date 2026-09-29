@@ -548,7 +548,7 @@ def _sync_position_drift(
             "attributed exposure outside the accepted tolerance, or remains unproven "
             "while a captured order for that symbol is still working at the broker."
         ),
-        operator_impact=("New positions are paused account-wide. Recognized risk reduction remains available."),
+        operator_impact=("New positions are on hold account-wide. Recognized risk reduction remains available."),
         next_step="Reconcile now, then review the affected symbols before resuming.",
         evidence_refs=("fresh_position_snapshot",),
         cause_facts=cause.to_mapping(),
@@ -565,7 +565,7 @@ def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> 
         headline="Broker account truth is unavailable",
         explanation=why,
         operator_impact=(
-            "New exposure and unproven reduction are paused account-wide until a fresh "
+            "New exposure and unproven reduction are on hold account-wide until a fresh "
             "snapshot succeeds. Cancellation and reconciliation remain available."
         ),
         next_step="Reconcile now after broker connectivity is restored.",
@@ -587,7 +587,7 @@ def _raise_incomplete_reconciliation_uncertainty(repo: ClerkSqliteRepository) ->
             "could be proven consistent."
         ),
         operator_impact=(
-            "New exposure and unproven reduction are paused account-wide until a complete "
+            "New exposure and unproven reduction are on hold account-wide until a complete "
             "reconciliation succeeds. Cancellation and reconciliation remain available."
         ),
         next_step="Inspect the reconciliation failure, correct it, and reconcile again.",

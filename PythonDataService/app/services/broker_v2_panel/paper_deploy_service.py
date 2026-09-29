@@ -942,5 +942,5 @@ def exit_steps_summary(terms: ExitTermsInput | None, now_ms: int) -> str:
         f"Next pre-market ({session_label(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
         f"hold if the spread exceeds {terms.spread_cap_bps:g} bps. "
         f"Next regular open ({session_label(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
-        "then sell the remaining quantity at market. A confirmed halt pauses exits."
+        "then sell the remaining quantity at market. A confirmed halt holds exits."
     )

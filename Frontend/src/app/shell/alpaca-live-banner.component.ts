@@ -5,13 +5,14 @@ import { RouterLink } from '@angular/router';
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import {
   accountWorkspaceBadgeRoute,
-  accountWorkspaceLens,
   accountWorkspaceLocation,
   type AccountWorkspaceLink,
 } from '../fleet/account-workspace';
 import { FleetDirectoryService } from '../fleet/fleet-directory.service';
 import {
+  laneAttention,
   laneConfirmedAccount,
+  type LaneAttention,
   laneDisplayName,
   laneDisplayNameText,
   type LaneDescriptor,
@@ -31,8 +32,8 @@ import { CurrentUrlService } from './current-url.service';
  */
 const ASSUME_REAL_MONEY = 'Assume real money until a read succeeds.';
 
-/** Which of the four treatments a badge renders in. */
-type BadgeTone = 'is-paper' | 'is-live' | 'is-shadow' | 'is-undetermined';
+/** Which of the five treatments a badge renders in. */
+type BadgeTone = 'is-paper' | 'is-live' | 'is-shadow' | 'is-reading' | 'is-undetermined';
 
 /**
  * Everything known about one lane's badge before its extra facts (shadow
@@ -86,26 +87,35 @@ interface LaneBadge {
  * the dense global header — but not the account number, which names the
  * account without guarding anything here (ADR 0064; #2188).
  *
- * **It is also the way to that account** (ADR 0064 Decision 3): the whole
+ * **It is the lane switch** (ADR 0064 Decision 3; PRD #2560 D4): the whole
  * badge is a link into its workspace, on the tab the operator is already
- * standing on. The link wraps the status region rather than replacing it —
- * one element cannot be both a live region and a link, and the warning below
- * is why the live region is the part that must not move.
+ * standing on — the workspace header's account dropdown is retired, so the
+ * pills are the one way between accounts. The link wraps the status region
+ * rather than replacing it — one element cannot be both a live region and a
+ * link, and the warning below is why the live region is the part that must
+ * not move. The pill of the account the operator is in is marked current.
  *
- * **It never renders nothing.** Four distinct things leave a mode
- * undetermined, and all four render the same LOUD amber warning rather than
- * the banned grey "not configured" styling and rather than silence:
+ * **It carries an attention dot** (PRD #2560 D4) from the lane's own
+ * `attention_count` in the fleet directory: a dot when something on the
+ * account needs the owner, a dot with a question mark when the count is
+ * unknown (never a silent zero), none when nothing does. How many, or that
+ * it is unknown, is in the accessible name and the tooltip.
+ *
+ * **It never renders nothing.** Three things leave a mode undetermined, and
+ * all three render the same LOUD amber warning rather than the banned grey
+ * "not configured" styling and rather than silence:
  *
  * 1. the server itself reports `final_verdict: 'unknown'`;
  * 2. this lane's own read failed;
- * 3. no read has completed for this lane yet (~5 s on every boot, and again
- *    whenever a lane joins mid-session);
- * 4. there is no lane at all — the shell passes `null` when the directory is
+ * 3. there is no lane at all — the shell passes `null` when the directory is
  *    still loading or its load failed, which on any non-broker route used to
  *    leave the header calm and badge-less for the entire session.
  *
  * An undeterminable lane could be real money, so the badge says so in its own
- * text and in its accessible name, not only through colour (WCAG 1.4.1).
+ * text and in its accessible name, not only through colour (WCAG 1.4.1). A
+ * lane whose first read has simply not landed yet (~5 s on every boot) is
+ * not undetermined: it reads "Reading…", like the workspace's mode badge
+ * (hurdle H4), so a routine Paper load never warns of real money.
  *
  * Note: the visible pill shows only the compact mode word ("Live" / "Paper" /
  * the undetermined sentence, via `modeWordFor`) — with exactly one paper and
@@ -151,23 +161,47 @@ interface LaneBadge {
       outline: 2px solid var(--p-primary-color, #6da2ff); outline-offset: 2px;
     }
     .alpaca-banner {
-      display: inline-flex; min-height: 30px; align-items: center; gap: 0.3rem;
-      padding: 0 0.55rem; border-radius: var(--radius-pill);
+      --lane: rgba(178, 181, 190, 0.45);
+      display: inline-flex; min-height: 30px; align-items: center; gap: 0.35rem;
+      padding: 0 0.6rem; border-radius: var(--radius-pill);
       font-size: var(--fs-xs); line-height: 1.2; white-space: nowrap;
-      border: 1px solid rgba(178, 181, 190, 0.45); color: var(--text-primary);
+      border: 1px solid var(--lane); color: var(--text-primary);
       background: rgba(5, 8, 14, 0.42); font-variant-numeric: tabular-nums;
       transition: box-shadow 0.12s ease, border-color 0.12s ease;
     }
-    .alpaca-banner.is-paper { color: #b9edff; border-color: #45b9e1; }
-    .alpaca-banner.is-live { color: #fff; border-color: #ff8b88; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
-    .alpaca-banner.is-shadow { color: #d9caff; border-color: #a78bfa; font-weight: 650; }
-    .alpaca-banner.is-undetermined { color: #fff; border-color: #ffb020; background: rgba(122, 61, 0, 0.85); font-weight: 750; }
-    .alpaca-banner.is-active {
-      border-width: 2px;
-      box-shadow: inset 0 0 0 1px var(--p-primary-color, #6da2ff);
+    /* The lane tokens (PRD #2560 D4): the pill's colour is its account's
+       lane; the mode word inside it is the carrier, never the colour. */
+    .alpaca-banner.is-paper { --lane: var(--lane-paper); color: var(--lane-paper-text); }
+    .alpaca-banner.is-live {
+      --lane: var(--lane-live); color: var(--lane-on-fill); background: var(--lane-live-fill); font-weight: 750;
+    }
+    .alpaca-banner.is-shadow { --lane: var(--lane-shadow); color: var(--lane-shadow-text); font-weight: 650; }
+    .alpaca-banner.is-reading { color: var(--text-secondary); border-style: dashed; }
+    .alpaca-banner.is-undetermined {
+      --lane: var(--lane-undetermined); color: var(--lane-on-fill); background: var(--lane-undetermined-fill);
+      font-weight: 750;
+    }
+    /* The account you are in: a heavier rim. Live and undetermined keep their
+       loud fills, so the pill you stand on never reads quieter than the rest. */
+    .alpaca-banner.is-active { border-width: 2px; }
+    .alpaca-banner.is-active:not(.is-live):not(.is-undetermined) {
+      background: color-mix(in srgb, var(--lane) 18%, rgba(5, 8, 14, 0.42));
     }
     .alpaca-banner__mode { font-weight: 750; }
     .alpaca-banner__lane { font-weight: 500; opacity: 0.7; }
+    /* The attention dot: its presence (a shape), not its colour, says the
+       account needs you; the accessible name and tooltip say how many. An
+       unknown count is a hollow dot with a question mark, never no dot. */
+    .alpaca-banner__dot {
+      display: inline-flex; width: 7px; height: 7px; flex: none;
+      border-radius: 50%; background: var(--warn, #ff9800);
+    }
+    .alpaca-banner__dot.is-unknown {
+      width: auto; height: auto; min-width: 0.85rem; padding: 0 0.15rem;
+      align-items: center; justify-content: center;
+      background: transparent; border: 1px dashed currentColor;
+      font-size: 0.65rem; font-weight: 700; line-height: 1;
+    }
   `],
   template: `
     @let b = badge();
@@ -180,6 +214,10 @@ interface LaneBadge {
         [attr.aria-label]="b.ariaLabel"
         [attr.title]="b.detail"
       >
+        @switch (attention().kind) {
+          @case ('count') { <span class="alpaca-banner__dot" aria-hidden="true"></span> }
+          @case ('unknown') { <span class="alpaca-banner__dot is-unknown" aria-hidden="true">?</span> }
+        }
         <span class="alpaca-banner__mode">{{ b.mode }}</span>
         @if (b.laneHint) {
           <span class="alpaca-banner__lane">· {{ b.laneHint }}</span>
@@ -192,6 +230,7 @@ interface LaneBadge {
         class="alpaca-banner__link"
         [routerLink]="link.commands"
         [queryParams]="link.queryParams"
+        [attr.aria-current]="isActive() ? 'true' : null"
       >
         <ng-container [ngTemplateOutlet]="chip" />
       </a>
@@ -222,19 +261,19 @@ export class AlpacaLiveBannerComponent {
   protected readonly destination = computed<AccountWorkspaceLink | null>(() => {
     const lane = this.lane();
     if (lane === null) return null;
-    const url = this.currentUrl();
-    const from = accountWorkspaceLocation(url);
-    return accountWorkspaceBadgeRoute(
-      from,
-      {
-        broker: lane.broker,
-        clerkId: lane.clerk_id,
-        accountId: laneConfirmedAccount(lane),
-      },
-      // A lens is a workspace's own perspective: outside one there is none to
-      // keep, so a stray `?lens=` on some other page never rides along.
-      from === null ? null : accountWorkspaceLens(url),
-    );
+    return accountWorkspaceBadgeRoute(accountWorkspaceLocation(this.currentUrl()), {
+      broker: lane.broker,
+      clerkId: lane.clerk_id,
+      accountId: laneConfirmedAccount(lane),
+    });
+  });
+
+  /** The attention dot's state: none, a count, or unknown — `null` or an
+   * absent count is unknown, never a zero. The roster-unknown badge has no
+   * lane to count for, so it has no dot. */
+  protected readonly attention = computed<LaneAttention>(() => {
+    const lane = this.lane();
+    return lane === null ? { kind: 'none' } : laneAttention(lane);
   });
 
   /** Whether the operator is currently standing inside this lane's own
@@ -257,7 +296,7 @@ export class AlpacaLiveBannerComponent {
         mode: 'Alpaca lanes unknown — assume real money',
         headline: 'The Alpaca lane directory has not resolved',
         detail: `The shell cannot list this browser's Alpaca lanes, so no lane's mode is known. ${ASSUME_REAL_MONEY}`,
-      }));
+      }), this.attention());
     }
 
     const siblings = this.fleetDirectory.lanesOf(lane.broker);
@@ -277,8 +316,9 @@ export class AlpacaLiveBannerComponent {
     const laneHint = collides ? laneDisplayNameText({ name, disambiguator }) : null;
 
     const { verdict, lastError } = state;
+    const attention = this.attention();
     if (verdict !== null) {
-      return finalizeBadge(verdictBadge({ lane: name, disambiguator, laneHint, mode, verdict }));
+      return finalizeBadge(verdictBadge({ lane: name, disambiguator, laneHint, mode, verdict }), attention);
     }
     if (lastError !== null) {
       return finalizeBadge(undetermined({
@@ -288,41 +328,65 @@ export class AlpacaLiveBannerComponent {
         mode,
         headline: 'Account verdict unavailable — the last read failed',
         detail: `The shell could not read this lane's Alpaca live verdict. ${ASSUME_REAL_MONEY}`,
-      }));
+      }), attention);
     }
-    return finalizeBadge(undetermined({
-      lane: name,
-      disambiguator,
+    // A routine cold load (hurdle H4, PRD #2560 story 36): the first read has
+    // not landed yet, which is not a failure, so the pill says it is reading
+    // — the same state the workspace's mode badge renders — rather than a
+    // real-money warning on every Paper page load. A failed or `unknown` read
+    // stays loud.
+    const accessibleName = laneDisplayNameText({ name, disambiguator });
+    return finalizeBadge({
+      tone: 'is-reading',
       laneHint,
       mode,
-      headline: 'Account verdict not yet read for this lane',
-      detail: `No live-verdict read has completed for this lane yet. ${ASSUME_REAL_MONEY}`,
-    }));
+      ariaLabel: `${accessibleName}: Reading account mode…`,
+      detail: 'Reading this account\'s mode; it is read every few seconds.',
+      shadow: false,
+      lossHold: false,
+      refusalCode: null,
+    }, attention);
   });
 }
 
-/** Folds `shadow` / `lossHold` / `refusalCode` into the
- * accessible name and the tooltip and drops them from the rendered type —
+/** Folds `shadow` / `lossHold` / `refusalCode` and the attention dot into
+ * the accessible name and the tooltip and drops them from the rendered type —
  * the one place those facts turn into text, so trimming the pill's
- * visible content down to the mode word can never mean losing them; they
- * move to the hover/screen-reader surface instead. */
-function finalizeBadge(raw: LaneBadgeFacts): LaneBadge {
+ * visible content down to the mode word and a dot can never mean losing
+ * them; they move to the hover/screen-reader surface instead. */
+function finalizeBadge(raw: LaneBadgeFacts, attention: LaneAttention): LaneBadge {
   const parts: string[] = [];
   if (raw.shadow) parts.push('Shadow authority');
   if (raw.lossHold) parts.push('loss hold');
   if (raw.refusalCode) parts.push(formatReceiptLabel(raw.refusalCode));
 
-  const { tone, mode, laneHint, ariaLabel, detail } = raw;
-  if (parts.length === 0) return { tone, mode, laneHint, ariaLabel, detail };
+  const { tone, mode, laneHint } = raw;
+  let { ariaLabel, detail } = raw;
+  if (parts.length > 0) {
+    const extras = parts.join(' · ');
+    ariaLabel = `${ariaLabel} — ${extras}.`;
+    detail = `${detail} ${extras}.`;
+  }
+  const needs = attentionSentence(attention);
+  if (needs !== null) {
+    ariaLabel = `${ariaLabel} ${needs}`;
+    detail = `${detail} ${needs}`;
+  }
+  return { tone, mode, laneHint, ariaLabel, detail };
+}
 
-  const extras = parts.join(' · ');
-  return {
-    tone,
-    mode,
-    laneHint,
-    ariaLabel: `${ariaLabel} — ${extras}.`,
-    detail: `${detail} ${extras}.`,
-  };
+/** What the attention dot means, in words — `null` when there is no dot. */
+function attentionSentence(attention: LaneAttention): string | null {
+  switch (attention.kind) {
+    case 'none':
+      return null;
+    case 'count':
+      return attention.count === 1
+        ? '1 thing on this account needs you.'
+        : `${attention.count} things on this account need you.`;
+    case 'unknown':
+      return 'Whether anything on this account needs you is unknown.';
+  }
 }
 
 /**
@@ -337,17 +401,40 @@ function finalizeBadge(raw: LaneBadgeFacts): LaneBadge {
  * that split is intentional rather than the #2185 kind of drift.
  */
 function modeWordFor(state: LaneVerdictState): string {
-  if (state.verdict !== null) {
-    switch (state.verdict.final_verdict) {
-      case 'paper': return 'Paper';
-      case 'live': return 'Live';
-      case 'shadow': return 'Shadow';
-      case 'unknown': return 'Mode unknown — assume real money';
-    }
+  if (state.verdict === null) {
+    return state.lastError !== null ? 'Mode unavailable — assume real money' : 'Reading…';
   }
-  return state.lastError !== null
-    ? 'Mode unavailable — assume real money'
-    : 'Mode not yet read — assume real money';
+  // No fall-through: every case returns, so a verdict missing here is a
+  // compile error ("not all code paths return"), not a silent "Reading…".
+  switch (recognisedVerdict(state.verdict)) {
+    case 'paper': return 'Paper';
+    case 'live': return 'Live';
+    case 'shadow': return 'Shadow';
+    case 'unknown': return 'Mode unknown — assume real money';
+  }
+}
+
+/**
+ * `final_verdict` as this build knows it. The wire is not the type: a clerk on
+ * another release can send a value outside the contract's union (#2550
+ * renamed `live-unarmed` to `live`), and that is undetermined — the loud
+ * real-money state — never a fall-through that throws inside `badge` or
+ * leaves the pill reading "Reading…" as if the first read had not landed.
+ * The `satisfies never` makes a verdict added to the contract a compile error
+ * here, so both switches below stay exhaustive.
+ */
+function recognisedVerdict(verdict: AlpacaLiveVerdict): AlpacaLiveVerdict['final_verdict'] {
+  const value = verdict.final_verdict;
+  switch (value) {
+    case 'paper':
+    case 'live':
+    case 'shadow':
+    case 'unknown':
+      return value;
+    default:
+      value satisfies never;
+      return 'unknown';
+  }
 }
 
 function verdictBadge({
@@ -378,7 +465,8 @@ function verdictBadge({
     // separate account-read failure makes the overall verdict unknown.
     shadow: v.clerk_authority === 'shadow',
   };
-  switch (v.final_verdict) {
+  const finalVerdict = recognisedVerdict(v);
+  switch (finalVerdict) {
     case 'paper':
       return {
         ...base,
@@ -389,7 +477,7 @@ function verdictBadge({
     case 'shadow':
       return {
         ...base,
-        tone: v.final_verdict === 'shadow' ? 'is-shadow' : 'is-live',
+        tone: finalVerdict === 'shadow' ? 'is-shadow' : 'is-live',
         refusalCode: null,
       };
     case 'unknown':

@@ -11,8 +11,6 @@ import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
-import { LensTabsComponent } from './shared/lens/lens-tabs.component';
-import { ActiveLensBridgeService } from './shared/lens/active-lens-bridge.service';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
@@ -37,7 +35,6 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
-    LensTabsComponent,
     Toast,
   ],
   styles: [`
@@ -84,18 +81,6 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
       }
     }
 
-    /* Shrinks the shared pill toggle (its own default look, unmodified) to
-       sit comfortably beside the live-mode pills in the top bar. */
-    .shell-lens-toggle ::ng-deep .lens-tabs {
-      padding: 2px;
-    }
-
-    .shell-lens-toggle ::ng-deep .lens-tabs__tab {
-      min-height: auto;
-      padding: 0.3rem 0.75rem;
-      font-size: var(--fs-xs);
-    }
-
     /* Named container "ide" drives the .ide-grid breakpoints declared in
        styles.scss. Lives here (outside any per-page component) so
        container-query measurement is unaffected by tab switches, modal
@@ -122,17 +107,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
-        <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
-          @if (lensHost(); as host) {
-            <app-lens-tabs
-              class="shell-lens-toggle"
-              [ariaLabel]="host.ariaLabel ?? 'Desk perspective'"
-              [idPrefix]="host.idPrefix ?? ''"
-              [panelId]="host.panelId ?? null"
-              [lens]="host.lens()"
-              (lensChange)="host.select($event)"
-            />
-          }
+        <nav class="shell-actions" shell-connection aria-label="Accounts">
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
             <app-lane-attention-bell [lane]="lane" />
@@ -163,15 +138,9 @@ export class AppComponent {
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
   private readonly titleContext = inject(WorkspaceTitleContextService);
-  private readonly lensBridge = inject(ActiveLensBridgeService);
-
-  /** The one Trader/Operator toggle, shown only while some page has
-   * registered as its host (ActiveLensBridgeService) — never a dead control
-   * on pages with no lens. */
-  protected readonly lensHost = this.lensBridge.host;
 
   /** Inside an account workspace the window names what is open and the account
-   * it is open on — "Gallery · Paper" (ADR 0064 Decision 6). The account's
+   * it is open on — "Home · Paper" (ADR 0064 Decision 6). The account's
    * *name* is `laneDisplayName`, never its Paper/Live mode: the two are
    * separate facts that only read alike while a lane has no nickname.
    *
@@ -181,8 +150,8 @@ export class AppComponent {
    * when the URL names a bot is what keeps a stale label from ever reaching a
    * tab's title.
    *
-   * Deploy is one of the tabs (ADR 0064 Decision 1 extended), so opening it
-   * renames the window exactly as switching to Bots or Gallery does. */
+   * Deploy keeps its routed URL (PRD #2560), so opening it renames the
+   * window exactly as switching to Activity or Settings does. */
   private readonly workspaceTitle = computed(() => {
     const location = accountWorkspaceLocation(this.currentUrl());
     if (location === null) return null;

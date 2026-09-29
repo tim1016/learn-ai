@@ -77,7 +77,12 @@ import {
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
-import { DeployMoneyStepComponent, budgetReviewContext, type MoneyReview } from './deploy-money-step.component';
+import {
+  DEPLOY_TYPING_SETTLE_MS,
+  DeployMoneyStepComponent,
+  budgetReviewContext,
+  type MoneyReview,
+} from './deploy-money-step.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
@@ -134,13 +139,6 @@ const UNKNOWN_OUTCOME = deployNotice(
 );
 
 const NOT_COMMITTED_MESSAGE = 'No Deploy was committed for this submission. Nothing was set aside and nothing started.';
-
-/**
- * The symbol input fires per keystroke. Scoping the readiness fetch to every
- * intermediate prefix would burn a request per character and let a stale
- * response land after a newer one; one settle beat is enough.
- */
-const SYMBOL_SCOPE_DEBOUNCE_MS = 400;
 
 function sameParameterValues(
   left: Readonly<Record<string, unknown>>,
@@ -282,6 +280,12 @@ export class AlpacaDeployWorkflowComponent {
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
+  /**
+   * The symbol input fires per keystroke. Scoping the readiness fetch to every
+   * intermediate prefix would burn a request per character and let a stale
+   * response land after a newer one; one settle beat is enough.
+   */
+  private readonly symbolScopeSettleMs = inject(DEPLOY_TYPING_SETTLE_MS);
 
   /** The `?strategy=`, `?from=` and `?submission=` deep links. */
   private readonly queryParams = toSignal(this.route.queryParamMap, {
@@ -1348,7 +1352,7 @@ export class AlpacaDeployWorkflowComponent {
       // the newer scope on the floor: dropped, it strands the page on checks
       // for a symbol the owner has already left, with no way back.
       if (!this.deployView.reload()) this.scheduleSymbolScope(symbol);
-    }, SYMBOL_SCOPE_DEBOUNCE_MS);
+    }, this.symbolScopeSettleMs);
   }
 
   protected setSizingPreset(value: DeploySizingPreset): void {

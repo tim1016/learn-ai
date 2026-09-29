@@ -1,10 +1,8 @@
 import type {
-  AccountOperatorPosture,
   BlockerSeverity,
   Disposition,
   OperatorBlocker,
   OperatorBlockerAnchor,
-  OperatorBlockerAudience,
   OperatorConditionScope,
   OperatorHost,
   OperatorMove,
@@ -15,7 +13,6 @@ interface OperatorBlockerFixtureOptions {
   readonly scope?: OperatorConditionScope;
   readonly host?: OperatorHost;
   readonly anchor?: OperatorBlockerAnchor;
-  readonly audience?: OperatorBlockerAudience;
   readonly severity?: BlockerSeverity;
   readonly disposition?: Disposition;
   readonly headline?: string;
@@ -52,7 +49,6 @@ export function operatorBlockerFixture(
     },
     host: options.host ?? 'bot_cockpit',
     anchor: options.anchor ?? { kind: 'surface', subject_key: null },
-    audience: options.audience ?? 'operator',
     disposition: options.disposition ?? 'fix_elsewhere',
     headline: options.headline ?? 'Broker disconnected',
     detail: hasOwnOption(options, 'detail')
@@ -61,15 +57,5 @@ export function operatorBlockerFixture(
     primary_move: hasOwnOption(options, 'primaryMove') ? options.primaryMove ?? null : DEFAULT_MOVE,
     secondary_moves: options.secondaryMoves ?? [],
     applies_to: options.appliesTo ?? 'both',
-  };
-}
-
-/** A healthy `AccountOperatorPosture` (null condition, no host blockers) for fixtures unrelated to #1664. */
-export function healthyAccountOperatorPostureFixture(): AccountOperatorPosture {
-  return {
-    condition: null,
-    account_desk: null,
-    status_headline: 'Account Clerk custody is healthy',
-    status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
   };
 }

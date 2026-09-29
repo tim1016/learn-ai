@@ -27,15 +27,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
+from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
-from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
+from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
 )
-from app.broker.alpaca.clerk.sqlite.account_operator_posture import build_account_eligibility_posture
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
@@ -66,9 +66,8 @@ from app.schemas.broker_v2_panel import (
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
-from app.services.broker_v2_panel.catalog_projection_service import holdings_text
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
-from app.services.sqlite_clerk_compat import account_operator_posture_context
+from app.services.sqlite_clerk_compat import account_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -172,24 +171,22 @@ def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
 def _account_standing_items(projection: ClerkProjection) -> list[LaneAttentionItem]:
     """What the account's own standing needs from the owner (review B5).
 
-    Judged by the canonical operator posture on the latest account
-    observation already cached (``cached_broker_account_snapshot``) -- never
-    a broker read of its own -- so an account Alpaca blocked, left inactive
-    or runs in the wrong mode is a line on Home and in the bell. Channels and
-    in-flight commands are left out: a channel that holds entries is its own
-    episode above, and a command still resolving needs nothing from the
-    owner. Nothing cached means nothing is claimed either way.
+    Judged by the account's eligibility (``account_eligibility``) on the
+    latest account observation already cached
+    (``cached_broker_account_snapshot``) -- never a broker read of its own --
+    so an account Alpaca blocked, left inactive or runs in the wrong mode is a
+    line on Home and in the bell. A channel that holds entries is its own
+    episode above. Nothing cached means nothing is claimed either way.
     """
     account = cached_broker_account_snapshot("alpaca")
     if account is None:
         return []
-    context = account_operator_posture_context(projection, channel_healths=None, account=account)
-    posture = build_account_eligibility_posture(replace(context, channels_ready=True, outstanding_intents=0))
-    if posture is None or posture.condition is None or posture.account_desk is None:
+    condition = account_eligibility(projection, account)
+    if condition is None:
         return []
     return [LaneAttentionItem(
-        condition_id=f"account:{posture.condition.id}", reason_code=posture.condition.id, kind="account",
-        severity=posture.condition.severity, headline=posture.account_desk.headline,
+        condition_id=f"account:{condition.condition_id}", reason_code=condition.condition_id, kind="account",
+        severity=condition.severity, headline=condition.headline,
         action=LaneAttentionAction(label="Open Settings", destination="settings"),
     )]
 
@@ -260,8 +257,13 @@ def _bot_items(
             items.append(LaneAttentionItem(
                 condition_id=f"lifecycle-unreadable:{sid}", reason_code="LIFECYCLE_UNREADABLE",
                 kind="position_unverified", severity="warning", strategy_instance_id=sid, symbol=bot.symbol,
-                headline=f"{sid}'s lifecycle could not be read, so what it holds is unknown. Check it at the broker.",
-                action=_OPEN_BOT,
+                # Its fix is in the app (hurdle H29): reconciling re-reads
+                # what the account holds at Alpaca.
+                headline=(
+                    f"{sid}'s lifecycle could not be read, so what it holds is unknown. "
+                    "Reconcile now to re-read the account at Alpaca."
+                ),
+                action=_ORDER_RECORDS,
             ))
         elif bot.group == "holding" and sid not in already_named:
             items.append(_stopped_holding_item(repository, sid))

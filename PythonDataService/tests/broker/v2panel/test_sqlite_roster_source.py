@@ -456,7 +456,8 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
 
     result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
-    assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
+    # A retired bot with nothing live in custody is cleared: it is not on Home (#2567).
+    assert [row.strategy_instance_id for row in result] == ["active-spy"]
 
 
 @pytest.mark.asyncio
@@ -477,15 +478,20 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
             return SimpleNamespace(strategy_instance_id=self.strategy_instance_id, **update)
 
     binding = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
+    # A cleared Dry Run (#2567): its sealed simulator is never opened again.
+    cleared = SimpleNamespace(strategy_instance_id="dry-cleared", mode="dry_run")
     facade = _SyntheticFacade()
 
     class _Registry:
         def bindings_for_broker(self, _broker: str) -> list[SimpleNamespace]:
-            return [binding]
+            return [cleared, binding]
+
+        def status(self, _broker: str, sid: str) -> SimpleNamespace:
+            return SimpleNamespace(phase="RETIRED" if sid == cleared.strategy_instance_id else "OFF_DUTY")
 
         @asynccontextmanager
         async def synthetic_runtime_for_projection(self, received_binding: SimpleNamespace):
-            assert received_binding is binding
+            assert received_binding is binding, "a cleared Dry Run's simulator was opened by the poll"
             yield SimpleNamespace(clerk=facade, authority_kind="synthetic")
 
     async def real_catalog(_broker: str, _account_id: str) -> list[object]:
@@ -538,7 +544,8 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     for _ in range(20):
         result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
-    assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
+    # A retired bot with nothing live in custody is cleared: it is not on Home (#2567).
+    assert [row.strategy_instance_id for row in result] == ["active-spy"]
 
 
 async def _resolved_account(_broker: str, account_id: str) -> str:
@@ -1094,7 +1101,8 @@ async def test_catalog_reads_homes_roster_facts_off_the_event_loop(
         rows = await sqlite_panel_source.read_sqlite_catalog_from_facade("alpaca", facade)
 
     assert rows is not None
-    assert [row.strategy_instance_id for row in rows] == ["active-spy", "retired-qqq"]
+    # A retired bot with nothing live in custody is cleared: it is not on Home (#2567).
+    assert [row.strategy_instance_id for row in rows] == ["active-spy"]
     for read, threads in repository.read_threads.items():
         assert threads, f"the catalog never read {read}"
         assert all(thread is not loop_thread for thread in threads), f"{read} ran on the event loop"

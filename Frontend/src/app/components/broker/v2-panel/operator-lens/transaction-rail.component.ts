@@ -24,8 +24,8 @@ import { TransactionEvidenceTimelineComponent } from './transaction-evidence-tim
  *
  * Not-applicable stations come from the capability profile (§4), not from
  * local logic. When `profile` is null the component still renders all
- * stations in `unknown_stale` state — the shell should not render the lens
- * until the profile is loaded.
+ * stations in `unknown_stale` state — the bot page should not render the
+ * rail until the profile is loaded.
  *
  * * */
 @Component({

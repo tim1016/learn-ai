@@ -8,7 +8,7 @@
  * than in a service every surface would have to inject.
  *
  * Three consumers share it: the workspace shell (which tab to mark current,
- * where each tab and the account switcher lead), `app-menu`'s
+ * where each tab and the top-bar account pills lead), `app-menu`'s
  * `activeMenuNodeFor` (every workspace URL highlights Accounts), and
  * `AppComponent`'s window title. Keeping it pure is what lets them agree
  * without one calling the other.
@@ -17,8 +17,6 @@
  * mode, a bot's label) reaches these functions as plain parameters, read by
  * the component that already holds the directory.
  */
-
-import { LENS_QUERY_PARAM } from '../shared/lens/lens';
 
 /** The workspace's tabs, in the order they are presented. Home is the
  * account's money and its bots: Overview, Bots and Gallery merged (D1, D3). */
@@ -79,6 +77,9 @@ export interface AccountWorkspaceLocation {
    * open. A bot's page is not a tab of its own: it belongs to Home, which is
    * what keeps Home highlighted while it is open. */
   readonly botSid: string | null;
+  /** Home is open as its Wall (`?view=wall`). The Wall is how Home is being
+   * looked at, so an account pill keeps it, like the tab (story 38). */
+  readonly wall: boolean;
 }
 
 /** The account — or the account-less lane — a route is built for. A route
@@ -128,12 +129,14 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
   const account = ACCOUNT_WORKSPACE_URL.exec(path);
   if (account !== null) {
     const [, broker, clerkId, accountId, segment, sid] = account;
+    const tab = segment === 'activity' || segment === 'deploy' ? segment : 'home';
     return {
       broker: decodeURIComponent(broker),
       clerkId: decodeURIComponent(clerkId),
       accountId: decodeURIComponent(accountId),
-      tab: segment === 'activity' || segment === 'deploy' ? segment : 'home',
+      tab,
       botSid: sid === undefined ? null : decodeURIComponent(sid),
+      wall: tab === 'home' && sid === undefined && routeQueryOf(url).get(HOME_VIEW_QUERY_PARAM) === HOME_WALL_VIEW,
     };
   }
 
@@ -146,19 +149,8 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
     accountId: null,
     tab: surface === 'settings' ? 'settings' : 'home',
     botSid: null,
+    wall: false,
   };
-}
-
-/**
- * The lens perspective `url` names, or `null` when it names none.
- *
- * Read from the URL rather than from a stored preference: only a perspective
- * the operator addressed is one to keep across a move. Lives here so the one
- * place that knows how to read a workspace URL is also the one place that
- * knows how to write the lens back into the next one.
- */
-export function accountWorkspaceLens(url: string): string | null {
-  return queryOf(url).get(LENS_QUERY_PARAM);
 }
 
 /**
@@ -252,58 +244,38 @@ export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): re
 }
 
 /**
- * Where a shell account badge lands (ADR 0064 Decisions 3/4).
+ * Where a top-bar account pill lands (ADR 0064 Decisions 3/4; PRD #2560 D4).
  *
- * A badge is the account switcher reached from the top bar instead of the
- * workspace header, so inside a workspace it behaves identically: the same
- * tab on the chosen account, keeping the lens, dropping whatever was open
- * over it. Outside one — any other page in the app — there is no tab to keep,
- * so the badge opens that account's front door.
+ * The pills are the only way between accounts — the workspace header's
+ * account switcher is retired — so inside a workspace a pill keeps the
+ * operator on the tab they are on, on the chosen account. A bot's page is
+ * never carried across — the chosen account need not run that bot — so a
+ * switch from one lands on Home. An account the chosen lane has not
+ * confirmed has no Activity or Deploy either; Settings is the tab it can
+ * serve, and binding it is what the operator has to do there anyway.
  *
- * `from` is the workspace the operator is standing in, or `null` when they
- * are not in one. A badge for a *different* broker than the workspace they
- * are in is a move between brokers rather than between accounts: it has no
- * tab to carry, and `accountWorkspaceSwitchRoute` would build the
- * destination under the broker being left, so it takes the front door too.
+ * Outside a workspace — any other page in the app — there is no tab to keep,
+ * so the pill opens that account's front door. A pill for a *different*
+ * broker than the workspace the operator is in is a move between brokers, so
+ * it takes the front door too.
+ *
+ * Home's Wall travels with Home: it is how the tab is being looked at, so
+ * Live's Wall lands on Paper's Wall (story 38). Nothing that was open *over*
+ * the workspace travels: an open Deploy form, a selected custody timeline, a
+ * retired `?lens=`, or any later `?`-addressed state closes on a switch
+ * instead of retargeting itself at the other account.
  */
 export function accountWorkspaceBadgeRoute(
   from: AccountWorkspaceLocation | null,
   target: AccountWorkspaceAddress,
-  lens: string | null,
 ): AccountWorkspaceLink {
-  if (from !== null && from.broker === target.broker) {
-    return accountWorkspaceSwitchRoute(from, target, lens);
+  if (from === null || from.broker !== target.broker) {
+    return { commands: accountWorkspaceEntryRoute(target), queryParams: {} };
   }
-  return { commands: accountWorkspaceEntryRoute(target), queryParams: lensQuery(lens) };
-}
-
-/**
- * Where the account switcher lands (ADR 0064 Decision 4): the same tab on the
- * chosen account, keeping the operator's lens perspective.
- *
- * A bot's page is never carried across — the chosen account need not run that
- * bot — so a switch from one lands on Home. An account the chosen lane has not
- * confirmed has no Deploy either; Settings is the tab it can serve for
- * that, and binding it is what the operator has to do there anyway.
- *
- * Nothing that was open *over* the workspace travels: the destination's query
- * is built from `lens` alone rather than merged from the current URL, so an
- * open Deploy drawer, a selected custody timeline, or any later `?`-addressed
- * state closes on a switch instead of retargeting itself at the other account.
- */
-export function accountWorkspaceSwitchRoute(
-  from: AccountWorkspaceLocation,
-  target: Omit<AccountWorkspaceAddress, 'broker'>,
-  lens: string | null,
-): AccountWorkspaceLink {
   const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'home';
-  const destination: AccountWorkspaceAddress = {
-    broker: from.broker,
-    clerkId: target.clerkId,
-    accountId: target.accountId,
-  };
-  const commands = accountWorkspaceTabRoute(destination, tab) ?? settingsRoute(destination);
-  return { commands, queryParams: lensQuery(lens) };
+  const commands = accountWorkspaceTabRoute(target, tab) ?? settingsRoute(target);
+  const wall = from.wall && target.accountId !== null;
+  return { commands, queryParams: wall ? { [HOME_VIEW_QUERY_PARAM]: HOME_WALL_VIEW } : {} };
 }
 
 /**
@@ -343,22 +315,14 @@ function settingsRoute(address: AccountWorkspaceAddress): string[] {
   return [...laneRoute(address.broker, address.clerkId), 'settings'];
 }
 
-/** The destination's query, built from the lens alone — never merged from the
- * URL being left, so nothing open *over* a workspace travels with a move. */
-function lensQuery(lens: string | null): Readonly<Record<string, string>> {
-  return lens === null ? {} : { [LENS_QUERY_PARAM]: lens };
-}
-
-/** `url`'s query parameters, empty when it carries none. */
-function queryOf(url: string): URLSearchParams {
-  const withoutHash = url.split('#')[0];
-  const queryIndex = withoutHash.indexOf('?');
-  return new URLSearchParams(queryIndex === -1 ? '' : withoutHash.slice(queryIndex + 1));
-}
-
 /** `url` without its query string, fragment, or trailing slash — the part a
  * route pattern matches on. Shared with `app-menu`, which matches its entries
  * against the same path this module parses workspace URLs out of. */
+/** The query of a router URL, without its fragment. */
+function routeQueryOf(url: string): URLSearchParams {
+  return new URLSearchParams(url.split('#')[0].split('?')[1] ?? '');
+}
+
 export function routePathOf(url: string): string {
   const path = url.split('#')[0].split('?')[0];
   return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;

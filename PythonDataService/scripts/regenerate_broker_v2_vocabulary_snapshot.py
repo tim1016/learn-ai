@@ -12,9 +12,9 @@ a working tree) each lock against their own copy:
   code carries non-trivial server-authored copy. Failing means a code was added
   (or copy omitted) without regenerating.
 
-- Vitest (S5, when the Angular surface lands) will load the Frontend-tree
-  snapshot and assert its emergency copy-fallback map covers exactly the same
-  code set.
+- Vitest ``broker-v2-copy-contract.spec.ts`` loads the Frontend-tree
+  snapshot and asserts every code carries a non-empty server-authored label
+  and explanation. There is no client-side copy map: the server authors it.
 
 A CI job (``broker-v2-vocabulary-contract``) regenerates both files from live
 source on every PR and diffs them against the committed copies, so a hand-edit
@@ -75,20 +75,18 @@ _SNAPSHOT_COMMENT: Final[str] = (
     "PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py "
     "reads the Python-tree copy and asserts equality with the live "
     "ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. "
-    "The Frontend Vitest surface (S5) reads the Frontend-tree copy. "
-    "Adding a code requires (a) updating vocabulary.py, (b) re-running "
-    "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py, "
-    "(c) adding the emergency-fallback copy on the Frontend map. Any "
-    "missing step fails a parity test."
+    "The Frontend Vitest surface reads the Frontend-tree copy. "
+    "Adding a code requires (a) updating vocabulary.py and (b) re-running "
+    "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py. "
+    "Either missing step fails a parity test."
 )
 
 
 def build_snapshot() -> dict[str, object]:
     """Return the snapshot dict, deterministically ordered.
 
-    ``copy`` carries the server-authored label per code so the Frontend
-    emergency-fallback map can be diffed against the exact server prose, not a
-    hand-copied approximation.
+    ``copy`` carries the server-authored label and explanation per code, so
+    the committed snapshot pins the exact server prose.
     """
     return {
         "$comment": _SNAPSHOT_COMMENT,

@@ -84,6 +84,7 @@ dispatch — wrong-target refuses as `clerk_account_mismatch`, never retargets).
 | `bot_admission_plan` | POST | `/accounts/{account_id}/bots/admission` | `…/bots/admission` | `deploy` | read |
 | `bot_cohort_flatten_read` | GET | `/accounts/{account_id}/bots/cohort-flatten` | `…/bots/cohort-flatten` | `bot_panel_read` | read |
 | `bot_cohort_flatten` | POST | `/accounts/{account_id}/bots/cohort-flatten` | `…/bots/cohort-flatten` | `bot_action` | durable_key |
+| `bots_clear` | POST | `/accounts/{account_id}/bots/clear` | `…/bots/clear` | `bot_action` | durable_key |
 | `bots_deploy_read` | GET | `/accounts/{account_id}/bots/deploy` | `…/bots/deploy` | `deploy` | read |
 | `bot_panel_read` | GET | `/accounts/{account_id}/bots/{sid}/panel` | `…/bots/{sid}/panel` | `bot_panel_read` | read |
 | `bot_panel_action` | POST | `/accounts/{account_id}/bots/{sid}/actions` | `…/bots/{sid}/actions` | `bot_action` | durable_key |

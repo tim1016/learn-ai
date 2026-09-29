@@ -13,6 +13,7 @@ if TYPE_CHECKING:
         EffectOperationReceipt,
         EffectPurpose,
         InstanceCustodyProof,
+        ReconciliationCut,
         ReconciliationVerdict,
     )
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -159,6 +160,14 @@ class ActiveAlpacaClerk(Protocol):
         Projects the sweep's last verdict instead of reconciling, so a read
         contacts no broker and appends nothing to the ledger.
         """
+        ...
+
+    async def reconcile_through(self) -> ReconciliationCut:
+        """Reconcile the account once, naming the ledger point the pass began after."""
+        ...
+
+    def reconciliation_covers(self, cut: ReconciliationCut, strategy_instance_id: str) -> bool:
+        """Whether ``cut``'s pass still proves this bot's custody without a new one."""
         ...
 
 

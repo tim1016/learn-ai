@@ -29,7 +29,7 @@ interface RunHistoryLocation {
   readonly newerCursors: readonly (string | null)[];
 }
 
-/** Previous-run loading and navigation; latest-run evidence is shared by both lenses. */
+/** Previous-run loading and navigation; latest-run evidence is the bot page's own. */
 @Component({
   selector: 'app-operator-run-history',
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -27,7 +27,7 @@ from app.config import settings
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
 from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
 from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _SETTINGS, _T0, DEPLOYED_SID, account_snapshot
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, _T0, DEPLOYED_SID, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT
 
 # ema_crossover_signal is a sealed Signal Program (#1730); most tests below
@@ -664,7 +664,6 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
             outstanding_intents=0,
             observed_at_ms=_T0,
             channel_healths=None,
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", no_channel_status)
@@ -718,7 +717,6 @@ async def test_deploy_requires_both_fresh_clerk_channels(
             outstanding_intents=0,
             observed_at_ms=now_ms_utc(),
             channel_healths=channels,
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", incomplete_channel_status)
@@ -842,7 +840,6 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
             ),
             outstanding_intents=0,
             observed_at_ms=_T0,
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", held_status)
@@ -891,7 +888,6 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
             ),
             outstanding_intents=0,
             observed_at_ms=_T0,
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", frozen_status)
@@ -966,7 +962,6 @@ async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_re
             channel_healths=[
                 ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms_utc()),
             ],
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", frozen_and_held_status)

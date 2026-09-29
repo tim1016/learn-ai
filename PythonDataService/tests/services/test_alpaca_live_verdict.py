@@ -185,3 +185,33 @@ async def test_standing_hold_overrides_fresh_risk_in_account_verdict(shadow_runt
     verdict = alpaca_live_verdict(settings=_live(), runtime=runtime, now_ms=_NOW)
     assert verdict.deployment_readiness == "loss_hold"
     assert "reducing exits" in verdict.detail
+
+
+async def test_pill_tooltip_names_a_missing_loss_limit_and_its_fix_in_settings(tmp_path: Path) -> None:
+    """H7: an account with no daily loss limit refuses every new entry, and
+    the pill's tooltip said only "Current risk evidence is unavailable". It
+    now says what the shared risk check says -- the limit is missing and is
+    set in Settings -- the same words Deploy and Settings show."""
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+    from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
+    from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, complete_fee_evidence
+    from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-PILL", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    complete_fee_evidence(repo)
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="reviewed", stop_receipt="stopped")
+    sync = LiveEnvelopeSync(repo=repo, read=_Read(unrealized=0), envelope=LiveEnvelopeGate(values=None, custody_is_simulated=False))
+    runtime = ActiveClerkRuntime(authority_kind="sqlite", envelope_sync=sync, _sqlite_repository=repo, account_id=repo.account_id)
+    try:
+        verdict = alpaca_live_verdict(settings=_paper(), runtime=runtime, now_ms=NOON)
+
+        assert verdict.final_verdict == "paper"
+        assert verdict.deployment_readiness == "risk_not_observed"
+        assert verdict.detail == (
+            "Orders reach Alpaca's paper endpoint only. "
+            "No daily loss limit is set for this account, so new entries are refused. Set one in Settings."
+        )
+    finally:
+        await runtime.close()

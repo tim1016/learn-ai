@@ -1,5 +1,9 @@
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
+import type { components } from '../../src/app/api/broker.types';
+import type { AggregateAttentionResponse } from '../../src/app/services/lane-attention.service';
+import type { IndicatorInfo } from '../../src/app/shared/indicator-catalog/indicator-catalog.service';
+import { fakeAccountMoney } from '../../src/app/testing/account-money-fixtures';
 import {
   ACCOUNT_ID,
   BROWSER_RELOAD_COUNT,
@@ -31,6 +35,51 @@ interface Deferred {
 const CLERK_ID = 'clrk-playwright-1413';
 const CLERK_SCOPE = `/api/brokers/alpaca/clerks/${CLERK_ID}`;
 const ACCOUNT_SCOPE = `${CLERK_SCOPE}/accounts/${ACCOUNT_ID}`;
+const LIFECYCLE_ACTIONS_PATH_SUFFIX = `/bots/${STRATEGY_INSTANCE_ID}/actions`;
+
+/** The shell's top-bar attention poll (#2228), on a 5 s cadence. */
+const AGGREGATE_ATTENTION_PATH = '/api/broker-clerks/aggregate/attention';
+/** The account header's one money read (PRD #2560 D12), once per workspace. */
+const ACCOUNT_MONEY_PATH = `${ACCOUNT_SCOPE}/money`;
+/** The day chart's two indicator catalogs (the one bot view, PRD #2560 D2). */
+const INDICATOR_CATALOG_PATH = '/api/dataset/available';
+const SUPPORTED_CHART_INDICATORS_PATH = '/api/chart/indicators/supported';
+
+const EMA_CATALOG_ENTRY: IndicatorInfo = {
+  name: 'ema',
+  category: 'overlap',
+  description: 'Exponential Moving Average (EMA)',
+  configurable_params: [{
+    name: 'length', type: 'int', default: 10, min: 1, max: 500, description: 'Lookback period',
+  }],
+};
+const SUPPORTED_CHART_INDICATORS: components['schemas']['ChartIndicatorSupportResponse'] = {
+  names: [EMA_CATALOG_ENTRY.name],
+};
+const QUIET_LANE_ATTENTION: AggregateAttentionResponse = {
+  observed_at_ms: 1_753_800_004_000,
+  lanes: [{
+    broker: 'alpaca',
+    clerk_id: CLERK_ID,
+    ok: true,
+    value: { account_id: ACCOUNT_ID, items: [] },
+  }],
+};
+
+/** Reads the current product makes on this page outside the evidence-click
+ * surface, each answered from a contract-typed fixture (GET only) and counted
+ * per page load so the campaign still proves they stay reads that fire once
+ * per mount (or on their poll cadence), not in a loop. */
+const BACKGROUND_READS: ReadonlyMap<string, unknown> = new Map<string, unknown>([
+  [AGGREGATE_ATTENTION_PATH, QUIET_LANE_ATTENTION],
+  [ACCOUNT_MONEY_PATH, fakeAccountMoney({ account_id: ACCOUNT_ID })],
+  [INDICATOR_CATALOG_PATH, {
+    success: true,
+    categories: { [EMA_CATALOG_ENTRY.category]: [EMA_CATALOG_ENTRY] },
+    total: 1,
+  }],
+  [SUPPORTED_CHART_INDICATORS_PATH, SUPPORTED_CHART_INDICATORS],
+]);
 
 interface CorrelationContext {
   readonly browserEpoch: string;
@@ -58,6 +107,11 @@ interface CorrelationLedgerRow {
 interface BrowserSseObservation {
   readonly epoch: string;
   readonly revision: number;
+}
+
+interface BackgroundRead {
+  readonly pageLoad: number;
+  readonly path: string;
 }
 
 interface AcceptanceContext {
@@ -181,6 +235,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
     const observedSse: BrowserSseObservation[] = [];
     const lifecycleRequestActionIds: string[] = [];
     const unexpectedApiRequests: string[] = [];
+    const backgroundReads: BackgroundRead[] = [];
     let plannedPageLoad = 0;
     let activeCorrelation: CorrelationContext | null = null;
 
@@ -188,6 +243,22 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       const request = route.request();
       const url = new URL(request.url());
       const path = url.pathname;
+
+      // Read-only means GET: every other method on the API is unexpected,
+      // except a lifecycle action, which is ledgered on its own below.
+      if (path.startsWith('/api/')
+        && request.method() !== 'GET'
+        && !path.endsWith(LIFECYCLE_ACTIONS_PATH_SUFFIX)) {
+        unexpectedApiRequests.push(`${request.method()} ${path}`);
+        await route.fulfill({ status: 501, json: { detail: 'Unexpected E2E API request.' } });
+        return;
+      }
+      const backgroundReadBody = BACKGROUND_READS.get(path);
+      if (backgroundReadBody !== undefined) {
+        backgroundReads.push({ pageLoad: plannedPageLoad, path });
+        await route.fulfill({ json: backgroundReadBody });
+        return;
+      }
 
       if (path === '/api/broker-clerks') {
         await route.fulfill({
@@ -316,7 +387,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         await route.fulfill({ json: receipt });
         return;
       }
-      if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/actions`)) {
+      if (path.endsWith(LIFECYCLE_ACTIONS_PATH_SUFFIX)) {
         const body = request.postDataJSON() as { action_id?: unknown };
         lifecycleRequestActionIds.push(
           typeof body.action_id === 'string' ? body.action_id : 'MISSING_ACTION_ID',
@@ -622,6 +693,28 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       revision: FINAL_REVISION,
     }, () => {
       expect(lifecycleRequestActionIds).toEqual([]);
+    });
+    const readsPerPageLoad = (readPath: string): number[] =>
+      Array.from({ length: PAGE_LOAD_COUNT }, (_, pageLoad) =>
+        backgroundReads.filter((read) => read.pageLoad === pageLoad && read.path === readPath).length);
+    const oncePerPageLoad = Array.from({ length: PAGE_LOAD_COUNT }, () => 1);
+    await acceptanceAssertion(testInfo, {
+      check: 'background reads fire once per mount or on their poll',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
+      expect({
+        accountMoney: readsPerPageLoad(ACCOUNT_MONEY_PATH),
+        indicatorCatalog: readsPerPageLoad(INDICATOR_CATALOG_PATH),
+        supportedChartIndicators: readsPerPageLoad(SUPPORTED_CHART_INDICATORS_PATH),
+        attentionPolledOnEveryPageLoad: readsPerPageLoad(AGGREGATE_ATTENTION_PATH)
+          .every((count) => count >= 1),
+      }).toEqual({
+        accountMoney: oncePerPageLoad,
+        indicatorCatalog: oncePerPageLoad,
+        supportedChartIndicators: oncePerPageLoad,
+        attentionPolledOnEveryPageLoad: true,
+      });
     });
     await acceptanceAssertion(testInfo, {
       check: 'no unexpected API requests occurred',

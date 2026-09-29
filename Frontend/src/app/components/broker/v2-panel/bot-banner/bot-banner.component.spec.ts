@@ -138,17 +138,26 @@ describe('BotBannerComponent', () => {
     expect(requested).toEqual([]);
   });
 
-  it('opens the manual ticket under the routed account, and offers only armed exits (H20)', async () => {
-    await renderBanner({
-      actions: [fakePanelAction('retire', { label: 'Retire' }), fakePanelAction('archive', { label: 'Archive', enabled: false })],
-    });
+  it('opens the manual ticket under the routed account', async () => {
+    await renderBanner();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions for this bot' }));
     const manual = screen.getByRole('link', { name: 'Manual order' });
     expect(manual.getAttribute('href')).toMatch(/^\/brokers\/alpaca\/clerks\/clrk_spec\/accounts\/pa9\?/);
     expect(manual.getAttribute('href')).toContain('accountId=PA9');
-    expect(screen.getByRole('button', { name: 'Retire' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+  });
+
+  it('never offers Retire or Archive, even when the backend presents them armed (owner decision 2026-09-28)', async () => {
+    // Clearing a finished bot is Home's Finished fold alone; the backend still
+    // presents both actions because the bulk clear reads archive's token.
+    await renderBanner(stopped({
+      actions: [fakePanelAction('retire', { label: 'Retire' }), fakePanelAction('archive', { label: 'Archive' })],
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for this bot' }));
+    expect(screen.getByRole('link', { name: 'Manual order' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
   });
 
   it('offers a Dry Run bot no manual ticket on the account', async () => {

@@ -58,6 +58,22 @@ export function laneConfirmedAccount(lane: LaneDescriptor): string | null {
   return typeof accountId === 'string' && accountId.length > 0 ? accountId : null;
 }
 
+/** Whether a lane's account needs the owner (PRD #2560 D4): the lane
+ * attention read's own count, carried by the directory. Unknown is its own
+ * state — a `null` or absent count is never read as zero. */
+export type LaneAttention =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'count'; readonly count: number }
+  | { readonly kind: 'unknown' };
+
+/** The one reading of `attention_count` the top-bar pill and the account
+ * card share. */
+export function laneAttention(lane: LaneDescriptor): LaneAttention {
+  const count = lane.provider_summary?.attention_count;
+  if (count === null || count === undefined) return { kind: 'unknown' };
+  return count > 0 ? { kind: 'count', count } : { kind: 'none' };
+}
+
 /** One lane's resolved display name (ADR 0064 Decision 5): its own nickname,
  * or its lane label until one is set. `disambiguator` is this lane's own
  * `display_label`, present only when `name` collides — trimmed and

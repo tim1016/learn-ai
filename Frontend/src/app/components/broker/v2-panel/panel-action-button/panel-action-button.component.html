@@ -41,7 +41,6 @@
 @if (confirmationOpen()) {
   @if (action().confirmation; as confirmation) {
     <app-typed-halt-confirm
-      [open]="true"
         [heading]="confirmation.title"
         [message]="confirmation.body"
         [consequence]="confirmation.consequence"

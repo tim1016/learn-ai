@@ -25,8 +25,7 @@
         <strong>{{ notice.label }}</strong>
         <p>{{ notice.explanation }}</p>
         @if (notice.strategy_instance_id) {
-        <a [routerLink]="['/brokers', 'alpaca', 'accounts', accountId(), 'bots', notice.strategy_instance_id]"
-           [queryParams]="operatorLensQuery">{{ notice.action_label }}</a>
+        <a [routerLink]="['/brokers', 'alpaca', 'accounts', accountId(), 'bots', notice.strategy_instance_id]">{{ notice.action_label }}</a>
         }
       </div>
     }
@@ -48,7 +47,6 @@
                     'bots',
                     strategyInstanceId,
                   ]"
-                  [queryParams]="operatorLensQuery"
                 >Review <code>{{ strategyInstanceId }}</code> recovery</a>
               </div>
             } @else {
@@ -256,7 +254,6 @@
 @if (confirmationAction(); as action) {
   @if (action.confirmation; as confirmation) {
     <app-typed-halt-confirm
-      [open]="true"
       [heading]="confirmation.title"
       [accountId]="accountId()"
       [message]="action.explanation"

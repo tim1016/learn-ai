@@ -261,8 +261,8 @@ class ExecutionAuthorityRevivedError(ActionExecutionError):
             "This account's execution lease had expired and has just been "
             "revived; nothing was applied.",
             detail=(
-                "The data plane's execution lease for this account expired while "
-                "the process was paused, and a supervised, store-verified revival "
+                "This account's execution lease expired while the service was "
+                "suspended, and a supervised, store-verified revival "
                 "just re-acquired it -- no other writer ever held the account. "
                 "This request's write was not attempted under the revived lease: "
                 "retry the action now that authority is restored."

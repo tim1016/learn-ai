@@ -1,5 +1,6 @@
 import { provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
+import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
@@ -106,5 +107,21 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
 
     expect(screen.getByText(/does not list clerk lane clerk-unknown/i)).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open Settings' })).toBeNull();
+  });
+
+  it.each([
+    ['a lane that is not ready', testLane({ clerk_id: 'clerk-x', lifecycle_state: 'starting' })],
+    ['a lane with no confirmed account', testLane({
+      clerk_id: 'clerk-x', provider_summary: { ...testLane().provider_summary, confirmed_account_id: null },
+    })],
+  ])('has no detectable accessibility violations for %s', async (_name, lane) => {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
+      inputs: { clerkId: 'clerk-x' },
+      providers: [provideRouter([]), provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] })],
+    });
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+
+    expect(results.violations).toEqual([]);
   });
 });

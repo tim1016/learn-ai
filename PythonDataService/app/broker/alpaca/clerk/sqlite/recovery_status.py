@@ -52,7 +52,7 @@ def read_recovery_status(
         return status("unknown", "RECOVERY_NOT_CHECKED", unknown)
     last_checked = facts.last_checked_at_ms
     if facts.reason_code == "BROKER_SNAPSHOT_STALE":
-        return status("broker_unreachable", facts.reason_code, "The Clerk could not reach the broker; recovery is paused.")
+        return status("broker_unreachable", facts.reason_code, "Alpaca could not be reached; recovery waits until it can be.")
     completed_at_ms = last_checked if checkpoint is None else checkpoint["completed_at_ms"]
     interval_ms = DEFAULT_RECOVERY_INTERVAL_MS if checkpoint is None else checkpoint["interval_ms"]
     if last_checked is None or completed_at_ms is None or not 0 <= now_ms - completed_at_ms <= 2 * interval_ms:

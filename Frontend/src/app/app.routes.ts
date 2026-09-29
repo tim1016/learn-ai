@@ -2,6 +2,7 @@ import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
 import { homeRedirectGuard } from "./fleet/home-redirect.guard";
+import { dropRetiredLensGuard } from "./fleet/retired-lens.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>
@@ -319,21 +320,19 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // The account Settings tab — including the broker configuration profiles
-    // (ADR 0060) under its Broker connection section. Declared before the desk
-    // so the intent of the deeper path is readable next to it; Angular would
-    // backtrack to it either way, since the desk route consumes no trailing
-    // segments.
-    //
-    // Delivery C: Settings is canonical only under an explicit clerk.
+    // Settings — the Configuration tab until PRD #2560 — belongs to one
+    // account's lane (FR-092) and lives only under its clerk. A broker-wide
+    // bookmark names no lane, so, like the retired Bots and Gallery
+    // choosers below, it lands on the account list, where choosing the
+    // account is choosing whose Settings to open — never a lane picked for
+    // the operator (FR-096).
     path: "brokers/alpaca/settings",
-    loadComponent: loadBrokerLaneUnavailable,
+    redirectTo: "/brokers/alpaca",
+    pathMatch: "full",
   },
   {
-    // The tab was Configuration until PRD #2560 (FR-092 keeps it
-    // lane-scoped); old bookmarks keep working.
     path: "brokers/alpaca/configuration",
-    redirectTo: "/brokers/alpaca/settings",
+    redirectTo: "/brokers/alpaca",
     pathMatch: "full",
   },
   {
@@ -359,6 +358,10 @@ export const routes: Routes = [
     // tabs. Each tab now owns whatever inset its own content wants.
     path: 'brokers/alpaca/clerks/:clerkId',
     data: { fullBleed: true, broker: 'alpaca' },
+    // The Trader/Operator lens is retired (PRD #2560 D2): an old link's
+    // `?lens=` is dropped, on entry and on every move inside the workspace.
+    canActivate: [dropRetiredLensGuard],
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
     loadComponent: () =>
       import(
         './components/brokers/alpaca-workspace/alpaca-account-workspace.component'

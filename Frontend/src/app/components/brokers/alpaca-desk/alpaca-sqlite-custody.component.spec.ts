@@ -180,7 +180,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
     expect(await screen.findByText('Bot is not managing this position')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Flatten' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/accounts/PA1/bots/dead-bot?lens=operator');
+      .toBe('/brokers/alpaca/accounts/PA1/bots/dead-bot');
   });
 
   it('keeps an account notice visible without linking to a null bot', async () => {
@@ -265,7 +265,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
 
     const botLink = await screen.findByRole('link', { name: 'Review spy-bot recovery' });
     expect(botLink.getAttribute('href'))
-      .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
+      .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot');
     // No retry is scheduled for this cause, so no attempt time is shown.
     expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });

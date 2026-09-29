@@ -1547,6 +1547,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear finished bots from Home: one per-bot archive leg each, with per-leg outcomes (ADR 0052) */
+        post: operations["clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
         parameters: {
             query?: never;
@@ -2218,15 +2235,8 @@ export interface paths {
          *
          *     A protected read (the always-on data-plane secret gates the whole router).
          *     Transport only: resolve the account-scoped Clerk facade and delegate — the
-         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state,
-         *     plus (#1664) the one canonical account operator posture, authored from
-         *     this same custody projection and a same-request account observation.
-         *
-         *     The account read degrades gracefully: a broker-side failure does not 503
-         *     this endpoint (custody state is independently available) — it instead
-         *     surfaces as an explicit ``alpaca_account_evidence_unavailable`` operator
-         *     condition so the account/paper-mode checks fail closed rather than
-         *     silently passing.
+         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+         *     It never reads the broker: every fact is the custody projection's.
          */
         get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
         put?: never;
@@ -2371,6 +2381,26 @@ export interface paths {
         get: operations["fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bots Clear
+         * @description Fleet-routed POST /accounts/{account_id}/bots/clear (bot_action).
+         */
+        post: operations["fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8145,31 +8175,6 @@ export interface components {
              */
             world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
-        /**
-         * AccountOperatorPosture
-         * @description One canonical account-level operator decision, authored from one
-         *     evidence cut (issue #1664).
-         *
-         *     ``condition`` is ``None`` exactly when the account is healthy; in that
-         *     case the ``account_desk`` projection is also ``None`` and
-         *     ``status_headline`` / ``status_detail`` carry the backend-authored healthy
-         *     copy. Whenever ``condition`` is set, ``account_desk`` is required — a
-         *     non-null condition can never validate without it, so the desk never
-         *     silently reads ``None`` for a live blocking condition. The projection
-         *     shares ``condition`` (identity and severity) and carries the desk's
-         *     disposition, copy, and moves per ADR 0027; its own ``host`` field is
-         *     validated to be ``account_desk``. The former ``fleet_roster`` projection
-         *     was retired with its host (#2192). Consumers must never re-derive a
-         *     verdict from raw evidence.
-         */
-        AccountOperatorPosture: {
-            account_desk: components["schemas"]["OperatorBlocker"] | null;
-            condition: components["schemas"]["OperatorCondition"] | null;
-            /** Status Detail */
-            status_detail: string | null;
-            /** Status Headline */
-            status_headline: string;
-        };
         /** AccountPinRequest */
         AccountPinRequest: {
             /** Account Id */
@@ -9959,6 +9964,21 @@ export interface components {
             trade_count?: number | null;
             /** World Label */
             world_label: string;
+        };
+        /**
+         * BotClearRequest
+         * @description Clear finished bots from Home (owner decision 2026-09-28; ADR 0052 §4).
+         *
+         *     Membership is explicit (ADR 0051 D2): exactly these bots, each one leg of
+         *     the unchanged per-bot ``archive`` under the derived identity
+         *     ``{idempotency_key}:{sid}`` (ADR 0051 D4). The request names no action:
+         *     this endpoint clears, and nothing else.
+         */
+        BotClearRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Strategy Instance Ids */
+            strategy_instance_ids: string[];
         };
         /**
          * BotControlAuthorityFacts
@@ -12015,7 +12035,6 @@ export interface components {
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
             observed_at_ms: number;
-            operator_posture: components["schemas"]["AccountOperatorPosture"];
             /** Outstanding Intents */
             outstanding_intents: number;
         };
@@ -15110,7 +15129,7 @@ export interface components {
         };
         /**
          * EvidenceEntry
-         * @description One redacted, size-capped journal entry exposed to the operator lens.
+         * @description One redacted, size-capped custody record entry exposed as evidence.
          */
         EvidenceEntry: {
             /** Broker State */
@@ -20220,25 +20239,11 @@ export interface components {
             volume: number;
         };
         /**
-         * OpenRunbookAction
-         * @description Move: open an operator runbook by backend-authored slug.
-         */
-        OpenRunbookAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "open_runbook";
-            /** Slug */
-            slug: string;
-        };
-        /**
          * OperatorBlocker
          * @description Host-scoped, backend-authored guidance for one operator condition.
          *
-         *     Audience is presentational routing and confers no permission. Frontends
-         *     render this backend-authored guidance and must never infer a cure from a
-         *     reason code.
+         *     Frontends render this backend-authored guidance and must never infer a
+         *     cure from a reason code.
          */
         OperatorBlocker: {
             anchor: components["schemas"]["OperatorBlockerAnchor"];
@@ -20247,11 +20252,6 @@ export interface components {
              * @enum {string}
              */
             applies_to: "deploy" | "run" | "both";
-            /**
-             * Audience
-             * @enum {string}
-             */
-            audience: "trader" | "operator" | "both";
             condition: components["schemas"]["OperatorCondition"];
             /** Detail */
             detail?: string | null;
@@ -20266,7 +20266,7 @@ export interface components {
              * Host
              * @enum {string}
              */
-            host: "bot_cockpit" | "deploy_preflight" | "account_monitor" | "account_desk";
+            host: "bot_cockpit" | "deploy_preflight" | "account_monitor";
             primary_move?: components["schemas"]["OperatorMove"] | null;
             /** Secondary Moves */
             secondary_moves?: components["schemas"]["OperatorMove"][];
@@ -20283,7 +20283,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "surface" | "verdict" | "lease" | "clerk" | "reconciliation" | "holdings_row" | "event" | "cure_tools";
+            kind: "surface" | "verdict" | "lease" | "reconciliation" | "holdings_row" | "event" | "cure_tools";
             /** Subject Key */
             subject_key: string | null;
         };
@@ -20367,7 +20367,7 @@ export interface components {
         /** OperatorMove */
         OperatorMove: {
             /** Action */
-            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["OpenRunbookAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
             confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Label */
             label: string;
@@ -21249,7 +21249,7 @@ export interface components {
         };
         /**
          * PortfolioHistoryProofResponse
-         * @description C1 + C2 + C3 bundle for the Trader lens historical scope.
+         * @description C1 + C2 + C3 bundle for the historical scope.
          */
         PortfolioHistoryProofResponse: {
             attribution?: components["schemas"]["AccountPnlAttributionResponse"] | null;
@@ -22254,7 +22254,7 @@ export interface components {
         };
         /**
          * RecentDecisionView
-         * @description Bounded backend-authored decision receipt for the Trader lens.
+         * @description Bounded backend-authored decision receipt shown on the bot page.
          */
         RecentDecisionView: {
             /** Authority Account Id */
@@ -22294,7 +22294,7 @@ export interface components {
         };
         /**
          * RecentFillView
-         * @description Bounded Clerk-attributed fill receipt for the Trader lens.
+         * @description Bounded Clerk-attributed fill receipt shown on the bot page.
          */
         RecentFillView: {
             /** Authority Account Id */
@@ -31489,6 +31489,44 @@ export interface operations {
             };
         };
     };
+    clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotClearRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
@@ -33200,6 +33238,45 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

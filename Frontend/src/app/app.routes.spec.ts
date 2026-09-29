@@ -190,11 +190,25 @@ describe('routes', () => {
     expect(router.url).toBe('/brokers/alpaca');
   });
 
+  it.each([['/brokers/alpaca/settings'], ['/brokers/alpaca/configuration']])(
+    'lands the broker-wide Settings bookmark %s on the account list, never a dead page (#2567)',
+    async (from) => {
+      // Settings is one lane's page (FR-092); a bookmark naming no lane lands
+      // where the owner chooses the account, never on a page that cannot
+      // stage or Apply, and never on a lane picked for them (FR-096).
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(from);
+
+      expect(router.url).toBe('/brokers/alpaca');
+    },
+  );
+
   it.each([
-    ['/brokers/alpaca/configuration', '/brokers/alpaca/settings'],
     ['/brokers/ibkr/clerks/clrk_other/configuration', '/brokers/ibkr/clerks/clrk_other/settings'],
   ])('redirects the Configuration bookmark %s to its Settings equivalent %s (#2566)', async (from, to) => {
-    // Neither address can prove an Alpaca lane, so both still render the
+    // The address cannot prove an Alpaca lane, so it still renders the
     // in-place lane-unavailable page — under the Settings address.
     TestBed.configureTestingModule({ providers: appConfig.providers });
     const router = TestBed.inject(Router);
@@ -291,6 +305,25 @@ describe('routes', () => {
     ])('lands the retired tab %s on Home at %s', async (url, landed) => {
       // Overview, Bots and Gallery merged into Home (PRD #2560); Gallery is
       // its Wall view. A `?lens=` is retired with the lens and never travels.
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(url);
+
+      expect(router.url).toBe(landed);
+    });
+
+    it.each([
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall&lens=trader', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1'],
+      ['/brokers/alpaca/clerks/clrk_spec/settings?lens=operator', '/brokers/alpaca/clerks/clrk_spec/settings'],
+      ['/brokers/alpaca?lens=operator', '/brokers/alpaca'],
+      ['/brokers/alpaca?surface=bots&lens=operator', '/brokers/alpaca'],
+    ])('drops the retired ?lens= from %s and lands on %s', async (url, landed) => {
+      // The Trader/Operator lens is gone (PRD #2560 D2): an old link still
+      // opens the page it named, with everything else it carried.
       TestBed.configureTestingModule({ providers: appConfig.providers });
       const router = TestBed.inject(Router);
 

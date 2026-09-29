@@ -716,16 +716,15 @@ async def read_sqlite_catalog(
         # (again per coherence retry); the fenced pass below builds each row
         # exactly once, at a revision it can vouch for.
         membership = await asyncio.to_thread(roster_membership, facade.repository)
-        strategy_instance_ids = membership.identities
+        # A cleared bot -- retired, nothing live in custody -- is not on Home
+        # (#2567): the catalog reads and returns only the rest (#1911).
+        strategy_instance_ids = membership.with_live_custody
         if not strategy_instance_ids:
             return []
-        # Only rows that can still need attention are projected. An inert
-        # retired row's custody projection is the dominant per-row cost of this
-        # read and its answer is already known (#1911).
         projections = await read_sqlite_catalog_projections(
             broker,
             account_id,
-            membership.with_live_custody,
+            strategy_instance_ids,
         )
         economic_rollups = await read_sqlite_catalog_economic_rollups(
             broker,
@@ -790,8 +789,9 @@ def _bind_catalog_rows(
         raise SqliteCatalogRevisionMismatch(
             "SQLite roster membership changed during catalog projection."
         )
+    # A cleared bot leaves the catalog (#2567); its records stay, readable by id.
     return build_sqlite_catalog(
-        statuses,
+        [status for status in statuses if status.strategy_instance_id not in membership.inert_terminal],
         projections,
         economic_rollups=economic_rollups,
         account_id=account_id,
@@ -823,13 +823,14 @@ async def read_sqlite_catalog_from_facade(
     account_id = facade.account_id
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
         membership = await asyncio.to_thread(roster_membership, facade.repository)
-        strategy_instance_ids = membership.identities
+        # A cleared bot is not on Home (#2567); see ``read_sqlite_catalog``.
+        strategy_instance_ids = membership.with_live_custody
         if not strategy_instance_ids:
             return []
 
         def read_projection_cut(
             selected_ids: tuple[str, ...] = tuple(strategy_instance_ids),
-            projected_ids: tuple[str, ...] = tuple(membership.with_live_custody),
+            projected_ids: tuple[str, ...] = tuple(strategy_instance_ids),
         ) -> tuple[dict[str, ClerkProjection], dict[str, EconomicSnapshot]]:
             custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
@@ -1190,14 +1191,17 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
             bots.append(HomeRosterBot(sid, str(registration["symbol"]), None, None))
             continue
         outcome = status.duty_outcome
-        unclean = not status.running and outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
+        bot_world_kind = bot_world(world, status.mode)
+        # A Dry Run's unclean end is its simulator's to recover, never the
+        # account's "Reconcile now" line, even once it is Finished (#2567).
+        unclean = (
+            bot_world_kind != "synthetic" and not status.running
+            and outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
+        )
         bots.append(HomeRosterBot(
             strategy_instance_id=sid,
             symbol=status.symbol,
-            group=bot_group(
-                world=bot_world(world, status.mode), running=status.running,
-                holds_money=sid in holding,
-            ),
+            group=bot_group(world=bot_world_kind, running=status.running, holds_money=sid in holding),
             unclean_ended_at_ms=ended_at_ms(status, latest_stop_ms=stops.get(sid)) if unclean else None,
         ))
     return bots
@@ -1254,8 +1258,13 @@ def _terminal_exposure_notices(
             }, exc_info=True)
             notices.append(ExposureNoticeView(
                 strategy_instance_id=sid, symbol=str(registration["symbol"]),
-                kind="position_unverified", label="Position could not be verified; check the broker",
-                explanation="This bot's lifecycle or custody evidence could not be read. Check its position and working orders at the broker.",
+                kind="position_unverified", label="Position could not be verified",
+                # Every fix it names is in the app (hurdle H29).
+                explanation=(
+                    "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
+                    "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
+                    "available once the position is proven."
+                ),
                 action_label="Open bot",
             ))
     return notices

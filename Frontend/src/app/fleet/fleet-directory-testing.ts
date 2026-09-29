@@ -38,6 +38,8 @@ export function testLane(
       confirmed_binding_generation: 3,
       endpoint_mode: 'paper',
       authority_state: 'real_paper',
+      // A healthy lane: nothing needs the owner. Omit it to test "unknown".
+      attention_count: 0,
     },
     observed_at_ms: 1_757_000_000_000,
     ...overrides,

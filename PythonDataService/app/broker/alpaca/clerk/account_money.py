@@ -70,6 +70,25 @@ FULL_BAR_BPS = 10_000
 SegmentKind = Literal["bot", "stopped", "outside", "charges", "settling", "new", "free"]
 
 
+def quantity_text(quantity: float | Decimal) -> str:
+    """A share count as the owner reads it: ``4``, ``0.125`` -- never ``4.000000`` or ``1e+06``.
+
+    A float position is read to six significant digits first, so storage
+    noise (``0.30000000000000004``) never reaches the owner.
+    """
+    return f"{Decimal(f'{quantity:g}').normalize():f}"
+
+
+def holdings_text(exposure: Mapping[str, float | Decimal]) -> str:
+    """What is held, as the owner reads it: "5 SPY, 2 QQQ" ("" when nothing).
+
+    The one wording of a holding on the account's pages -- a bot's row, its
+    attention line, and the money bar's note on shorts. The caller passes
+    only nonzero quantities (``position_quantity_is_nonzero``).
+    """
+    return ", ".join(f"{quantity_text(quantity)} {symbol}" for symbol, quantity in sorted(exposure.items()))
+
+
 class MoneyConservationError(AssertionError):
     """The projected parts do not add up to the account: a bug, never a display."""
 
@@ -168,7 +187,14 @@ def account_money(
 
 
 def _check_conservation(money: AccountMoney) -> None:
-    """The exact identity every drawn bar rests on; a failure is a projection bug."""
+    """The exact identity every drawn bar rests on; a failure is a projection bug.
+
+    It checks the partition, not its inputs: total = C - U_buy + U_sell +
+    sum(position cost) is how ``account_money`` builds the total, so restating
+    it here would be a tautology. That U_buy never prices shares missing from
+    the positions is instead structural: the fee evidence splits outside
+    executions from before custody began off at their source (H35).
+    """
     with money_context():
         budget = money.budget
         parts = (

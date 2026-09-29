@@ -5,7 +5,7 @@
     "PythonDataService/app/broker/fleet_composition.py (production_provider_adapters)",
     "PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py (ALPACA_OPERATIONS)"
   ],
-  "adapter_version": "alpaca-fleet.10",
+  "adapter_version": "alpaca-fleet.11",
   "operations": {
     "account_money_read": {
       "method": "GET",
@@ -135,6 +135,11 @@
     "bots_catalog_read": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/catalog",
+      "requires_account": true
+    },
+    "bots_clear": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/clear",
       "requires_account": true
     },
     "bots_deploy_read": {

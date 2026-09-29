@@ -329,55 +329,6 @@
         "title": "AccountMoneyView",
         "type": "object"
       },
-      "AccountOperatorPosture": {
-        "additionalProperties": false,
-        "description": "One canonical account-level operator decision, authored from one\nevidence cut (issue #1664).\n\n``condition`` is ``None`` exactly when the account is healthy; in that\ncase the ``account_desk`` projection is also ``None`` and\n``status_headline`` / ``status_detail`` carry the backend-authored healthy\ncopy. Whenever ``condition`` is set, ``account_desk`` is required \u2014 a\nnon-null condition can never validate without it, so the desk never\nsilently reads ``None`` for a live blocking condition. The projection\nshares ``condition`` (identity and severity) and carries the desk's\ndisposition, copy, and moves per ADR 0027; its own ``host`` field is\nvalidated to be ``account_desk``. The former ``fleet_roster`` projection\nwas retired with its host (#2192). Consumers must never re-derive a\nverdict from raw evidence.",
-        "properties": {
-          "account_desk": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperatorBlocker"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "condition": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperatorCondition"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "status_detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status Detail"
-          },
-          "status_headline": {
-            "title": "Status Headline",
-            "type": "string"
-          }
-        },
-        "required": [
-          "condition",
-          "account_desk",
-          "status_headline",
-          "status_detail"
-        ],
-        "title": "AccountOperatorPosture",
-        "type": "object"
-      },
       "AccountPinRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4628,6 +4579,36 @@
           "world_label"
         ],
         "title": "BotCatalogView",
+        "type": "object"
+      },
+      "BotClearRequest": {
+        "additionalProperties": false,
+        "description": "Clear finished bots from Home (owner decision 2026-09-28; ADR 0052 \u00a74).\n\nMembership is explicit (ADR 0051 D2): exactly these bots, each one leg of\nthe unchanged per-bot ``archive`` under the derived identity\n``{idempotency_key}:{sid}`` (ADR 0051 D4). The request names no action:\nthis endpoint clears, and nothing else.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "strategy_instance_ids": {
+            "items": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Strategy Instance Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "strategy_instance_ids"
+        ],
+        "title": "BotClearRequest",
         "type": "object"
       },
       "BotControlAuthorityFacts": {
@@ -9950,9 +9931,6 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
-          "operator_posture": {
-            "$ref": "#/components/schemas/AccountOperatorPosture"
-          },
           "outstanding_intents": {
             "title": "Outstanding Intents",
             "type": "integer"
@@ -9963,8 +9941,7 @@
           "account_id",
           "hold",
           "outstanding_intents",
-          "observed_at_ms",
-          "operator_posture"
+          "observed_at_ms"
         ],
         "title": "ClerkStatus",
         "type": "object"
@@ -16705,7 +16682,7 @@
         "type": "object"
       },
       "EvidenceEntry": {
-        "description": "One redacted, size-capped journal entry exposed to the operator lens.",
+        "description": "One redacted, size-capped custody record entry exposed as evidence.",
         "properties": {
           "broker_state": {
             "anyOf": [
@@ -28116,29 +28093,9 @@
         "title": "OhlcvBar",
         "type": "object"
       },
-      "OpenRunbookAction": {
-        "additionalProperties": false,
-        "description": "Move: open an operator runbook by backend-authored slug.",
-        "properties": {
-          "kind": {
-            "const": "open_runbook",
-            "title": "Kind"
-          },
-          "slug": {
-            "title": "Slug",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "slug"
-        ],
-        "title": "OpenRunbookAction",
-        "type": "object"
-      },
       "OperatorBlocker": {
         "additionalProperties": false,
-        "description": "Host-scoped, backend-authored guidance for one operator condition.\n\nAudience is presentational routing and confers no permission. Frontends\nrender this backend-authored guidance and must never infer a cure from a\nreason code.",
+        "description": "Host-scoped, backend-authored guidance for one operator condition.\n\nFrontends render this backend-authored guidance and must never infer a\ncure from a reason code.",
         "properties": {
           "anchor": {
             "$ref": "#/components/schemas/OperatorBlockerAnchor"
@@ -28150,15 +28107,6 @@
               "both"
             ],
             "title": "Applies To",
-            "type": "string"
-          },
-          "audience": {
-            "enum": [
-              "trader",
-              "operator",
-              "both"
-            ],
-            "title": "Audience",
             "type": "string"
           },
           "condition": {
@@ -28193,8 +28141,7 @@
             "enum": [
               "bot_cockpit",
               "deploy_preflight",
-              "account_monitor",
-              "account_desk"
+              "account_monitor"
             ],
             "title": "Host",
             "type": "string"
@@ -28221,7 +28168,6 @@
           "condition",
           "host",
           "anchor",
-          "audience",
           "disposition",
           "headline",
           "applies_to"
@@ -28238,7 +28184,6 @@
               "surface",
               "verdict",
               "lease",
-              "clerk",
               "reconciliation",
               "holdings_row",
               "event",
@@ -28488,7 +28433,6 @@
               "mapping": {
                 "confirm_in_form": "#/components/schemas/ConfirmInFormAction",
                 "navigate": "#/components/schemas/NavigateAction",
-                "open_runbook": "#/components/schemas/OpenRunbookAction",
                 "remove": "#/components/schemas/RemoveAction",
                 "retire_replace": "#/components/schemas/RetireReplaceAction"
               },
@@ -28500,9 +28444,6 @@
               },
               {
                 "$ref": "#/components/schemas/ConfirmInFormAction"
-              },
-              {
-                "$ref": "#/components/schemas/OpenRunbookAction"
               },
               {
                 "$ref": "#/components/schemas/RetireReplaceAction"
@@ -30401,7 +30342,7 @@
       },
       "PortfolioHistoryProofResponse": {
         "additionalProperties": false,
-        "description": "C1 + C2 + C3 bundle for the Trader lens historical scope.",
+        "description": "C1 + C2 + C3 bundle for the historical scope.",
         "properties": {
           "attribution": {
             "anyOf": [
@@ -33024,7 +32965,7 @@
         "type": "object"
       },
       "RecentDecisionView": {
-        "description": "Bounded backend-authored decision receipt for the Trader lens.",
+        "description": "Bounded backend-authored decision receipt shown on the bot page.",
         "properties": {
           "authority_account_id": {
             "anyOf": [
@@ -33144,7 +33085,7 @@
         "type": "object"
       },
       "RecentFillView": {
-        "description": "Bounded Clerk-attributed fill receipt for the Trader lens.",
+        "description": "Bounded Clerk-attributed fill receipt shown on the bot page.",
         "properties": {
           "authority_account_id": {
             "anyOf": [
@@ -53477,6 +53418,83 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/clear": {
+      "post": {
+        "operationId": "clear_bots_scoped_api_brokers__broker__accounts__account_id__bots_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotClearRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CohortActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear finished bots from Home: one per-bot archive leg each, with per-leg outcomes (ADR 0052)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
       "get": {
         "operationId": "get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get",
@@ -56785,7 +56803,7 @@
     },
     "/api/brokers/{broker}/clerk/status": {
       "get": {
-        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state,\nplus (#1664) the one canonical account operator posture, authored from\nthis same custody projection and a same-request account observation.\n\nThe account read degrades gracefully: a broker-side failure does not 503\nthis endpoint (custody state is independently available) \u2014 it instead\nsurfaces as an explicit ``alpaca_account_evidence_unavailable`` operator\ncondition so the account/paper-mode checks fail closed rather than\nsilently passing.",
+        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state.\nIt never reads the broker: every fact is the custody projection's.",
         "operationId": "get_clerk_status_api_brokers__broker__clerk_status_get",
         "parameters": [
           {
@@ -57377,6 +57395,98 @@
           }
         },
         "summary": "Fleet Bots Catalog Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/clear": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/clear (bot_action).",
+        "operationId": "fleet_bots_clear_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bots Clear",
         "tags": [
           "broker-clerks"
         ]

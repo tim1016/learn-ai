@@ -16,20 +16,17 @@ OperatorHost = Literal[
     "bot_cockpit",
     "deploy_preflight",
     "account_monitor",
-    "account_desk",
 ]
 ConditionScope = Literal["bot", "account", "broker", "fleet", "host", "strategy"]
 OperatorBlockerAnchorKind = Literal[
     "surface",
     "verdict",
     "lease",
-    "clerk",
     "reconciliation",
     "holdings_row",
     "event",
     "cure_tools",
 ]
-OperatorBlockerAudience = Literal["trader", "operator", "both"]
 
 _SUBJECT_KEY_ANCHOR_KINDS: frozenset[OperatorBlockerAnchorKind] = frozenset(
     {"holdings_row", "event"}
@@ -79,15 +76,6 @@ class ConfirmInFormAction(BaseModel):
     anchor: str
 
 
-class OpenRunbookAction(BaseModel):
-    """Move: open an operator runbook by backend-authored slug."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["open_runbook"]
-    slug: str
-
-
 class RetireReplaceAction(BaseModel):
     """Move: retire this bot and start a fresh deploy flow with lineage kept."""
 
@@ -105,7 +93,7 @@ class RemoveAction(BaseModel):
 
 
 OperatorAction = Annotated[
-    NavigateAction | ConfirmInFormAction | OpenRunbookAction | RetireReplaceAction | RemoveAction,
+    NavigateAction | ConfirmInFormAction | RetireReplaceAction | RemoveAction,
     Field(discriminator="kind"),
 ]
 
@@ -145,9 +133,8 @@ class OperatorCondition(BaseModel):
 class OperatorBlocker(BaseModel):
     """Host-scoped, backend-authored guidance for one operator condition.
 
-    Audience is presentational routing and confers no permission. Frontends
-    render this backend-authored guidance and must never infer a cure from a
-    reason code.
+    Frontends render this backend-authored guidance and must never infer a
+    cure from a reason code.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -155,7 +142,6 @@ class OperatorBlocker(BaseModel):
     condition: OperatorCondition
     host: OperatorHost
     anchor: OperatorBlockerAnchor
-    audience: OperatorBlockerAudience
     disposition: Disposition
     headline: str
     detail: str | None = None
@@ -171,7 +157,6 @@ class OperatorBlocker(BaseModel):
         scope: ConditionScope,
         host: OperatorHost,
         anchor: OperatorBlockerAnchor,
-        audience: OperatorBlockerAudience,
         disposition: Disposition,
         headline: str,
         detail: str | None,
@@ -190,7 +175,6 @@ class OperatorBlocker(BaseModel):
             ),
             host=host,
             anchor=anchor,
-            audience=audience,
             disposition=disposition,
             headline=headline,
             detail=detail,
@@ -215,50 +199,3 @@ class DeployPreflightResponse(BaseModel):
 
     ready: bool
     blockers: list[OperatorBlocker]
-
-
-class AccountOperatorPosture(BaseModel):
-    """One canonical account-level operator decision, authored from one
-    evidence cut (issue #1664).
-
-    ``condition`` is ``None`` exactly when the account is healthy; in that
-    case the ``account_desk`` projection is also ``None`` and
-    ``status_headline`` / ``status_detail`` carry the backend-authored healthy
-    copy. Whenever ``condition`` is set, ``account_desk`` is required — a
-    non-null condition can never validate without it, so the desk never
-    silently reads ``None`` for a live blocking condition. The projection
-    shares ``condition`` (identity and severity) and carries the desk's
-    disposition, copy, and moves per ADR 0027; its own ``host`` field is
-    validated to be ``account_desk``. The former ``fleet_roster`` projection
-    was retired with its host (#2192). Consumers must never re-derive a
-    verdict from raw evidence.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    condition: OperatorCondition | None
-    account_desk: OperatorBlocker | None
-    status_headline: str
-    status_detail: str | None
-
-    @model_validator(mode="after")
-    def _hosts_match_condition(self) -> AccountOperatorPosture:
-        if self.condition is None:
-            if self.account_desk is not None:
-                raise ValueError("a healthy posture (condition=None) must not carry a host blocker")
-            return self
-        if self.account_desk is None:
-            raise ValueError(
-                "a non-null condition requires the account_desk projection — a missing "
-                "projection would silently render as no blocker on the desk"
-            )
-        if self.account_desk.condition != self.condition:
-            raise ValueError(
-                "a host blocker's condition must match the posture's condition identity"
-            )
-        if self.account_desk.host != "account_desk":
-            raise ValueError(
-                f"the account_desk projection must carry host='account_desk', "
-                f"not {self.account_desk.host!r}"
-            )
-        return self

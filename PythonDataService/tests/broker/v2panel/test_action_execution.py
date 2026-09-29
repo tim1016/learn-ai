@@ -382,7 +382,11 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
                     action_id="stop",
                     label="Stop",
                     enabled=False,
-                    blockers=[SimpleNamespace(detail="Start the bot before Stop.")],
+                    blockers=[SimpleNamespace(
+                        headline="The bot is not running.",
+                        detail="Start the bot before Stop.",
+                        condition=SimpleNamespace(id="BOT_NOT_RUNNING"),
+                    )],
                     concurrency_token="token",
                 )
             ],
@@ -415,7 +419,10 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
             operator_identity="operator",
         )
 
+    # The refusal is the guard's own: its headline, its why and its code.
+    assert str(exc.value) == "The bot is not running."
     assert exc.value.detail == "Start the bot before Stop."
+    assert exc.value.reason_code == "BOT_NOT_RUNNING"
 
 
 

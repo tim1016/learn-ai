@@ -234,6 +234,30 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(sent).resolves.toMatchObject({ receipt_id: 'command-key-1' });
   });
 
+  it('clears exactly the named bots with one command body under the frozen key', async () => {
+    const sent = service.clearBots(target('account/1'), {
+      idempotency_key: 'command-key-1',
+      strategy_instance_ids: ['old-bot', 'older-bot'],
+    });
+    const request = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/bots/clear');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toMatchObject({
+      idempotency_key: 'command-key-1',
+      strategy_instance_ids: ['old-bot', 'older-bot'],
+      command_context: expect.objectContaining({
+        capability: 'bot_action',
+        idempotency_key: 'command-key-1',
+        expected_effective_binding_generation: 3,
+      }),
+    });
+    request.flush({
+      account_id: 'account/1', receipt_id: 'command-key-1', recorded_at_ms: 2, legs: [],
+      applied_count: 0, replayed_count: 0, refused_count: 0, failed_count: 0,
+    });
+
+    await expect(sent).resolves.toMatchObject({ receipt_id: 'command-key-1' });
+  });
+
   it('refuses a cohort flatten whose body key disagrees with its frozen target', () => {
     expect(() =>
       service.runCohortFlatten(target('account/1'), {

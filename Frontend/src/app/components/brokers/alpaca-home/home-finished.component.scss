@@ -30,9 +30,42 @@
   th,
   td {
     padding: var(--space-2) var(--space-4);
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--border);
     text-align: left;
   }
+}
+
+.home-finished__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.home-finished__count {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.home-finished__pick {
+  width: 1%;
+}
+
+/* A Dry Run is simulated cash, never the account's money: dashed, like its
+   group above, and named in words by its chip. */
+.home-finished__row--dry-run td {
+  border-top-style: dashed;
+}
+
+.home-finished__chip {
+  margin-left: var(--space-2);
+  padding: 0.05rem 0.4rem;
+  border: 1px dashed var(--chart-series-sky);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
 }
 
 .home-finished__num {

@@ -45,6 +45,7 @@ import { AlpacaManualOrderHostComponent } from '../alpaca-desk/alpaca-manual-ord
 import { HomeAttentionComponent } from './home-attention.component';
 import { HomeBotGroupComponent } from './home-bot-group.component';
 import { homeBots } from './home-bots';
+import { HOME_CLEAR_COPY, type ClearBatch, type ClearOutcome } from './home-clear';
 import { HomeFinishedComponent } from './home-finished.component';
 import { HomeMoneyComponent } from './home-money.component';
 
@@ -84,8 +85,9 @@ function rosterKey(target: ResourceTarget): string {
  * List or a Wall; Dry Run; the folded Finished list; the folded Account
  * details from Alpaca.
  *
- * Home owns the one action path for its bots (Stop), fenced to the lane the
- * owner was shown (#2068), and moves the keyboard to the outcome. The bot
+ * Home owns the action paths for its bots — Stop, and clearing finished bots
+ * — fenced to the lane the owner was shown (#2068), and moves the keyboard to
+ * the outcome. The bot
  * grouping, every dollar and every attention line are the backend's; Home
  * only joins each bot to its own slice of the money read.
  */
@@ -193,9 +195,23 @@ export class AlpacaHomeComponent {
   protected readonly outcome = signal<Outcome | null>(null);
   protected readonly flattenOpen = signal(false);
   private readonly outcomeNotice = viewChild<ElementRef<HTMLElement>>('outcomeNotice');
+  private readonly listRadio = viewChild<ElementRef<HTMLButtonElement>>('listRadio');
+  private readonly wallRadio = viewChild<ElementRef<HTMLButtonElement>>('wallRadio');
   private flattenOpener: HTMLElement | null = null;
 
+  /** The last clear sent: a retry re-sends it verbatim, under its own key. */
+  private readonly clearBatch = signal<ClearBatch | null>(null);
+  /** How many bots the clear in flight carries. */
+  protected readonly clearing = signal<number | null>(null);
+  protected readonly clearOutcome = signal<ClearOutcome | null>(null);
+  private readonly finished = viewChild(HomeFinishedComponent);
+
   constructor() {
+    // Home opens on the account's money as it is now. The read belongs to the
+    // workspace and is polled only every 15 s, so a Deploy or a sale made on
+    // another page would otherwise leave its bot's row joined to a read from
+    // before it — "Money not shown" beside a bar that still claims the money.
+    if (!this.accountData.money.isLoading()) this.accountData.money.reload();
     effect(() => {
       if (this.catalog.hasValue()) this.lastCatalog.set(this.catalog.value());
     });
@@ -203,7 +219,10 @@ export class AlpacaHomeComponent {
     // another account clears it.
     effect(() => {
       this.key();
-      untracked(() => this.outcome.set(null));
+      untracked(() => {
+        this.outcome.set(null);
+        this.dismissClear();
+      });
     });
     // The Wall's candles and fills stream from the gallery feed only while the
     // Wall is shown; the List needs none.
@@ -235,6 +254,20 @@ export class AlpacaHomeComponent {
     });
   }
 
+  /** Arrow keys, Home and End move the List/Wall choice and the keyboard with
+   * it (the ARIA radio group pattern). With two choices every move flips it. */
+  protected onViewKeydown(event: KeyboardEvent): void {
+    const wall =
+      ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(event.key) ? !this.wall()
+      : event.key === 'Home' ? false
+      : event.key === 'End' ? true
+      : null;
+    if (wall === null) return;
+    event.preventDefault();
+    this.showView(wall);
+    (wall ? this.wallRadio() : this.listRadio())?.nativeElement.focus();
+  }
+
   protected refresh(): void {
     this.catalog.reload();
     this.accountData.money.reload();
@@ -260,13 +293,12 @@ export class AlpacaHomeComponent {
    */
   protected async stop(sid: string): Promise<void> {
     if (this.pendingSids().has(sid)) return;
-    const fence = this.openFence();
-    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane('alpaca', this.clerkId()));
-    if (!verdict.ok) {
-      this.announce({ tone: 'danger', message: verdict.message });
+    const lane = this.shownLane();
+    if (!lane.ok) {
+      this.announce({ tone: 'danger', message: lane.message });
       return;
     }
-    const target = withCommand(withEntity(fencedTarget(this.target(), fence), sid), 'bot_action', crypto.randomUUID());
+    const target = withCommand(withEntity(lane.target, sid), 'bot_action', crypto.randomUUID());
     this.pendingSids.update((current) => new Set(current).add(sid));
     try {
       const panel = await this.panelService.getPanel(target, sid);
@@ -280,11 +312,7 @@ export class AlpacaHomeComponent {
     } catch (error) {
       const rejection = deriveActionRejection(error, `${sid} could not be stopped.`);
       this.announce({ tone: 'danger', message: rejection.why ? `${rejection.message} ${rejection.why}` : rejection.message });
-      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
-        void this.fleetDirectory.refresh().catch(() => {
-          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
-        });
-      }
+      this.refreshDirectoryAfterFenceRefusal(rejection.reasonCode);
     } finally {
       this.pendingSids.update((current) => {
         const next = new Set(current);
@@ -293,6 +321,79 @@ export class AlpacaHomeComponent {
       });
       this.refresh();
     }
+  }
+
+  /**
+   * Clear the confirmed finished bots (owner decision 2026-09-28) under a key
+   * minted for this confirmation, against the lane the owner was shown.
+   */
+  protected async clear(sids: readonly string[]): Promise<void> {
+    if (this.clearing() !== null) return;
+    const lane = this.shownLane();
+    if (!lane.ok) {
+      this.clearBatch.set(null);
+      this.clearOutcome.set({ kind: 'refused', message: lane.message, why: null, reasonCode: null });
+      this.focusClearOutcome();
+      return;
+    }
+    const key = crypto.randomUUID();
+    const batch: ClearBatch = {
+      target: withCommand(lane.target, 'bot_action', key),
+      request: { idempotency_key: key, strategy_instance_ids: [...sids] },
+    };
+    this.clearBatch.set(batch);
+    await this.sendClear(batch);
+  }
+
+  /** Re-send the last clear unchanged: a bot it already cleared replays. */
+  protected async retryClear(): Promise<void> {
+    const batch = this.clearBatch();
+    if (batch !== null && this.clearing() === null) await this.sendClear(batch);
+  }
+
+  protected dismissClear(): void {
+    this.clearOutcome.set(null);
+    this.clearBatch.set(null);
+  }
+
+  private async sendClear(batch: ClearBatch): Promise<void> {
+    this.clearing.set(batch.request.strategy_instance_ids.length);
+    try {
+      const result = await this.panelService.clearBots(batch.target, batch.request);
+      this.clearOutcome.set({ kind: 'result', result, requested: batch.request.strategy_instance_ids });
+    } catch (error) {
+      const rejection = deriveActionRejection(error, HOME_CLEAR_COPY.requestFallback);
+      this.clearOutcome.set(rejection.outcome === 'unknown'
+        ? { kind: 'unknown' }
+        : { kind: 'refused', message: rejection.message, why: rejection.why, reasonCode: rejection.reasonCode });
+      this.refreshDirectoryAfterFenceRefusal(rejection.reasonCode);
+    } finally {
+      this.clearing.set(null);
+      // Cleared bots leave the Finished list on this read.
+      this.refresh();
+      this.focusClearOutcome();
+    }
+  }
+
+  private focusClearOutcome(): void {
+    afterNextRender({ write: () => this.finished()?.focusOutcome() }, { injector: this.injector });
+  }
+
+  /** The lane the owner was shown, as a command target — or why it no longer
+   * is the lane this account routes to (#2068). */
+  private shownLane(): { readonly ok: true; readonly target: ResourceTarget } | { readonly ok: false; readonly message: string } {
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane('alpaca', this.clerkId()));
+    return verdict.ok ? { ok: true, target: fencedTarget(this.target(), fence) } : verdict;
+  }
+
+  /** A refusal that proves the shown lane stale re-reads the directory, so the
+   * next action is fenced to a lane the owner can see. */
+  private refreshDirectoryAfterFenceRefusal(reasonCode: string | null): void {
+    if (reasonCode !== 'clerk_binding_generation_conflict') return;
+    void this.fleetDirectory.refresh().catch(() => {
+      this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+    });
   }
 
   /** Say what happened and move the keyboard there (PRD #2560 story 48). */

@@ -1,0 +1,41 @@
+@let done = outcome();
+<section class="clear-outcome" aria-label="Clear outcome">
+  <p #summaryLine class="clear-outcome__summary" tabindex="-1" [attr.role]="unresolved() ? 'alert' : 'status'">
+    <strong>{{ summary() }}</strong>
+    @if (done.kind === 'refused') {
+      @if (done.reasonCode; as code) { <span class="clear-outcome__code">{{ code | receiptLabel }}</span> }
+      @if (done.why; as why) { <span>{{ why }}</span> }
+    }
+  </p>
+
+  @if (done.kind === 'result') {
+    <ul class="clear-outcome__legs">
+      @for (leg of done.result.legs; track leg.strategy_instance_id) {
+        <li>
+          <code>{{ leg.strategy_instance_id }}</code>
+          <strong>{{ copy.legLabel[leg.outcome] }}</strong>
+          @if (leg.error; as error) {
+            @if (error.reason_code) { <span class="clear-outcome__code">{{ error.reason_code | receiptLabel }}</span> }
+            <span>{{ error.message }}</span>
+            @if (error.why; as why) { <span>{{ why }}</span> }
+          }
+        </li>
+      }
+    </ul>
+    @if (notAttempted().length > 0) {
+      <p>
+        {{ copy.notAttempted }}
+        @for (sid of notAttempted(); track sid; let last = $last) {
+          <code>{{ sid }}</code>{{ last ? '' : ', ' }}
+        }
+      </p>
+    }
+  }
+
+  <div class="clear-outcome__actions">
+    @if (canRetry()) {
+      <button type="button" [disabled]="busy()" [attr.aria-busy]="busy()" (click)="retryRequested.emit()">{{ copy.retry }}</button>
+    }
+    <button type="button" [disabled]="busy()" (click)="dismissed.emit()">{{ copy.dismiss }}</button>
+  </div>
+</section>

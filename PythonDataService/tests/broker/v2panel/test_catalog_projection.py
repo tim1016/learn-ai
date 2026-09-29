@@ -627,11 +627,26 @@ async def test_a_finished_result_the_fees_cannot_vouch_for_is_unknown_never_zero
         ("real_live", "dry_run", True),
     ],
 )
-async def test_a_dry_run_is_its_own_group_and_world_whatever_it_holds(world, mode, running) -> None:
+async def test_a_dry_run_is_its_own_group_while_it_runs_or_holds(world, mode, running) -> None:
     row = await _home_row(running=running, exposure={"SPY": 1.0}, holding=(SID,), world=world, mode=mode)
 
     assert (row.group, row.world_label) == ("dry_run", "DRY RUN · simulated cash")
     assert row.final_result_usd is None
+
+
+@pytest.mark.parametrize(("world", "mode"), [("synthetic", "trade"), ("real_paper", "dry_run")])
+async def test_a_stopped_flat_dry_run_is_finished_under_its_own_world_label(world, mode) -> None:
+    """Owner decision 2026-09-28 (#2567): the Finished fold is the one place
+    a bot is cleared from, Dry Runs included. A stopped, flat Dry Run is
+    Finished like any other bot, still worded as a Dry Run, never as the
+    account's money (D5)."""
+    row = await _home_row(
+        running=False, exposure={}, world=world, mode=mode,
+        results={SID: BotResult(result=Decimal("1.25"), trade_count=2)},
+    )
+
+    assert (row.group, row.world_label) == ("finished", "DRY RUN · simulated cash")
+    assert (row.final_result_usd, row.trade_count) == ("1.25", 2)
 
 
 @pytest.mark.parametrize(

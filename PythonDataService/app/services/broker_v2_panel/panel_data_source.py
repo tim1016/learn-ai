@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.models import (
     EffectOperationState,
     EffectPurpose,
     OrderJournalEntry,
+    ReconciliationCut,
 )
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -66,6 +67,8 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     get_bot_task_registry,
 )
+from app.services.bot_runner_errors import BotRunnerError, InvalidStrategyInstanceIdError
+from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
@@ -164,6 +167,11 @@ async def _selected_panel_authority(
     Yields the resolved account id, the registry, the bot's binding and the
     selected facade, so a read and the action it gates project from the same
     authority, selected once.
+
+    An id the runner holds no binding for -- or could never hold one for --
+    is the panel's own ``UnknownBotError`` (404) in the runner's words: the
+    runner's error type is not a panel error, so untranslated it answered
+    the bot page with a 500 and aborted a whole clear batch at one leg.
     """
     resolved = await validate_account(broker, account_id)
     registry = get_bot_task_registry()
@@ -172,7 +180,10 @@ async def _selected_panel_authority(
             "The bot runner is not available.",
             detail="The service is still starting or has shut down.",
         )
-    binding = registry.binding_for_control(broker, sid)
+    try:
+        binding = registry.binding_for_control(broker, sid)
+    except (RunnerUnknownBotError, InvalidStrategyInstanceIdError) as exc:
+        raise UnknownBotError(str(exc), detail=exc.detail) from exc
     async with _panel_authority_for_binding(registry, binding) as facade:
         yield resolved, registry, binding, facade
 
@@ -322,6 +333,11 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     synthetic_rows: list[BotCatalogView] = []
     for binding in registry.bindings_for_broker(broker):
         if binding.mode != "dry_run":
+            continue
+        # A cleared Dry Run leaves Home and this poll: its sealed simulator is
+        # never opened again for it (#2567). Clearing needed it stopped and
+        # flat, so there is nothing left in it to show.
+        if registry.status(broker, binding.strategy_instance_id).phase == "RETIRED":
             continue
         try:
             async with _panel_authority_for_binding(registry, binding) as facade:
@@ -606,12 +622,19 @@ async def get_history_chart(
     return await build_history_chart_response(broker, account_id, sid, timeframe)
 
 
-def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[str, ActionPerformer]:
+def _action_performers(
+    broker: str,
+    sid: str,
+    *,
+    idempotency_key: str,
+    reconciled: ReconciliationCut | None = None,
+) -> dict[str, ActionPerformer]:
     """Map each executable action id to the coroutine that performs it (§11, §12).
 
     Only actions with production custody are wired. The remaining closed-set
     actions raise ``ActionNotAvailableError`` from the executor rather than
-    presenting a fake success.
+    presenting a fake success. ``reconciled`` is a clear batch's one account
+    pass, which archive's guard may answer against (``bot_runner.archive``).
     """
 
 
@@ -641,14 +664,21 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
-        await registry.archive(
-            broker,
-            sid,
-            updated_by=operator,
-            # The operator's own words when they gave any; the generic line is
-            # a fallback, not a replacement for the audit context they typed.
-            reason=reason or f"Panel archive by {operator}",
-        )
+        try:
+            await registry.archive(
+                broker,
+                sid,
+                updated_by=operator,
+                # The operator's own words when they gave any; the generic line is
+                # a fallback, not a replacement for the audit context they typed.
+                reason=reason or f"Panel archive by {operator}",
+                reconciled=reconciled,
+            )
+        except BotRunnerError as error:
+            # The commit-time guard refused under the bot's lock, before any
+            # write (ADR 0052 §3): a typed refusal that names its cause, not
+            # an unknown outcome -- nothing was applied.
+            raise ActionNotAvailableError(str(error), detail=error.detail, reason_code=error.reason_code) from error
         return (
             "Bot archived and taken off the roster. Its history and receipts are "
             "kept; it can start no new runs."
@@ -717,6 +747,7 @@ async def run_action(
     request: PanelActionRequest,
     *,
     operator_identity: str,
+    reconciled: ReconciliationCut | None = None,
 ) -> PanelActionResult:
     """Execute one presented action for a bot (§11).
 
@@ -737,7 +768,7 @@ async def run_action(
         )
     try:
         return await _run_action_under_live_authority(
-            broker, account_id, sid, request, operator_identity=operator_identity
+            broker, account_id, sid, request, operator_identity=operator_identity, reconciled=reconciled
         )
     except ExecutionLeaseLost as error:
         await _revive_lease_or_raise(broker, account_id, sid, request, error=error)
@@ -912,6 +943,7 @@ async def _run_action_under_live_authority(
     request: PanelActionRequest,
     *,
     operator_identity: str,
+    reconciled: ReconciliationCut | None,
 ) -> PanelActionResult:
     """Act in the one authority the bot's panel is read from.
 
@@ -937,14 +969,18 @@ async def _run_action_under_live_authority(
             )
         availability_error: ActionNotAvailableError | None = None
         if not action.enabled:
+            # The refusal is the guard's own: its headline, its why and its
+            # condition code, so a batch leg reports the reason its bot gave.
             blocker = action.blockers[0] if action.blockers else None
-            availability_error = ActionNotAvailableError(
-                f"The '{action.label}' action is blocked by the current panel state.",
-                detail=(
-                    blocker.detail
-                    if blocker is not None
-                    else "Refresh the panel and inspect the operation's readiness check."
-                ),
+            availability_error = (
+                ActionNotAvailableError(
+                    f"The '{action.label}' action is blocked by the current panel state.",
+                    detail="Refresh the panel and inspect the operation's readiness check.",
+                )
+                if blocker is None
+                else ActionNotAvailableError(
+                    blocker.headline, detail=blocker.detail, reason_code=blocker.condition.id
+                )
             )
         try:
             sqlite_result = await execute_sqlite_panel_action(
@@ -970,7 +1006,9 @@ async def _run_action_under_live_authority(
         sid=sid,
         current_revision=panel.revision,
         current_concurrency_token=action.concurrency_token,
-        performers=_action_performers(broker, sid, idempotency_key=request.idempotency_key),
+        performers=_action_performers(
+            broker, sid, idempotency_key=request.idempotency_key, reconciled=reconciled
+        ),
         operator_identity=operator_identity,
         store=durable_idempotency_store_for(registry.artifacts_root, sid),
         availability_error=availability_error,

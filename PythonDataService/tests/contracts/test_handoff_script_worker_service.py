@@ -394,18 +394,124 @@ def test_the_fleet_path_derives_the_coordinators_published_port() -> None:
     assert 'data_plane_url="http://$(published_host_address "$published_port_line")"' in script
 
 
-def test_the_operator_page_url_is_clerk_scoped_on_fleet_postures() -> None:
-    """On a fleet posture the page the ceremony opens must be the clerk's
-    own Settings page. The compatibility /brokers/alpaca/settings URL
-    renders BrokerLaneUnavailableComponent there — the operator could
-    never stage or Apply from it. Pinned against the Angular routes the
-    URL must resolve through: the clerk route prefix plus its settings
-    child (app.routes.ts), which the Configuration tab became (#2566)."""
+def test_the_operator_page_url_is_always_clerk_scoped() -> None:
+    """The page the ceremony opens is always a clerk's own Settings page —
+    on every posture. The broker-wide /brokers/alpaca/settings address was
+    never a page the operator could stage or Apply from, and now only
+    redirects to the account list (#2567), so no line of the script may
+    open it. Pinned against the Angular routes the URL must resolve
+    through: the clerk route prefix plus its settings child
+    (app.routes.ts), which the Configuration tab became (#2566)."""
     script = _script()
-    assert "brokers/alpaca/clerks/$fleet_clerk_id/settings" in script
-    assert "brokers/alpaca/clerks/\"$fleet_clerk_id\"/settings" not in script
+    functional = [line for line in script.splitlines() if not line.strip().startswith("#")]
+    assert [line for line in functional if "4200/brokers/alpaca/settings" in line] == []
+    assert "http://localhost:4200/brokers/alpaca/clerks/%s/settings" in script
     routes = (
         REPOSITORY_ROOT / "Frontend" / "src" / "app" / "app.routes.ts"
     ).read_text(encoding="utf-8")
     assert "brokers/alpaca/clerks/:clerkId" in routes
     assert "path: 'settings'" in routes
+
+
+def _directory(*lanes: tuple[str, str]) -> str:
+    return json.dumps({"observed_at_ms": 1, "clerks": [
+        {"broker": broker, "clerk_id": clerk_id} for broker, clerk_id in lanes
+    ]})
+
+
+def _settings_page(*, fleet_clerk_id: str, directory: str | None) -> subprocess.CompletedProcess[str]:
+    """Run the script's own ``settings_page_url`` against a stubbed ``curl``
+    that answers the account directory (or fails, when ``directory`` is
+    ``None``), exactly as the ceremony calls it after the worker restarts."""
+    curl = (
+        "curl() { echo 'curl: (7) Failed to connect to 127.0.0.1 port 8000' >&2; return 7; }\n"
+        if directory is None
+        else f"curl() {{ printf '%s' {json.dumps(directory)}; }}\n"
+    )
+    probe = (
+        'data_plane_url="http://127.0.0.1:8000"\n'
+        'control_secret="secret"\n'
+        f'fleet_clerk_id="{fleet_clerk_id}"\n'
+        f"{curl}"
+        f"{_script_function('single_alpaca_lane')}\n"
+        f"{_script_function('settings_page_url')}\n"
+        "settings_page_url\n"
+    )
+    return subprocess.run(["bash", "-c", probe], capture_output=True, text=True, timeout=10)
+
+
+def test_a_fleet_lane_opens_its_own_settings_page() -> None:
+    completed = _settings_page(fleet_clerk_id="clrk_paper", directory=None)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "http://localhost:4200/brokers/alpaca/clerks/clrk_paper/settings"
+
+
+def test_the_combined_posture_opens_the_directorys_one_alpaca_lane() -> None:
+    """#2567 (CodeRabbit on #2568): a combined worker names no FLEET_CLERK_ID,
+    and the ceremony used to open the broker-wide /brokers/alpaca/settings —
+    a page that could never stage or Apply. It now opens the one Alpaca
+    lane the same data plane's account directory lists; another broker's
+    lanes never count."""
+    completed = _settings_page(
+        fleet_clerk_id="", directory=_directory(("alpaca", "clrk_combined"), ("ibkr", "clrk_other")),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "http://localhost:4200/brokers/alpaca/clerks/clrk_combined/settings"
+
+
+@pytest.mark.parametrize(
+    "directory",
+    [
+        _directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")),
+        _directory(),
+        None,
+    ],
+    ids=["two-alpaca-lanes", "no-alpaca-lane", "directory-unreadable"],
+)
+def test_the_combined_posture_refuses_rather_than_guess_a_lane(directory: str | None) -> None:
+    """With several Alpaca lanes, none, or no readable directory, no single
+    lane can be named: ``settings_page_url`` fails (the ceremony then prints
+    the by-hand procedure and exits 1) and never prints a URL."""
+    completed = _settings_page(fleet_clerk_id="", directory=directory)
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("directory", "reason"),
+    [
+        (None, "The account directory (http://127.0.0.1:8000/api/broker-clerks) could not be read: "
+               "curl: (7) Failed to connect to 127.0.0.1 port 8000"),
+        (_directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")), "does not list exactly one Alpaca lane"),
+        ("<html>proxy error</html>", "is not the lane list this script reads"),
+    ],
+    ids=["directory-unreadable", "two-alpaca-lanes", "not-a-lane-list"],
+)
+def test_the_refusal_says_why_no_lane_was_named(directory: str | None, reason: str) -> None:
+    """Review A (minor): an unreachable directory was reported as "does not
+    list exactly one Alpaca lane", because curl's own error was discarded.
+    Each failure now names itself, with curl's error when it has one."""
+    completed = _settings_page(fleet_clerk_id="", directory=directory)
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
+
+
+def test_the_refusal_names_the_by_hand_procedure_loudly() -> None:
+    """The refusal is loud and complete: it says why, where to finish, how
+    to restart this lane's worker, and where to confirm Apply."""
+    script = _script()
+    assert 'if ! settings_url="$(settings_page_url)"; then' in script
+    refusal = script[script.index('if ! settings_url="$(settings_page_url)"; then'):]
+    refusal = refusal[: refusal.index("\nfi\n")]
+    assert "cat >&2 <<EOF" in refusal and "exit 1" in refusal
+    for step in (
+        "http://localhost:4200/brokers/alpaca",
+        "Apply staged revision",
+        "${compose_words[*]} restart $worker_service",
+        "Last Apply",
+    ):
+        assert step in refusal

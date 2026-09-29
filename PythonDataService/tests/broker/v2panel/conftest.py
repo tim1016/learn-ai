@@ -23,7 +23,6 @@ from app.broker.contract.registry import (
 )
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.bot_runner import AdmittedBotStart, set_bot_task_registry
@@ -40,12 +39,6 @@ from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.fixtures import ACCT
 
 _T0 = 1_700_000_000_000
-_HEALTHY_POSTURE = AccountOperatorPosture(
-    condition=None,
-    account_desk=None,
-    status_headline="Account Clerk custody is healthy",
-    status_detail=None,
-)
 
 
 def account_snapshot(**overrides: object) -> BrokerAccountSnapshot:
@@ -210,7 +203,6 @@ def deploy_app(
                 ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=observed_at_ms),
                 ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=observed_at_ms),
             ],
-            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)

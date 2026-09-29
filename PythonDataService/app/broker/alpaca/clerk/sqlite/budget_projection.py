@@ -7,13 +7,13 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money
+from app.broker.alpaca.clerk.account_money import AccountMoney, Holding, account_money, holdings_text, quantity_text
 from app.broker.alpaca.clerk.budgets import AccountBudget, account_budget, deployment_budget
 from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -46,6 +46,9 @@ class BudgetFees(Protocol):
     @property
     def external_fills(self) -> tuple[FeeFill, ...]: ...
 
+    @property
+    def pre_custody_quantities(self) -> Mapping[str, Decimal]: ...
+
     def total_for(self, subject_id: str) -> Decimal: ...
 
     def unobserved_cash_claim(self, *, cash_seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> Decimal: ...
@@ -55,13 +58,18 @@ class BudgetFees(Protocol):
 def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_before_ms: int) -> Decimal:
     """Price normalized external BUY facts once, retaining unknown obligations.
 
-    Formula: sum(qty * price for external BUYs not yet inside observed cash).
+    Executions from before custody began arrive as quantities only: they
+    complete their order's population and are never priced (H35), because
+    their cash is inside the account custody started from.
+
+    Formula: sum(qty * price for custody-era external BUYs not yet inside
+      observed cash).
     Reference: PRD #2540 all-disjoint-claims contract; observation #2441/#2442.
     Canonical implementation: this composition over the fee evidence's exact
       activity population; no external balance or second execution ledger.
     Validated against: sqlite/test_budget_claims.py external cases (exact).
     """
-    quantities: dict[str, Decimal] = {}
+    quantities: dict[str, Decimal] = dict(fees.pre_custody_quantities)
     unseen = ZERO
     for fill in fees.external_fills:
         key = fill.native_order_id
@@ -173,23 +181,36 @@ def _long_cost(lots: Iterable[OpenLot]) -> Decimal:
 
 
 def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
-    return [f"{lot.exact_qty:f} {lot.symbol} sold short by {holder}" for lot in lots if lot.side is not OrderSide.BUY]
+    """One holder's open shorts as one phrase, a total per symbol (H35).
+
+    FIFO keeps one open lot per sale; the note names the position, not each
+    lot: "8 AAPL, 8 QQQ, 4 TSLA sold short by outside orders".
+    """
+    short: dict[str, Decimal] = {}
+    for lot in lots:
+        if lot.side is not OrderSide.BUY:
+            short[lot.symbol] = short.get(lot.symbol, ZERO) + lot.exact_qty
+    return [f"{holdings_text(short)} sold short by {holder}"] if short else []
 
 
 def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
     """Shares bought outside every bot, at FIFO cost, one holding per symbol.
 
-    The execution population is the one ``_external_cash_claim`` already
-    proved complete; each fill's symbol is its external order's. A fill whose
-    order or execution time is unknown cannot be lotted, so it is named.
+    The execution population is the custody-era one ``_external_cash_claim``
+    already proved complete; each fill's symbol is its external order's. A
+    fill whose order or execution time is unknown cannot be lotted, so it is
+    named. Executions from before custody began never reach it (H35): custody
+    starts from a flat account, so lotting an older sale alone would read the
+    closing sale of an older purchase as a short.
     """
     symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
     records: list[FillRecord] = []
-    unpriced: list[str] = []
+    unpriced: dict[str, Decimal] = {}
     for fill in fees.external_fills:
         symbol = symbols.get(fill.native_order_id) if fill.native_order_id is not None else None
         if symbol is None or fill.occurred_at_ms is None:
-            unpriced.append(f"{fill.quantity:f} shares from outside order {fill.native_order_id or fill.fill_id}")
+            order = fill.native_order_id or fill.fill_id
+            unpriced[order] = unpriced.get(order, ZERO) + fill.quantity
             continue
         records.append(FillRecord(
             account_id="", sid=f"external:{symbol}", intent_id=fill.fill_id, order_ref=fill.native_order_id or fill.fill_id,
@@ -202,8 +223,9 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     for lot in fifo.open_lots:
         if lot.side is OrderSide.BUY:
             held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_qty * lot.exact_cost
-    unpriced += _shorts(fifo.open_lots, holder="outside orders")
-    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], unpriced
+    named = [f"{quantity_text(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
+    named += _shorts(fifo.open_lots, holder="outside orders")
+    return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named
 
 
 def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:

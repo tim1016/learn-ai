@@ -11,7 +11,7 @@ import { HOME_VIEW_QUERY_PARAM, HOME_WALL_VIEW, accountWorkspaceHomeRoute } from
  * works at either depth: an account's `bots`/`gallery` land on that
  * account's Home, and a lane's account-less `bots`/`gallery` on the lane's
  * Home, which explains in place why it cannot open (FR-096). Nothing else
- * the old URL carried travels: `?lens=` is retired with the lens.
+ * the old URL carried travels, the retired `?lens=` included.
  */
 export function homeRedirectGuard(view: 'list' | 'wall'): CanActivateFn {
   return (route) =>

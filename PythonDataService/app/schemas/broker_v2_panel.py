@@ -13,7 +13,7 @@ server-authored ``label`` / ``explanation`` copy so no raw enum reaches the UI.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +30,7 @@ from app.broker.v2panel.vocabulary import (
     StationId,
     StationState,
 )
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.marketdata.feed import WarmupRefusalReason
 from app.schemas.account_authority import (
     SIMULATED_AUTHORITY_KINDS,
@@ -146,8 +147,9 @@ BotGroup = Literal["running", "holding", "finished", "dry_run"]
 
 ``running`` trades the account's money; ``holding`` is stopped with position
 cost or still-claimed money above zero; ``finished`` is stopped, flat and with
-nothing still claimed; ``dry_run`` trades simulated cash and never the
-account's money."""
+nothing still claimed -- a Dry Run included, named by its world label -- and
+is the one group a bot is cleared from; ``dry_run`` is a Dry Run that runs or
+still holds simulated cash, never the account's money."""
 
 
 class BotCatalogView(BaseModel):
@@ -475,7 +477,7 @@ class WorkingOrderView(BaseModel):
 
 
 class RecentDecisionView(BaseModel):
-    """Bounded backend-authored decision receipt for the Trader lens."""
+    """Bounded backend-authored decision receipt shown on the bot page."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -534,7 +536,7 @@ class RecentDecisionView(BaseModel):
 
 
 class RecentFillView(BaseModel):
-    """Bounded Clerk-attributed fill receipt for the Trader lens."""
+    """Bounded Clerk-attributed fill receipt shown on the bot page."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -876,6 +878,38 @@ class CohortFlattenRequest(BaseModel):
             raise ValueError("cohort legs must name distinct bots")
         for leg in self.legs:
             if len(self.idempotency_key) + 1 + len(leg.strategy_instance_id) > 128:
+                raise ValueError(
+                    "idempotency_key plus strategy_instance_id exceeds the "
+                    "per-leg idempotency identity budget of 128 characters"
+                )
+        return self
+
+
+class BotClearRequest(BaseModel):
+    """Clear finished bots from Home (owner decision 2026-09-28; ADR 0052 §4).
+
+    Membership is explicit (ADR 0051 D2): exactly these bots, each one leg of
+    the unchanged per-bot ``archive`` under the derived identity
+    ``{idempotency_key}:{sid}`` (ADR 0051 D4). The request names no action:
+    this endpoint clears, and nothing else.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    # Each id is a strategy instance id or the whole request is a 422: a
+    # malformed id can name no bot, and refusing it here keeps it from ever
+    # reaching a leg's lookup or its receipt path.
+    strategy_instance_ids: list[
+        Annotated[str, Field(min_length=1, max_length=96, pattern=INSTANCE_ID_PATTERN)]
+    ] = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _bots_are_distinct_and_keys_fit(self) -> BotClearRequest:
+        if len(set(self.strategy_instance_ids)) != len(self.strategy_instance_ids):
+            raise ValueError("each bot can be cleared once per request")
+        for sid in self.strategy_instance_ids:
+            if len(self.idempotency_key) + 1 + len(sid) > 128:
                 raise ValueError(
                     "idempotency_key plus strategy_instance_id exceeds the "
                     "per-leg idempotency identity budget of 128 characters"

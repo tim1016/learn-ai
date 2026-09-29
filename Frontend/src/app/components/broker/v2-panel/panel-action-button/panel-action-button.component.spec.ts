@@ -80,7 +80,6 @@ describe('PanelActionButtonComponent', () => {
               condition: { id: 'OPEN_ORDER', severity: 'blocking', scope: 'bot' },
               host: 'bot_cockpit',
               anchor: { kind: 'surface', subject_key: null },
-              audience: 'both',
               disposition: 'wait',
               headline: 'An order is still open.',
               detail: 'Wait for the order to settle.',
@@ -118,7 +117,6 @@ describe('PanelActionButtonComponent', () => {
               },
               host: 'bot_cockpit',
               anchor: { kind: 'surface', subject_key: null },
-              audience: 'both',
               disposition: 'wait',
               headline: 'An order is still open.',
               detail: 'Wait for the order to settle.',
@@ -160,7 +158,6 @@ describe('PanelActionButtonComponent', () => {
               },
               host: 'bot_cockpit',
               anchor: { kind: 'surface', subject_key: null },
-              audience: 'both',
               disposition: 'terminal',
               headline: 'The bot is already stopped.',
               detail: 'No stop command is necessary.',
@@ -176,7 +173,6 @@ describe('PanelActionButtonComponent', () => {
               },
               host: 'bot_cockpit',
               anchor: { kind: 'surface', subject_key: null },
-              audience: 'both',
               disposition: 'fix_elsewhere',
               headline: 'The Clerk cannot prove current account custody.',
               detail: 'Restore broker observation and reconcile.',
@@ -248,7 +244,6 @@ describe('PanelActionButtonComponent', () => {
       },
       host: 'bot_cockpit',
       anchor: { kind: 'surface', subject_key: null },
-      audience: 'both',
       disposition: 'fix_here',
       headline: 'Clerk evidence for this account is stale.',
       detail: 'Reconcile to refresh it.',
@@ -373,4 +368,49 @@ describe('PanelActionButtonComponent', () => {
     expect(moveRequested).not.toHaveBeenCalled();
   });
 
+  // ── Story 80: a cancelled confirmation hands the keyboard back ────────────
+  // Every real host mounts the dialog under its own `@if` and removes it on
+  // cancel, so the return has to survive the dialog being destroyed.
+
+  describe('focus after a cancelled confirmation', () => {
+    const confirmed = action({
+      confirmation: {
+        title: 'Stop this bot?',
+        body: 'It stops after the current bar.',
+        consequence: 'No new orders are placed.',
+        confirm_label: 'Stop',
+      },
+    });
+
+    async function openConfirmation(): Promise<HTMLElement> {
+      await render(PanelActionButtonComponent, { inputs: { action: confirmed } });
+      const opener = screen.getByRole('button', { name: 'Stop' });
+      opener.focus();
+      fireEvent.click(opener);
+      await Promise.resolve();
+      expect(screen.getByTestId('typed-halt-confirm-dialog')).toBeTruthy();
+      expect(document.activeElement).not.toBe(opener);
+      return opener;
+    }
+
+    it('returns focus to the action button when Cancel is pressed', async () => {
+      const opener = await openConfirmation();
+
+      fireEvent.click(screen.getByTestId('typed-halt-confirm-cancel'));
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(screen.queryByTestId('typed-halt-confirm-dialog')).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it('returns focus to the action button when Escape is pressed', async () => {
+      const opener = await openConfirmation();
+
+      fireEvent.keyDown(screen.getByTestId('typed-halt-confirm-cancel'), { key: 'Escape' });
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(screen.queryByTestId('typed-halt-confirm-dialog')).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+  });
 });

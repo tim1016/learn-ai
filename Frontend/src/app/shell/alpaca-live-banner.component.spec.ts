@@ -91,14 +91,16 @@ const PAPER_LANE = testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_
 const LIVE_LANE = testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' });
 
 describe('AlpacaLiveBannerComponent', () => {
-  it('warns loudly before the first read for this lane, never renders nothing', async () => {
+  it('reads "Reading…" before the first read for this lane, never a real-money warning (H4)', async () => {
+    // A routine cold load of a Paper account must not say "assume real money"
+    // (PRD #2560 story 36); it still renders, never nothing.
     await renderWith(PAPER_LANE, { verdict: null, lastError: null });
 
     const status = screen.getByRole('status');
-    expect(status.className).toContain('is-undetermined');
-    expect(status.textContent).toContain('Mode not yet read');
-    expect(status.textContent).toContain('assume real money');
-    expect(status.getAttribute('aria-label')).toContain('Paper');
+    expect(status.className).toContain('is-reading');
+    expect(status.textContent?.trim()).toBe('Reading…');
+    expect(status.textContent).not.toContain('real money');
+    expect(status.getAttribute('aria-label')).toBe('Paper: Reading account mode…');
   });
 
   it('warns loudly when there is no lane at all, because the roster itself is unknown', async () => {
@@ -246,6 +248,25 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
+  it('renders a verdict value this build does not recognise as the loud real-money warning, never "Reading…"', async () => {
+    // The wire is not the type: a clerk on another release can send a
+    // `final_verdict` outside this build's union (#2550 renamed
+    // `live-unarmed` to `live`), and that must read as undetermined — a pill
+    // frozen on "Reading…" would look like a routine cold load forever.
+    const fromAnotherRelease = {
+      ...verdict({ configured_mode: 'live', headline: 'Live account — not armed', detail: 'fixture' }),
+      final_verdict: 'live-unarmed',
+    } as unknown as AlpacaLiveVerdict;
+    await renderWith(LIVE_LANE, { verdict: fromAnotherRelease, lastError: null });
+
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-undetermined');
+    expect(status.textContent).toContain('Mode unknown');
+    expect(status.textContent).toContain('assume real money');
+    expect(status.textContent).not.toContain('Reading');
+    expect(status.getAttribute('aria-label')).toContain('Assume real money until a read succeeds.');
+  });
+
   it('says Shadow authority on an undetermined verdict, in its accessible name, when the clerk holds the no-submit Shadow authority', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
@@ -280,11 +301,6 @@ describe('AlpacaLiveBannerComponent', () => {
       'the last read failed',
       PAPER_LANE,
       { verdict: null, lastError: new Error('down') } satisfies LaneVerdictState,
-    ],
-    [
-      'no read has completed yet',
-      PAPER_LANE,
-      UNPOLLED_LANE_STATE,
     ],
     [
       'the server itself reports unknown',
@@ -337,7 +353,7 @@ describe('AlpacaLiveBannerComponent', () => {
     const named = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab' },
+      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
     });
     await renderWith(named, { verdict: verdict({}), lastError: null });
 
@@ -351,12 +367,12 @@ describe('AlpacaLiveBannerComponent', () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab' },
+      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
     });
     const live = testLane({
       clerk_id: 'clrk_live',
       display_label: 'Live',
-      provider_summary: { account_nickname: '  strategy lab  ' },
+      provider_summary: { account_nickname: '  strategy lab  ', attention_count: 0 },
     });
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
 
@@ -407,8 +423,8 @@ describe('AlpacaLiveBannerComponent', () => {
       verdict: verdict({ configured_mode: 'live', final_verdict: 'live' }),
       lastError: null,
     };
-    // `booting` is left at the default UNPOLLED_LANE_STATE ("Mode not yet
-    // read…"), distinct from both "Paper" and "Live" — three lanes, three
+    // `booting` is left at the default UNPOLLED_LANE_STATE ("Reading…"),
+    // distinct from both "Paper" and "Live" — three lanes, three
     // different mode words, no collision anywhere.
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live, booting], new Map([
       ['clrk_live', liveState],
@@ -421,12 +437,12 @@ describe('AlpacaLiveBannerComponent', () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab' },
+      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
     });
     const live = testLane({
       clerk_id: 'clrk_live',
       display_label: 'Live',
-      provider_summary: { account_nickname: '  strategy lab  ' },
+      provider_summary: { account_nickname: '  strategy lab  ', attention_count: 0 },
     });
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
 
@@ -439,12 +455,12 @@ describe('AlpacaLiveBannerComponent', () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab' },
+      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
     });
     const live = testLane({
       clerk_id: 'clrk_live',
       display_label: 'Live',
-      provider_summary: { account_nickname: '  strategy lab  ' },
+      provider_summary: { account_nickname: '  strategy lab  ', attention_count: 0 },
     });
     await renderWith(live, { verdict: verdict({ observed_account_id: 'PA9' }), lastError: null }, [
       paper,
@@ -460,12 +476,12 @@ describe('AlpacaLiveBannerComponent', () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab' },
+      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
     });
     const live = testLane({
       clerk_id: 'clrk_live',
       display_label: 'Live',
-      provider_summary: { account_nickname: '  strategy lab  ' },
+      provider_summary: { account_nickname: '  strategy lab  ', attention_count: 0 },
     });
     await renderWith(paper, { verdict: null, lastError: new Error('down') }, [paper, live]);
 
@@ -478,7 +494,7 @@ describe('AlpacaLiveBannerComponent', () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
-      provider_summary: { account_nickname: 'Solo' },
+      provider_summary: { account_nickname: 'Solo', attention_count: 0 },
     });
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper]);
 
@@ -493,12 +509,15 @@ describe('AlpacaLiveBannerComponent', () => {
       await renderAt(`/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`, PAPER_LANE);
 
       expect(screen.getByRole('status').className).toContain('is-active');
+      // Current is said in words to assistive tech, not only by the border.
+      expect(screen.getByRole('link').getAttribute('aria-current')).toBe('true');
     });
 
     it("does not render as active when the operator is standing inside a different lane's workspace", async () => {
       await renderAt(LIVE_WORKSPACE, PAPER_LANE);
 
       expect(screen.getByRole('status').className).not.toContain('is-active');
+      expect(screen.getByRole('link').getAttribute('aria-current')).toBeNull();
     });
 
     it('does not render as active outside any workspace', async () => {
@@ -541,11 +560,11 @@ describe('AlpacaLiveBannerComponent', () => {
       );
     });
 
-    it('carries the lens perspective across, exactly as the in-workspace switcher does', async () => {
+    it('never carries the retired lens across (PRD #2560 D2)', async () => {
       await renderAt(`${LIVE_WORKSPACE}?lens=operator`, PAPER_LANE);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}?lens=operator`,
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
       );
     });
 
@@ -594,6 +613,53 @@ describe('AlpacaLiveBannerComponent', () => {
 
       expect(screen.queryByRole('link')).toBeNull();
       expect(screen.getByRole('status').textContent).toContain('Alpaca lanes unknown');
+    });
+  });
+  describe('the attention dot (PRD #2560 D4)', () => {
+    function laneWithAttention(count: number | null | undefined): LaneDescriptor {
+      const summary = { ...testLane().provider_summary };
+      if (count === undefined) delete summary.attention_count;
+      else summary.attention_count = count;
+      return testLane({ clerk_id: 'clrk_paper', display_label: 'Paper', provider_summary: summary });
+    }
+
+    it('shows no dot, and says nothing, when nothing on the account needs the owner', async () => {
+      await renderWith(laneWithAttention(0), { verdict: verdict({}), lastError: null });
+
+      const status = screen.getByRole('status');
+      expect(status.querySelector('.alpaca-banner__dot')).toBeNull();
+      expect(status.getAttribute('aria-label')).not.toMatch(/needs you|need you/);
+    });
+
+    it('shows a dot and says how many things need the owner, in the accessible name and the tooltip', async () => {
+      await renderWith(laneWithAttention(2), { verdict: verdict({}), lastError: null });
+
+      const status = screen.getByRole('status');
+      expect(status.querySelector('.alpaca-banner__dot:not(.is-unknown)')).toBeTruthy();
+      expect(status.getAttribute('aria-label')).toContain('2 things on this account need you.');
+      expect(status.getAttribute('title')).toContain('2 things on this account need you.');
+
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+    });
+
+    it.each([
+      ['omitted', undefined],
+      ['null', null],
+    ])('says so when the count is %s — unknown is never shown as a zero', async (_case, count) => {
+      await renderWith(laneWithAttention(count), { verdict: verdict({}), lastError: null });
+
+      const status = screen.getByRole('status');
+      const dot = status.querySelector('.alpaca-banner__dot.is-unknown');
+      expect(dot?.textContent).toBe('?');
+      expect(status.getAttribute('aria-label')).toContain('Whether anything on this account needs you is unknown.');
+      expect(status.textContent).not.toContain('0');
+    });
+
+    it('puts the one-thing wording in the singular', async () => {
+      await renderWith(laneWithAttention(1), { verdict: verdict({}), lastError: null });
+
+      expect(screen.getByRole('status').getAttribute('aria-label')).toContain('1 thing on this account needs you.');
     });
   });
 });

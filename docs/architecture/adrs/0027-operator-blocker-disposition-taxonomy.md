@@ -113,3 +113,18 @@ Stage 8 note above is superseded on this point: by 2026-09-22, roster rows no
 longer carried `host=fleet_roster` projections, and the only producer left was
 the account posture, which this change removed. `fleet_roster` in the Decision's
 host list (item 2) is historical.
+
+As of PRD #2560 slice 7 (#2567, 2026-09-28), the `account_desk` host is
+retired too. Its only renderer, the Overview desk's operator lens, was
+deleted with the Trader/Operator lens (PRD #2560 D2), so nothing rendered
+the account posture or its "Open Clerk recovery" move any more. The Clerk
+status no longer carries `operator_posture`; `AccountOperatorPosture` and
+`account_desk` are gone from the backend schema, the committed OpenAPI
+contract, the generated frontend types and the TS mirror. The account's own
+eligibility (identity mismatch, wrong mode, inactive, blocked) is Home's
+account attention line (`account_eligibility.py`). The remaining hosts are
+`bot_cockpit`, `deploy_preflight` and `account_monitor`. The posture was also
+the only producer of the `open_runbook` move, the `clerk` anchor and any
+audience other than `both`, so those are gone too: the `audience` field left
+the wire with the lenses it routed between (Decision item 2's "audience" is
+historical).

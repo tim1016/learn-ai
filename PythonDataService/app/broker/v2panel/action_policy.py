@@ -97,7 +97,6 @@ def _blocker(
         scope=scope,
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
-        audience="both",
         disposition="wait",
         headline=headline,
         detail=detail,
@@ -333,23 +332,22 @@ def evaluate_archive(
 
 _ARCHIVE_BLOCKER_COPY: dict[ArchiveBlockedCause, tuple[str, str]] = {
     "BOT_STILL_RUNNING": (
-        "Stop the bot before archiving it.",
+        "Stop the bot before clearing it.",
         "A running bot still evaluates bars and can place orders.",
     ),
     "BOT_DUTY_NOT_SETTLED": (
         "This bot's last run has not finished settling.",
-        "Its process is gone but the Clerk still holds an open run. Wait for "
-        "recovery to record how that run ended, then archive.",
+        "Its process is gone but its run is still open. Wait for recovery to "
+        "record how that run ended, then clear it.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
-        "The Clerk cannot prove this bot is flat.",
-        "Archiving is allowed on proof that the bot holds nothing. Restore "
-        "broker observation and run Reconcile now before archiving.",
+        "This account cannot prove the bot is flat.",
+        "A bot is cleared only on proof that it holds nothing. Choose Reconcile "
+        "now once Alpaca can be read, then clear it.",
     ),
     "ARCHIVE_WOULD_STRAND_CUSTODY": (
-        "This bot still holds custody.",
-        "Flatten attributed exposure and let working orders reach a terminal "
-        "state before archiving the registration.",
+        "This bot still holds shares or has a working order.",
+        "Flatten it and let its working orders finish, then clear it.",
     ),
 }
 
@@ -374,8 +372,8 @@ def _guard_archive(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]
             _blocker(
                 "BOT_ALREADY_RETIRED",
                 scope="bot",
-                headline="This registration is already off the roster.",
-                detail="A retired or archived registration cannot be archived again.",
+                headline="This bot is already cleared.",
+                detail="A cleared bot is off Home already; its history is kept.",
                 evidence={"strategy_instance_id": ctx.strategy_instance_id},
             )
         )

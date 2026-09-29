@@ -220,8 +220,8 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "The Account Clerk accepted a verified manual-order cancellation.",
     ),
     "MANUAL_TICKET_PAUSED_UNKNOWN": (
-        "Manual ticket paused",
-        "The Account Clerk paused the ticket while a broker outcome remains unknown.",
+        "Manual ticket on hold",
+        "The Account Clerk holds the ticket while a broker outcome remains unknown.",
     ),
     "MANUAL_TICKET_COMPLETED": (
         "Manual ticket completed",

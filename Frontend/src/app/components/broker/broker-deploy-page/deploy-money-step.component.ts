@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  InjectionToken,
   computed,
   effect,
   inject,
@@ -39,9 +40,13 @@ export function budgetReviewContext(target: ResourceTarget, body: DeployBotBody)
   return canonicalJson({ target, body });
 }
 
-/** The amount stops being typed before it is previewed: one request per
- * settled amount, not one per keystroke. */
-const AMOUNT_SETTLE_MS = 400;
+/** How long a typed symbol or amount must stay unchanged before Deploy acts
+ * on it: one request per settled value, not one per keystroke. A spec that is
+ * not about the settle itself provides 0. */
+export const DEPLOY_TYPING_SETTLE_MS = new InjectionToken<number>('DEPLOY_TYPING_SETTLE_MS', {
+  providedIn: 'root',
+  factory: () => 400,
+});
 
 /**
  * A price wait is transient: each preview asks IBKR for the instrument, and
@@ -84,6 +89,7 @@ export class DeployMoneyStepComponent {
   readonly reviewed = output<MoneyReview | null>();
 
   private readonly service = inject(BrokerV2PanelService);
+  private readonly settleMs = inject(DEPLOY_TYPING_SETTLE_MS);
 
   protected readonly fields = form(this.amount, (amount) => {
     readOnly(amount, () => this.disabled());
@@ -168,7 +174,7 @@ export class DeployMoneyStepComponent {
     effect(() => this.reviewed.emit(this.ready()));
     effect((onCleanup) => {
       const amount = this.amount();
-      const timer = setTimeout(() => this.settledAmount.set(amount), AMOUNT_SETTLE_MS);
+      const timer = setTimeout(() => this.settledAmount.set(amount), this.settleMs);
       onCleanup(() => clearTimeout(timer));
     });
     effect((onCleanup) => {
