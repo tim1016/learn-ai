@@ -7,7 +7,10 @@ import {
   output,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { accountWorkspaceDeployAgainRoute } from '../../../../fleet/account-workspace';
+import {
+  accountWorkspaceDeployAgainRoute,
+  accountWorkspaceHistoryLink,
+} from '../../../../fleet/account-workspace';
 
 import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import {
@@ -40,6 +43,10 @@ import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action
  * order ticket. It never offers Archive, although the backend still presents
  * it: clearing a finished bot is Home's Finished fold alone (owner decision
  * 2026-09-28).
+ *
+ * A cleared bot's page, opened from History (#2574), is read-only: it says it
+ * was cleared, links back to History, offers no manual order, and keeps
+ * Deploy again, which pre-fills a new bot from this one.
  *
  * A Dry Run bot is marked as simulated cash, never with the lane's colour
  * (hurdle H23): its money is not the account's.
@@ -77,6 +84,17 @@ export class BotBannerComponent {
 
   protected readonly dryRun = computed(() => this.panel().mode === 'dry_run');
 
+  /** Cleared from Home: the backend's own answer (`BotPanelView.status`),
+   * the same one this bot's History row gives. A retired bot still holding
+   * shares is holding, not cleared, and keeps its cure. */
+  protected readonly cleared = computed(() => this.panel().status === 'cleared');
+
+  /** History, on its cleared bots. */
+  protected readonly history = computed(() => accountWorkspaceHistoryLink(
+    { broker: this.panel().broker, clerkId: this.clerkId() },
+    { status: 'cleared' },
+  ));
+
   /** The lane's world, worded once, for a bot that trades the lane's money. */
   protected readonly worldChip = computed<LaneModeChip | null>(() =>
     this.dryRun() ? null : verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
@@ -97,8 +115,9 @@ export class BotBannerComponent {
     () => `Revision ${this.panel().revision}${this.panel().health.running ? ' running' : ' stopped'}`,
   );
 
-  /** A Dry Run bot trades no account money, so it has no manual ticket to open. */
-  protected readonly manualOrderNavigation = computed(() => this.dryRun() ? null
+  /** A Dry Run bot trades no account money, so it has no manual ticket to
+   * open; a cleared bot's page is read-only, so it has none either. */
+  protected readonly manualOrderNavigation = computed(() => this.dryRun() || this.cleared() ? null
     : buildManualOrderTicketNavigation({
       broker: this.panel().broker,
       clerkId: this.clerkId(),

@@ -38,6 +38,7 @@ from app.schemas.account_authority import (
     account_authority_agrees,
 )
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
+from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact
@@ -664,6 +665,11 @@ class BotPanelView(BaseModel):
     # This bot's sealed exit terms (PRD #2504), or ``None`` for a bot whose
     # custody holds no seal (a pre-seal or non-SQLite registration).
     exit_terms: ExitTerms | None = None
+    # Where the bot is now -- running, holding, finished, or cleared from
+    # Home -- the same answer its History row gives (#2574,
+    # ``catalog_projection_service.bot_status``). A cleared bot's page is
+    # read-only; the page reads it here and never re-derives it.
+    status: BotHistoryStatus
     readiness_checks: list[ReadinessCheckView]
     # Server-authored presentation aggregate. Consumers render these counts
     # verbatim so every surface reports the same command-gate posture.

@@ -1728,6 +1728,18 @@ def _durable_decision_id(decision_id: str) -> str:
     return f"{_ENCODED_DECISION_PREFIX}{encoded.decode('ascii')}"
 
 
+def decision_id_from_durable(durable_decision_id: str) -> str:
+    """The decision id ``_durable_decision_id`` stored, as its caller named it.
+
+    A recovery EXIT's colon-free id (``recovery-flatten-…``) was never
+    encoded and comes back unchanged.
+    """
+    if not durable_decision_id.startswith(_ENCODED_DECISION_PREFIX):
+        return durable_decision_id
+    encoded = durable_decision_id.removeprefix(_ENCODED_DECISION_PREFIX)
+    return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+
+
 def _is_working_order(order: OrderResource) -> bool:
     return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
 

@@ -30,6 +30,7 @@ from app.broker.v2panel.vocabulary import (
 )
 from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
+from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -764,6 +765,7 @@ def build_panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
+    bot_status: BotHistoryStatus,
     feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
     feed_continuity_run_id: str | None = None,
     warmup_join: RetainedWarmupJoin | None = None,
@@ -786,6 +788,10 @@ def build_panel(
     ``tests/broker/v2panel/test_panel_projection.py``) omit it, and it falls
     back to the Dry Run synthetic authority implied by ``status.mode`` /
     ``status.strategy_instance_id``, or to ``account_id`` otherwise.
+
+    ``bot_status`` is where the bot is now by its custody's own facts
+    (``catalog_projection_service.custody_bot_status``); the projection only
+    carries it.
 
     ``program_build`` is required and must be the caller's real evidence cut
     (``panel_data_source._program_build_for_display`` for the live router
@@ -917,6 +923,7 @@ def build_panel(
         readiness_checks=readiness_checks,
         readiness_ready_count=readiness_ready_count,
         readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
+        status=bot_status,
         exposure=exposure,
         working_orders=working_orders,
         recent_decisions=decision_views,

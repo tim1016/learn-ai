@@ -208,10 +208,8 @@ def test_launch_keeps_instance_immutable_and_appends_run_records(
     assert repository.read(_SID) == second
     assert repository.read_run(_SID, "run-002") is not None
     assert repository.read_run(_SID, "missing") is None
-    assert [run.run_id for run in repository.list_runs(_SID)] == [
-        "run-002",
-        "run-001",
-    ]
+    assert repository.read_run(_SID, "run-001").launch_reason == "deploy"
+    assert repository.read_run(_SID, "run-002").launch_reason == "resume"
 
 
 def test_changed_configuration_cannot_reuse_strategy_instance_identity(
@@ -530,7 +528,7 @@ def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
     legacy_path.write_text(legacy_bytes, encoding="utf-8")
 
     assert repository.read(_SID) == _binding()
-    assert [run.run_id for run in repository.list_runs(_SID)] == ["run-001"]
+    assert repository.read_run(_SID, "run-001").launch_reason == "legacy"
     assert legacy_path.read_text(encoding="utf-8") == legacy_bytes
     assert not (instance_dir / "strategy_instance.json").exists()
 
