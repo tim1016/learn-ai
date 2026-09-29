@@ -188,7 +188,7 @@ async def test_stale_published_observation_cannot_admit_after_policy_change(risk
     sync.apply_risk_policy(_policy(2, 200), expected_revision=1)
     sync.envelope.publish(old)
     with pytest.raises(AdmissionBlockedError):
-        require_envelope_admission(repo, envelope=sync.envelope, reference_price=10, now_ms=NOON,
+        require_envelope_admission(repo, envelope=sync.envelope, reference_price=10, now_ms=NOON, strategy_instance_id="spy-bot",
             leg=BrokerOrderLeg(symbol="SPY", side=OrderSide.BUY, order_type=OrderType.MARKET,
                 quantity=1, time_in_force=TimeInForce.DAY))
 

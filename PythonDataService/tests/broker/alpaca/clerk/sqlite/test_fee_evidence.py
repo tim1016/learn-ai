@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, _external_cash_claim
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.fee_evidence import (
     FEE_EVIDENCE_KIND,
     FEE_EVIDENCE_MAX_AGE_MS,

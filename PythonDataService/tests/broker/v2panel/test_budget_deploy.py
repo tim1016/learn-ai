@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, observation_is_fresh
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -718,6 +718,18 @@ async def test_account_money_endpoint_serves_the_view_and_refuses_an_unserved_ac
     assert served.json()["free_to_deploy_usd"] == "800.00" and served.json()["segments"][0]["kind"] == "bot"
     assert other.status_code == 503 and "custody authority is unavailable" in other.json()["detail"]["why"]
     assert "Settings" in other.json()["detail"]["why"]
+
+
+@pytest.mark.parametrize("to_http", [budget_deploy.budget_error, budget_deploy.money_error], ids=["deploy", "money"])
+def test_a_money_refusal_carries_its_reason_code_as_well_as_its_words(to_http) -> None:
+    """#2553: an unknown fee is refused under its own code, and the HTTP error names it, not only its message."""
+    from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryFeeProvisionUnrecorded
+
+    error = to_http(EntryFeeProvisionUnrecorded("An earlier entry order has no recorded fee estimate."))
+
+    assert error.reason_code == "ENTRY_FEE_PROVISION_UNRECORDED"
+    assert error.detail == "An earlier entry order has no recorded fee estimate."
+    assert to_http(BudgetUnavailable("Wait for this account's custody recovery to finish.")).reason_code is None
 
 
 async def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_previews(

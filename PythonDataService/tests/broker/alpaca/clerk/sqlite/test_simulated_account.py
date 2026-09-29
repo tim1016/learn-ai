@@ -12,13 +12,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
@@ -135,7 +135,10 @@ def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow
     assert observed_day_pnl(observation=current, now_ms=clock()).total_usd == pytest.approx(49.97, abs=1e-9, rel=0)
     assert current.unrealized_pl_usd == pytest.approx(30, abs=1e-9, rel=0)
     assert current.fills_seen_before_ms == clock() + 1
-    assert repo.reserved_cash_decimal(seen_before_ms=current.fills_seen_before_ms) == 0
+    assert repo.account_budget(
+        cash=current.cash_available_usd, seen_before_ms=current.fills_seen_before_ms,
+        modelled_fees_seen_before_ms=current.modelled_fees_seen_before_ms,
+    ).order_claims == 0
     assert current.modelled_fees_seen_before_ms == clock() + 1
     close = previous_completed_session_close_ms(NOON + 86_400_000)
     _mark(tmp_path, evidence, at_ms=close, price=130)

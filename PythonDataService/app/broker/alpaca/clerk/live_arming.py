@@ -95,11 +95,12 @@ ARMING_REASON_CODES: frozenset[str] = frozenset(
     }
 )
 
-# What ``sqlite/arming_admission.require_arming_admission`` may refuse with —
-# the three codes above plus the per-instance states ``arming_status`` names.
-# ``uncertainty.py`` classifies all of them transient: a lost arming refuses
-# the next ENTER and retries on the next decision clock — it never pauses the
-# instance and never halts it from inside admission.
+# What the retired ENTER-time arming check refused with — the three codes
+# above plus the per-instance states ``arming_status`` names. No ENTER is
+# judged by arming any more (#2553: only a budgeted account admits one), but
+# ``blocked`` receipts already recorded under these codes stay readable:
+# ``uncertainty.py`` keeps them transient, so the replay proof still
+# recognises them rather than calling them drift.
 ARMING_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ARMING_REQUIRED,

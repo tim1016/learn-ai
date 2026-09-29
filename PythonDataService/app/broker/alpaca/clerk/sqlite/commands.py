@@ -206,7 +206,7 @@ def submit_start_run(
         # would race unprotected reads against concurrent callers on the
         # same shared connection.
         if repo.budget_authority_version() >= 2:
-            from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+            from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 
             raise BudgetUnavailable("Fresh budget-backed Deploy is required after budget authority cutover.")
         require_strategy_instance(repo, strategy_instance_id)

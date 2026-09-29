@@ -1,4 +1,4 @@
-"""The arming fact Start, Resume and the runner share (ADR 0059 D11, slice 7 R6).
+"""The arming fact Start and the runner share (ADR 0059 D11, slice 7 R6).
 
 Read-only: one ``account_arming`` read of the ledger and the runner's sealed
 bindings, judged at the caller's instant. It answers ``None`` for every world
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -20,9 +19,8 @@ from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE
 from app.broker.alpaca.clerk.live_arming_history import account_arming
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_SETTINGS_FIELDS, LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.config import AlpacaSettings
 from app.broker.ibkr.config import live_artifacts_root
-from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
+from app.schemas.account_authority import world_admits_account_mode
 from app.schemas.run_admission import ARMING_NEXT_STEP, ArmingAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding
 
@@ -35,23 +33,18 @@ def live_arming_admission_fact(
     binding: BrokerBotBinding,
     custody: ClerkCustodySnapshot,
     observed_at_ms: int,
-    *,
-    custody_world: CustodyWorld | None = None,
-    settings: AlpacaSettings | None = None,
-    artifacts_root: Path | None = None,
-    live_state_root: Path | None = None,
 ) -> ArmingAdmissionFact | None:
     """The instance's arming state on the live account, or ``None`` where arming does not apply.
 
-    The keyword seams exist for tests and for callers that already hold the
-    values; production resolves each from its one owner.
+    The world, the settings and both artifact roots are each resolved from
+    their one owner.
     """
     from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 
     runtime = get_clerk_runtime(custody.account_id)
     if runtime is not None and runtime.sqlite_repository is not None and runtime.sqlite_repository.budget_authority_version() >= 2:
         return None  # Consent/money are checked by the durable Deploy command.
-    world = primary_custody_world() if custody_world is None else custody_world
+    world = primary_custody_world()
     # ``world != "real_live"`` is the world question; the mode question is the
     # closed table's answer for that world, not a second ``"live"`` literal
     # (repo philosophy #5 — one spelling of the world-to-mode rule).
@@ -65,11 +58,11 @@ def live_arming_admission_fact(
         # The envelope an arming is judged against is the effective
         # revision's (ADR 0060), so a staged-but-unapplied risk change
         # cannot make a sealed arming look stale.
-        resolved = resolved_alpaca_settings() if settings is None else settings
+        resolved = resolved_alpaca_settings()
         arming = account_arming(
             live_account_id=custody.account_id,
-            artifacts_root=resolved.clerk_dir if artifacts_root is None else artifacts_root,
-            live_state_root=live_artifacts_root() if live_state_root is None else live_state_root,
+            artifacts_root=resolved.clerk_dir,
+            live_state_root=live_artifacts_root(),
             configured_envelope=(
                 runtime.clerk.live_envelope.values
                 if runtime is not None and runtime.clerk is not None and runtime.clerk.live_envelope is not None

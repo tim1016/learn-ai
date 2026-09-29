@@ -1,4 +1,4 @@
-"""The one resolver Start, Resume and the runner share for the arming fact (slice 7, R6)."""
+"""The one resolver Start and the runner share for the arming fact (slice 7, R6)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.schemas.account_authority import CustodyWorld
 from app.schemas.run_admission import ArmingAdmissionFact
+from app.services import live_arming_admission
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.live_arming_admission import live_arming_admission_fact
 from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
@@ -67,22 +68,27 @@ def _custody(account_id: str = LIVE_ACCT, account_mode: str = "live") -> ClerkCu
     )
 
 
-def _fact(
+def _serve(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    live_state_root: Path,
     *,
-    custody: ClerkCustodySnapshot | None = None,
     custody_world: CustodyWorld = "real_live",
-) -> ArmingAdmissionFact | None:
-    return live_arming_admission_fact(
-        _binding(),
-        custody or _custody(),
-        NOW,
-        custody_world=custody_world,
-        settings=live_settings(),
-        artifacts_root=tmp_path,
-        live_state_root=live_state_root,
-    )
+) -> Path:
+    """Install what production resolves the fact from; returns the runner's live-state root.
+
+    The primary authority's world, the bound Alpaca settings (whose Clerk
+    directory holds the arming ledger) and the runner's artifacts root: each
+    patched at its one owner, as seen from the resolver's module.
+    """
+    live_state_root = tmp_path / "runner"
+    monkeypatch.setattr(live_arming_admission, "primary_custody_world", lambda: custody_world)
+    monkeypatch.setattr(live_arming_admission, "resolved_alpaca_settings", lambda: live_settings(clerk_dir=tmp_path))
+    monkeypatch.setattr(live_arming_admission, "live_artifacts_root", lambda: live_state_root)
+    return live_state_root
+
+
+def _fact(custody: ClerkCustodySnapshot | None = None) -> ArmingAdmissionFact | None:
+    return live_arming_admission_fact(_binding(), custody or _custody(), NOW)
 
 
 @pytest.mark.parametrize(
@@ -104,24 +110,20 @@ def _fact(
 )
 def test_paper_shadow_and_dry_run_launches_get_no_fact(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     binding: BrokerBotBinding,
     custody: ClerkCustodySnapshot,
     custody_world: CustodyWorld,
 ) -> None:
-    fact = live_arming_admission_fact(
-        binding,
-        custody,
-        NOW,
-        custody_world=custody_world,
-        settings=live_settings(),
-        artifacts_root=tmp_path,
-        live_state_root=tmp_path / "runner",
-    )
-    assert fact is None
+    _serve(monkeypatch, tmp_path, custody_world=custody_world)
+    assert live_arming_admission_fact(binding, custody, NOW) is None
 
 
-def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(tmp_path: Path) -> None:
-    fact = _fact(tmp_path, tmp_path / "runner")
+def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _serve(monkeypatch, tmp_path)
+    fact = _fact()
     assert fact is not None
     assert fact.state == "NOT_ARMED"
     assert fact.reason_code == LIVE_ARMING_REQUIRED
@@ -129,8 +131,8 @@ def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(tmp_pat
     assert fact.observed_at_ms == NOW
 
 
-def test_an_armed_live_instance_is_armed(tmp_path: Path) -> None:
-    live_state_root = tmp_path / "runner"
+def test_an_armed_live_instance_is_armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    live_state_root = _serve(monkeypatch, tmp_path)
     seal = record_sealed_binding(live_state_root, strategy_instance_id=SID, sealed_account_id=LIVE_ACCT)
     LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT).append(
         LiveArmingRecord.create(
@@ -144,14 +146,16 @@ def test_an_armed_live_instance_is_armed(tmp_path: Path) -> None:
             max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
         )
     )
-    fact = _fact(tmp_path, live_state_root)
+    fact = _fact()
     assert fact is not None
     assert (fact.state, fact.reason_code) == ("ARMED", None)
 
 
-def test_another_accounts_arming_record_does_not_arm_this_account(tmp_path: Path) -> None:
+def test_another_accounts_arming_record_does_not_arm_this_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The resolver reads the ledger of the account being launched, not any ledger it finds."""
-    live_state_root = tmp_path / "runner"
+    live_state_root = _serve(monkeypatch, tmp_path)
     seal = record_sealed_binding(live_state_root, strategy_instance_id=SID, sealed_account_id=LIVE_ACCT)
     other = "9LIVE0002"
     LiveArmingLedger(tmp_path, live_account_id=other).append(
@@ -166,17 +170,20 @@ def test_another_accounts_arming_record_does_not_arm_this_account(tmp_path: Path
             max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
         )
     )
-    fact = _fact(tmp_path, live_state_root)
+    fact = _fact()
     assert fact is not None
     assert (fact.state, fact.reason_code) == ("NOT_ARMED", LIVE_ARMING_REQUIRED)
 
 
-def test_an_unreadable_ledger_is_unreadable_not_unarmed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_an_unreadable_ledger_is_unreadable_not_unarmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _serve(monkeypatch, tmp_path)
     ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
     ledger.path.parent.mkdir(parents=True, exist_ok=True)
     ledger.path.write_text('{"kind":"armed","schema_version":1}\n', encoding="utf-8")
     with caplog.at_level(logging.WARNING):
-        fact = _fact(tmp_path, tmp_path / "runner")
+        fact = _fact()
     assert fact is not None
     assert (fact.state, fact.reason_code) == ("UNREADABLE", LIVE_ARMING_LEDGER_INVALID)
     assert any(record.action == "live_arming_admission_unreadable" for record in caplog.records)

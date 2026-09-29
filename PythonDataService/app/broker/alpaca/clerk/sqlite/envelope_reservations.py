@@ -1,4 +1,4 @@
-"""Cash reservations for accepted ENTERs (ADR 0059 D4, plan R1/R9).
+"""Cash reservations for accepted ENTERs (ADR 0059 D4, plan R1).
 
 A reservation prices the part of an ENTER the latest cash observation
 cannot see: the unfilled remainder of a working order, plus any fill the
@@ -6,12 +6,18 @@ Clerk recorded at or after ``seen_before_ms`` — the instant before which the
 observation's cash is trusted to include a fill, which the caller supplies
 (``AccountObservation.fills_seen_before_ms``). A filled order reserves
 everything not recorded before that instant — its later fills and its
-not-yet-recorded ones alike, because a filled order's quantity is known. A
-dead order (canceled, expired, rejected, replaced) reserves only its fills
-recorded at or after it; its unrecorded remainder is cancelled quantity,
-never cash. The shadow book fills at submit while the sweep records the
-fill later, so a filled order with no fill row is the common case there,
-not a corner.
+not-yet-recorded ones alike, because a filled order's quantity is known. An
+ended order reserves only its fills recorded at or after it; its unrecorded
+remainder is cancelled quantity, never cash. An order has ended when the
+broker ended it (canceled, expired, rejected, replaced), or when its ENTER
+ended before the broker ever knew it: the effect is terminal (refused before
+contact, failed outright, or proven absent) and the order has no broker
+identity and no fill (``ENTRY_ORDER_ENDED_SQL``, the one definition
+``budget_projection`` also reads; the same three facts
+``order_evidence.order_never_reached_broker`` reads). An ENTER whose outcome
+is still unknown keeps its whole claim until it is resolved. The shadow book
+fills at submit while the sweep records the fill later, so a filled order
+with no fill row is the common case there, not a corner.
 
 Each part prices at what it costs, not at one number (#2442). A recorded
 fill the observation cannot see reserves its *actual* cost — fill price ×
@@ -19,6 +25,13 @@ quantity plus any reported fee — because that is the cash the broker
 already took at the fill's own price. Only quantity no recorded fill names
 prices at the reservation's ``reference_price`` (the decision price the
 ENTER was admitted against), which is an estimate, never the fill's cost.
+
+Its fee is the provision the entry requirement recorded at admission
+(``budgets.entry_requirement``), never a re-quote from the fee model (#2553):
+a later rate change cannot move a past claim. While any of the order is
+unfilled, the remainder claims the whole recorded provision -- no share is
+computed, so no money is rounded here (owner decision 2026-09-29); the claim
+ends when the order fills or ends.
 
 Corrections fold at their restated size. Each order contributes its
 *effective* fills — the head of every correction chain, whatever its
@@ -32,9 +45,12 @@ Any fill row with no successor counts — including a cumulative-recovery row,
 which is its own root and genuinely filled quantity, so its own
 ``recorded_at_ms`` dates it when the lineage walk supplies no root.
 
-The row is a sibling of the ``ENTER_ACCEPTED`` custody transition, committed
-in its transaction but never part of its hashed payload: adding a reservation
-must not move a ``custody_transitions.row_hash`` (plan R9).
+The row is folded from ``ENTER_ACCEPTED``'s facts (the exact reference price
+and the recorded provision), so it replays with the custody chain. A row an
+earlier build wrote beside the transition carries a float price and no
+recorded provision (#2553). Its fills still price as above, but while it has
+an unfilled remainder its fee is unknown: reading that claim refuses with
+``EntryFeeProvisionUnrecorded`` rather than pricing the fee at zero.
 """
 
 from __future__ import annotations
@@ -43,11 +59,28 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
-from app.broker.alpaca.clerk.budgets import entry_requirement
-from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED, EnvelopeReservation
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 
-_DEAD_ORDER_STATES = ("canceled", "expired", "rejected", "replaced")
+# An ENTRY order that can never fill further, over ``orders o`` joined to its
+# ``effect_operations e``: the broker ended it, or its effect is terminal while
+# nothing says the broker ever knew it -- no broker identity (set only by an
+# acknowledgement) and no fill (a fill can be recorded before its order's
+# acknowledgement). A refused, failed or proven-absent ENTER is the common
+# case (#2553); an ``unknown`` effect is not terminal. Never NULL, so it
+# composes under NOT.
+ENTRY_ORDER_ENDED_SQL = (
+    "(LOWER(COALESCE(o.broker_state, '')) IN ('canceled','expired','rejected','replaced') "
+    "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
+)
+
+
+class EntryFeeProvisionUnrecorded(BudgetUnavailable):
+    """An open entry's reservation recorded no fee provision, so its fee is unknown (#2553)."""
+
+    reason_code = ENTRY_FEE_PROVISION_UNRECORDED
 
 
 def append_envelope_reservation_row(
@@ -75,25 +108,41 @@ def append_envelope_reservation_row(
 
 @dataclass(frozen=True)
 class EntryCashClaim:
-    """Disjoint claim components; the bot budget uses only unfilled cost."""
+    """Disjoint claim components; the bot budget uses only the unfilled cost and fee.
+
+    ``unfilled_fee`` is the one read of the remainder's fee: the whole
+    recorded provision while any of the order is unfilled, else zero. It
+    refuses instead of answering zero when a remainder is open on a
+    reservation that recorded no provision (``_fee`` is then ``None``).
+    """
 
     strategy_instance_id: str
     order_ref: str
     unfilled_cost: Decimal
     unseen_fill_cost: Decimal
-    unseen_reported_fees: Decimal
-    unfilled_fee: Decimal = ZERO
+    _fee: Decimal | None
+
+    @property
+    def unfilled_fee(self) -> Decimal:
+        if self._fee is None:
+            raise EntryFeeProvisionUnrecorded(
+                "An earlier entry order has no recorded fee estimate and can still fill, so the "
+                "cash it claims is unknown. It clears once that order fills or is cancelled at "
+                "Alpaca; then choose Reconcile now."
+            )
+        return self._fee
 
 
 def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple[EntryCashClaim, ...]:
     """The reserved notional a cash figure seeing only fills recorded before ``seen_before_ms`` misses.
 
     A fill recorded strictly before ``seen_before_ms`` counts as seen; one
-    recorded at it or later stays reserved. Every reservation is summed; a
-    dead order reserves only its unseen recorded fills, each at that fill's
+    recorded at it or later stays reserved. Every reservation is summed; an
+    ended order reserves only its unseen recorded fills, each at that fill's
     actual cost (price × quantity plus reported fee); a live order reserves
     its unseen recorded fills at their actual cost plus its unrecorded
-    remainder at the reservation's reference price. Nothing is pruned on
+    remainder at the reservation's reference price and the whole
+    recorded fee provision. Nothing is pruned on
     ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill
     without touching ``orders``, and the websocket's acknowledgement is
     skipped when the snapshot has not moved, so a dead order's
@@ -111,10 +160,12 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
 
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
+        # A recorded row carries its exact price; an earlier build's float
+        # price converts as historical REAL evidence (clerk.money).
         "SELECT r.quantity AS quantity, COALESCE(r.exact_reference_price,r.reference_price) AS reference_price, "
-        "r.fee_provision_cents, r.reserved_at_ms, "
+        "r.exact_reference_price IS NOT NULL AS provision_recorded, r.fee_provision_cents, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
-        "LOWER(o.broker_state) AS state, "
+        f"{ENTRY_ORDER_ENDED_SQL} AS ended, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
@@ -132,7 +183,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     with money_context():
         for order_ref, fills in by_order.items():
             first = fills[0]
-            filled = unseen_cost = unseen_fees = ZERO
+            filled = unseen_cost = ZERO
             for fill in fills:
                 if fill["fill_id"] is None:
                     continue
@@ -141,47 +192,23 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 if fill["execution_recorded_at_ms"] >= seen_before_ms:
                     fee = ZERO if fill["fee"] is None else normalize_money(fill["fee"])
                     unseen_cost += qty * normalize_money(fill["price"]) + fee
-                    unseen_fees += fee
-            remaining_quantity = (
-                ZERO if first["state"] in _DEAD_ORDER_STATES else
-                max(ZERO, normalize_money(first["quantity"]) - filled)
-            )
-            unfilled = remaining_quantity * normalize_money(first["reference_price"])
-            fee = ZERO
-            if remaining_quantity > ZERO and first["fee_provision_cents"]:
-                # Filled shares already belong to the canonical fee projection.
-                # Quote only the remainder, using the original reference/date.
-                # Its own prospective settlement rounds upward, deliberately
-                # retaining conservative per-order rounding headroom.
-                _, fee_cents = entry_requirement(
-                    quantity=remaining_quantity, price=first["reference_price"], at_ms=first["reserved_at_ms"],
-                )
-                fee = Decimal(fee_cents) / 100
+            quantity = normalize_money(first["quantity"])
+            remaining_quantity = ZERO if first["ended"] else max(ZERO, quantity - filled)
+            fee: Decimal | None = ZERO
+            if remaining_quantity > ZERO:
+                fee = Decimal(first["fee_provision_cents"]) / 100 if first["provision_recorded"] else None
             claims.append(EntryCashClaim(
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,
-                unfilled_cost=unfilled, unseen_fill_cost=unseen_cost,
-                unseen_reported_fees=unseen_fees,
-                unfilled_fee=fee,
+                unfilled_cost=remaining_quantity * normalize_money(first["reference_price"]),
+                unseen_fill_cost=unseen_cost, _fee=fee,
             ))
     return tuple(claims)
 
 
-def reserved_cash_decimal(conn: sqlite3.Connection, *, seen_before_ms: int) -> Decimal:
-    """Exact sum of disjoint order claims; no SQL REAL multiplication.
-
-    Formula: sum(unfilled quantity * reference + unseen fill quantity * actual + fee).
-    Reference: PRD #2540 money contract; #2441/#2442 observation overlap policy.
-    Canonical implementation: this module and clerk.money normalization.
-    Validated against: tests/broker/alpaca/clerk/sqlite/test_envelope_reservations.py.
-    """
-    with money_context():
-        return sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in
-                    entry_cash_claims(conn, seen_before_ms=seen_before_ms)), ZERO)
-
-
-def reserved_cash_usd(conn: sqlite3.Connection, *, seen_before_ms: int) -> float:
-    """Compatibility display view; admission uses reserved_cash_decimal."""
-    return float(reserved_cash_decimal(conn, seen_before_ms=seen_before_ms))
-
-
-__all__ = ["append_envelope_reservation_row", "entry_cash_claims", "reserved_cash_decimal", "reserved_cash_usd"]
+__all__ = [
+    "ENTRY_ORDER_ENDED_SQL",
+    "EntryCashClaim",
+    "EntryFeeProvisionUnrecorded",
+    "append_envelope_reservation_row",
+    "entry_cash_claims",
+]

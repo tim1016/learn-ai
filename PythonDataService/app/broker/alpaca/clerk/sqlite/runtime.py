@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.account_authority import (
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
-from app.broker.alpaca.clerk.budgets import entry_requirement
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable, entry_requirement
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.exit_terms import (
     ExitTerms,
@@ -75,7 +75,6 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
 )
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -309,12 +308,16 @@ class SqliteAlpacaClerkFacade:
         # from. Passed in, never read off the ports here — the composition root
         # owns which capabilities and which operator allowances apply.
         self._program_leg_policy = program_leg_policy or ProgramLegPolicy.regular_only()
-        # ADR 0059 D4: the risk envelope every live-world ENTER is bounded by,
-        # or ``None`` where no envelope is configured (paper, synthetic).
-        # Composed by the authority selector, never built here.
+        # ADR 0059 D4: the risk envelope every ENTER is judged by -- it
+        # refuses one on an account not switched to budgets (#2553) and bounds
+        # the rest by their deployment's budget. Every account authority
+        # composes one; ``None`` only on a store no authority composed
+        # (qualification rehearsals). Composed by the authority selector,
+        # never built here.
         self._live_envelope = live_envelope
-        # ADR 0059 D11: per-instance arming, consulted at ENTER on the live
-        # authority only; ``None`` on paper and under shadow.
+        # ADR 0059 D11: per-instance arming on the live authority only;
+        # ``None`` on paper and under shadow. It admits no ENTER (#2553: only a
+        # budgeted account does); the live verdict reads its mode hold.
         self._live_arming = live_arming
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
@@ -365,7 +368,7 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def live_arming(self) -> ArmingGate | None:
-        """The per-instance arming gate this authority admits ENTERs against, if it has one."""
+        """The per-instance arming gate the live verdict reads, if this authority has one."""
         return self._live_arming
 
     @property
@@ -1169,7 +1172,6 @@ class SqliteAlpacaClerkFacade:
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
-                        arming=self._live_arming,
                         # Preserve the recorded decision price through the
                         # canonical Decimal normalization boundary.
                         reference_price=(

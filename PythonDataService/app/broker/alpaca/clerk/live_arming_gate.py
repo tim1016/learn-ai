@@ -1,4 +1,4 @@
-"""The per-instance arming gate a live authority admits ENTERs against (ADR 0059 D3/D11, slice 7).
+"""The per-instance arming gate a live authority reads its arming through (ADR 0059 D3/D11, slice 7).
 
 Formula: ``status_for(sid, now_ms) = arming_status(records, seal_hash=seals[sid], now_ms)``
   over one snapshot of the ledger and the runner's sealed bindings; the
@@ -6,12 +6,12 @@ Formula: ``status_for(sid, now_ms) = arming_status(records, seal_hash=seals[sid]
 Reference: design R5 in
   ``docs/superpowers/specs/2026-09-09-live-slice-7-gate-remeaning-design.md``.
 Canonical implementation: this file. The status rule is ``live_arming.py``;
-  the refresh is ``sqlite/arming_refresh.py``; the admission is
-  ``sqlite/arming_admission.py``.
+  the refresh is ``sqlite/arming_refresh.py``. It admits no ENTER any more
+  (#2553: only a budgeted account does); the live verdict reads it.
 Validated against: ``tests/broker/alpaca/clerk/test_live_arming_gate.py``.
 
 Pure: no I/O, no clock. The sync publishes a snapshot it stamped with the
-repository clock; admission derives the instance's state at *its own*
+repository clock; a reader derives the instance's state at *its own*
 ``now_ms``, so a lapse at the ET-date boundary is enforced at the instant.
 """
 
@@ -63,14 +63,17 @@ class ArmingSnapshot:
 
 
 class ArmingGate:
-    """The snapshot one authority admits ENTERs against.
+    """The arming snapshot one live authority's refresh publishes.
+
+    No ENTER is admitted against it (#2553: only an account switched to
+    budgets admits one); the live verdict reads its standing mode hold.
 
     A process-local cache of local evidence, never a custody fact — the
     ``LiveEnvelopeGate`` precedent. Two faults, with two lifetimes, because
-    the two things that stop this gate admitting are not the same fact:
+    the two things that withdraw this gate's snapshot are not the same fact:
 
     * ``invalidate`` is *this refresh's* verdict — a ledger nobody can read
-      seals nothing and admits nothing. The next refresh that does read the
+      seals nothing. The next refresh that does read the
       ledger clears it by publishing.
     * ``hold`` / ``release`` is a *sticky* fault the refresh cannot clear:
       the account the broker answered is not the one this authority was

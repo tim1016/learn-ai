@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult, BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, DecisionReceipt
 from app.broker.contract.models import (
     BrokerOrder,
