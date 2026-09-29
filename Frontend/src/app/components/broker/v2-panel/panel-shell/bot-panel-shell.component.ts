@@ -134,6 +134,9 @@ interface PreparedSafeFlatten {
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
 const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
 
+/** A running bot's current-run evidence is re-read this often. */
+export const CURRENT_RUN_POLL_MS = 5_000;
+
 /** The commands of a safe flatten: from anywhere on the page, each opens the
  * stranded-position warning's one confirmation (H30). */
 const SAFE_FLATTEN_ACTION_IDS: ReadonlySet<PanelAction['action_id']> = new Set([
@@ -446,7 +449,7 @@ export class BotPanelShellComponent {
       if (this.panel()?.health.running && !this.currentRun.isLoading()) {
         this.currentRun.reload();
       }
-    }, 5_000);
+    }, CURRENT_RUN_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
     effect(() => {
       const target = this.target();
