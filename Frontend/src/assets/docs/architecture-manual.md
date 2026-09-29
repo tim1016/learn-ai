@@ -202,7 +202,7 @@ The proof is not checked once and forgotten: it is re-read and its files re-fing
 - **Fills.** Each fill is recorded under the broker's own ID, corrections are appended rather than overwritten, profit and loss is computed first-in-first-out, and an unknown fee is shown as unknown, never as zero.
 - **Per bot.** The sealed configuration, one record per run with its outcome and build proof, the decision receipts, and a ledger of the exact bars the bot saw, which lets a run be replayed and checked.
 - **Research evidence** (backtest runs, parity verdicts, Golden reviews) lives in Python's research tables in Postgres.
-- **"Flat" has one definition everywhere**, and every position a bot holds has an in-app path back to flat ("safe flatten"). Stopping a bot alone leaves its position open; that is deliberate, so a stop never trades by surprise ([ADR 0045](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0045-exposure-lifecycle-closure.md)).
+- **"Flat" has one definition everywhere**, and every position a bot holds has an in-app path back to flat ("safe flatten"). Stopping a bot alone leaves its position open; that is deliberate, so a stop never trades by surprise ([ADR 0045](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0045-exposure-lifecycle-closure.md)). A Dry Run is the exception: it holds nothing real, so when its run ends for any reason its simulation closes the position at the last price the run saw.
 
 ---
 

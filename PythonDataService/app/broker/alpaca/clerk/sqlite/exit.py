@@ -52,10 +52,19 @@ logger = logging.getLogger(__name__)
 ACTION_EXIT = "EXIT"
 
 
+def exit_effect_operation_id(*, strategy_instance_id: str, decision_id: str) -> str:
+    """The effect an EXIT decided as ``decision_id`` is recorded under, whether or not it exists yet."""
+    return f"effect:{_exit_identity_key(strategy_instance_id, decision_id)}"
+
+
+def _exit_identity_key(strategy_instance_id: str, decision_id: str) -> str:
+    return f"{strategy_instance_id}:{decision_id}"
+
+
 def _exit_identity(
     *, account_id: str, strategy_instance_id: str, decision_id: str, entry_order_ref: str
 ) -> tuple[str, str, str, str]:
-    idempotency_key = f"{strategy_instance_id}:{decision_id}"
+    idempotency_key = _exit_identity_key(strategy_instance_id, decision_id)
     command_id = f"cmd:{idempotency_key}"
     effect_idempotency_key = f"exit:{idempotency_key}"
     payload_hash = hashlib.sha256(
@@ -163,7 +172,9 @@ def _accept_exit_capture(
             )
             entry_order_refs.append(candidate.order_ref)
 
-        effect_operation_id = f"effect:{idempotency_key}"
+        effect_operation_id = exit_effect_operation_id(
+            strategy_instance_id=strategy_instance_id, decision_id=decision_id
+        )
         facts = ExitAcceptedFacts(
             idempotency_key=idempotency_key,
             payload_hash=payload_hash,
@@ -318,7 +329,8 @@ def accept_recovery_exit(
     on a running bot is re-drivable by design.
 
     Decision-id namespaces: ``recovery-flatten-<hex16>``,
-    ``exit-redrive-<episode-hex12>-<n>`` (both colon-free; the idempotency
+    ``exit-redrive-<episode-hex12>-<n>``, ``dry-run-close-<hex16>`` (a Dry
+    Run's run-end close, ``dry_run_close``) (all colon-free; the idempotency
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
 

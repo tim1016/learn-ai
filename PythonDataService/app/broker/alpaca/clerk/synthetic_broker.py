@@ -9,6 +9,9 @@ binding, the position projection — is ``synthesized_orders.py``, shared with
 A recovery EXIT (the operator's safe flatten of a stopped Dry Run) has no
 decision bar: it fills at the live IBKR quote read when it is sent -- the bid
 for a sale, the ask for a purchase -- retained first as its own evidence bar.
+A run-end close (the simulation closing what an ended run left, owner decision
+2026-09-29) fills at the last price the run saw instead, re-stated at the
+instant it sold so the fill never predates its EXIT.
 """
 
 from __future__ import annotations
@@ -49,6 +52,7 @@ from app.services.market_liveness import prepared_top_of_book
 from app.services.session_authority import order_session_state_at_ms, session_state_at_ms
 from app.services.source_bar_ledger import (
     RECOVERY_QUOTE_PROVIDER,
+    RUN_END_CLOSE_PROVIDER,
     RetainedSourceBar,
     SourceBarConflictError,
     SourceBarLedger,
@@ -90,8 +94,9 @@ class SyntheticBroker:
 
     The Clerk remains the custody authority.  This adapter supplies the
     broker-shaped acknowledgement and fills it needs without contacting Alpaca;
-    its only prices are retained bars and, for a recovery EXIT, the live IBKR
-    quote retained as one.
+    its only prices are retained bars: the decision bar, for an operator's
+    recovery EXIT the live IBKR quote retained as one, and for a run-end close
+    the last bar its run saw, re-stated at the instant it sells.
     """
 
     broker_id = SYNTHETIC_BROKER_ID
@@ -254,6 +259,46 @@ class SyntheticBroker:
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
         return True
 
+    def bind_run_end_close_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind a run-end close to the last price the run saw, retained at the instant it sells.
+
+        That price is the newest bar the market delivered, not a live quote:
+        the close must not wait on a feed that may be why the run ended, and
+        it works overnight (owner decision 2026-09-29). Re-stating it at now
+        keeps the fill after the EXIT that caused it. ``False`` (no bar was
+        ever delivered for ``symbol``) leaves the close unsent.
+        """
+        if self._ledger is None or self._source_bars is None:
+            return False
+        last_seen = self._source_bars.latest_for_symbol(symbol, market_only=True)
+        if last_seen is None:
+            return False
+        now_ms = self._clock()
+        session = order_session_state_at_ms(now_ms=now_ms, extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window)
+        price = last_seen.close
+        try:
+            retained_bar = self._source_bars.retain_run_end_close(MarketDataBar(
+                symbol=symbol, start_ms=now_ms - 1, end_ms=now_ms,
+                open=price, high=price, low=price, close=price, volume=0,
+                fetched_at_ms=now_ms, feed_id=RUN_END_CLOSE_PROVIDER, session_phase=session.phase,
+            ))
+        except SourceBarConflictError:
+            logger.warning(
+                "simulated run-end close price could not be retained as fill evidence",
+                exc_info=True,
+                extra={"action": "simulated_run_end_close_unretained", "account_id": self._account_id,
+                       "symbol": symbol, "client_order_id": client_order_id},
+            )
+            return False
+        self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+        logger.info(
+            "bound a Dry Run's run-end close to the last price its run saw",
+            extra={"action": "simulated_run_end_close_bound", "account_id": self._account_id,
+                   "symbol": symbol, "client_order_id": client_order_id, "price": str(price),
+                   "last_seen_bar_ref": last_seen.bar_ref, "last_seen_end_ms": last_seen.end_ms},
+        )
+        return True
+
     def _recovery_quote(self, symbol: str) -> TopOfBookQuote | None:
         if self._ledger is None or self._source_bars is None:
             return None
@@ -348,7 +393,9 @@ class SyntheticBroker:
         candidate = retained_bar if retained_bar is not None else bound
         if candidate is not None:
             return self._ledger.verified_retained_bar(candidate, symbol=symbol)
-        latest = self._source_bars.latest_for_symbol(symbol)
+        # The last price the market delivered: a no-submit world's own fill
+        # evidence (a recovery quote, a run-end close) is never a fill price.
+        latest = self._source_bars.latest_for_symbol(symbol, market_only=True)
         if latest is None:
             raise SimulatedPriceUnavailableError(
                 f"No retained source bar exists for {symbol!r}; refusing a synthetic fill."

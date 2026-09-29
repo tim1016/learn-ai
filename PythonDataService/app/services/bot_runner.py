@@ -1119,7 +1119,7 @@ class BotTaskRegistry:
             canary_rollback=canary_rollback,
         )
         self._schedule_run_replay_receipt(managed.binding)
-        await self._authority_for(managed.binding).release_if_unused()
+        await self._authority_for(managed.binding).release_after_run_end()
         return self.status(broker, strategy_instance_id)
 
     async def stop_every_running_bot(self, *, updated_by: str, reason: str) -> LaneStopOutcome:
@@ -1278,7 +1278,7 @@ class BotTaskRegistry:
                 managed.binding.strategy_instance_id,
                 managed.binding.run_id,
             )
-            await self._authority_for(managed.binding).release_if_unused()
+            await self._authority_for(managed.binding).release_after_run_end()
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
 
@@ -1637,7 +1637,7 @@ class BotTaskRegistry:
             # otherwise a fast cancellation can unregister custody between
             # the task's provisional terminal record and the final proof.
             if managed is None or managed.stop_reason_code is None:
-                await self._authority_for(binding).release_if_unused()
+                await self._authority_for(binding).release_after_run_end()
 
     # ── guards and composition ────────────────────────────────────────
 

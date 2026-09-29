@@ -9,6 +9,13 @@ The custody card named the real account for the same reason.
 These tests drive the real seams -- the panel read, the panel action executor
 and the recovery check route -- against a real synthetic authority, with the
 account's real authority wired to an Alpaca double that fails on any call.
+
+Since 2026-09-29 a Dry Run never ends holding: its simulation closes what the
+ended run left at the last price the run saw (``dry_run_close``). The
+operator's flatten stays the fallback for a close that could not be sent
+(``test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the_way_back``);
+the tests of that flatten's own mechanics disable the close
+(``run_ending="close_disabled"``).
 """
 
 from __future__ import annotations
@@ -29,8 +36,11 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.models import EffectPurpose
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite import dry_run_close
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.synthetic_broker import SimulatedPriceUnavailableError
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.marketdata.feed import MarketDataBar
 from app.routers import alpaca_clerk_sqlite
@@ -44,7 +54,7 @@ from app.schemas.deployment_budget import DeployBudgetConsent, DeploymentBudgetV
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry, set_bot_task_registry
 from app.services.broker_v2_panel import budget_deploy, panel_data_source, panel_scope
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
@@ -52,6 +62,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.sqlite_panel_source import SqlitePanelBotNotFound, read_sqlite_panel_evidence
 from app.services.session_authority import et_minute_of_day_ms
+from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.v2panel.conftest import account_snapshot
@@ -61,6 +72,7 @@ SID = "live-dry-dv-spy-0928"
 SIM_ACCOUNT = f"sim:{SID}"
 NEXT_SESSION_NOON = et_minute_of_day_ms(date(2026, 9, 9), 12 * 60)
 NEXT_SESSION_PRE_MARKET = et_minute_of_day_ms(date(2026, 9, 9), 8 * 60)
+OVERNIGHT = et_minute_of_day_ms(date(2026, 9, 9), 2 * 60)
 _BAR_CLOSE = Decimal("600.00")
 
 
@@ -126,6 +138,7 @@ class _World:
     alpaca: _AlpacaThatMustNeverBeCalled
     real: SqliteAlpacaClerkFacade
     clock: _TestClock
+    artifacts_root: Path
 
 
 def _binding() -> BrokerBotBinding:
@@ -146,10 +159,31 @@ def binding_recorded() -> bool:
 
 
 @pytest.fixture
+def run_ending() -> str:
+    """How the run ended; a test overrides it.
+
+    ``supervised`` -- the run stopped and the runner released its authority,
+    as after a FEED_DEATH. ``hard_death`` -- the process died: the run is still
+    ACTIVE on disk and no run-end pass ran. ``died_mid_exit`` -- a hard death
+    just after the strategy's own EXIT was accepted, before it sent anything.
+    ``close_disabled`` -- supervised, but the simulation's run-end close could
+    not run, so the operator's flatten is the way back to flat.
+    """
+    return "supervised"
+
+
+# The operator's flatten of a Dry Run is the fallback for a run-end close
+# that could not run; these tests drive that fallback.
+_FALLBACK_FLATTEN = pytest.mark.parametrize("run_ending", ["close_disabled"])
+
+
+@pytest.fixture
 async def crashed_dry_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding_recorded: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding_recorded: bool, run_ending: str,
 ) -> AsyncIterator[_World]:
     """A Dry Run that bought 1 simulated SPY at $600 and then crashed, runtime released."""
+    if run_ending == "close_disabled":
+        monkeypatch.setattr(dry_run_close, "closes_owed_for", lambda _repo, _sid: [])
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
     market_liveness.reset_market_liveness_store_for_testing()
@@ -192,15 +226,24 @@ async def crashed_dry_run(
             action_plan=binding.action_plan, quantity=1, retained_source_bar=decision_bar,
         )
         assert bought.child_order_refs, bought.explanation
-        # The crash: the run is stopped and the in-process runtime released,
-        # exactly as a supervised FEED_DEATH leaves a Dry Run.
-        await runtime.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=binding.run_id, reason="crash")
-        await authority.release_if_unused()
+        if run_ending in ("hard_death", "died_mid_exit"):
+            if run_ending == "died_mid_exit":
+                accept_exit(
+                    runtime.sqlite_repository, account_id=SIM_ACCOUNT, strategy_instance_id=SID, decision_id="exit-1",
+                    lifecycle_run_id=binding.run_id, entry_order_ref=bought.child_order_refs[0],
+                )
+            # The process died mid-run: nothing stopped the run or ran a pass.
+            await authority.release_if_unused()
+        else:
+            # The crash: the run is stopped and the in-process runtime
+            # released, exactly as a supervised FEED_DEATH leaves a Dry Run.
+            await runtime.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=binding.run_id, reason="crash")
+            await authority.release_after_run_end()
         assert get_clerk_runtime(SIM_ACCOUNT) is None
         clock.value = NOON + 30 * 60_000
         # IBKR's live SPY book half an hour after the crash.
         _publish_quote(clock.value, bid=601.25, ask=601.30)
-        yield _World(alpaca=alpaca, real=real, clock=clock)
+        yield _World(alpaca=alpaca, real=real, clock=clock, artifacts_root=tmp_path)
     finally:
         await close_synthetic_clerk_runtimes()
         set_active_clerk_runtime(None)
@@ -233,6 +276,7 @@ async def _run(panel: BotPanelView, action_id: str, key: str):
     )
 
 
+@_FALLBACK_FLATTEN
 async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_its_money(
     crashed_dry_run: _World,
 ) -> None:
@@ -289,6 +333,7 @@ async def test_the_crashed_dry_run_reconciles_prepares_and_flattens_releasing_it
     assert crashed_dry_run.alpaca.calls == []
 
 
+@_FALLBACK_FLATTEN
 async def test_a_dry_run_stopped_yesterday_flattens_at_todays_live_bid(
     crashed_dry_run: _World,
 ) -> None:
@@ -311,6 +356,7 @@ async def test_a_dry_run_stopped_yesterday_flattens_at_todays_live_bid(
     assert crashed_dry_run.alpaca.calls == []
 
 
+@_FALLBACK_FLATTEN
 async def test_a_dry_run_with_no_live_quote_refuses_its_flatten_before_recording_an_exit(
     crashed_dry_run: _World,
 ) -> None:
@@ -358,6 +404,7 @@ async def _execute_through_the_recovery_route(
     )
 
 
+@_FALLBACK_FLATTEN
 async def test_the_bot_recovery_route_sells_a_dry_run_at_market_without_touching_alpaca(
     crashed_dry_run: _World,
 ) -> None:
@@ -370,6 +417,7 @@ async def test_the_bot_recovery_route_sells_a_dry_run_at_market_without_touching
     assert crashed_dry_run.alpaca.calls == []
 
 
+@_FALLBACK_FLATTEN
 async def test_the_bot_recovery_route_sells_a_dry_run_pre_market_at_its_confirmed_limit(
     crashed_dry_run: _World,
 ) -> None:
@@ -387,6 +435,7 @@ async def test_the_bot_recovery_route_sells_a_dry_run_pre_market_at_its_confirme
     assert crashed_dry_run.alpaca.calls == []
 
 
+@_FALLBACK_FLATTEN
 async def test_dry_run_recovery_never_touches_the_alpaca_adapter(
     crashed_dry_run: _World,
 ) -> None:
@@ -420,6 +469,7 @@ async def test_a_bot_without_custody_is_refused_in_owner_words(
     assert SID in str(refused.value)
 
 
+@_FALLBACK_FLATTEN
 @pytest.mark.parametrize("binding_recorded", [False])
 async def test_a_dry_run_whose_deploy_crashed_before_its_binding_is_served_by_its_own_simulator(
     crashed_dry_run: _World,
@@ -450,4 +500,178 @@ async def test_a_dry_run_whose_deploy_crashed_before_its_binding_is_served_by_it
         )
     assert (refused.value.status_code, refused.value.detail["reason"]) == (409, "recovery_action_unavailable")
     assert "reconciliation" in refused.value.detail["message"]
+    assert crashed_dry_run.alpaca.calls == []
+
+
+async def test_a_crashed_dry_run_is_closed_by_its_simulation_at_the_last_price_its_run_saw(
+    crashed_dry_run: _World,
+) -> None:
+    """Owner decision 2026-09-29: a Dry Run holds nothing real, so it never ends holding.
+
+    The close lands when the run ends -- before anything reads the bot -- at
+    the $600 the run last saw, not IBKR's $601.25 bid half an hour later.
+    """
+    repo = ClerkSqliteRepository.open(
+        account_id=SIM_ACCOUNT, artifacts_root=crashed_dry_run.artifacts_root, clock=crashed_dry_run.clock,
+    )
+    try:
+        assert not any(repo.attributed_positions_for_strategy(SID).values())
+    finally:
+        repo.close()
+
+    panel = await _panel()
+
+    assert panel.exposure == {}
+    assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
+        ("sell", 1.0, 600.0, NOON + 1_000),
+    ]
+    assert panel.health.duty_outcome is None or panel.health.duty_outcome.exposure_notices == []
+    money = await budget_deploy.budget_view(ACCT, SID)
+    assert (money.state, money.headline, money.segment) == ("ready", "Stopped · finished", None)
+    assert crashed_dry_run.alpaca.calls == []
+
+
+@pytest.mark.parametrize("run_ending", ["hard_death"])
+async def test_a_dry_run_whose_process_died_is_closed_when_next_opened_even_overnight(
+    crashed_dry_run: _World,
+) -> None:
+    """No run-end pass ran and no market is open: the next opening retires the
+    orphaned run and closes at the last price it saw, stamped when it sold."""
+    crashed_dry_run.clock.value = OVERNIGHT
+
+    panel = await _panel()
+
+    assert panel.exposure == {}
+    assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
+        ("sell", 1.0, 600.0, OVERNIGHT),
+    ]
+    assert not panel.health.running
+    assert crashed_dry_run.alpaca.calls == []
+
+
+async def test_the_run_end_close_sells_once_however_often_the_bot_is_opened(
+    crashed_dry_run: _World,
+) -> None:
+    for _ in range(3):
+        panel = await _panel()
+
+    assert [fill.side for fill in panel.recent_fills] == ["sell", "buy"]
+    assert panel.exposure == {}
+
+
+@pytest.mark.parametrize("run_ending", ["hard_death"])
+async def test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the_way_back(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close the simulation cannot price folds like any EXIT, never silently:
+    the position stays attributed and the operator's flatten, at IBKR's live
+    bid, is the way back to flat."""
+    latest_for_symbol = SourceBarLedger.latest_for_symbol
+
+    def no_market_bar(self: SourceBarLedger, symbol: str, **kwargs: object):
+        return None if kwargs.get("market_only") else latest_for_symbol(self, symbol, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(SourceBarLedger, "latest_for_symbol", no_market_bar)
+    panel = await _panel()
+    assert panel.exposure == {"SPY": 1.0}
+
+    await _run(panel, "reconcile_now", "reconcile-after-unpriced-close")
+    panel = await _panel()
+    flattened = await _run(panel, "execute_safe_flatten", "flatten-after-unpriced-close")
+
+    assert flattened.applied
+    panel = await _panel()
+    assert panel.exposure == {}
+    assert [(fill.side, fill.price) for fill in panel.recent_fills][:1] == [("sell", 601.25)]
+    assert crashed_dry_run.alpaca.calls == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ExecutionLeaseLost("lease reassigned", account_id=SIM_ACCOUNT),
+        SimulatedPriceUnavailableError("no retained source bar"),
+    ],
+    ids=["clerk-lease-lost", "not-a-clerk-error"],
+)
+async def test_a_failed_run_end_pass_never_fails_the_stop_and_still_releases(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    """The run has already ended: whatever its run-end pass raises is logged,
+    the authority released, and the Stop or shutdown releasing it succeeds."""
+    registry = get_bot_task_registry()
+    assert registry is not None
+    authority = registry._authority_for(_binding())
+    await authority.ensure_recoverable()
+    runtime = get_clerk_runtime(SIM_ACCOUNT)
+    assert runtime is not None and runtime.clerk is not None
+
+    async def failing_pass() -> None:
+        raise failure
+
+    monkeypatch.setattr(runtime.clerk, "reconcile_once", failing_pass)
+
+    await authority.release_after_run_end()
+
+    assert get_clerk_runtime(SIM_ACCOUNT) is None
+    assert any(
+        getattr(record, "action", None) == "dry_run_run_end_reconcile_failed" for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("run_ending", ["died_mid_exit"])
+async def test_a_dry_runs_own_exit_left_waiting_by_its_death_is_superseded_by_the_run_end_close(
+    crashed_dry_run: _World,
+) -> None:
+    """Owner decision 2026-09-29: the run-end close supersedes the bot's own waiting EXIT.
+
+    Reopened overnight, that EXIT cannot go out, so it ends not flat; the same
+    pass then closes the position at the last price the run saw, and the
+    close's flat proof clears the not-flat notice -- nothing is left for the
+    owner.
+    """
+    crashed_dry_run.clock.value = OVERNIGHT
+
+    panel = await _panel()
+
+    assert panel.exposure == {}
+    assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
+        ("sell", 1.0, 600.0, OVERNIGHT),
+    ]
+    assert panel.health.duty_outcome is None or panel.health.duty_outcome.exposure_notices == []
+    assert panel.clerk.freeze_active is False and panel.clerk.hold_active is False
+    repo = ClerkSqliteRepository.open(
+        account_id=SIM_ACCOUNT, artifacts_root=crashed_dry_run.artifacts_root, clock=crashed_dry_run.clock,
+    )
+    try:
+        own_exit = repo.effect_operation(f"effect:{SID}:exit-1")
+        assert own_exit is not None and own_exit.state == "failed"
+        assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID) is None
+    finally:
+        repo.close()
+    assert crashed_dry_run.alpaca.calls == []
+
+
+@pytest.mark.parametrize("run_ending", ["hard_death"])
+async def test_a_run_end_close_that_breaks_never_blocks_reconcile_or_the_fallback_flatten(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unexpected failure closing one bot (here a custody row the close
+    cannot read) is logged and the pass goes on: Reconcile now still
+    succeeds, so the operator's flatten stays the way back to flat."""
+
+    def unreadable(_repo: ClerkSqliteRepository, _sid: str) -> list[dry_run_close.OwedClose]:
+        raise AssertionError("no ENTER_ACCEPTED transition found for the entry")
+
+    monkeypatch.setattr(dry_run_close, "closes_owed_for", unreadable)
+
+    panel = await _panel()
+    reconciled = await _run(panel, "reconcile_now", "reconcile-despite-broken-close")
+    panel = await _panel()
+
+    assert reconciled.applied
+    assert panel.exposure == {"SPY": 1.0}
+    assert _action(panel, "execute_safe_flatten").enabled
+    assert any(getattr(record, "action", None) == "dry_run_close_failed" for record in caplog.records)
     assert crashed_dry_run.alpaca.calls == []
