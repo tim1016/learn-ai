@@ -27,7 +27,6 @@ from app.schemas.broker_v2_gallery import (
     GalleryBotView,
     GalleryFeedView,
     GalleryLiveSnapshot,
-    GalleryPrimaryAction,
     GallerySymbolBars,
 )
 from app.services.broker_v2_panel import panel_chart_data_source
@@ -75,9 +74,6 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
-        # A healthy roster row carries no row action: a row's action is only
-        # ever its own recovery cure (``sqlite_panel_adapter._catalog_row_action``).
-        self.row_action = None
 
     @property
     def status_label(self) -> str:
@@ -210,9 +206,6 @@ async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
     assert {s["symbol"] for s in body["symbols"]} == {"SPY", "QQQ"}  # IWM (retired) never subscribed
     stopped = next(b for b in body["bots"] if b["sid"] == "Aug11-03")
     assert stopped["running"] is False
-    assert stopped["primary_action"]["action_id"] == "deploy_again"
-    assert stopped["primary_action"]["label"] == "Deploy again"
-    assert stopped["primary_action"]["enabled"] is True
 
 
 async def test_gallery_stream_stopped_bot_survives_update() -> None:
@@ -241,8 +234,6 @@ async def test_gallery_stream_stopped_bot_survives_update() -> None:
     assert payload["removed_sids"] == []
     assert {b["sid"] for b in payload["bots_delta"]} == {"Aug11-02"}
     assert payload["bots_delta"][0]["running"] is False
-    assert payload["bots_delta"][0]["primary_action"]["action_id"] == "deploy_again"
-    assert payload["bots_delta"][0]["primary_action"]["enabled"] is True
 
 
 def _frame_payload(frame: str) -> dict:
@@ -588,7 +579,6 @@ def _snapshot_frame_of_exact_size(target_bytes: int) -> GalleryLiveSnapshot:
                     day_pnl=None,
                     session_change_pct=None,
                     fills_today=None,
-                    primary_action=GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True),
                     feed=GalleryFeedView(
                         state="LIVE",
                         headline="Feed live",

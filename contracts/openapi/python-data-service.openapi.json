@@ -19605,9 +19605,6 @@
             "title": "Phase",
             "type": "string"
           },
-          "primary_action": {
-            "$ref": "#/components/schemas/GalleryPrimaryAction"
-          },
           "realized_pnl_today": {
             "anyOf": [
               {
@@ -19656,7 +19653,6 @@
           "day_pnl",
           "session_change_pct",
           "fills_today",
-          "primary_action",
           "feed"
         ],
         "title": "GalleryBotView",
@@ -19769,45 +19765,6 @@
           "symbols"
         ],
         "title": "GalleryLiveSnapshot",
-        "type": "object"
-      },
-      "GalleryPrimaryAction": {
-        "description": "The single most relevant action for a gallery tile (\u00a7 gallery spec).",
-        "properties": {
-          "action_id": {
-            "enum": [
-              "stop",
-              "deploy_again"
-            ],
-            "title": "Action Id",
-            "type": "string"
-          },
-          "disabled_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Disabled Reason"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          }
-        },
-        "required": [
-          "action_id",
-          "label",
-          "enabled"
-        ],
-        "title": "GalleryPrimaryAction",
         "type": "object"
       },
       "GallerySymbolBars": {

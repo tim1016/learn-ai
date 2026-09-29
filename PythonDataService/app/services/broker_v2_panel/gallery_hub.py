@@ -45,7 +45,6 @@ from app.schemas.broker_v2_gallery import (
     GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
-    GalleryPrimaryAction,
     GalleryResolution,
     GallerySymbolBars,
 )
@@ -331,20 +330,6 @@ class GalleryHub:
         if self._resolution == "5s":
             await self._aggregator.ensure_subscribed(symbol)
 
-    def _primary_action(
-        self,
-        row: BotCatalogView,
-    ) -> GalleryPrimaryAction:
-        """Stop is a command; Deploy again only navigates to fresh consent."""
-        if not row.running:
-            return GalleryPrimaryAction(
-                action_id="deploy_again", label="Deploy again", enabled=True,
-            )
-        # A roster row carries a recovery cure or no row action, never a Stop
-        # verdict. The running tile keeps its Stop entry point; the UI reads
-        # the bot's current stop (``stop_bot_decisions``) before sending it.
-        return GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True)
-
     def _project_bot(
         self,
         row: BotCatalogView,
@@ -385,7 +370,6 @@ class GalleryHub:
             session_change_pct=session_change_pcts.get(row.symbol),
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
-            primary_action=self._primary_action(row),
             feed=feeds[row.symbol],
         )
 
@@ -599,8 +583,8 @@ class GalleryHub:
 
         Every shown (non-retired) bot is re-projected into ``bots_delta`` (no
         dirty-tracking yet) — this includes a bot that stopped since the last
-        call, which re-projects with ``running=False`` (``_primary_action``
-        then presents Deploy again navigation) rather than dropping it from the wall.
+        call, which re-projects with ``running=False`` rather than dropping it
+        from the wall.
         ``known_sids`` is the *caller's own* last-observed shown roster —
         each SSE stream tracks this itself (see the router's
         ``_gallery_event_source``) rather than the hub holding one shared

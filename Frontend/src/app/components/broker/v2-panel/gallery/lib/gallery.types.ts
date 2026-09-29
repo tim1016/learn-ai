@@ -1,7 +1,7 @@
 /**
  * Contract types for the broker-v2 bot gallery aggregated stream.
  *
- * `GalleryPrimaryAction`, `GalleryBotView`, `GallerySymbolBars`, and
+ * `GalleryFeedView`, `GalleryBotView`, `GallerySymbolBars`, and
  * `GalleryLiveSnapshot` alias the generated OpenAPI schemas below — the
  * snapshot doubles as the REST bootstrap response and the SSE `snapshot`
  * event payload, so it is not an OpenAPI exception. `GalleryLiveUpdate` and
@@ -26,7 +26,6 @@ export type GalleryResolution = components['schemas']['GalleryLiveSnapshot']['re
 // absence the same as the backend's own default (`?? null` / `?? []` /
 // `?? {}`) at the few call sites that read these keys, rather than
 // asserting a stronger type than the wire contract actually promises.
-export type GalleryPrimaryAction = components['schemas']['GalleryPrimaryAction'];
 
 /** The IBKR bar line a tile charts (#2330): whether market data is arriving, not just the stream. */
 export type GalleryFeedView = components['schemas']['GalleryFeedView'];

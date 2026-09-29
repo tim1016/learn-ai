@@ -74,7 +74,6 @@ function bot(sid: string, overrides: Partial<GalleryBotView> = {}): GalleryBotVi
     session_change_pct: 0,
     fills_today: 0,
     last_bar_at_ms: null,
-    primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
     feed: {
       state: 'LIVE',
       headline: 'Feed live',

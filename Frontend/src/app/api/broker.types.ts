@@ -16290,7 +16290,6 @@ export interface components {
             open_pnl: number | null;
             /** Phase */
             phase: string;
-            primary_action: components["schemas"]["GalleryPrimaryAction"];
             /** Realized Pnl Today */
             realized_pnl_today: number | null;
             /** Running */
@@ -16353,23 +16352,6 @@ export interface components {
             surface_version: number;
             /** Symbols */
             symbols: components["schemas"]["GallerySymbolBars"][];
-        };
-        /**
-         * GalleryPrimaryAction
-         * @description The single most relevant action for a gallery tile (§ gallery spec).
-         */
-        GalleryPrimaryAction: {
-            /**
-             * Action Id
-             * @enum {string}
-             */
-            action_id: "stop" | "deploy_again";
-            /** Disabled Reason */
-            disabled_reason?: string | null;
-            /** Enabled */
-            enabled: boolean;
-            /** Label */
-            label: string;
         };
         /**
          * GallerySymbolBars

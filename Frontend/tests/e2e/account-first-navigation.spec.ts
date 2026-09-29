@@ -221,7 +221,6 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
           attention_required: false,
           last_error: null,
         },
-        primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
       },
     ],
     symbols: [
