@@ -1,13 +1,15 @@
-import { statSync } from "node:fs";
-
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
 // The Angular test builder executes this config under Node, but @types/node is
-// not a dependency, so declare the one Node global this file touches.
+// not a dependency, so declare the Node surface this file touches. `node:fs`
+// comes through `getBuiltinModule` (Node 22.3+) for the same reason.
 declare const process: {
   env: Record<string, string | undefined>;
+  getBuiltinModule(id: "node:fs"): { statSync(path: string): { size: number } };
 };
+
+const { statSync } = process.getBuiltinModule("node:fs");
 
 function positiveInteger(name: string): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
