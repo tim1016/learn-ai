@@ -4,7 +4,7 @@
   (expandedChange)="expanded.set($event)"
 >
   @if (expanded()) {
-    <app-bot-run-history
+    <app-bot-current-run
       [state]="currentRunState()"
       [botRunning]="botRunning()"
       [feedContinuity]="feedContinuity()"

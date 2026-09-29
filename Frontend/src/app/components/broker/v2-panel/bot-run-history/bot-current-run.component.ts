@@ -7,23 +7,22 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import { BotRunEvidenceCardComponent } from './bot-run-evidence-card.component';
 
 /**
- * The bot page's run evidence: the current run's launch, process and
- * terminal evidence, and its IBKR market-data continuity. Earlier runs --
- * and every other bot -- are listed in History (#2574), which this links to;
- * the one-run-at-a-time pager it replaced is gone.
+ * The bot page's current run: its launch, process and terminal evidence, and
+ * its IBKR market-data continuity. The bot's earlier runs are listed in
+ * History (#2574), which this links to, narrowed to this bot.
  */
 @Component({
-  selector: 'app-bot-run-history',
+  selector: 'app-bot-current-run',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [BotRunEvidenceCardComponent, RouterLink, TimestampDisplayComponent],
-  templateUrl: './bot-run-history.component.html',
-  styleUrl: './bot-run-history.component.scss',
+  templateUrl: './bot-current-run.component.html',
+  styleUrl: './bot-current-run.component.scss',
 })
-export class BotRunHistoryComponent {
+export class BotCurrentRunComponent {
   readonly state = input.required<CurrentRunState>();
   readonly botRunning = input(false);
   readonly feedContinuity = input.required<FeedContinuityView>();
-  /** History, where every run of every bot is listed. */
+  /** History, narrowed to this bot and every one of its runs. */
   readonly historyLink = input.required<AccountWorkspaceLink>();
   readonly retryRequested = output();
 

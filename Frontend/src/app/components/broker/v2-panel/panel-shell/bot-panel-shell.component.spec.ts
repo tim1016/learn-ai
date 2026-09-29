@@ -1704,7 +1704,7 @@ describe('BotPanelShellComponent', () => {
     expect(within(tape).queryByText(/Polygon snapshot/)).toBeNull();
   });
 
-  it('shows the current run under Runs and sends earlier runs to History', async () => {
+  it("shows the current run under Runs and sends earlier runs to History, narrowed to this bot", async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1722,7 +1722,7 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByText('run-current')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
     expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec');
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
   });
 

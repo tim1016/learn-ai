@@ -161,7 +161,10 @@ describe('BotBannerComponent', () => {
 
   it("renders a cleared bot's page read-only, with Deploy again and the way to History (#2574)", async () => {
     const panel = fakeBotPanelView();
-    await renderBanner(stopped({ health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' } }));
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'cleared',
+    }));
 
     expect(screen.getByRole('note').textContent).toContain('its records here are read-only');
     expect(screen.getByRole('link', { name: 'Every cleared bot is in History' }).getAttribute('href'))
@@ -171,10 +174,22 @@ describe('BotBannerComponent', () => {
     expect(screen.queryByRole('button', { name: 'More actions for this bot' })).toBeNull();
   });
 
-  it('keeps the cure on a retired bot that still holds shares: it is not cleared', async () => {
+  it('reads cleared from the backend alone: a retired bot it calls finished is not read-only', async () => {
     const panel = fakeBotPanelView();
     await renderBanner(stopped({
       health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'finished',
+    }));
+
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByRole('button', { name: 'More actions for this bot' })).toBeTruthy();
+  });
+
+  it("keeps the cure on a retired bot that still holds shares: the backend says it is holding, not cleared", async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'holding',
       actions: [fakePanelAction('flatten_stop', { label: 'Flatten' })],
       primary_action: 'flatten_stop',
     }));

@@ -3,19 +3,20 @@ import { RouterLink } from '@angular/router';
 
 import { accountWorkspaceBotRoute } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
-import { laneConfirmedAccount, laneDisplayNameText } from '../../../fleet/fleet-directory.types';
+import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
-import type { FleetBotHistoryRow } from './bot-history.service';
+import { historyAccountName, type FleetBotHistoryRow } from './bot-history.service';
 
 /**
  * History's list (#2574): one line per bot, newest first. Each line names its
- * account with the lane colour and the mode worded, and opens the bot's own
- * page. Every figure is the backend's: counts as counted, dollars as authored
+ * account with the lane colour and the mode worded, and the whole line opens
+ * the bot's own page — its one real link, the bot's name, stretched over the
+ * row. Every figure is the backend's: counts as counted, dollars as authored
  * strings (an unknown one says so, never $0), outcomes in the backend's
  * words with their code through `receiptLabel`.
  *
@@ -49,7 +50,6 @@ export class HistoryTableComponent {
     this.bots().map((bot) => {
       const key = `${bot.clerk_id}/${bot.strategy_instance_id}`;
       const lane = this.fleetDirectory.lane(bot.broker, bot.clerk_id);
-      const name = this.fleetDirectory.displayNameOf(bot.broker, bot.clerk_id);
       const expandable = bot.runs.length > 1 || bot.money_unavailable_reason !== null;
       return {
         key,
@@ -59,7 +59,7 @@ export class HistoryTableComponent {
           clerkId: bot.clerk_id,
           accountId: (lane === undefined ? null : laneConfirmedAccount(lane)) ?? bot.account_id,
         }, bot.strategy_instance_id).commands,
-        accountName: name === null ? bot.account_id : laneDisplayNameText(name),
+        accountName: historyAccountName(this.fleetDirectory, bot.broker, bot.clerk_id, bot.account_id),
         mode: verdictModeChip(this.liveVerdicts.stateFor(bot.clerk_id)),
         expandable,
         open: expandable && this.opened().has(key),

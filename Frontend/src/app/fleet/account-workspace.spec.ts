@@ -183,6 +183,18 @@ describe('the links Home hands out', () => {
     });
     expect(accountWorkspaceHistoryLink(ACCOUNT, { account: 'clrk_spec' }).queryParams).toEqual({ account: 'clrk_spec' });
   });
+
+  it("opens History on one bot, every run of it, from the bot's own page (#2574)", () => {
+    const link = accountWorkspaceHistoryLink(
+      { broker: 'alpaca', clerkId: 'clrk_spec' },
+      { account: 'clrk_spec', bot: 'spy-ema-1', status: undefined },
+    );
+
+    expect(link).toEqual({
+      commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history'],
+      queryParams: { account: 'clrk_spec', bot: 'spy-ema-1' },
+    });
+  });
 });
 
 describe('the tab strip', () => {
@@ -308,5 +320,9 @@ describe('accountWorkspaceTitle', () => {
 
   it('names only what is open when the account has no resolved name', () => {
     expect(accountWorkspaceTitle('settings', null, null)).toBe('Settings');
+  });
+
+  it('titles History by itself: it is every account, not the one it was opened from (#2574)', () => {
+    expect(accountWorkspaceTitle('history', 'Paper', null)).toBe('History');
   });
 });

@@ -23,6 +23,26 @@
   }
 }
 
+/* The whole line opens the bot's page: its one real link (the bot's name) is
+   stretched over the row, so a click anywhere lands where the link goes while
+   the row still reads as one link. The runs toggle sits above it. */
+.history-table__row {
+  position: relative;
+
+  &:hover td { background: var(--bg-sunken); }
+}
+
+.history-table__sid::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.history-table__toggle {
+  position: relative;
+  z-index: 1;
+}
+
 /* A Dry Run is simulated cash, never the account's money: dashed, and named
    in words by its world label. */
 .history-table__row--dry-run td {

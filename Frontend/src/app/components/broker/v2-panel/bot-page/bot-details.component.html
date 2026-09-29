@@ -110,7 +110,7 @@
       <app-operator-run-history
         [broker]="broker()"
         [clerkId]="clerkId()"
-        [accountId]="accountId()"
+        [strategyInstanceId]="sid()"
         [currentRunState]="currentRunState()"
         (runRefreshRequested)="runRefreshRequested.emit()"
         [botRunning]="panel().health.running"

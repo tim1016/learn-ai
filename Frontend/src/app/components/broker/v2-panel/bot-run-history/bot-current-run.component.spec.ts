@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
 import type { BotRunView, CurrentRunState, FeedContinuityView } from '../lib/broker-v2-panel.types';
-import { BotRunHistoryComponent } from './bot-run-history.component';
+import { BotCurrentRunComponent } from './bot-current-run.component';
 
 const HISTORY: AccountWorkspaceLink = {
   commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history'],
-  queryParams: { account: 'clrk_spec' },
+  queryParams: { account: 'clrk_spec', bot: 'sid-001' },
 };
 
 const CONTINUITY: FeedContinuityView = {
@@ -74,13 +74,13 @@ function state(overrides: Partial<CurrentRunState> = {}): CurrentRunState {
 }
 
 function renderRuns(inputs: Record<string, unknown>) {
-  return render(BotRunHistoryComponent, {
+  return render(BotCurrentRunComponent, {
     inputs: { historyLink: HISTORY, ...inputs },
     providers: [provideRouter([])],
   });
 }
 
-describe('BotRunHistoryComponent', () => {
+describe('BotCurrentRunComponent', () => {
   it('shows the backend-owned current process evidence without inferring terminal state', async () => {
     await renderRuns({
       state: state(),
@@ -108,11 +108,11 @@ describe('BotRunHistoryComponent', () => {
     expect(screen.queryByText('Loading run evidence…')).toBeNull();
   });
 
-  it('sends earlier runs to History instead of paging through them one at a time', async () => {
+  it('sends earlier runs to History, narrowed to this bot, instead of paging through them one at a time', async () => {
     await renderRuns({ state: state(), feedContinuity: CONTINUITY });
 
     expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec');
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
     expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Older run' })).toBeNull();
   });

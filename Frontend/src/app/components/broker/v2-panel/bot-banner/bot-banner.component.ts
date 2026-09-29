@@ -84,18 +84,16 @@ export class BotBannerComponent {
 
   protected readonly dryRun = computed(() => this.panel().mode === 'dry_run');
 
-  /** Cleared: retired, with nothing the backend still offers to do for it
-   * (a retired bot still holding shares keeps its cure, and is not cleared). */
-  protected readonly cleared = computed(
-    () => this.panel().health.phase === 'RETIRED' && this.primaryAction() === null,
-  );
+  /** Cleared from Home: the backend's own answer (`BotPanelView.status`),
+   * the same one this bot's History row gives. A retired bot still holding
+   * shares is holding, not cleared, and keeps its cure. */
+  protected readonly cleared = computed(() => this.panel().status === 'cleared');
 
   /** History, on its cleared bots. */
-  protected readonly history = computed(() => accountWorkspaceHistoryLink({
-    broker: this.panel().broker,
-    clerkId: this.clerkId(),
-    accountId: this.routeAccountId(),
-  }, { status: 'cleared' }));
+  protected readonly history = computed(() => accountWorkspaceHistoryLink(
+    { broker: this.panel().broker, clerkId: this.clerkId() },
+    { status: 'cleared' },
+  ));
 
   /** The lane's world, worded once, for a bot that trades the lane's money. */
   protected readonly worldChip = computed<LaneModeChip | null>(() =>

@@ -1,6 +1,8 @@
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { Router, provideRouter } from '@angular/router';
+import { TestBed } from '@angular/core/testing';
+import { Router, provideRouter, withComponentInputBinding } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,6 +16,7 @@ import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures'
 import { AlpacaHistoryPageComponent } from './alpaca-history-page.component';
 import {
   BotHistoryService,
+  botHistoryQuery,
   type BotHistoryQuery,
   type FleetBotHistoryPage,
   type FleetBotHistoryRow,
@@ -21,6 +24,8 @@ import {
 
 const LIVE_CLERK = 'clrk_live000000000000000000bb';
 const LIVE_ACCOUNT = 'live-account-1';
+
+const ANY: BotHistoryQuery = { account: null, status: null, world: null, symbol: null, bot: null, page: 1 };
 
 function bot(overrides: Partial<FleetBotHistoryRow> = {}): FleetBotHistoryRow {
   return {
@@ -68,48 +73,52 @@ function page(overrides: Partial<FleetBotHistoryPage> = {}): FleetBotHistoryPage
   };
 }
 
+function historyProviders(read: (query: BotHistoryQuery) => Promise<FleetBotHistoryPage>) {
+  return [
+    provideHttpClient(),
+    provideHttpClientTesting(),
+    // The symbol filter is the shared symbol picker over a host universe.
+    provideFakeVendorCatalog(fakeVendorCatalog()),
+    provideFakeTickerCatalog(fakeTickerCatalog()),
+    provideFleetDirectory({
+      observed_at_ms: 1,
+      clerks: [
+        testLane(),
+        testLane({
+          clerk_id: LIVE_CLERK,
+          display_label: 'Live',
+          provider_summary: { ...testLane().provider_summary, confirmed_account_id: LIVE_ACCOUNT },
+        }),
+      ],
+    }),
+    {
+      provide: AlpacaLiveVerdictService,
+      useValue: {
+        stateFor: (clerkId: string) => fakeVerdictState(clerkId === LIVE_CLERK ? 'live' : 'paper'),
+        start: vi.fn(),
+      },
+    },
+    { provide: BotHistoryService, useValue: { read } },
+  ];
+}
+
 async function renderHistory(answer: FleetBotHistoryPage, inputs: Record<string, string> = {}) {
   const read = vi.fn<(query: BotHistoryQuery) => Promise<FleetBotHistoryPage>>().mockResolvedValue(answer);
   const view = await render(AlpacaHistoryPageComponent, {
     inputs,
-    providers: [
-      provideRouter([]),
-      provideHttpClient(),
-      provideHttpClientTesting(),
-      // The symbol filter is the shared instrument card over a host universe.
-      provideFakeVendorCatalog(fakeVendorCatalog()),
-      provideFakeTickerCatalog(fakeTickerCatalog()),
-      provideFleetDirectory({
-        observed_at_ms: 1,
-        clerks: [
-          testLane(),
-          testLane({
-            clerk_id: LIVE_CLERK,
-            display_label: 'Live',
-            provider_summary: { ...testLane().provider_summary, confirmed_account_id: LIVE_ACCOUNT },
-          }),
-        ],
-      }),
-      {
-        provide: AlpacaLiveVerdictService,
-        useValue: {
-          stateFor: (clerkId: string) => fakeVerdictState(clerkId === LIVE_CLERK ? 'live' : 'paper'),
-          start: vi.fn(),
-        },
-      },
-      { provide: BotHistoryService, useValue: { read } },
-    ],
+    providers: [provideRouter([]), ...historyProviders(read)],
   });
   await view.fixture.whenStable();
   view.fixture.detectChanges();
-  return { ...view, read };
+  const navigate = vi.spyOn(view.fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
+  return { ...view, read, navigate };
 }
 
 describe('AlpacaHistoryPageComponent', () => {
   it('lists every account with no filter pre-selected, one line per bot', async () => {
     const { read } = await renderHistory(page());
 
-    expect(read).toHaveBeenCalledWith({ clerkId: null, status: null, world: null, symbol: null, page: 1 });
+    expect(read).toHaveBeenCalledWith(ANY);
     expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe('');
     const line = screen.getByRole('link', { name: 'spy-ema-20260928-0931' }).closest('tr') as HTMLElement;
     // The account is named with its mode worded, not by colour alone.
@@ -125,11 +134,21 @@ describe('AlpacaHistoryPageComponent', () => {
     expect(line.textContent).toContain('3 sent · 2 filled · 1 cancelled');
   });
 
-  it("opens a bot's own page on its own account's workspace", async () => {
+  it('names each account in the filter with its mode worded', async () => {
+    await renderHistory(page());
+
+    const options = within(screen.getByLabelText('Account')).getAllByRole('option').map((option) => option.textContent?.trim());
+    expect(options).toEqual(['All accounts', 'Paper · PAPER · practice money', 'Live · LIVE · real money']);
+  });
+
+  it("opens a bot's own page on its own account's workspace, from its one link", async () => {
     await renderHistory(page({ rows: [bot({ clerk_id: LIVE_CLERK, account_id: 'LIVE-ACCOUNT-1', world: 'live' })] }));
 
-    expect(screen.getByRole('link', { name: 'spy-ema-20260928-0931' }).getAttribute('href'))
+    const link = screen.getByRole('link', { name: 'spy-ema-20260928-0931' });
+    expect(link.getAttribute('href'))
       .toBe(`/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}/bots/spy-ema-20260928-0931`);
+    // The whole line opens it: that one link, stretched over the row.
+    expect(within(link.closest('tr') as HTMLElement).getAllByRole('link')).toEqual([link]);
   });
 
   it('shows an unknown result as unknown, with its reason, never as $0', async () => {
@@ -171,30 +190,35 @@ describe('AlpacaHistoryPageComponent', () => {
     expect(screen.getByText('Result and fees are for all 2 runs of this bot; they are not split by run.')).toBeTruthy();
   });
 
-  it('names every account it could not read, never leaving one silently out', async () => {
+  it('names every account and bot it could not read, never by a raw lane id', async () => {
     await renderHistory(page({
       gaps: [
         {
           broker: 'alpaca', clerk_id: LIVE_CLERK, account_id: LIVE_ACCOUNT, strategy_instance_id: null,
-          reason: "This account's bots could not be read right now. Refresh to try again.", reason_code: 'clerk_unreachable',
+          reason: "Account 'live-account-1' is not this Clerk's account.", reason_code: 'lane_refused_read',
         },
         {
           broker: 'alpaca', clerk_id: TEST_CLERK_ID, account_id: TEST_ACCOUNT_ID, strategy_instance_id: 'spy-dry-1',
           reason: "This Dry Run's own records could not be read, so it is not listed.", reason_code: null,
+        },
+        {
+          broker: 'alpaca', clerk_id: 'clrk_retired00000000000000cc', account_id: null, strategy_instance_id: null,
+          reason: 'This account is not set up yet, so its bots cannot be listed.', reason_code: 'no_confirmed_account',
         },
       ],
     }));
 
     const gaps = screen.getByRole('alert');
     expect(within(gaps).getByText('Live')).toBeTruthy();
-    expect(gaps.textContent).toContain(formatReceiptLabel('clerk_unreachable'));
-    expect(gaps.textContent).toContain('Dry Run spy-dry-1');
+    expect(gaps.textContent).toContain(formatReceiptLabel('lane_refused_read'));
+    expect(gaps.textContent).toContain("Account 'live-account-1' is not this Clerk's account.");
+    expect(within(gaps).getByText('spy-dry-1')).toBeTruthy();
+    expect(within(gaps).getByText('Unnamed account')).toBeTruthy();
+    expect(gaps.textContent).not.toContain('clrk_');
   });
 
   it('narrows the list from the filters, starting again from the first page', async () => {
-    const { fixture } = await renderHistory(page(), { page: '3' });
-    const router = fixture.debugElement.injector.get(Router);
-    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    const { navigate } = await renderHistory(page(), { page: '3' });
 
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'cleared' } });
 
@@ -202,6 +226,89 @@ describe('AlpacaHistoryPageComponent', () => {
       queryParams: { status: 'cleared', page: null },
       queryParamsHandling: 'merge',
     }));
+  });
+
+  it("opens with the URL's filters selected and read — where Home's Finished link lands", async () => {
+    const { read } = await renderHistory(page({ rows: [bot({ status: 'cleared', status_label: 'Cleared' })] }), {
+      status: 'cleared',
+      world: 'paper',
+      page: '2',
+    });
+
+    expect(read).toHaveBeenCalledWith({ ...ANY, status: 'cleared', world: 'paper', page: 2 });
+    expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('cleared');
+    expect((screen.getByLabelText('World') as HTMLSelectElement).value).toBe('paper');
+  });
+
+  it('treats what the list does not know in the URL as unset, never as an unreadable list', async () => {
+    const { read } = await renderHistory(page(), { account: 'clrk_gone', symbol: 'not a symbol!', status: 'lost' });
+
+    expect(read).toHaveBeenCalledWith(ANY);
+    expect(screen.queryByText('History could not be read. Refresh to try again.')).toBeNull();
+  });
+
+  it("opens on one bot from its own page, and widens back to every bot", async () => {
+    const { read, navigate } = await renderHistory(page(), { account: TEST_CLERK_ID, bot: 'spy-ema-20260928-0931' });
+
+    expect(read).toHaveBeenCalledWith({ ...ANY, account: TEST_CLERK_ID, bot: 'spy-ema-20260928-0931' });
+    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe(TEST_CLERK_ID);
+    expect(screen.getByText('One bot:', { exact: false }).textContent).toContain('spy-ema-20260928-0931');
+    fireEvent.click(screen.getByRole('button', { name: 'Every bot' }));
+
+    expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { bot: null, page: null } }));
+  });
+
+  it("narrows to a symbol from the history's own symbols, ungated", async () => {
+    const { navigate } = await renderHistory(page());
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Symbol' }));
+    const options = screen.getAllByRole('option');
+    expect(options.map((option) => option.textContent ?? '').join(' ')).toContain('QQQ');
+    fireEvent.click(options.find((option) => option.textContent?.includes('QQQ')) as HTMLElement);
+
+    expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { symbol: 'QQQ', page: null } }));
+  });
+
+  it('clears the symbol filter with Any symbol', async () => {
+    const { read, navigate } = await renderHistory(page(), { symbol: 'qqq' });
+
+    expect(read).toHaveBeenCalledWith({ ...ANY, symbol: 'QQQ' });
+    fireEvent.click(screen.getByRole('button', { name: 'Any symbol' }));
+
+    expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { symbol: null, page: null } }));
+  });
+
+  it('pages Newer and Older, and moves focus to the page count after paging', async () => {
+    const { read, navigate, fixture } = await renderHistory(page({ page: 2, total: 60 }), { page: '2' });
+
+    expect(read).toHaveBeenCalledWith({ ...ANY, page: 2 });
+    const count = screen.getByText('Page 2 of 3 · 60 bots');
+    fireEvent.click(screen.getByRole('button', { name: 'Older' }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(navigate).toHaveBeenLastCalledWith([], expect.objectContaining({ queryParams: { page: '3' } }));
+    expect(document.activeElement).toBe(count);
+    fireEvent.click(screen.getByRole('button', { name: 'Newer' }));
+    expect(navigate).toHaveBeenLastCalledWith([], expect.objectContaining({ queryParams: { page: null } }));
+  });
+
+  it('keeps the last page on screen, marked busy, while the next is read', async () => {
+    const { read, fixture } = await renderHistory(page({ page: 1, total: 60 }));
+    read.mockReturnValueOnce(new Promise(() => undefined));
+
+    fixture.componentRef.setInput('page', '2');
+    fixture.detectChanges();
+    // The read never answers, so the page is not stable: let the loader start.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    expect(read).toHaveBeenLastCalledWith({ ...ANY, page: 2 });
+    expect(screen.getByRole('link', { name: 'spy-ema-20260928-0931' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'History pages' })).toBeTruthy();
+    expect(screen.getByRole('table').closest('[aria-busy]')?.getAttribute('aria-busy')).toBe('true');
+    // Refresh never disables itself under the owner's focus.
+    expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('reads again only when the owner asks: Refresh, never a poll', async () => {
@@ -219,5 +326,45 @@ describe('AlpacaHistoryPageComponent', () => {
 
     const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
     expect(results.violations.map((violation) => violation.id)).toEqual([]);
+  });
+
+  it("binds the URL's query to the page through the router (withComponentInputBinding)", async () => {
+    const read = vi.fn<(query: BotHistoryQuery) => Promise<FleetBotHistoryPage>>().mockResolvedValue(page());
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [{ path: 'brokers/:broker/clerks/:clerkId/history', component: AlpacaHistoryPageComponent }],
+          withComponentInputBinding(),
+        ),
+        ...historyProviders(read),
+      ],
+    });
+    const harness = await RouterTestingHarness.create();
+
+    await harness.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/history?status=cleared&page=2`);
+
+    expect(read).toHaveBeenCalledWith({ ...ANY, status: 'cleared', page: 2 });
+  });
+});
+
+describe('botHistoryQuery', () => {
+  const known = (clerkId: string) => clerkId === TEST_CLERK_ID;
+
+  it('reads every filter the URL carries', () => {
+    expect(botHistoryQuery(
+      { account: TEST_CLERK_ID, status: 'holding', world: 'dry_run', symbol: ' brk.b ', bot: 'spy-1', page: '4' },
+      known,
+    )).toEqual({ account: TEST_CLERK_ID, status: 'holding', world: 'dry_run', symbol: 'BRK.B', bot: 'spy-1', page: 4 });
+  });
+
+  it.each([
+    ['an account no lane serves', { account: 'clrk_gone' }],
+    ['a malformed symbol', { symbol: 'SPY 500' }],
+    ['an unknown status', { status: 'paused' }],
+    ['an unknown world', { world: 'moon' }],
+    ['a bot id longer than the coordinator accepts', { bot: 'x'.repeat(129) }],
+    ['a page that is not a positive whole number', { page: '-2' }],
+  ])('treats %s as unset', (_case, values) => {
+    expect(botHistoryQuery(values, known)).toEqual(ANY);
   });
 });

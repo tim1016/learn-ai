@@ -5,16 +5,14 @@
       <p class="history__lede">Every bot across all accounts, newest first — when it ran, how it ended, its trades and money.</p>
     </div>
     <div class="history__refresh">
-      @if (result(); as page) {
+      @if (shown(); as page) {
         <span class="history__read">Read <app-timestamp-display [value]="page.observed_at_ms" mode="local" /></span>
       }
-      <button type="button" (click)="refresh()" [disabled]="history.isLoading()">
-        {{ history.isLoading() ? 'Reading…' : 'Refresh' }}
-      </button>
+      <button type="button" (click)="refresh()">Refresh</button>
     </div>
   </header>
 
-  <app-history-filters [query]="query()" [symbols]="result()?.symbols ?? []" (filterChanged)="filter($event)" />
+  <app-history-filters [query]="query()" [symbols]="shown()?.symbols ?? []" (filterChanged)="filter($event)" />
 
   @if (gaps().length > 0) {
     <div class="history__gaps" role="alert">
@@ -23,7 +21,7 @@
         @for (item of gaps(); track item.key) {
           <li>
             <strong>{{ item.accountName }}</strong>
-            @if (item.gap.strategy_instance_id; as sid) { · Dry Run {{ sid }} }
+            @if (item.gap.strategy_instance_id; as sid) { · <code>{{ sid }}</code> }
             — {{ item.gap.reason }}
             @if (item.gap.reason_code; as code) { <span class="history__code">({{ code | receiptLabel }})</span> }
           </li>
@@ -34,18 +32,19 @@
 
   @if (failed() && !history.isLoading()) {
     <p class="history__message" role="alert">History could not be read. Refresh to try again.</p>
-  } @else if (result(); as page) {
-    @if (page.rows.length === 0) {
-      <p class="history__message" role="status">No bots match these filters.</p>
-    } @else {
-      <app-history-table [bots]="page.rows" />
+  }
+
+  <p #listStatus class="history__message history__status" tabindex="-1" role="status">{{ statusText() }}</p>
+
+  @if (!failed() && shown(); as page) {
+    @if (page.rows.length > 0) {
+      <div class="history__list" [attr.aria-busy]="history.isLoading()">
+        <app-history-table [bots]="page.rows" />
+      </div>
       <nav class="history__pages" aria-label="History pages">
         <button type="button" [disabled]="page.page <= 1" (click)="goToPage(page.page - 1)">Newer</button>
-        <span role="status">Page {{ page.page }} of {{ pageCount() }} · {{ page.total }} bots</span>
         <button type="button" [disabled]="page.page >= pageCount()" (click)="goToPage(page.page + 1)">Older</button>
       </nav>
     }
-  } @else {
-    <p class="history__message" role="status">Reading every account's bots…</p>
   }
 </main>

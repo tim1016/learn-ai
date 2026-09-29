@@ -18,7 +18,7 @@
   <tbody>
     @for (row of rows(); track row.key) {
       @let bot = row.bot;
-      <tr [class.history-table__row--dry-run]="bot.world === 'dry_run'">
+      <tr class="history-table__row" [class.history-table__row--dry-run]="bot.world === 'dry_run'">
         <td>
           <a class="history-table__sid" [routerLink]="row.page">{{ bot.strategy_instance_id }}</a>
           <span class="history-table__meta">
