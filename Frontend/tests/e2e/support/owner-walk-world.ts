@@ -313,7 +313,7 @@ const PAPER_DEPLOY_VIEW = {
   ...DEPLOY_VIEW,
   account_id: PAPER_ACCOUNT,
   account_label: `Alpaca paper · ${PAPER_ACCOUNT}`,
-  evaluated_at_ms: NOW_MS,
+  evaluated_at: NOW_MS,
 } satisfies DeployBotView;
 const LIVE_ACCOUNT_DEPLOY_VIEW = {
   ...LIVE_DEPLOY_VIEW,
