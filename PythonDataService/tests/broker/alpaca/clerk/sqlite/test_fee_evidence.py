@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.services.session_authority import et_minute_of_day_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     DAY_PNL_ACCOUNT_ID,
     DAY_PNL_SID,
@@ -34,6 +35,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 
 
 def _activity(key: str, kind: str, at: int, amount: float = 0) -> BrokerActivity:
+    """A non-trade row as the adapter maps it: only its date, at ET midnight."""
     return BrokerActivity(
         broker="alpaca",
         activity_id=key,
@@ -44,7 +46,7 @@ def _activity(key: str, kind: str, at: int, amount: float = 0) -> BrokerActivity
         quantity=None,
         price=None,
         net_amount=amount,
-        occurred_at_ms=at,
+        occurred_at_ms=et_midnight_ms(et_date_at_ms(at)),
         observed_at_ms=NOON,
     )
 
@@ -65,7 +67,7 @@ def _seed(repo) -> None:
 def test_pending_fee_becomes_observed_once_and_old_observation_does_not_reappear(day_pnl_repo) -> None:
     repo = day_pnl_repo
     _seed(repo)
-    older = _activity("older", "CSD", YESTERDAY_NOON - 86_400_000, 1000)
+    older = _outside_fill("older", YESTERDAY_NOON - 86_400_000)
     assert record_fee_evidence(repo, [older], checked_at_ms=NOON)
     pending = repo.fee_attribution(now_ms=NOON)
     assert pending.known and pending.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.01")
@@ -97,7 +99,7 @@ def test_unchanged_polls_append_no_activity_payload_and_stay_fresh(day_pnl_repo)
     """
     repo = day_pnl_repo
     _seed(repo)
-    window = [_activity(f"row-{index}", "CSD", YESTERDAY_NOON - 86_400_000 + index) for index in range(300)]
+    window = [_outside_fill(f"row-{index}", YESTERDAY_NOON - 86_400_000 + index) for index in range(300)]
     ticks = [NOON + index * 15_000 for index in range(10)]
     for at in ticks:
         record_fee_evidence(repo, [row.model_copy(update={"observed_at_ms": at}) for row in window], checked_at_ms=at)
@@ -125,7 +127,7 @@ def test_unchanged_polls_append_no_activity_payload_and_stay_fresh(day_pnl_repo)
 
 def test_delta_records_project_the_same_attribution_as_one_full_union(tmp_path) -> None:
     """Unioning per-read deltas equals unioning every full window in order."""
-    first = _activity("older", "CSD", YESTERDAY_NOON - 86_400_000, 1000)
+    first = _outside_fill("older", YESTERDAY_NOON - 86_400_000)
     fee = _activity("fee", "FEE", YESTERDAY_NOON, -0.05)
     windows = [[first], [fee.model_copy(update={"observed_at_ms": NOON + 1}), first], [fee, first]]
     projections = []
@@ -167,6 +169,10 @@ def test_fee_projection_is_rebuilt_from_original_evidence(tmp_path) -> None:
     expected = custody_fee_attribution(repo._conn, now_ms=NOON, evidence_checked_at_ms=NOON)
     assert expected.unattributed == Decimal("0.05")
     original = repo.custody_transitions()
+    # A read with no trade row records the #2550 shape byte for byte (#2557).
+    assert all(
+        '"oldest_trade_at_ms"' not in row["facts_json"] for row in original if row["transition_kind"] == FEE_EVIDENCE_KIND
+    )
     path = repo.db_path
     repo.close()
     path.rename(path.with_suffix(".backup"))
@@ -241,6 +247,9 @@ class _PagedHistory:
     def __init__(self, rows: list[BrokerActivity]) -> None:
         self.rows = rows
         self.tokens: list[str | None] = []
+        # Reads (by the token they start at) whose provider cursor is lost
+        # once: the page repeats its token or has no id (``broker.py``).
+        self.lose_cursor_once: set[str | None] = set()
 
     async def read_activity_evidence(self, *, page_token: str | None = None):
         from app.broker.contract.models import BrokerActivityEvidence
@@ -254,6 +263,9 @@ class _PagedHistory:
             if len(page) < 100:
                 return BrokerActivityEvidence(activities=read, history_complete=True)
             start += 100
+        if page_token in self.lose_cursor_once:
+            self.lose_cursor_once.discard(page_token)
+            return BrokerActivityEvidence(activities=read, history_complete=False)
         return BrokerActivityEvidence(activities=read, history_complete=False, next_page_token=read[-1].activity_id)
 
 
@@ -302,8 +314,22 @@ async def test_backfill_keeps_an_uncovered_fill_day_fail_closed(day_pnl_repo) ->
 
 
 def _burst(count: int) -> list[BrokerActivity]:
-    """``count`` rows posted today before noon, newest first."""
-    return [_activity(f"new-{index}", "CSD", NOON - (index + 1) * 1_000) for index in range(count)]
+    """``count`` outside buys filled today before noon, newest first."""
+    return [_outside_fill(f"new-{index}", NOON - (index + 1) * 1_000) for index in range(count)]
+
+
+def _before_floor(count: int) -> list[BrokerActivity]:
+    """``count`` outside buys the day before custody's floor day, newest first."""
+    return [_outside_fill(f"old-{index}", YESTERDAY_NOON - 86_400_000 - index * 1_000) for index in range(count)]
+
+
+async def _record_head_read(repo: ClerkSqliteRepository, history: _PagedHistory) -> None:
+    """One newest-first read recorded as the producer records it, with no walk after."""
+    head = await history.read_activity_evidence()
+    record_fee_evidence(
+        repo, head.activities, checked_at_ms=NOON,
+        history_complete=head.history_complete, next_page_token=head.next_page_token,
+    )
 
 
 async def test_fee_in_a_gap_between_newest_first_reads_refuses_until_the_gap_walk_reads_it(day_pnl_repo) -> None:
@@ -311,40 +337,67 @@ async def test_fee_in_a_gap_between_newest_first_reads_refuses_until_the_gap_wal
 
     Coverage came from the oldest row ever read, so the fill day inside the
     gap counted as covered and the fee posted there was silently left out.
-    The day now refuses until the walk from the newer read's cursor reaches
-    the history custody already holds; the fee is then attributed once.
+    The day now refuses until the walk from the newer read's cursor re-reads
+    history custody retained -- joining it well short of the history's end --
+    and the fee is then attributed once.
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
 
     repo = day_pnl_repo
     _seed(repo)
     bot = f"bot:{DAY_PNL_SID}"
-    old = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
+    old = _before_floor(400)
     history = _PagedHistory(old)
     await FeeEvidenceSync(repo=repo, read=history).tick()
     assert repo.fee_attribution(now_ms=NOON).known
-    # 350 rows arrive before the next poll; the fill day's fee is among them.
-    fee = _activity("gap-fee", "FEE", YESTERDAY_NOON + 60_000, -0.05)
+    # 350 rows arrive before the next poll. The fill day's fee posted after
+    # that day ended and sorts at its start, under today's fills.
+    fee = _activity("gap-fee", "FEE", YESTERDAY_NOON, -0.05)
     history.rows = [*_burst(349), fee, *old]
-    head = await history.read_activity_evidence()
-    record_fee_evidence(
-        repo, head.activities, checked_at_ms=NOON,
-        history_complete=head.history_complete, next_page_token=head.next_page_token,
-    )
+    await _record_head_read(repo, history)
     gapped = repo.fee_attribution(now_ms=NOON)
     assert not gapped.known, f"the unread fee was left out of {gapped.total_for(bot)}"
     assert "The broker activity read does not cover this fee day." in gapped.unresolved
-    # The next tick walks from the newer read's cursor into retained history.
     await FeeEvidenceSync(repo=repo, read=history).tick()
     assert history.tokens == [None, None, None, "new-299"]
+    assert not _fee_records(repo)[-1].history_complete
     filled = repo.fee_attribution(now_ms=NOON)
     assert filled.known, filled.unresolved
-    assert filled.total_for(bot) == Decimal("0.05") and filled.observed_total == Decimal("0.05")
+    assert [(share.charge_id, share.state, share.amount) for share in filled.shares if share.subject_id == bot] == [
+        ("gap-fee", "observed", Decimal("0.05"))
+    ]
     # Later polls re-read the fee's neighbours; it is still counted once.
     await FeeEvidenceSync(repo=repo, read=history).tick()
     assert history.tokens[-1:] == [None]
     assert repo.fee_attribution(now_ms=NOON).total_for(bot) == Decimal("0.05")
     assert [row.activity_id for record in _fee_records(repo) for row in record.activities].count("gap-fee") == 1
+
+
+async def test_a_date_only_row_in_a_newer_read_cannot_prove_it_met_retained_history(day_pnl_repo) -> None:
+    """A midnight stamp cannot join two reads across a gap (#2557 review).
+
+    A date-only row carries only ET midnight of its date and may post long
+    after it. Among the newest rows it once pulled the read's oldest instant
+    back past the history custody retained, so the gap below those rows was
+    never walked. Only trade rows place a read in the newest-first order.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _seed(repo)
+    afternoon = [_outside_fill(f"old-{index}", YESTERDAY_NOON + 3_600_000 - index * 1_000) for index in range(50)]
+    history = _PagedHistory(afternoon)
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert repo.fee_attribution(now_ms=NOON).known
+    burst = _burst(400)
+    history.rows = [*burst[:150], _activity("fee", "FEE", YESTERDAY_NOON, -0.05), *burst[150:], *afternoon]
+    await _record_head_read(repo, history)
+    gapped = repo.fee_attribution(now_ms=NOON)
+    assert not gapped.known, "a date-only row joined the newest read to retained history"
+    assert "The broker activity read does not cover this fee day." in gapped.unresolved
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert history.tokens == [None, None, None, "new-298"]
+    assert repo.fee_attribution(now_ms=NOON).known
 
 
 async def test_outside_short_sale_in_a_gap_is_read_instead_of_counted_covered(day_pnl_repo) -> None:
@@ -377,7 +430,7 @@ async def test_closing_a_gap_hands_back_to_the_history_walk_where_it_stopped(day
 
     repo = day_pnl_repo
     _seed(repo)
-    today = [_activity(f"row-{index}", "CSD", NOON - 1_000_000 - (index + 1) * 1_000) for index in range(900)]
+    today = [_outside_fill(f"row-{index}", NOON - 1_000_000 - (index + 1) * 1_000) for index in range(900)]
     older = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(100)]
     history = _PagedHistory([*today, *older])
     await FeeEvidenceSync(repo=repo, read=history).tick()
@@ -391,18 +444,128 @@ async def test_closing_a_gap_hands_back_to_the_history_walk_where_it_stopped(day
     assert known == [False, False, True]
 
 
+async def test_a_walk_read_that_loses_its_cursor_resumes_from_the_next_head_read(day_pnl_repo) -> None:
+    """A walk read can end unfinished with no cursor (#2557 review).
+
+    The provider repeats its token or gives a row no id. Joining the next
+    head read must keep a cursor to walk from -- the head read's own, which
+    re-reads the overlap and then extends below it -- instead of taking the
+    deeper run's missing one and refusing the fill day forever.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _seed(repo)
+    today = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 1_000) for index in range(900)]
+    older = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(100)]
+    history = _PagedHistory([*today, *older])
+    history.lose_cursor_once.add("row-299")
+    known = []
+    for _ in range(4):
+        await FeeEvidenceSync(repo=repo, read=history).tick()
+        known.append(repo.fee_attribution(now_ms=NOON).known)
+    assert history.tokens == [None, "row-299", None, "row-299", None, "row-599", None, "row-899"]
+    assert known == [False, False, False, True]
+
+
+async def test_a_gap_opened_by_a_cursorless_read_is_walked_from_the_next_head_read(day_pnl_repo) -> None:
+    """A head read with no cursor cannot walk its own gap; the next one does (#2557 review)."""
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _seed(repo)
+    old = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
+    history = _PagedHistory(old)
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    history.rows = [*_burst(400), *old]
+    history.lose_cursor_once.add(None)
+    known = []
+    for _ in range(2):
+        await FeeEvidenceSync(repo=repo, read=history).tick()
+        known.append(repo.fee_attribution(now_ms=NOON).known)
+    assert history.tokens == [None, None, None, "new-299"]
+    assert known == [False, True]
+
+
+def test_days_the_history_walk_has_not_reached_refuse_with_no_known_row(tmp_path) -> None:
+    """Every custody day the walk has not reached is unproven (#2557 review).
+
+    Custody began 09-01 with no fill of its own and the newest read reaches
+    back only to 09-05, so an outside short sale on 09-03 is still unread.
+    No known row opened those days, so they once counted as covered.
+    """
+    genesis = et_minute_of_day_ms(date(2026, 9, 1), 12 * 60)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-unreached", artifacts_root=tmp_path, clock=_clock_at(genesis))
+    try:
+        # Fills from 09-06 on; the read's oldest rows are deposits dated 09-05.
+        fills = [_outside_fill(f"recent-{index}", NOON - (index + 1) * 720_000) for index in range(250)]
+        deposits = [_activity(f"deposit-{index}", "CSD", et_minute_of_day_ms(date(2026, 9, 5), 12 * 60)) for index in range(50)]
+        record_fee_evidence(repo, [*fills, *deposits], checked_at_ms=NOON, next_page_token="deposit-49")
+        unreached = custody_fee_attribution(repo._conn, now_ms=NOON, evidence_checked_at_ms=NOON)
+        assert not unreached.known, "days the walk has not reached counted as covered"
+        assert "The broker activity read does not cover this fee day." in unreached.unresolved
+        # The walk reaches the short sale custody would otherwise never see.
+        short = _outside_fill(
+            "unread-short", et_minute_of_day_ms(date(2026, 9, 3), 12 * 60), side="sell_short", order="console-short"
+        )
+        record_fee_evidence(repo, [short], checked_at_ms=NOON, history_complete=True, page_token="deposit-49")
+        walked = custody_fee_attribution(repo._conn, now_ms=NOON, evidence_checked_at_ms=NOON)
+        assert "The broker activity read does not cover this fee day." not in walked.unresolved
+        assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in walked.unresolved
+    finally:
+        repo.close()
+
+
+async def test_records_written_before_the_trade_reach_fact_refuse_until_a_read_rejoins_them(day_pnl_repo) -> None:
+    """Deploy over records the #2550 writer left (#2557 review).
+
+    Those records carry no oldest trade row, so a head read that added rows
+    over retained ones proves only its new rows' reach and never meets the
+    history below it: its days refuse. The first head read after deploy
+    carries the fact, rejoins that history and releases them.
+    """
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+    from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+    from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+
+    repo = day_pnl_repo
+    _seed(repo)
+    old = _before_floor(400)
+    history = _PagedHistory(old)
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert '"oldest_trade_at_ms"' in repo.custody_transitions()[-1]["facts_json"]
+    history.rows = [*_burst(5), *old]
+    head = await history.read_activity_evidence()
+    master_era = {
+        "activities": [row.model_dump(mode="json") for row in _burst(5)],
+        "checked_at_ms": NOON,
+        "history_complete": False,
+        "next_page_token": head.next_page_token,
+        "oldest_occurred_at_ms": min(row.occurred_at_ms for row in head.activities),
+        "page_token": None,
+    }
+    repo.append_transition(TransitionInput(
+        transition_kind=FEE_EVIDENCE_KIND, custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded", clerk_observed_at_ms=NOON, summary_code=FEE_EVIDENCE_KIND,
+        facts_json=canonicalize(master_era),
+    ))
+    assert not repo.fee_attribution(now_ms=NOON).known
+    await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert history.tokens[-1:] == [None]
+    assert repo.fee_attribution(now_ms=NOON).known
+
+
 async def test_restarted_producer_resumes_an_unfinished_gap_walk_and_older_days_stay_covered(
     tmp_path, day_pnl_clock
 ) -> None:
     """A gap never shrinks what was proven, and its walk survives a restart (#2557).
 
-    The gap lies inside today, after the newest row custody retained: the
+    The gap lies inside today, after the newest trade custody retained: the
     fill day before it stays covered throughout, today refuses (with no fill
-    of its own) until the walk reaches retained history, and a restarted
-    Clerk continues that walk from the cursor its hash chain retained.
+    of custody's own) until the walk reaches retained history, and a
+    restarted Clerk continues that walk from the cursor its hash chain kept.
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
-    from app.utils.session_anchors import et_midnight_ms
 
     def fill_day(repo: ClerkSqliteRepository):
         return custody_fee_attribution(
@@ -413,7 +576,7 @@ async def test_restarted_producer_resumes_an_unfinished_gap_walk_and_older_days_
     repo = initialize_day_pnl_repo(tmp_path, day_pnl_clock)
     try:
         _seed(repo)
-        this_morning = [_activity(f"morning-{index}", "CSD", TODAY_OPEN - index * 1_000) for index in range(20)]
+        this_morning = [_outside_fill(f"morning-{index}", TODAY_OPEN - index * 1_000) for index in range(20)]
         older = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
         history = _PagedHistory([*this_morning, *older])
         await FeeEvidenceSync(repo=repo, read=history).tick()
