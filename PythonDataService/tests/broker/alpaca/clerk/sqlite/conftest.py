@@ -407,13 +407,10 @@ def day_pnl_clock() -> _TestClock:
     return _clock_at(NOON)
 
 
-@pytest.fixture
-def day_pnl_repo(
-    tmp_path: Path, day_pnl_clock: _TestClock
-) -> Iterator[ClerkSqliteRepository]:
+def initialize_day_pnl_repo(artifacts_root: Path, clock: _TestClock) -> ClerkSqliteRepository:
     """One authority with a registered, running instance — every stamp from the clock."""
     clerk = ClerkSqliteRepository.initialize(
-        account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=tmp_path, clock=day_pnl_clock
+        account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=artifacts_root, clock=clock
     )
     clerk.register_strategy_instance(
         strategy_instance_id=DAY_PNL_SID, symbol=DAY_PNL_SYMBOL, config_hash="day-pnl-config"
@@ -423,8 +420,16 @@ def day_pnl_repo(
         account_id=DAY_PNL_ACCOUNT_ID,
         strategy_instance_id=DAY_PNL_SID,
         lifecycle_run_id=DAY_PNL_RUN_ID,
-        clock=day_pnl_clock,
+        clock=clock,
     )
+    return clerk
+
+
+@pytest.fixture
+def day_pnl_repo(
+    tmp_path: Path, day_pnl_clock: _TestClock
+) -> Iterator[ClerkSqliteRepository]:
+    clerk = initialize_day_pnl_repo(tmp_path, day_pnl_clock)
     yield clerk
     clerk.close()
 
