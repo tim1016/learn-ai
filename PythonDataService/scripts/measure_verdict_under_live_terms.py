@@ -1,0 +1,665 @@
+"""Does the EMA strategy's verdict survive the terms a live bot trades on? (#2466)
+
+Reruns the sealed ``ema_crossover_signal`` point (SPY, 15-minute bars, the
+registry's ``validated_settings``) through the repository's own research
+entry points, once under the research defaults and once per live execution
+term, alone and combined, over the SAME windows:
+
+* the Backtest Evidence Grade (``run_verdict``) of one engine run per window —
+  ``execute_engine_backtest``, the entry point Strategy Lab uses;
+* the walk-forward study verdict — the study's own fold planner and run-up
+  (``walk_forward_study.service.prepare_launch``), Grid Search's own per-fold
+  preflight and cell executor (``grid_search.service.prepare_launch``,
+  ``engine_adapter.default_execute_cell``), the ranking contract's ``leader``
+  and the frozen ``compute_verdict``. Only the database writes are skipped.
+
+Two seams are replaced, and each replacement is the finding it measures:
+
+* **Data roots.** Every managed lake read is admitted against the Postgres
+  catalog (``app.data_lake.admission``), and this script may not touch the
+  shared database. It therefore stages the lake's SPY minute archives into a
+  plain LEAN tree after checking each against its corporate-action receipt
+  (``verify_adjustment_receipt``) and points ``_resolve_lean_data_roots`` at
+  it. Every engine read is then bound to the study's snapshot manifest, as a
+  walk-forward cell's is.
+* **Engine construction.** ``EngineBacktestRequest`` and ``GridSearchSpec``
+  expose fill mode, a flat commission per order, slippage per share and
+  initial cash. A fixed share quantity, Alpaca's regulatory fees and a fill
+  at the open of the decision minute have no parameter, so
+  ``_build_backtest_engine`` is wrapped to install them through the engine's
+  own ``sizing_model`` / ``fill_model`` seams.
+
+Usage (host venv; no services, no vendor fetch)::
+
+    POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python scripts/measure_verdict_under_live_terms.py \\
+        --lake-volume /abs/path/data-lake-volume --workdir /abs/scratch --out /abs/scratch/results.json
+
+Reference: issue https://github.com/tim1016/learn-ai/issues/2466; findings in
+``docs/references/ema-verdict-under-live-terms.md``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import shutil
+import sys
+import time
+from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Literal
+
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SERVICE_ROOT))
+
+from app.broker.alpaca.regulatory_fees import (  # noqa: E402
+    FillFees,
+    fees_for_fill,
+    rates_for,
+    settle_session,
+)
+from app.broker.contract.models import OrderSide  # noqa: E402
+from app.data_lake.adjustment_versions import verify_adjustment_receipt  # noqa: E402
+from app.data_lake.path_policy import lake_subpath  # noqa: E402
+from app.engine.data.trade_bar import TradeBar  # noqa: E402
+from app.engine.execution.fill_model import FillModel  # noqa: E402
+from app.engine.execution.order import Direction, FillMode, Order, OrderEvent  # noqa: E402
+from app.engine.strategy.registry import _STRATEGY_REGISTRY  # noqa: E402
+from app.research.grid_search import engine_adapter  # noqa: E402
+from app.research.grid_search import service as sweeps  # noqa: E402
+from app.research.grid_search.models import CellResult, GridSearchSpec, NewSearch, SearchRow  # noqa: E402
+from app.research.sweep.grid import StrategyGridConfig, expand_grid  # noqa: E402
+from app.research.sweep.identity import CodeIdentity  # noqa: E402
+from app.research.sweep.ranking import leader  # noqa: E402
+from app.research.sweep.snapshot import DataSnapshot  # noqa: E402
+from app.research.walk_forward_study import service as studies  # noqa: E402
+from app.research.walk_forward_study.models import NewStudy, StudySpec  # noqa: E402
+from app.research.walk_forward_study.verdict import FoldEvidence, compute_verdict  # noqa: E402
+from app.schemas.engine_backtest import EngineBacktestRequest  # noqa: E402
+from app.services import engine_backtest_service  # noqa: E402
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+STRATEGY = "ema_crossover_signal"
+SYMBOL = "SPY"
+# The sealed live parameters (docs/audits/live-ema-spy-missed-entry-2026-09-17.md)
+# are the registry's validated point; the script refuses to run if they drift.
+EXPECTED_VALIDATED_SETTINGS = {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
+
+# Grade windows: the two recorded Strategy Lab grades of this configuration
+# (runs 18 and 33, artifacts/strategy-lab-validation-2026-09-27) and the whole
+# walk-forward range.
+GRADE_WINDOWS: dict[str, tuple[date, date]] = {
+    "W3mo": (date(2026, 2, 2), date(2026, 4, 30)),
+    "W6mo": (date(2025, 11, 3), date(2026, 4, 30)),
+    "WF-range": (date(2024, 6, 3), date(2026, 8, 31)),
+}
+# Walk-forward study: the form's default 12-month training / 3-month test over
+# the lake's SPY span (first archive 2024-05-20, which also holds the run-up).
+STUDY_START = date(2024, 6, 1)
+STUDY_END_EXCLUSIVE = date(2026, 9, 1)
+TRAINING_MONTHS = 12
+TEST_MONTHS = 3
+MIN_TRADES = 5
+
+RESEARCH_CASH = 100_000.0
+RESEARCH_COMMISSION_PER_ORDER = 1.0
+LIVE_QUANTITY = 1
+# The budget the first budgeted Paper deploy set aside for one SPY share
+# (2026-09-28, #2550); the bots on 2026-09-17..24 traded one share.
+LIVE_BUDGET = 1_000.0
+# CAT is pinned only from 2026-09-01. Earlier fills are charged the first
+# pinned rate (an upper bound: at most one cent per trading day with fills).
+CAT_BACKDATE_FROM = date(2026, 9, 1)
+
+FillTiming = Literal["signal_bar_close", "next_bar_open", "decision_minute_open"]
+FeeSchedule = Literal["flat_per_order", "alpaca_regulatory", "none"]
+
+
+@dataclass(frozen=True)
+class Terms:
+    """One execution basis: the research defaults, or some live terms swapped in."""
+
+    name: str
+    label: str
+    fill: FillTiming = "signal_bar_close"
+    fees: FeeSchedule = "flat_per_order"
+    slippage_per_share: float = 0.0
+    fixed_quantity: int | None = None
+    initial_cash: float = RESEARCH_CASH
+
+    @property
+    def request_fill_mode(self) -> str:
+        return "next_bar_open" if self.fill == "next_bar_open" else "signal_bar_close"
+
+    @property
+    def commission_per_order(self) -> float:
+        return RESEARCH_COMMISSION_PER_ORDER if self.fees == "flat_per_order" else 0.0
+
+
+LIVE_FILL: FillTiming = "decision_minute_open"
+VARIANTS: tuple[Terms, ...] = (
+    Terms("research", "Research defaults (100% equity, signal-bar close, $1/order, no spread, $100k)"),
+    Terms(
+        "qty_1sh_1k",
+        "T1: fixed 1 share on the $1,000 live budget",
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms("qty_1sh_100k", "T1 (capital sensitivity): fixed 1 share on $100k", fixed_quantity=LIVE_QUANTITY),
+    Terms(
+        "fill_next_bar_open",
+        "T2a: engine next_bar_open (open of the minute after the decision minute)",
+        fill="next_bar_open",
+    ),
+    Terms("fill_decision_minute_open", "T2b: open of the decision minute (live proxy)", fill="decision_minute_open"),
+    Terms("fees_alpaca", "T3: Alpaca regulatory fees instead of $1/order", fees="alpaca_regulatory"),
+    Terms("spread_1c", "T4: $0.01/share per fill", slippage_per_share=0.01),
+    Terms("spread_2c", "T4: $0.02/share per fill", slippage_per_share=0.02),
+    Terms(
+        "live_1c",
+        "Combined live terms: 1 share on $1,000, decision-minute open, Alpaca fees, $0.01/share",
+        fill=LIVE_FILL,
+        fees="alpaca_regulatory",
+        slippage_per_share=0.01,
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
+        "live_2c",
+        "Combined live terms with $0.02/share",
+        fill=LIVE_FILL,
+        fees="alpaca_regulatory",
+        slippage_per_share=0.02,
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
+        "live_1c_next_bar_open",
+        "Combined live terms, engine next_bar_open instead of the decision-minute open",
+        fill="next_bar_open",
+        fees="alpaca_regulatory",
+        slippage_per_share=0.01,
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
+        "qty_1sh_1k_alpaca",
+        "T1 + T3: fixed 1 share on $1,000 with Alpaca fees (no flat commission)",
+        fees="alpaca_regulatory",
+        fixed_quantity=LIVE_QUANTITY,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
+        "params_only_proxy",
+        "What the request parameters alone can express: $1,000 all-in (floors to 1 share), no commission, "
+        "$0.01/share, engine next_bar_open",
+        fill="next_bar_open",
+        fees="none",
+        slippage_per_share=0.01,
+        initial_cash=LIVE_BUDGET,
+    ),
+    Terms(
+        "costs_all_in",
+        "Live costs and timing, research sizing (100% of $100k)",
+        fill=LIVE_FILL,
+        fees="alpaca_regulatory",
+        slippage_per_share=0.01,
+    ),
+)
+
+
+# ── Live terms the engine has no parameter for ───────────────────────────
+
+
+@dataclass(frozen=True)
+class FixedQuantitySizing:
+    """``SetHoldings`` to a fixed share count — the live binding's ``quantity``."""
+
+    quantity: int
+    name: str = "fixed_quantity"
+
+    def target_quantity(
+        self, *, portfolio_value: Decimal, price: Decimal, target_fraction: Decimal, order_fee: Decimal
+    ) -> int:
+        return self.quantity if target_fraction > 0 else 0
+
+
+class LiveTermsFillModel(FillModel):
+    """The research fill model plus the two fill terms it cannot express.
+
+    ``decision_minute_open``: the consolidator emits the 15-minute bar on the
+    first minute bar at or after its end, which is the minute a live bot
+    decides and sends its market order in; fill at that minute's open.
+    ``alpaca_fees``: price each fill with the canonical Alpaca regulatory
+    model, settled per ET trade date and component (rounded up to the cent),
+    charged incrementally so each date's charges sum to its settlement.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: FillMode,
+        slippage_per_share: Decimal,
+        commission_per_order: Decimal,
+        decision_minute_open: bool,
+        alpaca_fees: bool,
+    ) -> None:
+        super().__init__(mode=mode, commission_per_order=commission_per_order, slippage_per_share=slippage_per_share)
+        self.decision_minute_open = decision_minute_open
+        self.alpaca_fees = alpaca_fees
+        self._accrued: dict[date, list[FillFees]] = {}
+
+    def fill_market_order(
+        self,
+        order: Order,
+        signal_bar: TradeBar,
+        next_bar: TradeBar | None = None,
+        current_bar: TradeBar | None = None,
+    ) -> OrderEvent | None:
+        if self.decision_minute_open and self.mode is FillMode.SIGNAL_BAR_CLOSE and current_bar is not None:
+            event = self._fill_at_decision_minute_open(order, current_bar)
+        else:
+            event = super().fill_market_order(order, signal_bar, next_bar, current_bar)
+        if event is not None and self.alpaca_fees:
+            event.fee = self._alpaca_fee(event)
+        return event
+
+    def _fill_at_decision_minute_open(self, order: Order, current_bar: TradeBar) -> OrderEvent:
+        price = current_bar.open
+        if order.direction == Direction.LONG:
+            price += self.slippage_per_share
+        elif order.direction == Direction.SHORT:
+            price -= self.slippage_per_share
+        return OrderEvent(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            filled_at_ms=current_bar.start_ms,
+            fill_price=price,
+            fill_quantity=order.quantity,
+            direction=order.direction,
+            fee=self.compute_fee(quantity=int(order.quantity), fill_price=price),
+            tag=order.tag,
+        )
+
+    def _alpaca_fee(self, event: OrderEvent) -> Decimal:
+        trade_date = et_date_at_ms(event.filled_at_ms)
+        side = OrderSide.BUY if event.direction == Direction.LONG else OrderSide.SELL
+        accrual = fees_for_fill(
+            trade_date=trade_date, side=side, quantity=Decimal(abs(event.fill_quantity)), fill_price=event.fill_price
+        )
+        if accrual.cat is None:
+            cat_rate = rates_for(CAT_BACKDATE_FROM).cat_per_share
+            assert cat_rate is not None
+            accrual = FillFees(sec=accrual.sec, taf=accrual.taf, cat=Decimal(abs(event.fill_quantity)) * cat_rate)
+        session = self._accrued.setdefault(trade_date, [])
+        before = settle_session(session).total if session else Decimal(0)
+        session.append(accrual)
+        return settle_session(session).total - before
+
+
+@contextmanager
+def live_terms(terms: Terms, roots: dict[bool, list[Path]]) -> Iterator[None]:
+    """Point the engine at the staged roots and install the terms it has no parameter for."""
+    original_roots = engine_backtest_service._resolve_lean_data_roots
+    original_build = engine_backtest_service._build_backtest_engine
+
+    def _roots(*, adjusted: bool) -> list[Path]:
+        return roots[adjusted]
+
+    def _build(**kwargs: Any) -> Any:
+        engine = original_build(**kwargs)
+        if terms.fill == "decision_minute_open" or terms.fees == "alpaca_regulatory":
+            config = kwargs["execution_config"]
+            engine.fill_model = LiveTermsFillModel(
+                mode=config.fill_mode,
+                slippage_per_share=config.slippage_per_share,
+                commission_per_order=config.commission_per_order,
+                decision_minute_open=terms.fill == "decision_minute_open",
+                alpaca_fees=terms.fees == "alpaca_regulatory",
+            )
+        if terms.fixed_quantity is not None:
+            engine.sizing_model = FixedQuantitySizing(terms.fixed_quantity)
+        return engine
+
+    engine_backtest_service._resolve_lean_data_roots = _roots  # type: ignore[assignment]
+    engine_backtest_service._build_backtest_engine = _build  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        engine_backtest_service._resolve_lean_data_roots = original_roots  # type: ignore[assignment]
+        engine_backtest_service._build_backtest_engine = original_build  # type: ignore[assignment]
+
+
+# ── Staging ──────────────────────────────────────────────────────────────
+
+
+def stage_minute_archives(lake_volume: Path, workdir: Path) -> dict[str, Any]:
+    """Copy SPY minute trade archives into plain LEAN trees, adjusted ones receipt-checked."""
+    staged: dict[str, Any] = {}
+    for mode, adjusted in (("polygon_split_adjusted", True), ("raw", False)):
+        source = lake_volume / lake_subpath(mode) / "equity" / "usa" / "minute" / SYMBOL.lower()
+        target_root = workdir / ("spy-adjusted" if adjusted else "spy-raw")
+        target = target_root / "equity" / "usa" / "minute" / SYMBOL.lower()
+        if target_root.exists():
+            shutil.rmtree(target_root)
+        target.mkdir(parents=True)
+        digest = hashlib.sha256()
+        archives = sorted(source.glob("*_trade.zip"))
+        for archive in archives:
+            payload = archive.read_bytes()
+            sha = hashlib.sha256(payload).hexdigest()
+            if adjusted:
+                verify_adjustment_receipt(archive, sha, SYMBOL)
+            (target / archive.name).write_bytes(payload)
+            digest.update(f"{archive.name}:{sha}\n".encode())
+        staged[mode] = {
+            "root": str(target_root),
+            "archives": len(archives),
+            "first": archives[0].name[:8],
+            "last": archives[-1].name[:8],
+            "manifest_sha256": digest.hexdigest(),
+        }
+        logger.info("staged %s %s archives %s..%s", len(archives), mode, archives[0].name[:8], archives[-1].name[:8])
+    return staged
+
+
+# ── Runs ─────────────────────────────────────────────────────────────────
+
+
+def _no_op(_: str) -> None:
+    return None
+
+
+def _grade_row(response: Any) -> dict[str, Any]:
+    stats = response.statistics or {}
+    verdict = response.run_verdict
+    return {
+        "success": response.success,
+        "error": response.error,
+        "trades": response.total_trades,
+        "win_rate": response.win_rate,
+        "net_profit": response.net_profit,
+        "total_fees": response.total_fees,
+        "initial_cash": response.initial_cash,
+        "sharpe": stats.get("sharpe_ratio"),
+        "cagr": stats.get("cagr"),
+        "max_drawdown_pct": stats.get("max_drawdown_pct"),
+        "profit_factor": stats.get("profit_factor"),
+        "expectancy_pct": stats.get("expectancy_pct"),
+        "psr": stats.get("probabilistic_sharpe_ratio"),
+        "grade": verdict.grade if verdict else None,
+        "composite": verdict.composite if verdict else None,
+        "evidence_action": verdict.evidence_action if verdict else None,
+        "verdict_status": verdict.status if verdict else None,
+        "dimension_scores": {d.key: d.score for d in verdict.dimensions} if verdict else {},
+        "max_quantity": max((t.quantity for t in response.trades), default=0),
+    }
+
+
+def grade_runs(terms: Terms, manifest: dict[str, str]) -> dict[str, Any]:
+    rows: dict[str, Any] = {}
+    for window, (start, end) in GRADE_WINDOWS.items():
+        request = EngineBacktestRequest(
+            strategy_name=STRATEGY,
+            params={"symbol": SYMBOL},
+            from_date=start.isoformat(),
+            to_date=end.isoformat(),
+            fill_mode=terms.request_fill_mode,
+            commission_per_order=terms.commission_per_order,
+            slippage_per_share=terms.slippage_per_share,
+            initial_cash=terms.initial_cash,
+            save_study=False,
+            auto_fetch=False,
+            summary_only=False,
+        )
+        started = time.monotonic()
+        response = engine_backtest_service.execute_engine_backtest(
+            request=request, on_phase=_no_op, on_log=_no_op, data_manifest=manifest
+        )
+        rows[window] = {**_grade_row(response), "seconds": round(time.monotonic() - started, 1)}
+        if terms.name == "research" or window == "W3mo":
+            rows[window]["trade_log"] = [
+                {
+                    "entry_ms": t.entry_time,
+                    "exit_ms": t.exit_time,
+                    "qty": t.quantity,
+                    "entry": t.entry_price,
+                    "exit": t.exit_price,
+                }
+                for t in response.trades
+            ]
+    return rows
+
+
+def _row_from(record: NewSearch) -> SearchRow:
+    """The launched sweep as its stored row would read back, without the database."""
+    return SearchRow(
+        id=record.id,
+        owner=record.owner,
+        strategy_key=record.strategy_key,
+        symbol=record.symbol,
+        status="running",
+        attempt=1,
+        job_id=None,
+        created_at_ms=0,
+        updated_at_ms=0,
+        finished_at_ms=None,
+        request=record.request,
+        receipt=record.receipt,
+        expected_cells=record.expected_cells,
+        completed_cells=0,
+        failed_cells=0,
+        leader_params_hash=None,
+        leader_params=None,
+        incomplete=False,
+        failure_reason=None,
+    )
+
+
+def launch_study(terms: Terms, roots: list[Path]) -> tuple[StudySpec, NewStudy]:
+    """The study as ``prepare_launch`` freezes it: folds, run-up, one snapshot over the whole range."""
+    grid = GridSearchSpec(
+        strategy_key=STRATEGY,
+        symbol=SYMBOL,
+        param_ranges={},
+        start_ms=et_midnight_ms(STUDY_START),
+        end_ms=et_midnight_ms(STUDY_END_EXCLUSIVE),
+        fill_mode=terms.request_fill_mode,
+        commission_per_order=terms.commission_per_order,
+        slippage_per_share=terms.slippage_per_share,
+        initial_cash=terms.initial_cash,
+        measure="sharpe_ratio",
+        min_trades=MIN_TRADES,
+    )
+    spec = StudySpec(grid=grid, training_months=TRAINING_MONTHS, test_months=TEST_MONTHS)
+    return spec, studies.prepare_launch(spec, job_id=None, roots=roots)
+
+
+def walk_forward(spec: StudySpec, study: NewStudy, roots: list[Path]) -> dict[str, Any]:
+    """Train, select by the ranking contract, test, then the frozen verdict — the study's loop minus its writes."""
+    grid = spec.grid
+    snapshot = DataSnapshot.from_dict(study.receipt["data_snapshot"])
+    identity = CodeIdentity(**study.receipt["code_identity"])
+
+    def _cell(start_ms: int, end_ms: int) -> tuple[CellResult, dict[str, Any]]:
+        record = sweeps.prepare_launch(
+            spec.sweep_spec(start_ms, end_ms), job_id=None, roots=roots, snapshot=snapshot, identity=identity
+        )
+        row = _row_from(record)
+        sweep_spec = GridSearchSpec.from_request_dict(record.request)
+        candidates = list(
+            expand_grid([StrategyGridConfig(sweep_spec.strategy_key, dict(sweep_spec.param_ranges))], [SYMBOL])
+        )
+        assert len(candidates) == 1, "the study sweeps the sealed point only"
+        return engine_adapter.default_execute_cell(row, sweep_spec)(candidates[0]), record.receipt["interval_table"]
+
+    folds: list[dict[str, Any]] = []
+    evidence: list[FoldEvidence] = []
+    for fold in study.folds:
+        train, train_window = _cell(fold.train_start_ms, fold.train_end_ms)
+        winner = leader([train], grid.measure, min_trades=grid.min_trades)
+        test, test_window = _cell(fold.test_start_ms, fold.test_end_ms)
+        status: Literal["completed", "failed"] = (
+            "completed" if winner is not None and test.status == "completed" else "failed"
+        )
+        item = FoldEvidence(
+            fold_index=fold.fold_index,
+            status=status,
+            train_sharpe=train.sharpe_ratio,
+            test_sharpe=test.sharpe_ratio,
+            test_trades=test.total_trades,
+        )
+        evidence.append(item)
+        folds.append(
+            {
+                "fold_index": fold.fold_index,
+                "train": [
+                    et_date_at_ms(train_window["evaluation_start_ms"]).isoformat(),
+                    et_date_at_ms(train_window["evaluation_end_ms"]).isoformat(),
+                ],
+                "test": [
+                    et_date_at_ms(test_window["evaluation_start_ms"]).isoformat(),
+                    et_date_at_ms(test_window["evaluation_end_ms"]).isoformat(),
+                ],
+                "run_up_sessions": train_window["run_up_sessions"],
+                "status": status,
+                "train_sharpe": train.sharpe_ratio,
+                "train_trades": train.total_trades,
+                "train_net_profit": train.net_profit,
+                "test_sharpe": test.sharpe_ratio,
+                "test_trades": test.total_trades,
+                "test_net_profit": test.net_profit,
+                "retention": item.retention,
+                "errors": [cell.error for cell in (train, test) if cell.error],
+            }
+        )
+    verdict = compute_verdict(evidence, min_trades=grid.min_trades)
+    return {"data_snapshot_digest": study.receipt["data_snapshot_digest"], "folds": folds, "verdict": verdict.as_dict()}
+
+
+def reproduce_recorded_run_33(manifest_roots: dict[bool, list[Path]]) -> dict[str, Any]:
+    """Recorded Strategy Lab run 33: W6mo, raw bars, the pinned us-equity-raw-ibkr-v1 profile (grade A)."""
+    start, end = GRADE_WINDOWS["W6mo"]
+    request = EngineBacktestRequest.model_validate(
+        {
+            "strategy_name": STRATEGY,
+            "params": {"symbol": SYMBOL},
+            "from_date": start.isoformat(),
+            "to_date": end.isoformat(),
+            "initial_cash": RESEARCH_CASH,
+            "compatibility_profile": "us-equity-raw-ibkr-v1",
+            "data_policy": {
+                "source": "polygon",
+                "symbol": SYMBOL,
+                "adjusted": False,
+                "session": "regular",
+                "input_bars": {"timespan": "minute", "multiplier": 1},
+                "strategy_bars": {"timespan": "minute", "multiplier": 1},
+            },
+            "save_study": False,
+            "auto_fetch": False,
+        }
+    )
+    with live_terms(Terms("recorded_run_33", "recorded run 33"), manifest_roots):
+        response = engine_backtest_service.execute_engine_backtest(request=request, on_phase=_no_op, on_log=_no_op)
+    return _grade_row(response)
+
+
+def run_variant(terms: Terms, staged: dict[str, Any]) -> dict[str, Any]:
+    logging.basicConfig(level=logging.WARNING)
+    roots = {True: [Path(staged["polygon_split_adjusted"]["root"])], False: [Path(staged["raw"]["root"])]}
+    started = time.monotonic()
+    with live_terms(terms, roots):
+        spec, study = launch_study(terms, roots[True])
+        wf = walk_forward(spec, study, roots[True])
+        grades = grade_runs(terms, study.receipt["data_snapshot"]["artifacts"])
+    return {
+        "terms": asdict(terms),
+        "grades": grades,
+        "walk_forward": wf,
+        "seconds": round(time.monotonic() - started, 1),
+    }
+
+
+def _check_sealed_point() -> dict[str, Any]:
+    registration = _STRATEGY_REGISTRY[STRATEGY]
+    contract = registration.signal_program_contract
+    assert contract is not None, f"{STRATEGY} has no signal-program contract"
+    validated = dict(contract.validated_settings)
+    defaults = registration.param_schema.model_validate({"symbol": SYMBOL}).model_dump()
+    if validated != EXPECTED_VALIDATED_SETTINGS or any(defaults[k] != v for k, v in validated.items()):
+        raise SystemExit(f"sealed point drifted: validated={validated} defaults={defaults}")
+    return {"validated_settings": validated, "defaults": defaults}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--lake-volume", type=Path, required=True, help="host path of the data-lake volume (read only)")
+    parser.add_argument("--workdir", type=Path, required=True, help="scratch directory for the staged LEAN trees")
+    parser.add_argument("--out", type=Path, required=True, help="JSON results path")
+    parser.add_argument("--variants", nargs="*", default=[v.name for v in VARIANTS])
+    parser.add_argument("--jobs", type=int, default=4)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    started = time.monotonic()
+    sealed = _check_sealed_point()
+    staged = stage_minute_archives(args.lake_volume, args.workdir)
+    roots = {True: [Path(staged["polygon_split_adjusted"]["root"])], False: [Path(staged["raw"]["root"])]}
+    recorded_33 = reproduce_recorded_run_33(roots)
+    logger.info(
+        "recorded run 33 reproduction: %s",
+        json.dumps({k: recorded_33[k] for k in ("trades", "net_profit", "total_fees", "sharpe", "grade")}),
+    )
+
+    selected = [v for v in VARIANTS if v.name in set(args.variants)]
+    results: dict[str, Any] = {}
+
+    def _record(name: str, row: dict[str, Any]) -> None:
+        results[name] = row
+        logger.info(
+            "%-24s WF=%-15s %s | %s (%ss)",
+            name,
+            row["walk_forward"]["verdict"]["label"],
+            row["walk_forward"]["verdict"]["based_on"],
+            " ".join(f"{w}:{g['grade']}/{g['composite']} ${g['net_profit']:.2f}" for w, g in row["grades"].items()),
+            row["seconds"],
+        )
+
+    if args.jobs <= 1:
+        for variant in selected:
+            _record(variant.name, run_variant(variant, staged))
+    else:
+        # One process per variant: the engine gate admits one backtest per process.
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {v.name: pool.submit(run_variant, v, staged) for v in selected}
+            for name, future in futures.items():
+                _record(name, future.result())
+    args.out.write_text(
+        json.dumps(
+            {
+                "sealed_point": sealed,
+                "staged": staged,
+                "recorded_run_33": recorded_33,
+                "variants": results,
+                "wall_seconds": round(time.monotonic() - started, 1),
+            },
+            indent=1,
+            sort_keys=True,
+            default=str,
+        )
+    )
+    logger.info("wrote %s (%.0fs)", args.out, time.monotonic() - started)
+
+
+if __name__ == "__main__":
+    main()
