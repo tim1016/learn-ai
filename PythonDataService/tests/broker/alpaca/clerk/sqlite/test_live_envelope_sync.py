@@ -20,6 +20,8 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca import adapter
+from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.live_envelope import (
     FILL_VISIBILITY_GRACE_MS,
     LIVE_ENVELOPE_CASH_EXCEEDED,
@@ -37,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -54,6 +57,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     complete_fee_evidence,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
 
@@ -183,7 +187,7 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
 
     def build(
         repository: ClerkSqliteRepository,
-        read: _Read | _LiveBroker,
+        read: _Read | _LiveBroker | AlpacaBroker,
         *,
         simulated: bool = False,
         **loop: Any,
@@ -490,6 +494,64 @@ async def test_rejected_cash_transfer_evidence_withdraws_on_direct_observe(
     assert sync.envelope.latest_observation() is None
 
 
+class _RawAlpacaClient:
+    """The client seam under a real ``AlpacaBroker``: raw account JSON, no transfers."""
+
+    def __init__(self, account: dict[str, Any]) -> None:
+        self.account = account
+
+    async def get_account(self) -> dict[str, Any]:
+        return self.account
+
+    async def list_activities(
+        self,
+        *,
+        limit: int,
+        page_token: str | None = None,
+        activity_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # ``float(True) == 1.0``: a $1 prior close turns a real loss into a gain.
+        pytest.param("last_equity", True, id="boolean-last-equity"),
+        pytest.param("equity", None, id="null-equity"),
+    ],
+)
+async def test_a_malformed_account_response_withdraws_the_previous_observation(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    """A malformed account is rejected evidence, not an outage to age out (#2606).
+
+    Driven through the real ``AlpacaBroker`` so the adapter's refusal and the
+    broker's naming of it are both on the path the sync reads.
+    """
+    monkeypatch.setattr(adapter, "now_ms", lambda: NOON)
+    healthy = load_alpaca_fixture_file("account", "account.json")
+    client = _RawAlpacaClient(healthy)
+    broker = AlpacaBroker(
+        client=client,  # type: ignore[arg-type]
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+    )
+    sync = make_sync(day_pnl_repo, broker)
+    assert await sync.tick() == "observed"
+    assert sync.envelope.latest_observation() is not None
+
+    client.account = {**healthy, field: value}
+
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
+    assert sync.display_observation(NOON) is None
+    assert _hold(day_pnl_repo) is None
+
+
 async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
@@ -597,7 +659,7 @@ async def test_a_non_finite_risk_figure_withdraws_the_observation(
     knobs: dict[str, float],
     fields: list[str],
 ) -> None:
-    """Alpaca can answer ``"NaN"``, and ``opt_float`` is a bare ``float(value)``.
+    """Alpaca can answer ``"NaN"``, and ``opt_float`` parses it with ``float(value)``.
 
     A NaN anywhere in the loss inputs makes ``loss_breached`` evaluate False —
     indistinguishable from "nothing breached" — so the account would keep

@@ -48,7 +48,13 @@ now_ms = now_ms_utc
 
 
 def to_float(value: Any) -> float:
-    """Parse a required Alpaca numeric (string or number) to ``float``."""
+    """Parse a required Alpaca numeric (string or number) to ``float``.
+
+    A JSON boolean is refused: ``float(True) == 1.0``, so a corrupt money field
+    would otherwise become $1 or $0 of broker evidence.
+    """
+    if isinstance(value, bool):
+        raise TypeError("Expected an Alpaca numeric, not a boolean")
     return float(value)
 
 
@@ -56,7 +62,7 @@ def opt_float(value: Any) -> float | None:
     """Parse an optional Alpaca numeric to ``float``; ``None``/empty → ``None``."""
     if value is None or value == "":
         return None
-    return float(value)
+    return to_float(value)
 
 
 def opt_str(value: Any) -> str | None:

@@ -223,6 +223,12 @@ notional cap, no symbol allowlist, no session restriction.
   ([Account Object](https://docs.alpaca.markets/us/v1.1/docs/account-plans))
   and recommends `equity - last_equity` for the account's day change
   ([Working with /account](https://docs.alpaca.markets/us/docs/working-with-account)).
+  The adapter's `to_float`/`opt_float` refuse a JSON boolean in any Alpaca
+  numeric, because `float(True)` is `1.0`. An account response the adapter
+  cannot map (a boolean, null, non-numeric or missing `cash` or `equity`, or a
+  boolean or non-numeric `last_equity`) makes `AlpacaBroker.get_account` raise
+  `BrokerEvidenceUnavailable`, which withdraws the prior envelope observation
+  immediately, like rejected transfer evidence below.
   The start is the canonical close of the trading day before the current ET
   calendar day. It therefore does not advance after today's session closes,
   and weekends, holidays, and early closes cannot make the cash-flow horizon

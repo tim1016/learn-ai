@@ -9,10 +9,32 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_account, rfc3339_to_ms
-from app.broker.contract.errors import BrokerAccountModeDisagreement
+from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.alpaca.config import AlpacaSettings
+from app.broker.contract.errors import (
+    BrokerAccountModeDisagreement,
+    BrokerEvidenceUnavailable,
+)
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
+
+
+class _AccountClient:
+    """The client seam: returns the raw account payload the test built."""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    async def get_account(self) -> dict[str, object]:
+        return self.payload
+
+
+def _paper_broker(payload: dict[str, object]) -> AlpacaBroker:
+    return AlpacaBroker(
+        client=_AccountClient(payload),  # type: ignore[arg-type]
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+    )
 
 
 def test_from_alpaca_account_maps_every_field(
@@ -88,6 +110,40 @@ def test_malformed_pattern_day_trader_is_rejected(
 
     with pytest.raises(TypeError, match="boolean or null"):
         from_alpaca_account(payload, account_mode="paper", observed_at_ms=_OBSERVED)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("cash", True, id="boolean-cash"),
+        pytest.param("equity", False, id="boolean-equity"),
+        pytest.param("last_equity", True, id="boolean-last-equity"),
+        pytest.param("cash", "not-a-number", id="unparseable-cash"),
+        pytest.param("equity", None, id="null-equity"),
+    ],
+)
+async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    field: str,
+    value: object,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload[field] = value
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+        await _paper_broker(payload).get_account()
+
+    assert info.value.http_status == 503
+
+
+async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload.pop("equity")
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed"):
+        await _paper_broker(payload).get_account()
 
 
 def test_live_mode_maps_live_and_a_non_pa_account_number(

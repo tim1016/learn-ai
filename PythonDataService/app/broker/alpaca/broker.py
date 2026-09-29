@@ -112,12 +112,11 @@ def _validate_transfer_payload(payload: object) -> None:
                 "pending or statusless rows are unavailable evidence."
             ),
         )
-    raw_amount = payload.get("net_amount")
     try:
-        numeric_amount = float(raw_amount)
+        numeric_amount = adapter.to_float(payload.get("net_amount"))
     except (TypeError, ValueError):
         numeric_amount = math.nan
-    if isinstance(raw_amount, bool) or not math.isfinite(numeric_amount):
+    if not math.isfinite(numeric_amount):
         raise BrokerEvidenceUnavailable(
             "An Alpaca transfer activity had no valid net amount.",
             broker=BROKER_ID,
@@ -255,7 +254,17 @@ class AlpacaBroker:
         payload = await self._client.get_account()
         # The mode that selected the endpoint is the only source of the
         # account's mode (ADR 0059 D1); the adapter refuses a disagreeing shape.
-        return adapter.from_alpaca_account(payload, account_mode=self._resolved_settings().mode)
+        account_mode = self._resolved_settings().mode
+        try:
+            return adapter.from_alpaca_account(payload, account_mode=account_mode)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            # The broker answered, but not with account evidence: named like a
+            # malformed transfer row, so the envelope withdraws its observation.
+            raise BrokerEvidenceUnavailable(
+                "Alpaca account evidence was malformed.",
+                broker=BROKER_ID,
+                detail="The account response could not be mapped to the broker contract.",
+            ) from exc
 
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()
