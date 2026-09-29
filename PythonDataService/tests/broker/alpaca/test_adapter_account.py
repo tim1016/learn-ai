@@ -9,10 +9,32 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_account, rfc3339_to_ms
-from app.broker.contract.errors import BrokerAccountModeDisagreement
+from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.alpaca.config import AlpacaSettings
+from app.broker.contract.errors import (
+    BrokerAccountModeDisagreement,
+    BrokerEvidenceUnavailable,
+)
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
+
+
+class _AccountClient:
+    """The client seam: returns the raw account payload the test built."""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    async def get_account(self) -> dict[str, object]:
+        return self.payload
+
+
+def _paper_broker(payload: dict[str, object]) -> AlpacaBroker:
+    return AlpacaBroker(
+        client=_AccountClient(payload),  # type: ignore[arg-type]
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+    )
 
 
 def test_from_alpaca_account_maps_every_field(
@@ -88,6 +110,53 @@ def test_malformed_pattern_day_trader_is_rejected(
 
     with pytest.raises(TypeError, match="boolean or null"):
         from_alpaca_account(payload, account_mode="paper", observed_at_ms=_OBSERVED)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "cause_type", "cause"),
+    [
+        pytest.param("cash", True, TypeError, "not a boolean", id="boolean-cash"),
+        pytest.param("equity", False, TypeError, "not a boolean", id="boolean-equity"),
+        pytest.param("last_equity", True, TypeError, "not a boolean", id="boolean-last-equity"),
+        pytest.param("cash", "not-a-number", ValueError, "'not-a-number'", id="unparseable-cash"),
+        pytest.param("equity", None, TypeError, "NoneType", id="null-equity"),
+    ],
+)
+async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    field: str,
+    value: object,
+    cause_type: type[Exception],
+    cause: str,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload[field] = value
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+        await _paper_broker(payload).get_account()
+
+    assert info.value.http_status == 503
+    # The plain message and ``detail`` stay owner copy: a router returns both.
+    # The technical reason rides on the exception chain for the operator's log.
+    assert info.value.detail is not None
+    assert type(info.value.__cause__).__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, cause_type)
+    assert cause in str(info.value.__cause__)
+
+
+async def test_broker_names_a_missing_account_field_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload.pop("equity")
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account evidence was malformed") as info:
+        await _paper_broker(payload).get_account()
+
+    assert info.value.detail is not None
+    assert "KeyError" not in info.value.detail
+    assert isinstance(info.value.__cause__, KeyError)
+    assert info.value.__cause__.args == ("equity",)
 
 
 def test_live_mode_maps_live_and_a_non_pa_account_number(

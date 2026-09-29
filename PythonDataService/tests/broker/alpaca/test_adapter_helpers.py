@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -51,6 +53,15 @@ def test_optional_helpers_pass_through_none() -> None:
 
 def test_to_float_parses_decimal_string() -> None:
     assert to_float("1000.50") == 1000.50
+
+
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+@pytest.mark.parametrize("value", [True, False])
+def test_numeric_helpers_reject_booleans(parser: Callable[[Any], float | None], value: bool) -> None:
+    # ``float(True) == 1.0``: a JSON boolean in a money field would otherwise
+    # become $1 or $0 of broker evidence.
+    with pytest.raises(TypeError, match="not a boolean"):
+        parser(value)
 
 
 def test_et_date_anchors_at_ny_midnight() -> None:
