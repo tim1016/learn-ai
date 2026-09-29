@@ -7,8 +7,8 @@ keep loading. Nothing here is math; there is no tolerance.
 Two account roots, each laid out as `accounts/DU123456/...`:
 
 - `active_breach/` - the gate has just frozen the account: an active
-  `unresolved_exposure.flag`, the data-plane producer log (breach event, then
-  freeze-recorded event) and one pre-split `account_events.jsonl` row.
+  `unresolved_exposure.flag` and the data-plane producer log (the breach event,
+  then the freeze-recorded event).
 - `cleared/` - an operator has cleared that freeze with a clean recovery proof:
   the cleared freeze, both clearance files (`account_recovery_clearance.json`
   and the gate's own `account_restart_intensity_clearance.json`) and the full
@@ -16,19 +16,22 @@ Two account roots, each laid out as `accounts/DU123456/...`:
 
 ## Provenance
 
-Generated once on `master` at 8e138f73, before the gate was deleted, by running
-`evaluate_restart_intensity` (policy `threshold=3, window_ms=60_000`) over three
-`ACTIVE` bindings of one bot (`spy-1`) at `now_ms=1_700_000_020_001`, then
-`clear_account_freeze` with a clean `reconcile` recovery proof recorded at
-`1_700_000_030_000`. The files are the bytes the code wrote; only the
-`.lock` files and the unrelated binding registry were left out. The producer
-log's `recorded_at_ms` is wall-clock time from the capture run.
+Every file is the bytes the code wrote. Generated once on `master` at 8e138f73,
+before the gate was deleted, by running `evaluate_restart_intensity` (policy
+`threshold=3, window_ms=60_000`) over three `ACTIVE` bindings of one bot
+(`spy-1`) at `now_ms=1_700_000_020_001`, copying the account directory
+(`active_breach/`), then `clear_account_freeze` with a clean `reconcile`
+recovery proof recorded at `1_700_000_030_000`, and copying it again
+(`cleared/`). `.lock` files and the unrelated binding registry were left out.
+The producer log's `recorded_at_ms` is wall-clock time from the capture run.
 
-The `account_events.jsonl` row is the exception: no current writer produces that
-file (it is immutable pre-split evidence). It is the breach payload from the
-producer log plus `seq=1` and `ts_ms=1_700_000_020_001`, in the pre-split
-writer's row shape (sorted keys, compact separators; see
-`AccountEventRecord` and the writer at `d953aa0c^`).
+There is deliberately no pre-split `account_events.jsonl` here. The gate
+existed before the July 2026 writer split, so an older account may hold a
+breach row in that file, but current code cannot write one: a faithful copy
+would have to come from running the pre-split writer (`d953aa0c^`), and this
+fixture does not. That file's reader only parses JSON rows and never looks at
+event types, and the producer-log payloads here already carry the breach
+event's `window_*` fields.
 
 Do not hand-edit these files. If they must change, regenerate from a checkout
 that still carries the gate and say why in the commit message.

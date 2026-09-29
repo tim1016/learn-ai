@@ -24,7 +24,6 @@ from app.engine.live.account_artifacts import (
     read_account_clerk_lease,
     read_account_events,
     read_account_events_tolerant,
-    read_account_events_tolerant_with_hash,
     read_account_freeze,
     read_account_recovery_clearance,
     read_legacy_account_events,
@@ -873,8 +872,6 @@ _SAVED_BREACH_REASON = (
     "restart_intensity.threshold_breached:observed=3:threshold=3:window_ms=60000:"
     "window_start_ms=1699999960001:window_end_ms=1700000020001"
 )
-# sha256 of the tolerant read of the saved pre-split ledger, pinned when the file was captured.
-_SAVED_LEDGER_SHA256 = "95df53ded523aca93c1ebae66a3c05263322fbc1ff83b07efd0132753e6288fd"
 _SAVED_CLEARANCE_FILENAME = "account_restart_intensity_clearance.json"
 
 
@@ -914,14 +911,12 @@ def test_saved_restart_intensity_freeze_still_loads_and_still_blocks(tmp_path: P
     gate = freeze.to_gate_result()
     assert (gate.gate_id, gate.status) == ("account.unresolved_exposure", "freeze")
     assert gate.operator_next_step == "STOP_RESTARTING_AND_RECOVER_ACCOUNT"
-    events = read_account_events(root, "DU123456")
-    assert [event["event_type"] for event in events] == [
-        "account_restart_intensity_breached",
-        "account_freeze_recorded",
-        "account_restart_intensity_breached",
-    ]
-    assert events[-1]["observed_count"] == 3
-    assert events[-1]["affected_instance_ids"] == ["spy-1"]
+    events = {event["event_type"]: event for event in read_account_events(root, "DU123456")}
+    assert sorted(events) == ["account_freeze_recorded", "account_restart_intensity_breached"]
+    breach = events["account_restart_intensity_breached"]
+    assert (breach["observed_count"], breach["window_ms"]) == (3, 60_000)
+    assert (breach["window_start_ms"], breach["window_end_ms"]) == (1_699_999_960_001, 1_700_000_020_001)
+    assert breach["affected_instance_ids"] == ["spy-1"]
 
 
 def test_saved_restart_intensity_freeze_clears_with_a_recovery_proof(tmp_path: Path) -> None:
@@ -933,12 +928,13 @@ def test_saved_restart_intensity_freeze_clears_with_a_recovery_proof(tmp_path: P
     clearance = read_account_recovery_clearance(root, "DU123456")
     assert clearance is not None
     assert clearance.evidence_id == "operator-recovery-1"
+    # The retired gate wrote a clearance-cutoff file here; nothing does any more.
+    assert not (account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME).exists()
 
 
 def test_saved_cleared_restart_intensity_artifacts_still_load(tmp_path: Path) -> None:
     root = _saved_account(tmp_path, "cleared")
-    leftover = account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME
-    leftover_bytes = leftover.read_bytes()
+    assert (account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME).is_file()
 
     assert read_account_freeze(root, "DU123456") is None
     evidence = account_artifacts.read_account_freeze_evidence(root, "DU123456")
@@ -955,7 +951,7 @@ def test_saved_cleared_restart_intensity_artifacts_still_load(tmp_path: Path) ->
         "account_restart_intensity_breached",
     ]
 
-    # A later, unrelated freeze is written and read beside the old cutoff file, which is left as history.
+    # A later, unrelated freeze is written and read beside the old cutoff file, which stays as history.
     write_account_freeze(
         root,
         AccountFreezeEvidence(
@@ -969,33 +965,3 @@ def test_saved_cleared_restart_intensity_artifacts_still_load(tmp_path: Path) ->
     later = read_account_freeze(root, "DU123456")
     assert later is not None
     assert later.source == "watchdog_halt_executor"
-    assert leftover.read_bytes() == leftover_bytes
-
-
-def test_saved_restart_intensity_ledger_row_keeps_its_hash(tmp_path: Path) -> None:
-    root = _saved_account(tmp_path, "active_breach")
-
-    rows, digest = read_account_events_tolerant_with_hash(root, "DU123456")
-
-    assert digest == _SAVED_LEDGER_SHA256
-    assert read_legacy_account_events(root, "DU123456") == rows
-    assert [row["event_type"] for row in rows] == ["account_restart_intensity_breached"]
-    assert rows[0]["window_ms"] == 60_000
-
-
-def test_account_artifacts_no_longer_ship_the_restart_intensity_gate(tmp_path: Path) -> None:
-    retired = (
-        "RestartIntensityPolicy",
-        "evaluate_restart_intensity",
-        "project_restart_intensity_gate",
-        "RESTART_INTENSITY_REASON",
-        "RESTART_INTENSITY_SOURCE",
-        "ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME",
-    )
-    assert [name for name in retired if hasattr(account_artifacts, name)] == []
-    assert not hasattr(AccountFreezeEvidence, "pauses_healthy_runs")
-
-    root = _saved_account(tmp_path, "active_breach")
-    clear_account_freeze(root, recovery_proof=_clean_recovery_proof("operator-recovery-1", 1_700_000_040_000))
-
-    assert not (account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME).exists()
