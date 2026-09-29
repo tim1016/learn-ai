@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -11,7 +11,7 @@ import type {
   SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
-import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.component';
 import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
@@ -670,6 +670,21 @@ function openDisclosure(label: string): void {
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
   details.open = true;
   fireEvent(details, new Event('toggle'));
+}
+
+/** The current-run poll's interval on a virtual clock, so a test lets one poll
+ * come due without waiting it out in wall-clock time (#2592). Only intervals
+ * are virtual: Angular's scheduler and the service promises keep real time. */
+function virtualRunPoll(): { elapse(): Promise<void> } {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  return {
+    async elapse() {
+      await vi.advanceTimersByTimeAsync(CURRENT_RUN_POLL_MS + 100);
+    },
+  };
 }
 
 function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
@@ -1899,6 +1914,7 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('refreshes current-run evidence during panel polling', async () => {
+    const runPoll = virtualRunPoll();
     mockService.getCurrentRun
       .mockResolvedValueOnce(makeRun())
       .mockResolvedValueOnce(
@@ -1928,15 +1944,16 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await runPoll.elapse();
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.getByText('Stopped')).toBeTruthy();
     fixture.destroy();
-  }, 10_000);
+  });
 
   it('does not poll immutable current-run evidence while the bot is off duty', async () => {
+    const runPoll = virtualRunPoll();
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: {
@@ -1967,10 +1984,10 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await runPoll.elapse();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     fixture.destroy();
-  }, 10_000);
+  });
 
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
