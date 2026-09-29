@@ -168,7 +168,7 @@ def test_a_clear_request_cannot_name_the_action_it_runs() -> None:
     """The endpoint clears, and nothing else: no field can steer it elsewhere."""
     with pytest.raises(ValidationError):
         BotClearRequest.model_validate(
-            {"idempotency_key": "k", "strategy_instance_ids": [_FINISHED], "action_id": "flatten_stop"}
+            {"idempotency_key": "k", "strategy_instance_ids": [_FINISHED], "action_id": "execute_safe_flatten"}
         )
 
 
@@ -331,7 +331,7 @@ async def test_the_commit_time_refusal_is_a_typed_refusal_not_an_unknown_outcome
             raise BotRunnerError(_STRAND_HEADLINE, detail=_STRAND_WHY, reason_code="ARCHIVE_WOULD_STRAND_CUSTODY")
 
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    archive = panel_data_source._action_performers("alpaca", _RACED, idempotency_key="clear-1:x")["archive"]
+    archive = panel_data_source._action_performers("alpaca", _RACED)["archive"]
 
     with pytest.raises(ActionNotAvailableError) as refused:
         await archive("owner", "Cleared from Home")

@@ -599,7 +599,6 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
     checks: list[ReadinessCheckView] = []
     authorities = {
         "stop": "Bot lifecycle registry",
-        "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
         "reconcile_now": "Alpaca Clerk reconciliation sweep",
     }
     for action in actions:
@@ -755,7 +754,6 @@ def build_panel(
     last_bar_at_ms: int | None,
     journal_tail_ref: str,
     journal_tail_seq: int | None,
-    flatten_supported: bool,
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
@@ -849,7 +847,6 @@ def build_panel(
         status,
         clerk,
         revision=revision,
-        flatten_supported=flatten_supported,
         channel_fresh=channel_health.ready,
         exposure=exposure,
         account_id=account_id,

@@ -23,7 +23,6 @@ const OBSERVED_AT_MS = 1_700_000_001_000;
 const PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: true,
   live_bars_supported: true,
   stations: [],
   supported_action_ids: [],

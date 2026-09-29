@@ -79,42 +79,44 @@ describe('OperatorReadinessComponent', () => {
   });
 
   it('offers a gate’s command beside it and passes a press up', async () => {
-    const flatten = fakePanelAction('flatten_stop', { label: 'Flatten & Stop', explanation: '' });
+    const flatten = fakePanelAction('execute_safe_flatten', { label: 'Execute safe flatten', explanation: '' });
     const { actionRequested } = await renderChecks(panelWith([flatten], [check(flatten)]));
 
-    expand('Flatten & Stop');
-    fireEvent.click(await screen.findByRole('button', { name: 'Flatten & Stop' }));
+    expand('Execute safe flatten');
+    fireEvent.click(await screen.findByRole('button', { name: 'Execute safe flatten' }));
 
     expect(actionRequested).toHaveBeenCalledWith({ action: flatten, reason: null });
   });
 
   it('keeps a disabled command’s reason code visible with its gate', async () => {
-    const blockedExplanation = 'The bot is already stopped with no attributed exposure.';
-    const flatten = fakePanelAction('flatten_stop', {
-      label: 'Flatten & stop',
+    const blockedExplanation = "Stop the bot's active run before executing a recovery flatten.";
+    const flatten = fakePanelAction('execute_safe_flatten', {
+      label: 'Execute safe flatten',
       explanation: blockedExplanation,
       enabled: false,
       blockers: [
         {
-          condition: { id: 'BOT_ALREADY_STOPPED_FLAT', severity: 'blocking', scope: 'bot' },
+          condition: { id: 'RUN_STILL_ACTIVE', severity: 'blocking', scope: 'bot' },
           host: 'bot_cockpit',
           anchor: { kind: 'surface', subject_key: null },
-          disposition: 'terminal',
+          disposition: 'wait',
           headline: blockedExplanation,
-          detail: 'No flatten command is necessary.',
+          detail: 'Stop bot decisions first, then execute the prepared flatten.',
           primary_move: null,
           secondary_moves: [],
           applies_to: 'run',
         },
       ],
     });
-    await renderChecks(panelWith([flatten], [check(flatten, { cure: 'No flatten command is necessary.' })]));
+    await renderChecks(
+      panelWith([flatten], [check(flatten, { cure: 'Stop bot decisions first, then execute the prepared flatten.' })]),
+    );
 
     expect(screen.getAllByText(blockedExplanation)).toHaveLength(1);
-    expand('Flatten & stop');
-    expect(await screen.findByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expand('Execute safe flatten');
+    expect(await screen.findByRole('button', { name: 'Execute safe flatten' })).toBeTruthy();
     expect(
-      screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('Bot Already Stopped Flat')),
+      screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('Run Still Active')),
     ).toBe(true);
   });
 

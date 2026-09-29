@@ -199,13 +199,13 @@ describe('PanelActionButtonComponent', () => {
     await render(PanelActionButtonComponent, {
       inputs: {
         action: action({
-          action_id: 'flatten_stop',
-          label: 'Flatten & stop',
+          action_id: 'execute_safe_flatten',
+          label: 'Execute safe flatten',
           confirmation: {
             title: 'Flatten attributed exposure?',
-            body: 'SPY 2; one working order.',
-            consequence: 'The runtime stops before reducing orders are submitted.',
-            confirm_label: 'Flatten & stop',
+            body: 'SPY 2.',
+            consequence: 'The Clerk will submit reduction-only orders for the exact attributed quantities.',
+            confirm_label: 'Flatten now',
             required_token: 'FLATTEN',
           },
         }),
@@ -213,7 +213,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Flatten & stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute safe flatten' }));
     expect(triggered).not.toHaveBeenCalled();
     const submit = screen.getByTestId('typed-halt-confirm-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);

@@ -511,7 +511,6 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
             last_bar_at_ms=None,
             journal_tail_ref=f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/decisions",
             journal_tail_seq=None,
-            flatten_supported=False,
             now_ms=NOW_MS,
             program_build=ProgramBuildAdmissionFact(
                 state="UNPROVEN",

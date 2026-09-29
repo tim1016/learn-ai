@@ -383,25 +383,25 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     label: 'Resolve execution coverage', explanation: '', blockers: [], confirmation: null,
   };
 
-  const staleFlattenStop: PanelAction = {
-    action_id: 'flatten_stop',
+  const staleSafeFlatten: PanelAction = {
+    action_id: 'execute_safe_flatten',
     revision: 1,
     concurrency_token: 'tok-stale',
     enabled: true,
-    label: 'Flatten & stop',
+    label: 'Execute safe flatten',
     explanation: '',
     blockers: [],
     confirmation: {
-      title: 'Flatten attributed exposure and stop?',
+      title: 'Flatten attributed exposure?',
       body: 'Attributed exposure: AAPL 10.',
-      consequence: 'The runtime stops first.',
-      confirm_label: 'Flatten & stop',
-      required_token: 'FLATTEN',
+      consequence: 'The Clerk will submit reduction-only orders for the exact attributed quantities.',
+      confirm_label: 'Flatten now',
+      required_token: '',
     },
   };
 
   const ACTIONS_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/actions';
-  // Stop and flatten-and-stop travel on their own operation, which a draining
+  // Stop and the safe flatten travel on their own operation, which a draining
   // lane still routes (#2351).
   const QUIESCE_URL = `${ACTIONS_URL}/quiesce`;
   const PANEL_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/panel';
@@ -472,12 +472,11 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry an action that requires operator confirmation, even if its token changed and it is still enabled', async () => {
-    // flatten_stop's token derives from live exposure/working-order state,
-    // and its confirmation text quotes exact numbers back to the operator. A
-    // silent retry after a 409 could flatten a materially different position
-    // than the one the operator confirmed — so confirmed actions always
-    // re-throw and let the operator re-confirm explicitly.
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleFlattenStop);
+    // A safe flatten's token is bound to the reduction plan its confirmation
+    // was shown for. A silent retry after a 409 could flatten a materially
+    // different position than the one the operator confirmed — so confirmed
+    // actions always re-throw and let the operator re-confirm explicitly.
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleSafeFlatten);
 
     http
       .expectOne(QUIESCE_URL)
@@ -530,7 +529,6 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
   it.each([
     'stop',
-    'flatten_stop',
     'stop_bot_decisions',
     'cancel_verified_working_orders',
     'execute_safe_flatten',

@@ -389,7 +389,6 @@ def _panel(
         last_bar_at_ms=last_bar_at_ms,
         journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
-        flatten_supported=True,
         now_ms=_NOW,
 
         sealed_program=sealed_program,
@@ -1621,7 +1620,6 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert action_ids == {
         "archive",
         "stop",
-        "flatten_stop",
         "reconcile_now",
     }
     assert panel.mission_verdict.state == "working"
@@ -1878,7 +1876,6 @@ def test_build_panel_requires_program_build_evidence() -> None:
             last_bar_at_ms=None,
             journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
             journal_tail_seq=None,
-            flatten_supported=True,
             now_ms=_NOW,
             market_pulse=_MARKET_PULSE,
         )
@@ -1921,19 +1918,13 @@ def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() 
     assert row.effect_operation_id is None
 
 
-def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
+def test_unperformed_actions_are_not_advertised() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
-    changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
 
-    # Retire is gone (#2578): Clear's archive is the one lifecycle exit.
-    assert {"retire", "cancel_order"}.isdisjoint(action.action_id for action in panel.actions)
-    confirmation = _action(panel, "flatten_stop").confirmation
-    assert confirmation is not None
-    assert confirmation.required_token == "FLATTEN"
-    assert "SPY 2" in confirmation.body
-    assert (
-        _action(panel, "flatten_stop").concurrency_token != _action(changed_exposure, "flatten_stop").concurrency_token
-    )
+    # Retire is gone (#2578): Clear's archive is the one lifecycle exit. Flatten
+    # & stop is gone (#2595): a held position is flattened by the recovery
+    # ladder's safe flatten.
+    assert {"retire", "flatten_stop", "cancel_order"}.isdisjoint(action.action_id for action in panel.actions)
 
 
 def test_missing_intent_does_not_present_retired_inventory_baseline_recovery() -> None:
@@ -2387,7 +2378,7 @@ def test_clear_hold_remains_absent_regardless_of_channel_health() -> None:
     assert "clear_hold" not in {action.action_id for action in unhealthy.actions}
 
 
-def test_account_freeze_blocks_start_and_flatten_with_authored_copy() -> None:
+def test_account_freeze_surfaces_its_authored_copy() -> None:
     frozen = _panel(
         _status(running=False),
         _clerk_status(
@@ -2408,7 +2399,6 @@ def test_account_freeze_blocks_start_and_flatten_with_authored_copy() -> None:
     assert frozen.clerk.freeze_label == "Account state unprovable"
     assert frozen.clerk.freeze_explanation == "Fresh account truth is unavailable."
     assert frozen.clerk.freeze_next_step == "Restore broker observation and reconcile."
-    assert _action(frozen, "flatten_stop").enabled is False
 
 
 def test_revision_is_deterministic_and_changes_on_state_change() -> None:

@@ -11,9 +11,9 @@ backend capability that performs the action:
 3. **Identity from the channel.** The operator identity is the configured
    ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
 
-The dispatch wires Stop, flatten-and-stop,
-reconciliation, clear-hold, and guarded inventory recovery. Unsupported
-closed-set actions such as Cancel order are not presented and raise
+The dispatch wires Archive (Clear); every other presented action is the
+SQLite recovery catalog's (``sqlite_panel_source.execute_sqlite_panel_action``).
+Unsupported closed-set actions such as Cancel order are not presented and raise
 ``ActionNotAvailableError`` if called directly.
 """
 

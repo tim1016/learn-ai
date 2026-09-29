@@ -30,8 +30,6 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
-    EffectOperationState,
-    EffectPurpose,
     OrderJournalEntry,
     ReconciliationCut,
 )
@@ -93,7 +91,6 @@ from app.services.broker_v2_panel.panel_errors import (
     PanelUnavailableError,
     UnknownBotError,
 )
-from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     program_build_view_from_run_evidence,
@@ -429,8 +426,6 @@ async def _get_panel_with_entries_from_authority(
     # ever recorded (never PROVEN at Start, or a run that predates it).
     program_build = _program_build_for_display(binding, verified_at_ms=captured_now_ms)
 
-    profile = panel_profile_for(broker)
-    flatten_supported = profile.flatten_supported if profile is not None else False
     from app.marketdata.ibkr_feed import get_market_data_feed
 
     market_data_feed = get_market_data_feed()
@@ -450,7 +445,6 @@ async def _get_panel_with_entries_from_authority(
         last_bar_at_ms=economics.last_activity_at_ms,
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
-        flatten_supported=flatten_supported,
         now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
@@ -621,24 +615,16 @@ def _action_performers(
     broker: str,
     sid: str,
     *,
-    idempotency_key: str,
     reconciled: ReconciliationCut | None = None,
 ) -> dict[str, ActionPerformer]:
-    """Map each executable action id to the coroutine that performs it (§11, §12).
+    """Map each executable lifecycle action id to the coroutine that performs it (§11, §12).
 
-    Only actions with production custody are wired. The remaining closed-set
-    actions raise ``ActionNotAvailableError`` from the executor rather than
-    presenting a fake success. ``reconciled`` is a clear batch's one account
-    pass, which archive's guard may answer against (``bot_runner.archive``).
+    Only Archive (Clear) reaches this executor: every other presented action
+    is the SQLite recovery catalog's and runs through
+    ``execute_sqlite_panel_action``. ``reconciled`` is a clear batch's one
+    account pass, which archive's guard may answer against
+    (``bot_runner.archive``).
     """
-
-
-    async def _stop(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
-        return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
 
     async def _archive(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
@@ -664,59 +650,7 @@ def _action_performers(
             "kept; it can start no new runs."
         )
 
-
-    async def _reconcile(operator: str, reason: str | None) -> str:
-        clerk = get_alpaca_clerk()
-        if clerk is None:
-            raise PanelUnavailableError("Alpaca order management is not configured.")
-        verdict = await clerk.reconcile_once()
-        return f"Reconciliation sweep complete: {verdict}."
-
-    async def _flatten_stop(operator: str, reason: str | None) -> str:
-        registry = get_bot_task_registry()
-        clerk = get_alpaca_clerk()
-        if registry is None:
-            raise PanelUnavailableError("The bot runner is not available.")
-        if clerk is None:
-            raise PanelUnavailableError("Alpaca order management is not configured.")
-        binding = registry.binding_for_control(broker, sid)
-        status = registry.status(broker, sid)
-        if status.running:
-            # STOP-AND-FLATTEN is ordered custody: first persist STOPPED and
-            # cancel strategy evaluation/working entries, then derive the
-            # reducing EXIT. A failed flatten must never leave the strategy
-            # running or able to submit a fresh entry.
-            await registry.stop(
-                broker,
-                sid,
-                reason=f"Panel flatten-and-stop by {operator}",
-            )
-        receipt = await clerk.execute_for_instance(
-            strategy_instance_id=sid,
-            run_id=binding.run_id,
-            decision_id=f"panel-flatten:{idempotency_key}",
-            purpose=EffectPurpose.EXIT,
-            action_plan=binding.action_plan,
-            quantity=binding.quantity,
-        )
-        if receipt.state is EffectOperationState.UNPROVABLE:
-            return (
-                "The bot is stopped, but the Clerk cannot prove that attributed exposure "
-                "is flat. Inspect the Clerk receipt before issuing another action."
-            )
-        if receipt.state is EffectOperationState.FLAT:
-            return "The Clerk proved attributed exposure is flat and the bot is stopped."
-        return (
-            "The bot is stopped and the Clerk submitted the reducing operation; "
-            "await its durable fill receipt before treating exposure as flat."
-        )
-
-    return {
-        "stop": _stop,
-        "archive": _archive,
-        "flatten_stop": _flatten_stop,
-        "reconcile_now": _reconcile,
-    }
+    return {"archive": _archive}
 
 
 async def run_action(
@@ -985,9 +919,7 @@ async def _run_action_under_live_authority(
         sid=sid,
         current_revision=panel.revision,
         current_concurrency_token=action.concurrency_token,
-        performers=_action_performers(
-            broker, sid, idempotency_key=request.idempotency_key, reconciled=reconciled
-        ),
+        performers=_action_performers(broker, sid, reconciled=reconciled),
         operator_identity=operator_identity,
         store=durable_idempotency_store_for(registry.artifacts_root, sid),
         availability_error=availability_error,

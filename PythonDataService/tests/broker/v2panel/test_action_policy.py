@@ -27,8 +27,6 @@ def _ctx(*, running: bool, variant: int) -> ActionGuardContext:
         reconciliation_verdict=f"verdict-{variant}",
         outstanding_intents=variant,
         has_exposure=bool(variant % 2),
-
-        flatten_supported=bool(variant % 2),
         account_id=f"acct-{variant}",
         strategy_instance_id=f"sid-{variant}",
         exposure={f"SYM{variant}": float(variant)},

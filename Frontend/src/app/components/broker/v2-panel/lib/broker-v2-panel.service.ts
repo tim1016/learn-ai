@@ -44,7 +44,6 @@ import type {
  * here instead of drifting (#2351). */
 const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
   stop: true,
-  flatten_stop: true,
   stop_bot_decisions: true,
   cancel_verified_working_orders: true,
   execute_safe_flatten: true,
@@ -414,11 +413,10 @@ export class BrokerV2PanelService {
    * otherwise the original error is re-thrown so the operator sees an honest
    * message instead of a silent re-post.
    *
-   * The confirmation guard is load-bearing, not incidental: `flatten_stop`'s
-   * token is derived from live exposure/working-order state
-   * (`action_policy.py`'s `revision_inputs`), and its confirmation text quotes
-   * those exact numbers back to the operator. Silently resubmitting a
-   * refreshed action after that text was shown would let the operator
+   * The confirmation guard is load-bearing, not incidental: a safe flatten's
+   * token is bound to the reduction plan its confirmation was shown for (the
+   * recovery catalog's evidence token). Silently resubmitting a refreshed
+   * action after that confirmation was shown would let the operator
    * unknowingly flatten a materially different position than the one they
    * confirmed. Confirmed actions therefore always re-throw on a 409 — the
    * operator sees the state changed and must re-confirm explicitly.

@@ -259,7 +259,6 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
 const PANEL_PROFILE: PanelProfile = {
   broker: 'alpaca',
   fee_fidelity: 'none',
-  flatten_supported: false,
   live_bars_supported: false,
   stations: [],
   supported_action_ids: ['stop'],

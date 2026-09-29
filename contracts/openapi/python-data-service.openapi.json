@@ -5007,7 +5007,6 @@
                 "enum": [
                   "deploy",
                   "stop",
-                  "flatten_stop",
                   "archive",
                   "cancel_order",
                   "reconcile_now",
@@ -10891,11 +10890,7 @@
           "action_id": {
             "anyOf": [
               {
-                "enum": [
-                  "flatten_stop",
-                  "execute_safe_flatten"
-                ],
-                "type": "string"
+                "const": "execute_safe_flatten"
               },
               {
                 "type": "null"
@@ -10969,12 +10964,8 @@
         "description": "One leg the operator confirmed \u2014 echoes the presented action facts.",
         "properties": {
           "action_id": {
-            "enum": [
-              "flatten_stop",
-              "execute_safe_flatten"
-            ],
-            "title": "Action Id",
-            "type": "string"
+            "const": "execute_safe_flatten",
+            "title": "Action Id"
           },
           "concurrency_token": {
             "maxLength": 128,
@@ -29588,7 +29579,6 @@
             "enum": [
               "deploy",
               "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29669,7 +29659,6 @@
             "enum": [
               "deploy",
               "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29756,7 +29745,6 @@
             "enum": [
               "deploy",
               "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29818,7 +29806,6 @@
             "enum": [
               "deploy",
               "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",
@@ -29892,10 +29879,6 @@
             "title": "Fee Fidelity",
             "type": "string"
           },
-          "flatten_supported": {
-            "title": "Flatten Supported",
-            "type": "boolean"
-          },
           "live_bars_supported": {
             "title": "Live Bars Supported",
             "type": "boolean"
@@ -29912,7 +29895,6 @@
               "enum": [
                 "deploy",
                 "stop",
-                "flatten_stop",
                 "archive",
                 "cancel_order",
                 "reconcile_now",
@@ -29934,7 +29916,6 @@
         "required": [
           "broker",
           "fee_fidelity",
-          "flatten_supported",
           "live_bars_supported",
           "stations",
           "supported_action_ids"
@@ -29949,7 +29930,6 @@
           "action_id": {
             "enum": [
               "stop",
-              "flatten_stop",
               "stop_bot_decisions",
               "cancel_verified_working_orders",
               "execute_safe_flatten",
@@ -32237,7 +32217,6 @@
             "enum": [
               "deploy",
               "stop",
-              "flatten_stop",
               "archive",
               "cancel_order",
               "reconcile_now",

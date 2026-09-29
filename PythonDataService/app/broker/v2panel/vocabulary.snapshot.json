@@ -32,7 +32,6 @@
     "deploy",
     "discharge_attributed_residue",
     "execute_safe_flatten",
-    "flatten_stop",
     "healthy",
     "missing_intent",
     "not_applicable",
@@ -159,10 +158,6 @@
     "execute_safe_flatten": {
       "label": "Execute safe flatten",
       "explanation": "Submit the prepared reduction as recovery EXIT custody with exact attributed quantities."
-    },
-    "flatten_stop": {
-      "label": "Flatten & stop",
-      "explanation": "Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping."
     },
     "healthy": {
       "label": "Healthy",

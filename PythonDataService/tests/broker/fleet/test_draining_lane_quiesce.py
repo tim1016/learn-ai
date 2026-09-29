@@ -1,7 +1,7 @@
 """A draining lane can be made quiet, and a retired one stops (issue #2351).
 
 ADR 0063 §2's amendment has the operator make a draining lane quiet with the
-panel's stop, cancel-verified-working-orders and flatten-and-stop, then the
+panel's stop, cancel-verified-working-orders and safe flatten, then the
 lane proves it. Before this fix ``resolve_route`` refused every routed
 operation for a draining clerk — those three included — so a lane drained
 with a bot running could never answer quiet from the UI; ``force-retire``

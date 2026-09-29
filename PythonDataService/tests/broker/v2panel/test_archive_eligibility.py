@@ -38,7 +38,6 @@ def _ctx(
         outstanding_intents=0,
         has_exposure=has_exposure,
 
-        flatten_supported=True,
         account_id="PA3KWXU1C4C3",
         strategy_instance_id="Aug11",
         exposure={"SPY": 1.0} if has_exposure else {},

@@ -1107,11 +1107,12 @@ async def test_flatten_and_stop_is_refused_before_anything_stops_while_the_bot_h
     """#2595: the panel's Flatten & stop never leaves a stopped bot holding shares.
 
     The report was that Flatten & stop stops the bot and then fails to send
-    its sale (its EXIT needs the run the stop just ended). That performer is
-    broken, but the SQLite panel has never presented ``flatten_stop``
-    (ADR 0045: a stopped bot is flattened by the recovery ladder's
-    ``execute_safe_flatten``), so a post of it is refused before any stop:
-    the bot keeps running, keeps its shares, and nothing reaches the broker.
+    its sale (its EXIT needs the run the stop just ended). That performer was
+    broken, but the SQLite panel never presented ``flatten_stop`` (ADR 0045: a
+    stopped bot is flattened by the recovery ladder's ``execute_safe_flatten``),
+    so the performer and the action id were removed. A post naming it is
+    refused at the request boundary, before any stop: the bot keeps running,
+    keeps its shares, and nothing reaches the broker.
     """
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
@@ -1167,10 +1168,9 @@ async def test_flatten_and_stop_is_refused_before_anything_stops_while_the_bot_h
     assert "flatten_stop" not in {action["action_id"] for action in before["actions"]}
     assert (before["health"]["running"], before["exposure"]) == (True, {"SPY": 10.0})
     for refusal in refusals:
-        assert refusal.status_code == 404, refusal.text
-        assert refusal.json()["detail"]["message"] == (
-            f"Action 'flatten_stop' is not available for bot '{SID}'."
-        )
+        assert refusal.status_code == 422, refusal.text
+        [error] = refusal.json()["detail"]
+        assert (error["loc"], error["input"]) == (["body", "action_id"], "flatten_stop")
     assert registry.stops == []
     assert (after["health"]["running"], after["exposure"]) == (True, {"SPY": 10.0})
     assert trade.submit_calls == []

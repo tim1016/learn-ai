@@ -493,7 +493,6 @@ const EXECUTE_ACTION = fakePanelAction('execute_safe_flatten', {
 const PANEL_PROFILE = {
   broker: 'alpaca',
   fee_fidelity: 'per_fill',
-  flatten_supported: true,
   live_bars_supported: true,
   stations: [],
   supported_action_ids: ['stop', 'reconcile_now', 'prepare_safe_flatten', 'execute_safe_flatten', 'archive'],

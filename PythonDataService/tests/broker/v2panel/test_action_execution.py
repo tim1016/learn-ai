@@ -15,7 +15,6 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
@@ -35,7 +34,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     durable_idempotency_store_for,
     execute_action,
 )
-from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
+from app.services.broker_v2_panel.panel_data_source import run_action
 
 _SID = "bot-alpha"
 
@@ -543,14 +542,14 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.recorded_at_ms == legacy_observed_at_ms
 
 
-@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire"])
+@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire", "flatten_stop"])
 async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
     tmp_path: Path, retired_action_id: str,
 ) -> None:
     """#2550 review: a bot's ledger written before Resume/Pause/Continue (and,
-    since #2578, Retire) were retired must still load. Those receipts remain
-    readable history, and the bot's next command -- Stop included -- runs
-    instead of failing the load."""
+    since #2578, Retire; since #2595, Flatten & stop) were retired must still
+    load. Those receipts remain readable history, and the bot's next command --
+    Stop included -- runs instead of failing the load."""
     path = tmp_path / "panel_action_receipts.json"
     compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
     history = {
@@ -713,7 +712,6 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         "read_sqlite_decision_receipts",
         lambda *_args, **_kwargs: [],
     )
-    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
@@ -839,7 +837,6 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])
-    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", _market_pulse)
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
@@ -851,69 +848,6 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
 
     [liveness] = evaluated
     assert (liveness.state, liveness.reason_code) == ("TRADABLE", "MARKET_TRADABLE")
-
-
-
-
-async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -> None:
-    events: list[str] = []
-    binding = SimpleNamespace(run_id="run-1", action_plan=object(), quantity=1)
-
-    class _Registry:
-        def binding_for_control(self, broker: str, sid: str):
-            assert (broker, sid) == ("alpaca", _SID)
-            return binding
-
-        def status(self, broker: str, sid: str):
-            assert (broker, sid) == ("alpaca", _SID)
-            return SimpleNamespace(running=True)
-
-        async def stop(self, broker: str, sid: str, *, reason: str) -> None:
-            assert (broker, sid) == ("alpaca", _SID)
-            events.append("stop")
-
-    class _Clerk:
-        async def execute_for_instance(self, **kwargs):
-            assert kwargs["strategy_instance_id"] == _SID
-            events.append("execute")
-            return SimpleNamespace(state=EffectOperationState.UNPROVABLE)
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers("alpaca", _SID, idempotency_key="flatten-1")["flatten_stop"](
-        "desk-operator", None
-    )
-
-    assert events == ["stop", "execute"]
-    assert "cannot prove" in message
-
-
-async def test_reconcile_performer_ignores_operator_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``reconcile_now`` has no operator-authored reason to journal; it ignores one."""
-
-    class _Clerk:
-        async def reconcile_once(self) -> str:
-            return "clean"
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="reconcile-1"
-    )["reconcile_now"]("desk-operator", "this should be ignored")
-
-    assert message == "Reconciliation sweep complete: clean."
 
 
 async def _noop() -> str:

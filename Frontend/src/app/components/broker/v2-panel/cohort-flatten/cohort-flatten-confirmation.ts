@@ -62,11 +62,10 @@ export const COHORT_FLATTEN_COPY = {
   capReached: (max: number) =>
     `A batch can carry at most ${max} bots; the rest of this cohort stays unselected.`,
 
-  // ── Review and confirmation (modelled on the per-bot flatten_stop copy) ──
+  // ── Review and confirmation ──
   review: (count: number) => `Review flatten of ${count}`,
   inFlight: (count: number) => `Flattening ${count} ${bots(count)}…`,
-  /** The per-bot `flatten_stop` confirmation's `required_token`, so one word
-   * means one thing on both surfaces. */
+  /** The word the operator types to confirm a cohort flatten. */
   confirmToken: 'FLATTEN',
   confirmHeading: (count: number) => `Flatten ${count} ${bots(count)} in this cohort?`,
   confirmMessage: (accountId: string, strategyLabel: string, legs: readonly CohortFlattenLeg[]) =>

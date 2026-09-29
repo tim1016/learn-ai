@@ -41,7 +41,6 @@ def alpaca_panel_profile() -> PanelProfile:
 
     - ``fee_fidelity="none"`` — Alpaca's ``trade_updates`` stream reports no
       per-fill commission, so the panel renders "Fees not reported" (§10).
-    - ``flatten_supported=True`` — the clerk owns namespaced flatten (§12).
     - ``live_bars_supported=False`` — no Alpaca-native live-bar strain in
       phase 1; the LIVE pane uses the IBKR bridge + Polygon fallback
       (ADR 0032 amendment, §8).
@@ -53,7 +52,6 @@ def alpaca_panel_profile() -> PanelProfile:
     return PanelProfile(
         broker="alpaca",
         fee_fidelity="none",
-        flatten_supported=True,
         live_bars_supported=False,
         stations=_stations_for(_ALPACA_INAPPLICABLE_STATIONS),
         supported_action_ids=supported_action_ids_for("alpaca"),

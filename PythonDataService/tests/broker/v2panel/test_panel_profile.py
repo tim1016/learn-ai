@@ -1,7 +1,7 @@
 """Contract tests for the panel capability profile (S1, spec §4).
 
-Snapshot-pins the Alpaca profile per broker: which stations apply, flatten
-support, fee fidelity, live-bar availability, supported action ids.
+Snapshot-pins the Alpaca profile per broker: which stations apply, fee
+fidelity, live-bar availability, supported action ids.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ def test_alpaca_profile_is_the_closed_descriptor() -> None:
     assert profile.broker == "alpaca"
     # Alpaca's trade_updates stream reports no per-fill commission (§10).
     assert profile.fee_fidelity == "none"
-    # The clerk owns namespaced flatten (§12).
-    assert profile.flatten_supported is True
     # No Alpaca-native live-bar strain in phase 1 (ADR 0032 amendment, §8).
     assert profile.live_bars_supported is False
 
@@ -39,13 +37,13 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
     assert profile.supported_action_ids == [
         "deploy",
         "stop",
-        "flatten_stop",
         "archive",
         "reconcile_now",
     ]
     # archive joined the advertised set when it gained a production performer
     # (ADR 0052), and retire left it with its performer (#2578) -- the
-    # invariant this test guards is unchanged.
+    # invariant this test guards is unchanged. So did flatten_stop, whose
+    # performer no SQLite panel could reach (#2595).
     assert "cancel_order" not in profile.supported_action_ids
 
 
@@ -62,7 +60,6 @@ def test_alpaca_profile_shape_is_frozen() -> None:
     assert set(dumped) == {
         "broker",
         "fee_fidelity",
-        "flatten_supported",
         "live_bars_supported",
         "stations",
         "supported_action_ids",

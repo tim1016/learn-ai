@@ -1044,7 +1044,7 @@ async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
     assert registry.status("alpaca", _SID).phase != "RETIRED"
 
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: registry)
-    archive = panel_data_source._action_performers("alpaca", _SID, idempotency_key="clear-1:x")["archive"]
+    archive = panel_data_source._action_performers("alpaca", _SID)["archive"]
     with pytest.raises(ActionNotAvailableError) as typed:
         await archive("owner", "Cleared from Home")
     assert typed.value.reason_code == "BOT_DUTY_NOT_SETTLED"

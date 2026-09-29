@@ -12,6 +12,8 @@ Every panel action today is per-bot: `POST /{broker}/accounts/{account_id}/bots/
 
 Which flatten-class action a bot presents depends on its authority surface. Under the active SQLite authority — the only production surface post-cutover — `adapt_sqlite_panel` retains only `resume`/`retire` from the generic lifecycle actions (`SQLITE_PANEL_LIFECYCLE_ACTION_IDS`, the deliberate #1778-era design), so `flatten_stop` never reaches those panels; the presented flatten is the recovery ladder's `execute_safe_flatten`, which arms for a stopped bot with reconciled attributed exposure — precisely T3's stranded state — and presents disabled while a run is active. The ladder's order (stop first, then flatten) is the same sequence T3's stop wave already followed. `flatten_stop` remains in the leg vocabulary for the surfaces that do present it.
 
+**Amendment (2026-09-29, #2595):** no surface presented `flatten_stop`, and its performer was removed with its action id (ADR 0045). A cohort leg is `execute_safe_flatten` alone (`CohortFlattenActionId`); where this record says `flatten_stop`, read the per-bot presented flatten.
+
 ## Decision
 
 ### 1. A cohort flatten is a batch of per-bot flatten-class legs — never an account-level position flatten
