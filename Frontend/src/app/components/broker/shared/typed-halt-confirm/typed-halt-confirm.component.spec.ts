@@ -1,4 +1,4 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { ChangeDetectionStrategy, Component, provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,14 +7,12 @@ import { TypedHaltConfirmComponent } from './typed-halt-confirm.component';
 
 interface Harness {
   el: HTMLElement;
-  setOpen(open: boolean): void;
   type(value: string): void;
   confirmed: number;
   cancelled: number;
 }
 
 function render(opts: {
-  open: boolean;
   requiredToken?: string;
   confirmLabel?: string;
   heading?: string;
@@ -26,7 +24,6 @@ function render(opts: {
     providers: [provideZonelessChangeDetection()],
   });
   const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
-  fixture.componentRef.setInput('open', opts.open);
   fixture.componentRef.setInput('heading', opts.heading ?? 'Backend title');
   fixture.componentRef.setInput('message', opts.message ?? 'Backend body.');
   fixture.componentRef.setInput('consequence', opts.consequence ?? 'Backend consequence.');
@@ -41,10 +38,6 @@ function render(opts: {
   fixture.detectChanges();
   return {
     el: fixture.nativeElement as HTMLElement,
-    setOpen(open) {
-      fixture.componentRef.setInput('open', open);
-      fixture.detectChanges();
-    },
     type(value) {
       fixture.componentInstance.onTyped(value);
       fixture.detectChanges();
@@ -61,13 +54,8 @@ function render(opts: {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('TypedHaltConfirmComponent', () => {
-  it('renders nothing when open is false', () => {
-    const h = render({ open: false });
-    expect(h.el.querySelector('[data-testid="typed-halt-confirm-dialog"]')).toBeNull();
-  });
-
   it('renders the dialog when open is true', () => {
-    const h = render({ open: true });
+    const h = render({});
     expect(
       h.el.querySelector('[data-testid="typed-halt-confirm-dialog"]'),
     ).not.toBeNull();
@@ -76,7 +64,7 @@ describe('TypedHaltConfirmComponent', () => {
   });
 
   it('disables the confirm button until the operator types HALT exactly', () => {
-    const h = render({ open: true });
+    const h = render({});
     const submit = (): HTMLButtonElement | null =>
       h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]');
 
@@ -88,7 +76,7 @@ describe('TypedHaltConfirmComponent', () => {
   });
 
   it('emits confirmed only after the token matches and the button is clicked', () => {
-    const h = render({ open: true });
+    const h = render({});
     h.type('WRONG');
     h.el
       .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
@@ -103,23 +91,11 @@ describe('TypedHaltConfirmComponent', () => {
   });
 
   it('emits cancelled when the cancel button is clicked', () => {
-    const h = render({ open: true });
+    const h = render({});
     h.el
       .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-cancel"]')
       ?.click();
     expect(h.cancelled).toBe(1);
-  });
-
-  it('resets the typed field when the dialog re-opens', () => {
-    const h = render({ open: true });
-    h.type('HALT');
-    h.setOpen(false);
-    h.setOpen(true);
-    // re-opened -> confirm should be disabled until re-typed
-    expect(
-      h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
-        ?.disabled,
-    ).toBe(true);
   });
 
   describe('Escape', () => {
@@ -162,7 +138,7 @@ describe('TypedHaltConfirmComponent', () => {
     }
 
     it('cancels once when pressed in the typed-confirm input', async () => {
-      const h = render({ open: true });
+      const h = render({});
 
       const press = await pressEscapeOn(h, 'typed-halt-confirm-input');
 
@@ -172,7 +148,7 @@ describe('TypedHaltConfirmComponent', () => {
     });
 
     it('cancels when pressed on a dialog button, even the confirm button', async () => {
-      const h = render({ open: true, requiredToken: '' });
+      const h = render({ requiredToken: '' });
 
       const press = await pressEscapeOn(h, 'typed-halt-confirm-submit');
 
@@ -182,7 +158,7 @@ describe('TypedHaltConfirmComponent', () => {
     });
 
     it('stays inside the dialog, so an enclosing menu that closes on Escape does not also act', async () => {
-      const h = render({ open: true });
+      const h = render({});
 
       const press = await pressEscapeOn(h, 'typed-halt-confirm-input');
 
@@ -194,7 +170,7 @@ describe('TypedHaltConfirmComponent', () => {
     it('cancels once from the backdrop, and an enclosing menu does not also act', async () => {
       // Shift+Tab from the token input lands on the backdrop button, which
       // sits outside the dialog element.
-      const h = render({ open: true });
+      const h = render({});
 
       const press = await pressEscapeOn(h, 'typed-halt-confirm-backdrop');
 
@@ -203,22 +179,8 @@ describe('TypedHaltConfirmComponent', () => {
       expect(press.ancestorSaw).toEqual([]);
     });
 
-    it('does nothing and is not swallowed while the dialog is closed', () => {
-      const h = render({ open: false });
-      const escape = new KeyboardEvent('keydown', {
-        key: 'Escape',
-        bubbles: true,
-        cancelable: true,
-      });
-
-      document.body.dispatchEvent(escape);
-
-      expect(h.cancelled).toBe(0);
-      expect(escape.defaultPrevented).toBe(false);
-    });
-
     it('still cancels from the document when focus is outside the dialog', () => {
-      const h = render({ open: true });
+      const h = render({});
 
       document.body.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
@@ -230,7 +192,7 @@ describe('TypedHaltConfirmComponent', () => {
 
   describe('plain confirm mode (no required token)', () => {
     it('hides the token field and enables confirm immediately', () => {
-      const h = render({ open: true, requiredToken: '' });
+      const h = render({ requiredToken: '' });
       expect(h.el.querySelector('[data-testid="typed-halt-confirm-input"]')).toBeNull();
       expect(
         h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
@@ -239,7 +201,7 @@ describe('TypedHaltConfirmComponent', () => {
     });
 
     it('emits confirmed on a single click with no typing', () => {
-      const h = render({ open: true, requiredToken: '' });
+      const h = render({ requiredToken: '' });
       h.el
         .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
         ?.click();
@@ -247,66 +209,103 @@ describe('TypedHaltConfirmComponent', () => {
     });
 
     it('renders the supplied confirm label', () => {
-      const h = render({ open: true, requiredToken: '', confirmLabel: 'Flatten & pause' });
+      const h = render({ requiredToken: '', confirmLabel: 'Flatten & pause' });
       expect(
         h.el.querySelector('[data-testid="typed-halt-confirm-submit"]')?.textContent?.trim(),
       ).toBe('Flatten & pause');
     });
 
     it('moves keyboard focus into the dialog (onto Cancel) when there is no token input', async () => {
-      TestBed.resetTestingModule();
-      TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
-      const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
-      fixture.componentRef.setInput('open', false);
-      fixture.componentRef.setInput('heading', 'Backend title');
-      fixture.componentRef.setInput('message', 'Backend body.');
-      fixture.componentRef.setInput('consequence', 'Backend consequence.');
-      fixture.componentRef.setInput('confirmLabel', 'Backend confirm');
-      fixture.componentRef.setInput('requiredToken', '');
-      document.body.appendChild(fixture.nativeElement);
-      fixture.detectChanges();
-      fixture.componentRef.setInput('open', true);
-      fixture.detectChanges();
-      await Promise.resolve();
+      const host = mountHost();
+      host.open();
+      await host.stable();
 
-      const cancel = (fixture.nativeElement as HTMLElement).querySelector(
-        '[data-testid="typed-halt-confirm-cancel"]',
-      );
-      expect(document.activeElement).toBe(cancel);
-      (fixture.nativeElement as HTMLElement).remove();
+      expect(document.activeElement).toBe(host.query('typed-halt-confirm-cancel'));
+      host.destroy();
     });
 
-    it('hands the keyboard back to what opened it when cancelled, once the host closes it', async () => {
-      TestBed.resetTestingModule();
-      TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
-      const opener = document.createElement('button');
-      opener.textContent = 'Flatten…';
-      document.body.appendChild(opener);
-      opener.focus();
-      const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
-      fixture.componentRef.setInput('open', false);
-      fixture.componentRef.setInput('heading', 'Backend title');
-      fixture.componentRef.setInput('message', 'Backend body.');
-      fixture.componentRef.setInput('consequence', 'Backend consequence.');
-      fixture.componentRef.setInput('confirmLabel', 'Backend confirm');
-      fixture.componentRef.setInput('requiredToken', '');
-      // The host closes the dialog on its cancelled output, as every host does.
-      fixture.componentInstance.cancelled.subscribe(() => fixture.componentRef.setInput('open', false));
-      document.body.appendChild(fixture.nativeElement);
-      fixture.detectChanges();
-      fixture.componentRef.setInput('open', true);
-      fixture.detectChanges();
-      await Promise.resolve();
-      expect(document.activeElement).not.toBe(opener);
+    it('hands the keyboard back to what opened it when cancelled and the host removes it', async () => {
+      const host = mountHost();
+      host.open();
+      await host.stable();
+      expect(document.activeElement).not.toBe(host.opener);
 
-      (fixture.nativeElement as HTMLElement)
-        .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-cancel"]')
-        ?.click();
-      await fixture.whenStable();
+      host.query('typed-halt-confirm-cancel')?.click();
+      await host.stable();
 
-      expect(document.activeElement).toBe(opener);
-      (fixture.nativeElement as HTMLElement).remove();
-      opener.remove();
+      expect(host.query('typed-halt-confirm-dialog')).toBeNull();
+      expect(document.activeElement).toBe(host.opener);
+      host.destroy();
+    });
+
+    it('leaves the keyboard to the host after a confirm', async () => {
+      const host = mountHost();
+      host.open();
+      await host.stable();
+
+      host.query('typed-halt-confirm-submit')?.click();
+      await host.stable();
+
+      expect(host.query('typed-halt-confirm-dialog')).toBeNull();
+      expect(document.activeElement).not.toBe(host.opener);
+      host.destroy();
     });
   });
 });
+
+/** The shape every real host has: the dialog is mounted under the host's own
+ * `@if` and removed on either output. */
+@Component({
+  selector: 'app-typed-confirm-host',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TypedHaltConfirmComponent],
+  template: `
+    <button type="button" data-testid="opener" (click)="shown.set(true)">Flatten…</button>
+    @if (shown()) {
+      <app-typed-halt-confirm
+        heading="Backend title"
+        message="Backend body."
+        consequence="Backend consequence."
+        requiredToken=""
+        confirmLabel="Backend confirm"
+        (confirmed)="shown.set(false)"
+        (cancelled)="shown.set(false)"
+      />
+    }
+  `,
+})
+class TypedConfirmHostComponent {
+  readonly shown = signal(false);
+}
+
+function mountHost(): {
+  opener: HTMLButtonElement;
+  open(): void;
+  stable(): Promise<void>;
+  query(testId: string): HTMLButtonElement | null;
+  destroy(): void;
+} {
+  TestBed.resetTestingModule();
+  TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+  const fixture = TestBed.createComponent(TypedConfirmHostComponent);
+  const el = fixture.nativeElement as HTMLElement;
+  document.body.appendChild(el);
+  fixture.detectChanges();
+  const query = (testId: string): HTMLButtonElement | null =>
+    el.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
+  const opener = query('opener');
+  if (opener === null) throw new Error('opener not rendered');
+  return {
+    opener,
+    open() {
+      opener.focus();
+      opener.click();
+    },
+    stable: () => fixture.whenStable(),
+    query,
+    destroy() {
+      fixture.destroy();
+      el.remove();
+    },
+  };
+}

@@ -254,7 +254,6 @@
 @if (confirmationAction(); as action) {
   @if (action.confirmation; as confirmation) {
     <app-typed-halt-confirm
-      [open]="true"
       [heading]="confirmation.title"
       [accountId]="accountId()"
       [message]="action.explanation"

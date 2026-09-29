@@ -193,7 +193,6 @@ export class CohortFlattenDrawerComponent {
    */
   private readonly lastDispatchRead = signal<number | null>(null);
 
-  private readonly reviewButton = viewChild<ElementRef<HTMLButtonElement>>('reviewButton');
   private readonly progress = viewChild<ElementRef<HTMLElement>>('progress');
   private readonly failureAlert = viewChild<ElementRef<HTMLElement>>('failureAlert');
   private readonly outcomePanel = viewChild(CohortFlattenOutcomeComponent);
@@ -312,9 +311,9 @@ export class CohortFlattenDrawerComponent {
     });
   }
 
+  /** The confirmation hands the keyboard back to Review as it closes. */
   protected cancelReview(): void {
     this.pending.set(null);
-    this.focusAfterRender(() => this.reviewButton()?.nativeElement.focus());
   }
 
   protected async confirm(): Promise<void> {

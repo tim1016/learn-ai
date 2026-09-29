@@ -133,7 +133,6 @@
 
 @if (historicalRecoveryDraft(); as draft) {
   <app-typed-halt-confirm
-    [open]="true"
     heading="Confirm exact execution recovery"
     [message]="historicalRecoveryMessage(draft.plan)"
     [assetSymbol]="draft.plan.exact_symbol"
