@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
@@ -304,10 +304,11 @@ class SyntheticBindingAuthority(BindingAuthority):
         (``dry_run_close``); running it here, while the authority is still
         open, stamps that simulated sale when the run ended instead of
         whenever the bot is next opened. The authority is released whatever
-        the pass does. A Clerk failure (a lost lease, a broken invariant) is
-        logged, not raised: the run has already ended, so it must not fail
-        the Stop or the shutdown releasing it, and the close -- derived from
-        durable facts -- is retried by the next opening.
+        the pass does, and any failure of the pass is logged with its stack,
+        not raised: the run has already ended, so nothing here may fail the
+        Stop that committed it or the shutdown loop releasing every other
+        bot, and the close -- derived from durable facts -- is retried by the
+        next opening.
         """
         async with self.runtime_access.hold():
             runtime = get_clerk_runtime(self.account_id)
@@ -317,7 +318,7 @@ class SyntheticBindingAuthority(BindingAuthority):
                     and not self.runtime_in_use(self.binding.strategy_instance_id)
                 ):
                     await runtime.clerk.reconcile_once()
-            except ClerkSqliteError:
+            except Exception:
                 logger.exception(
                     "a Dry Run's run-end reconciliation failed; its next opening closes what the run left",
                     extra={"action": "dry_run_run_end_reconcile_failed", "account_id": self.account_id,

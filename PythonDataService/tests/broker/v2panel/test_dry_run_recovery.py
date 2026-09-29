@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite import dry_run_close
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.synthetic_broker import SimulatedPriceUnavailableError
 from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.marketdata.feed import MarketDataBar
 from app.routers import alpaca_clerk_sqlite
@@ -182,7 +183,7 @@ async def crashed_dry_run(
 ) -> AsyncIterator[_World]:
     """A Dry Run that bought 1 simulated SPY at $600 and then crashed, runtime released."""
     if run_ending == "close_disabled":
-        monkeypatch.setattr(dry_run_close, "closes_owed", lambda _repo: [])
+        monkeypatch.setattr(dry_run_close, "closes_owed_for", lambda _repo, _sid: [])
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
     market_liveness.reset_market_liveness_store_for_testing()
@@ -585,10 +586,19 @@ async def test_a_run_end_close_with_no_price_leaves_the_operators_flatten_as_the
     assert crashed_dry_run.alpaca.calls == []
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ExecutionLeaseLost("lease reassigned", account_id=SIM_ACCOUNT),
+        SimulatedPriceUnavailableError("no retained source bar"),
+    ],
+    ids=["clerk-lease-lost", "not-a-clerk-error"],
+)
 async def test_a_failed_run_end_pass_never_fails_the_stop_and_still_releases(
     crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    failure: Exception,
 ) -> None:
-    """The run has already ended: a lost lease in its run-end pass is logged,
+    """The run has already ended: whatever its run-end pass raises is logged,
     the authority released, and the Stop or shutdown releasing it succeeds."""
     registry = get_bot_task_registry()
     assert registry is not None
@@ -597,10 +607,10 @@ async def test_a_failed_run_end_pass_never_fails_the_stop_and_still_releases(
     runtime = get_clerk_runtime(SIM_ACCOUNT)
     assert runtime is not None and runtime.clerk is not None
 
-    async def lease_lost() -> None:
-        raise ExecutionLeaseLost("lease reassigned", account_id=SIM_ACCOUNT)
+    async def failing_pass() -> None:
+        raise failure
 
-    monkeypatch.setattr(runtime.clerk, "reconcile_once", lease_lost)
+    monkeypatch.setattr(runtime.clerk, "reconcile_once", failing_pass)
 
     await authority.release_after_run_end()
 
@@ -640,4 +650,28 @@ async def test_a_dry_runs_own_exit_left_waiting_by_its_death_is_superseded_by_th
         assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID) is None
     finally:
         repo.close()
+    assert crashed_dry_run.alpaca.calls == []
+
+
+@pytest.mark.parametrize("run_ending", ["hard_death"])
+async def test_a_run_end_close_that_breaks_never_blocks_reconcile_or_the_fallback_flatten(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unexpected failure closing one bot (here a custody row the close
+    cannot read) is logged and the pass goes on: Reconcile now still
+    succeeds, so the operator's flatten stays the way back to flat."""
+
+    def unreadable(_repo: ClerkSqliteRepository, _sid: str) -> list[dry_run_close.OwedClose]:
+        raise AssertionError("no ENTER_ACCEPTED transition found for the entry")
+
+    monkeypatch.setattr(dry_run_close, "closes_owed_for", unreadable)
+
+    panel = await _panel()
+    reconciled = await _run(panel, "reconcile_now", "reconcile-despite-broken-close")
+    panel = await _panel()
+
+    assert reconciled.applied
+    assert panel.exposure == {"SPY": 1.0}
+    assert _action(panel, "execute_safe_flatten").enabled
+    assert any(getattr(record, "action", None) == "dry_run_close_failed" for record in caplog.records)
     assert crashed_dry_run.alpaca.calls == []

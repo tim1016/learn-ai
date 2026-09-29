@@ -18,6 +18,14 @@ worklist (:func:`closes_owed`) is derived from durable facts only -- no ACTIVE
 run, attributed exposure, an owned entry no EXIT owns -- with no "close owed"
 record of its own to lose.
 
+"The last price the run saw" is, operatively, the newest bar the market
+delivered to this Dry Run's own bar ledger, fill-evidence streams excluded
+(``SourceBarLedger.latest_for_symbol(market_only=True)``). Only the bot's runs
+append there -- live delivery and startup-join history, both run-scoped --
+and a close is owed only while no run is active, so that bar is the last one
+its last run received. A future writer to that ledger outside a run would
+break the equivalence; the fill would then need pinning to the run's end.
+
 Each close is one recovery EXIT under ``DRY_RUN_CLOSE_DECISION_PREFIX``,
 keyed on the exposure's newest entry, so a re-run of the pass drives the same
 EXIT and never sells twice. The EXIT machine sends it regardless of the
@@ -75,39 +83,49 @@ class OwedClose:
     decision_id: str
 
 
-def closes_owed(repo: ClerkSqliteRepository) -> list[OwedClose]:
-    """Every position a no-longer-running Dry Run holds that no EXIT owns yet.
-
-    Empty on any authority but a ``sim:`` one. An exposure whose close was
-    already accepted -- driven, folded or finished -- is not owed again.
-    """
+def ended_dry_runs(repo: ClerkSqliteRepository) -> list[str]:
+    """The strategy instances with no ACTIVE run on this authority; empty on any but a ``sim:`` one."""
     if not is_synthetic_account_id(repo.account_id):
         return []
+    return [
+        instance["strategy_instance_id"]
+        for instance in repo.strategy_instances()
+        if repo.active_run(instance["strategy_instance_id"]) is None
+    ]
+
+
+def closes_owed_for(repo: ClerkSqliteRepository, strategy_instance_id: str) -> list[OwedClose]:
+    """Every position one ended Dry Run holds that no EXIT owns yet.
+
+    An exposure whose close was already accepted -- driven, folded or
+    finished -- is not owed again.
+    """
+    held = [
+        symbol
+        for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items()
+        if position_quantity_is_nonzero(quantity)
+    ]
+    if not held:
+        return []
+    owned_entries = repo.entry_orders_for_strategy(strategy_instance_id)
     owed: list[OwedClose] = []
-    for instance in repo.strategy_instances():
-        strategy_instance_id = instance["strategy_instance_id"]
-        if repo.active_run(strategy_instance_id) is not None:
+    for symbol in held:
+        entries = [order for order in owned_entries if entry_order_symbol(repo, order.order_ref).upper() == symbol]
+        if not entries or any(repo.active_exit_for_order(order.order_ref) is not None for order in entries):
             continue
-        held = [
-            symbol
-            for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items()
-            if position_quantity_is_nonzero(quantity)
-        ]
-        if not held:
+        entry_order_ref = entries[-1].order_ref
+        decision_id = f"{DRY_RUN_CLOSE_DECISION_PREFIX}{hashlib.sha256(entry_order_ref.encode('utf-8')).hexdigest()[:16]}"
+        if repo.effect_operation(
+            exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
+        ) is not None:
             continue
-        owned_entries = repo.entry_orders_for_strategy(strategy_instance_id)
-        for symbol in held:
-            entries = [order for order in owned_entries if entry_order_symbol(repo, order.order_ref).upper() == symbol]
-            if not entries or any(repo.active_exit_for_order(order.order_ref) is not None for order in entries):
-                continue
-            entry_order_ref = entries[-1].order_ref
-            decision_id = f"{DRY_RUN_CLOSE_DECISION_PREFIX}{hashlib.sha256(entry_order_ref.encode('utf-8')).hexdigest()[:16]}"
-            if repo.effect_operation(
-                exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
-            ) is not None:
-                continue
-            owed.append(OwedClose(strategy_instance_id, symbol, entry_order_ref, decision_id))
+        owed.append(OwedClose(strategy_instance_id, symbol, entry_order_ref, decision_id))
     return owed
+
+
+def closes_owed(repo: ClerkSqliteRepository) -> list[OwedClose]:
+    """Every position a no-longer-running Dry Run on this authority still has to close."""
+    return [close for sid in ended_dry_runs(repo) for close in closes_owed_for(repo, sid)]
 
 
 async def close_exposure_of_ended_dry_runs(
@@ -118,61 +136,89 @@ async def close_exposure_of_ended_dry_runs(
     pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> None:
-    """Accept and drive one run-end close for each position :func:`closes_owed` names.
+    """Close what each ended Dry Run on this authority left, one bot at a time.
 
-    A run that re-activated before the capture, a held operation claim or a
-    policy block defers that close: an accepted EXIT is re-driven by the next
-    pass's operation recovery, and one never accepted is owed again.
+    The close is a convenience the simulation owes its owner, not a custody
+    proof the pass depends on. An unexpected failure closing one bot is
+    therefore logged with its stack and the pass goes on: letting it escape
+    would fail every later pass on this authority, and with them the
+    operator's Reconcile now -- the fresh reconciliation the fallback flatten
+    needs. The bot's position stays attributed and flagged, and the next pass
+    tries again.
     """
     run = off_loop if off_loop is not None else run_inline
-    for close in await run(lambda: closes_owed(repo)):
-        extra = {
-            "account_id": repo.account_id,
-            "strategy_instance_id": close.strategy_instance_id,
-            "symbol": close.symbol,
-            "decision_id": close.decision_id,
-        }
+    for strategy_instance_id in await run(partial(ended_dry_runs, repo)):
         try:
-            accepted = await intake.off_loop(
-                accept_recovery_exit,
-                repo,
-                account_id=repo.account_id,
-                strategy_instance_id=close.strategy_instance_id,
-                decision_id=close.decision_id,
-                entry_order_ref=close.entry_order_ref,
-                forbid_active_run=True,
+            for close in await run(partial(closes_owed_for, repo, strategy_instance_id)):
+                await _close_one(repo, close, trade=trade, intake=intake, pricing=pricing, run=run)
+        except Exception:
+            logger.exception(
+                "a Dry Run's run-end close failed; its position stays attributed and the pass goes on",
+                extra={"action": "dry_run_close_failed", "account_id": repo.account_id,
+                       "strategy_instance_id": strategy_instance_id},
             )
-            resolved = await resolve_accepted_exit(
-                repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run
-            )
-        except RecoveryRunActiveError:
-            logger.info(
-                "deferred a Dry Run's run-end close: its bot started a new run",
-                extra={"action": "dry_run_close_deferred_run_active", **extra},
-            )
-            continue
-        except (OperationClaimError, AdmissionBlockedError):
-            logger.info(
-                "deferred a Dry Run's run-end close: its custody is busy or blocked",
-                extra={"action": "dry_run_close_deferred", **extra},
-            )
-            continue
-        extra |= {"effect_operation_id": resolved.effect_operation_id, "reducing_order_ref": resolved.reducing_order_ref}
-        effect_operation_id = exit_effect_operation_id(
-            strategy_instance_id=close.strategy_instance_id, decision_id=close.decision_id
+
+
+async def _close_one(
+    repo: ClerkSqliteRepository,
+    close: OwedClose,
+    *,
+    trade: BrokerTradePort,
+    intake: ReentrantAsyncLock,
+    pricing: RecoveryPricing,
+    run: OffLoop,
+) -> None:
+    """Accept and drive one run-end close.
+
+    A run that re-activated before the capture, a held operation claim or a
+    policy block defers it: an accepted EXIT is re-driven by the next pass's
+    operation recovery, and one never accepted is owed again.
+    """
+    extra = {
+        "account_id": repo.account_id,
+        "strategy_instance_id": close.strategy_instance_id,
+        "symbol": close.symbol,
+        "decision_id": close.decision_id,
+    }
+    try:
+        accepted = await intake.off_loop(
+            accept_recovery_exit,
+            repo,
+            account_id=repo.account_id,
+            strategy_instance_id=close.strategy_instance_id,
+            decision_id=close.decision_id,
+            entry_order_ref=close.entry_order_ref,
+            forbid_active_run=True,
         )
-        effect = await run(partial(repo.effect_operation, effect_operation_id))
-        if effect is None or effect.state != "succeeded":
-            logger.warning(
-                "a Dry Run's run-end close did not leave it flat; the EXIT stays with custody recovery",
-                extra={"action": "dry_run_close_not_flat", "effect_state": None if effect is None else effect.state,
-                       **extra},
-            )
-            continue
+        resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
+    except RecoveryRunActiveError:
+        logger.info(
+            "deferred a Dry Run's run-end close: its bot started a new run",
+            extra={"action": "dry_run_close_deferred_run_active", **extra},
+        )
+        return
+    except (OperationClaimError, AdmissionBlockedError):
+        logger.info(
+            "deferred a Dry Run's run-end close: its custody is busy or blocked",
+            extra={"action": "dry_run_close_deferred", **extra},
+        )
+        return
+    extra |= {"effect_operation_id": resolved.effect_operation_id, "reducing_order_ref": resolved.reducing_order_ref}
+    effect = await run(partial(
+        repo.effect_operation,
+        exit_effect_operation_id(strategy_instance_id=close.strategy_instance_id, decision_id=close.decision_id),
+    ))
+    if effect is None or effect.state != "succeeded":
         logger.warning(
-            "closed an ended Dry Run's simulated position at the last price its run saw",
-            extra={"action": "dry_run_run_end_close", **extra},
+            "a Dry Run's run-end close did not leave it flat; the EXIT stays with custody recovery",
+            extra={"action": "dry_run_close_not_flat", "effect_state": None if effect is None else effect.state,
+                   **extra},
         )
+        return
+    logger.warning(
+        "closed an ended Dry Run's simulated position at the last price its run saw",
+        extra={"action": "dry_run_run_end_close", **extra},
+    )
 
 
-__all__ = ["OwedClose", "close_exposure_of_ended_dry_runs", "closes_owed"]
+__all__ = ["OwedClose", "close_exposure_of_ended_dry_runs", "closes_owed", "closes_owed_for", "ended_dry_runs"]

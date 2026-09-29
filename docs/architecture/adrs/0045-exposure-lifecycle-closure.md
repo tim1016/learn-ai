@@ -151,10 +151,13 @@ alarm. When a Dry Run's run ends holding -- a crash, a feed death, the
 operator's Stop, a restart -- its own reconciliation pass closes the position
 through a recovery EXIT under the `dry-run-close-<sha256(entry_order_ref)[:16]>`
 namespace (`clerk/sqlite/dry_run_close.py`). That close fills at the last price
-the run saw (the newest bar the market delivered, re-stated on the
-`sim.run_end_close` stream at the instant it sells), not at a live quote,
-because the feed may be why the run died and no quote exists overnight; so it
-is outside the send-time rule and the session calendar. The pass runs when the
+the run saw, not at a live quote, because the feed may be why the run died and
+no quote exists overnight; so it is outside the send-time rule and the session
+calendar. Operatively that price is the newest bar the market delivered to the
+Dry Run's own bar ledger, fill-evidence streams excluded; only the bot's runs
+append to that ledger and a close is owed only while no run is active, so it is
+the last bar the last run received. The price is re-stated on the
+`sim.run_end_close` stream at the instant the simulation sells. The pass runs when the
 runner releases the ended run's authority, when boot restores a Dry Run whose
 process died, and on every read that reopens a stopped Dry Run; its worklist
 is derived from durable facts, one close per exposure. Only a `sim:`
