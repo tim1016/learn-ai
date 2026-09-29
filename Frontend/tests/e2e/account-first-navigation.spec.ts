@@ -1,33 +1,82 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-import { fakeBotPanelView } from '../../src/app/testing/bot-panel-fixtures';
+import type { BrokerAccountSnapshot } from '../../src/app/api/alpaca.types';
+import type { GalleryLiveSnapshot } from '../../src/app/components/broker/v2-panel/gallery/lib/gallery.types';
+import type { AccountMoneyView } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.service';
+import type {
+  BotPanelLiveSnapshot,
+  ChartLiveResponse,
+  PanelProfile,
+} from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
+import type {
+  FleetDirectoryResponse,
+  LaneDescriptor,
+  LaneProviderSummary,
+} from '../../src/app/fleet/fleet-directory.types';
+import type { FleetCapability } from '../../src/app/fleet/resource-target';
+import type { AggregateAttentionResponse } from '../../src/app/services/lane-attention.service';
+import { fakeAccountMoney } from '../../src/app/testing/account-money-fixtures';
+import { fakeAlpacaLiveVerdict } from '../../src/app/testing/alpaca-live-verdict-fixtures';
+import {
+  fakeBotPanelView,
+  fakeCatalogBot,
+  fakeChartFeed,
+} from '../../src/app/testing/bot-panel-fixtures';
 
 /**
- * The account-first walk (ADR 0064, #2187): one way into Alpaca, and one
- * account under the operator's feet the whole way through it.
+ * The account-first walk (ADR 0064, #2187; PRD #2560): one way into Alpaca,
+ * and one account under the operator's feet the whole way through it.
  *
- * The list names accounts, not lanes; choosing one opens its workspace and
- * every move after that — a tab, a bot's page, Back, the account switcher,
- * an account badge in the top bar — either stays on that account or changes
- * it because the operator said so. Nothing substitutes another account
- * (FR-096), and each account's reads are its own (FR-093).
+ * The list names accounts, not lanes; choosing one opens its Home, and every
+ * move after that — a tab, Home's Wall, a bot's page, Back, a top-bar account
+ * pill — either stays on that account or changes it because the operator said
+ * so. Nothing substitutes another account (FR-096), and each account's reads
+ * are its own (FR-093).
  *
  * The fleet boundary is mocked at the network edge exactly as
  * `alpaca-multi-clerk.spec.ts` does: no coordinator, no clerk container, no
  * broker. Two ready lanes, Paper and Live, each with a confirmed account.
+ * Every payload is typed against the contract or built by the unit suite's
+ * canonical fixture, so a contract change breaks this walk at compile time
+ * instead of leaving it to drift.
  */
 
 const PAPER_CLERK = 'clrk-paper-0001';
 const PAPER_ACCOUNT = 'paper-account-0001';
 const LIVE_CLERK = 'clrk-live-0001';
 const LIVE_ACCOUNT = 'live-account-0001';
-const PAPER_BOT = 'paper-spy-01';
 const NOW_MS = 1_789_310_400_000;
 
-const PAPER_WORKSPACE = `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`;
-const LIVE_WORKSPACE = `/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}`;
+/** Paper's money read is the canonical fixture verbatim — one running bot and
+ * one stopped bot still holding shares — so its roster names the same two. */
+const PAPER_MONEY: AccountMoneyView = fakeAccountMoney({ account_id: PAPER_ACCOUNT });
+const PAPER_BOT = 'spy-ema-20260929-0931';
+const PAPER_HOLDING_BOT = 'spy-ema-20260925-1402';
 
-const CAPABILITIES = [
+/** Live runs no bots: all of its money is free, and its figures differ from
+ * Paper's so a card showing the other account's read cannot pass. */
+const LIVE_MONEY: AccountMoneyView = fakeAccountMoney({
+  account_id: LIVE_ACCOUNT,
+  world: 'real_live',
+  total_usd: '250000.00',
+  cash_usd: '250000.00',
+  free_to_deploy_usd: '250000.00',
+  in_bots_usd: '0.00',
+  held_by_stopped_usd: '0.00',
+  account_charges_usd: '0.00',
+  stopped_holding_count: 0,
+  open_pnl_usd: '0.00',
+  equity_usd: '250000.00',
+  today_pnl_usd: '0.00',
+  segments: [{ kind: 'free', label: 'free to deploy', amount_usd: '250000.00', share_bps: 10_000 }],
+});
+
+const PAPER_LANE = `/brokers/alpaca/clerks/${PAPER_CLERK}`;
+const LIVE_LANE = `/brokers/alpaca/clerks/${LIVE_CLERK}`;
+const PAPER_WORKSPACE = `${PAPER_LANE}/accounts/${PAPER_ACCOUNT}`;
+const LIVE_WORKSPACE = `${LIVE_LANE}/accounts/${LIVE_ACCOUNT}`;
+
+const CAPABILITIES: FleetCapability[] = [
   'account_read',
   'positions_read',
   'orders_read',
@@ -39,53 +88,70 @@ const CAPABILITIES = [
   'gallery_read',
 ];
 
-function lane(overrides: Record<string, unknown>): Record<string, unknown> {
+function lane(
+  clerkId: string,
+  displayLabel: string,
+  summary: LaneProviderSummary,
+  overrides: Partial<LaneDescriptor> = {},
+): LaneDescriptor {
   return {
     broker: 'alpaca',
+    clerk_id: clerkId,
+    display_label: displayLabel,
     lifecycle_state: 'ready',
     volume_id: 'vol-x',
     last_seen_at_ms: NOW_MS,
     routing_epoch: 4,
     effective_binding_generation: 3,
     capabilities: [...CAPABILITIES],
+    // The card's counts are the lane's own heartbeat summary; nothing needs
+    // the owner on either account.
+    provider_summary: { dry_run_count: 0, attention_count: 0, ...summary },
     observed_at_ms: NOW_MS,
     ...overrides,
   };
 }
 
-const directory = {
+const directory: FleetDirectoryResponse = {
   observed_at_ms: NOW_MS,
   clerks: [
-    lane({
-      clerk_id: PAPER_CLERK,
-      display_label: 'Paper',
-      provider_summary: {
-        provider_id: 'alpaca',
-        adapter_version: 'alpaca-fleet.4',
-        confirmed_account_id: PAPER_ACCOUNT,
-        confirmed_binding_generation: 3,
-        endpoint_mode: 'paper',
-        authority_state: 'real_paper',
-      },
+    lane(PAPER_CLERK, 'Paper', {
+      provider_id: 'alpaca',
+      adapter_version: 'alpaca-fleet.4',
+      confirmed_account_id: PAPER_ACCOUNT,
+      confirmed_binding_generation: 3,
+      endpoint_mode: 'paper',
+      authority_state: 'real_paper',
+      running_count: 1,
     }),
-    lane({
-      clerk_id: LIVE_CLERK,
-      display_label: 'Live',
-      routing_epoch: 19,
-      effective_binding_generation: 8,
-      provider_summary: {
+    lane(
+      LIVE_CLERK,
+      'Live',
+      {
         provider_id: 'alpaca',
         adapter_version: 'alpaca-fleet.4',
         confirmed_account_id: LIVE_ACCOUNT,
         confirmed_binding_generation: 8,
         endpoint_mode: 'live',
-        authority_state: 'shadow',
+        authority_state: 'real_live',
+        running_count: 0,
       },
-    }),
+      { routing_epoch: 19, effective_binding_generation: 8 },
+    ),
   ],
 };
 
-function account(accountId: string, equity: number): Record<string, unknown> {
+/** Both lanes answered the aggregate attention poll, and neither has
+ * anything needing the owner. */
+const attention: AggregateAttentionResponse = {
+  observed_at_ms: NOW_MS,
+  lanes: [
+    { broker: 'alpaca', clerk_id: PAPER_CLERK, ok: true, value: { account_id: PAPER_ACCOUNT, items: [] } },
+    { broker: 'alpaca', clerk_id: LIVE_CLERK, ok: true, value: { account_id: LIVE_ACCOUNT, items: [] } },
+  ],
+};
+
+function account(accountId: string, equity: number): BrokerAccountSnapshot {
   return {
     broker: 'alpaca',
     account_id: accountId,
@@ -106,52 +172,28 @@ function account(accountId: string, equity: number): Record<string, unknown> {
   };
 }
 
-function verdict(finalVerdict: string, accountId: string | null): Record<string, unknown> {
-  return {
-    configured_mode: finalVerdict === 'paper' ? 'paper' : 'live',
-    observed_account_id: accountId,
-    mode_agreement: 'agreed',
-    clerk_authority: finalVerdict === 'paper' ? 'sqlite' : 'shadow',
-    clerk_refusal_reason_code: null,
-    armed_instance_count: 0,
-    envelope_state: 'not_applicable',
-    envelope_agreement: 'not_applicable',
-    shadow_state: 'not_applicable',
-    loss_hold: 'not_applicable',
-    final_verdict: finalVerdict,
-    headline: `fixture verdict ${finalVerdict}`,
-    detail: 'fixture detail',
-    observed_at_ms: NOW_MS,
-  };
-}
-
-function catalogBot(sid: string, accountId: string): Record<string, unknown> {
-  return {
-    strategy_instance_id: sid,
-    strategy_key: 'deployment_validation',
-    strategy_label: 'Deployment Validation',
-    broker: 'alpaca',
-    account_id: accountId,
-    symbol: 'SPY',
-    mode: 'trade',
-    phase: 'ON_DUTY',
-    desired_state: 'RUNNING',
-    running: true,
-    status_label: 'Working',
-    status_explanation: 'fixture bot',
-    exposure: {},
+/** Paper's roster, matching its money read: the running bot and the stopped
+ * bot still holding the shares the read prices. */
+const paperCatalog = [
+  fakeCatalogBot({ strategy_instance_id: PAPER_BOT, account_id: PAPER_ACCOUNT, last_activity_at_ms: NOW_MS }),
+  fakeCatalogBot({
+    strategy_instance_id: PAPER_HOLDING_BOT,
+    account_id: PAPER_ACCOUNT,
+    phase: 'OFF_DUTY',
+    desired_state: 'STOPPED',
+    running: false,
+    status_label: 'Stopped',
+    status_explanation: 'Stopped · still holding 1 SPY',
+    exposure: { SPY: 1 },
     fills_today: 0,
     realized_pnl_today: 0,
-    open_pnl: 0,
-    day_pnl: 0,
+    group: 'holding',
     last_activity_at_ms: NOW_MS,
-    needs_attention: false,
-    row_action: null,
-  };
-}
+  }),
+];
 
-/** One tile's worth of gallery: a bot and the bars its chart draws. */
-function gallerySnapshot(sid: string, epoch: string): Record<string, unknown> {
+/** One tile's worth of Wall: the running bot and the bars its chart draws. */
+function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
   return {
     stream_epoch: epoch,
     surface_version: 1,
@@ -159,7 +201,7 @@ function gallerySnapshot(sid: string, epoch: string): Record<string, unknown> {
     resolution: '1m',
     bots: [
       {
-        sid,
+        sid: PAPER_BOT,
         symbol: 'SPY',
         label: 'Deployment Validation',
         phase: 'ON_DUTY',
@@ -172,6 +214,13 @@ function gallerySnapshot(sid: string, epoch: string): Record<string, unknown> {
         day_pnl: 0,
         session_change_pct: 0.4,
         last_bar_at_ms: NOW_MS,
+        feed: {
+          state: 'LIVE',
+          headline: 'Chart feed live',
+          detail: 'fixture feed',
+          attention_required: false,
+          last_error: null,
+        },
         primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
       },
     ],
@@ -179,8 +228,26 @@ function gallerySnapshot(sid: string, epoch: string): Record<string, unknown> {
       {
         symbol: 'SPY',
         bars: [
-          { t: NOW_MS - 120_000, o: 500, h: 502, l: 499, c: 501, v: 1_000 },
-          { t: NOW_MS - 60_000, o: 501, h: 503, l: 500, c: 502.5, v: 1_200 },
+          {
+            start_ms: NOW_MS - 120_000,
+            end_ms: NOW_MS - 60_000,
+            open: '500.00',
+            high: '502.00',
+            low: '499.00',
+            close: '501.00',
+            volume: 1_000,
+            source: 'ibkr',
+          },
+          {
+            start_ms: NOW_MS - 60_000,
+            end_ms: NOW_MS,
+            open: '501.00',
+            high: '503.00',
+            low: '500.00',
+            close: '502.50',
+            volume: 1_200,
+            source: 'ibkr',
+          },
         ],
       },
     ],
@@ -188,7 +255,47 @@ function gallerySnapshot(sid: string, epoch: string): Record<string, unknown> {
   };
 }
 
-const SCOPE = (clerk: string) => `/api/brokers/alpaca/clerks/${clerk}`;
+/** The broker's panel profile a bot's page reads before it renders. */
+const PANEL_PROFILE: PanelProfile = {
+  broker: 'alpaca',
+  fee_fidelity: 'none',
+  flatten_supported: false,
+  live_bars_supported: false,
+  stations: [],
+  supported_action_ids: ['stop'],
+};
+
+/** The running bot's own page: its panel and an empty live chart. A bot's
+ * panel is a large contract shape, and the unit suite already owns a
+ * canonical one; copying it here would give this walk its own drifting second
+ * copy of a contract it only needs in order to reach the bot's page. */
+function botLiveSnapshot(resolution: ChartLiveResponse['resolution']): BotPanelLiveSnapshot {
+  const base = fakeBotPanelView();
+  return {
+    stream_epoch: 'paper-bot-epoch',
+    surface_version: 1,
+    panel: fakeBotPanelView({
+      strategy_instance_id: PAPER_BOT,
+      account_id: PAPER_ACCOUNT,
+      health: { ...base.health, strategy_instance_id: PAPER_BOT },
+      clerk: { ...base.clerk, account_id: PAPER_ACCOUNT },
+    }),
+    live_chart: {
+      strategy_instance_id: PAPER_BOT,
+      symbol: 'SPY',
+      trading_date_open_ms: NOW_MS - 3_600_000,
+      trading_date_close_ms: NOW_MS + 3_600_000,
+      resolution,
+      bars: [],
+      fill_markers: [],
+      overlay_notices: [],
+      feed: fakeChartFeed(),
+      as_of_ms: NOW_MS,
+    },
+  };
+}
+
+const SCOPE =(clerk: string) => `/api/brokers/alpaca/clerks/${clerk}`;
 const ACCOUNT_SCOPE = (clerk: string, accountId: string) =>
   `${SCOPE(clerk)}/accounts/${accountId}`;
 
@@ -215,53 +322,60 @@ async function installFleetBoundary(page: Page): Promise<string[]> {
     }
     requests.push(`${request.method()} ${path}`);
 
+    if (path === '/api/broker-clerks/aggregate/attention') {
+      await route.fulfill({ json: attention });
+      return;
+    }
     if (path === `${SCOPE(PAPER_CLERK)}/live-verdict`) {
-      await route.fulfill({ json: verdict('paper', PAPER_ACCOUNT) });
+      await route.fulfill({ json: fakeAlpacaLiveVerdict('paper', { observed_account_id: PAPER_ACCOUNT }) });
       return;
     }
     if (path === `${SCOPE(LIVE_CLERK)}/live-verdict`) {
-      await route.fulfill({ json: verdict('live-unarmed', LIVE_ACCOUNT) });
+      await route.fulfill({ json: fakeAlpacaLiveVerdict('live', { observed_account_id: LIVE_ACCOUNT }) });
       return;
     }
     if (path === `${SCOPE(PAPER_CLERK)}/account`) {
-      await route.fulfill({ json: account(PAPER_ACCOUNT, 10_000) });
+      await route.fulfill({ json: account(PAPER_ACCOUNT, 100_000) });
       return;
     }
     if (path === `${SCOPE(LIVE_CLERK)}/account`) {
       await route.fulfill({ json: account(LIVE_ACCOUNT, 250_000) });
       return;
     }
+    if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/money`) {
+      await route.fulfill({ json: PAPER_MONEY });
+      return;
+    }
+    if (path === `${ACCOUNT_SCOPE(LIVE_CLERK, LIVE_ACCOUNT)}/money`) {
+      await route.fulfill({ json: LIVE_MONEY });
+      return;
+    }
     if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/bots/catalog`) {
-      await route.fulfill({ json: [catalogBot(PAPER_BOT, PAPER_ACCOUNT)] });
+      await route.fulfill({ json: paperCatalog });
       return;
     }
     if (path === `${ACCOUNT_SCOPE(LIVE_CLERK, LIVE_ACCOUNT)}/bots/catalog`) {
       await route.fulfill({ json: [] });
       return;
     }
-    if (path.endsWith('/gallery/snapshot')) {
-      const live = path.startsWith(SCOPE(LIVE_CLERK));
-      await route.fulfill({
-        json: live
-          ? { ...gallerySnapshot(PAPER_BOT, 'live-epoch'), bots: [], symbols: [] }
-          : gallerySnapshot(PAPER_BOT, 'paper-epoch'),
-      });
+    if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/gallery/snapshot`) {
+      await route.fulfill({ json: gallerySnapshot('paper-epoch') });
       return;
     }
-    if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/bots/${PAPER_BOT}/panel`) {
-      // The one fixture in this file that is not inline: a bot's panel is a
-      // large contract shape, and the unit suite already owns a canonical
-      // one. Copying it here would give this walk its own drifting second
-      // copy of a contract it only needs in order to reach the bot's page.
-      await route.fulfill({
-        json: fakeBotPanelView({
-          strategy_instance_id: PAPER_BOT,
-          account_id: PAPER_ACCOUNT,
-        }),
-      });
+    if (path === `${ACCOUNT_SCOPE(LIVE_CLERK, LIVE_ACCOUNT)}/gallery/snapshot`) {
+      await route.fulfill({ json: { ...gallerySnapshot('live-epoch'), bots: [], symbols: [] } });
       return;
     }
-    if (path.endsWith('/gallery/stream')) {
+    if (path === '/api/brokers/alpaca/panel-profile') {
+      await route.fulfill({ json: PANEL_PROFILE });
+      return;
+    }
+    if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/bots/${PAPER_BOT}/live-snapshot`) {
+      const resolution = url.searchParams.get('resolution') === '1m' ? '1m' : '5s';
+      await route.fulfill({ json: botLiveSnapshot(resolution) });
+      return;
+    }
+    if (path.endsWith('/gallery/stream') || path.endsWith('/live-stream')) {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
@@ -280,6 +394,19 @@ async function installFleetBoundary(page: Page): Promise<string[]> {
 const withoutVerdictPolls = (requests: string[]): string[] =>
   requests.filter((entry) => !entry.includes('/live-verdict'));
 
+/** The top-bar account pills (PRD #2560 D4), each a link named by its
+ * account and the server's verdict for it. */
+const accountPill = (page: Page, account: 'Paper' | 'Live') =>
+  page
+    .getByRole('navigation', { name: 'Accounts', exact: true })
+    .getByRole('link', { name: new RegExp(`^${account}:`) });
+
+/** One tab of the open account's tab strip. */
+const workspaceTab = (page: Page, tab: 'Home' | 'Activity' | 'Settings') =>
+  page
+    .getByRole('navigation', { name: 'Account sections' })
+    .getByRole('link', { name: tab, exact: true });
+
 test.describe('Account-first Alpaca navigation', () => {
   test('walks the account list into one account and stays on it', async ({ page }) => {
     const requests = await installFleetBoundary(page);
@@ -292,49 +419,62 @@ test.describe('Account-first Alpaca navigation', () => {
 
     const accounts = page.getByRole('list', { name: 'Alpaca accounts' }).getByRole('link');
     await expect(accounts).toHaveCount(2);
+    // Each card reads its own account's money (D10/D12, FR-093): Paper's
+    // figures on Paper's card, Live's on Live's.
     const paperCard = accounts.filter({ hasText: 'Paper' });
-    await expect(paperCard).toContainText('$10,000.00');
-    await expect(paperCard).toContainText('1 bot running');
+    await expect(paperCard).toContainText('Account money $100,000.00');
+    await expect(paperCard).toContainText('Free to deploy $98,329.57');
+    await expect(paperCard).toContainText('1 running');
+    await expect(paperCard).toContainText('1 stopped, still holding');
+    await expect(paperCard).toContainText('All clear');
+    const liveCard = accounts.filter({ hasText: 'Live' });
+    await expect(liveCard).toContainText('Account money $250,000.00');
+    await expect(liveCard).toContainText('0 running');
     // No lane mechanics: the card names an account, not a wiring diagram.
     await expect(page.getByText('Binding generation')).toHaveCount(0);
     await expect(page.getByText('Real Paper')).toHaveCount(0);
 
-    // The whole card opens that account's workspace.
+    // The whole card opens that account's Home.
     await paperCard.click();
     await expect(page).toHaveURL(PAPER_WORKSPACE);
+    await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
     // From here on, every read belongs to the account the operator chose. The
     // list's own reads before this point are each card reading its *own* lane
     // — the per-account independence FR-093 asks for, not a lane reaching
     // across — so the ledger is measured from the moment the choice was made.
     const sinceTheChoice = requests.length;
 
-    // Bots, then one bot's own page — which belongs to the tab it was opened
-    // from, so Bots stays current while it is open.
-    await page.getByRole('link', { name: 'Bots', exact: true }).click();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots`);
-    await page.getByRole('link', { name: 'Open full page' }).click();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${PAPER_BOT}?from=bots`);
-    await expect(page.getByRole('link', { name: 'Bots', exact: true })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    const home = page.getByRole('main', { name: 'Home' });
+    const listView = page.getByRole('radio', { name: 'List' });
+    const wallView = page.getByRole('radio', { name: 'Wall' });
+    // The bot's own page names the bot it is for.
+    const botPage = page.getByRole('heading', { name: PAPER_BOT, exact: true });
 
-    // Back to the roster it was opened from.
-    await page.goBack();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots`);
+    // Home's List, then one bot's own page — which belongs to Home, so Home
+    // stays the current tab while it is open.
+    await expect(listView).toHaveAttribute('aria-checked', 'true');
+    await home.getByRole('link', { name: PAPER_BOT, exact: true }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${PAPER_BOT}`);
+    await expect(botPage).toBeVisible();
+    await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
 
-    // Gallery, then one tile — which stamps the tab it was opened from, so
-    // Back returns to the Gallery rather than to the roster.
-    await page.getByRole('link', { name: 'Gallery', exact: true }).click();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/gallery`);
-    await page.getByRole('button', { name: `Open SPY · ${PAPER_BOT} detail` }).click();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${PAPER_BOT}?from=gallery`);
-    await expect(page.getByRole('link', { name: 'Gallery', exact: true })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    // Back to the List it was opened from.
     await page.goBack();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/gallery`);
+    await expect(page).toHaveURL(PAPER_WORKSPACE);
+    await expect(listView).toHaveAttribute('aria-checked', 'true');
+
+    // Home's Wall, then one tile — Back returns to the Wall rather than to
+    // the List.
+    await wallView.click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}?view=wall`);
+    await expect(wallView).toHaveAttribute('aria-checked', 'true');
+    await home.getByRole('link', { name: PAPER_BOT, exact: true }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${PAPER_BOT}`);
+    await expect(botPage).toBeVisible();
+    await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
+    await page.goBack();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}?view=wall`);
+    await expect(wallView).toHaveAttribute('aria-checked', 'true');
 
     // Nothing the workspace did reached into the other account (FR-096).
     expect(
@@ -344,42 +484,58 @@ test.describe('Account-first Alpaca navigation', () => {
     ).toEqual([]);
   });
 
-  test('switches accounts in place, keeping the tab, and comes back by badge', async ({ page }) => {
+  test('switches accounts in place from the top-bar pills, keeping the tab', async ({ page }) => {
     await installFleetBoundary(page);
 
-    await page.goto(`${PAPER_WORKSPACE}/gallery`);
-    await expect(page.getByRole('main', { name: 'Bot gallery' })).toBeVisible();
+    // Each pill is the same move from anywhere in a workspace: the chosen
+    // account, on the tab the operator is standing on (ADR 0064 Decision 4;
+    // PRD #2560 D4 — the pills are the only way between accounts). Activity
+    // is account-scoped; Settings is lane-scoped (FR-092).
+    const standingOn = [
+      { tab: 'Activity', paperTab: `${PAPER_WORKSPACE}/activity`, liveTab: `${LIVE_WORKSPACE}/activity` },
+      { tab: 'Settings', paperTab: `${PAPER_LANE}/settings`, liveTab: `${LIVE_LANE}/settings` },
+    ] as const;
+    for (const { tab, paperTab, liveTab } of standingOn) {
+      await page.goto(paperTab);
+      await expect(workspaceTab(page, tab)).toHaveAttribute('aria-current', 'page');
+      await expect(accountPill(page, 'Paper')).toHaveAttribute('aria-current', 'true');
 
-    // The account switcher in the workspace header: choosing Live lands on
-    // Live's Gallery, not on its Overview — the operator was looking at a
-    // Gallery and still is (ADR 0064 Decision 4).
-    await page.getByRole('button', { name: /Paper/ }).first().click();
-    await page.getByRole('link', { name: /Live/ }).first().click();
-    await expect(page).toHaveURL(`${LIVE_WORKSPACE}/gallery`);
+      await accountPill(page, 'Live').click();
+      await expect(page).toHaveURL(liveTab);
+      await expect(workspaceTab(page, tab)).toHaveAttribute('aria-current', 'page');
+      await expect(accountPill(page, 'Live')).toHaveAttribute('aria-current', 'true');
+      await expect(accountPill(page, 'Paper')).not.toHaveAttribute('aria-current', 'true');
 
-    // The Paper badge in the top bar is the same move made from the shell:
-    // it returns to Paper's Gallery, the tab still under the operator's feet.
-    await page
-      .locator('app-alpaca-live-banner')
-      .filter({ hasText: 'Paper' })
-      .getByRole('link')
-      .click();
-    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/gallery`);
+      await accountPill(page, 'Paper').click();
+      await expect(page).toHaveURL(paperTab);
+      await expect(workspaceTab(page, tab)).toHaveAttribute('aria-current', 'page');
+    }
+
+    // Home's Wall travels with Home: it is how the tab is being looked at.
+    await page.goto(`${PAPER_WORKSPACE}?view=wall`);
+    await expect(page.getByRole('radio', { name: 'Wall' })).toHaveAttribute('aria-checked', 'true');
+
+    await accountPill(page, 'Live').click();
+    await expect(page).toHaveURL(`${LIVE_WORKSPACE}?view=wall`);
+    await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('radio', { name: 'Wall' })).toHaveAttribute('aria-checked', 'true');
+
+    await accountPill(page, 'Paper').click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}?view=wall`);
+    await expect(page.getByRole('radio', { name: 'Wall' })).toHaveAttribute('aria-checked', 'true');
   });
 
-  test('opens an account from outside any workspace on its Overview', async ({ page }) => {
+  test('opens an account from outside any workspace on its Home', async ({ page }) => {
     await installFleetBoundary(page);
 
-    // Standing nowhere near an account: a badge has no tab to keep, so it
-    // opens the account's own page.
+    // Standing nowhere near an account: a pill has no tab to keep, so it
+    // opens the account's own Home.
     await page.goto('/data-lab');
-    await page
-      .locator('app-alpaca-live-banner')
-      .filter({ hasText: 'Live' })
-      .getByRole('link')
-      .click();
+    await accountPill(page, 'Live').click();
 
     await expect(page).toHaveURL(LIVE_WORKSPACE);
+    await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
   });
 
   test('offers Alpaca as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {
