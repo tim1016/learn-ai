@@ -183,12 +183,14 @@ def test_withdrawing_drops_the_observation_at_once() -> None:
     assert gate.latest_observation() is None
 
 
-def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
+def test_the_admission_reason_codes_are_the_envelope_refusals() -> None:
+    """The plan's four, plus the unknown fee of a pre-provision entry order (#2553)."""
     assert set(ENVELOPE_ADMISSION_REASON_CODES) == {
         "LIVE_ENVELOPE_CASH_EXCEEDED",
         "LIVE_ENVELOPE_LOSS_HOLD",
         "LIVE_ENVELOPE_DISAGREEMENT",
         "LIVE_ENVELOPE_UNOBSERVED",
+        "ENTRY_FEE_PROVISION_UNRECORDED",
     }
     assert isinstance(ENVELOPE_ADMISSION_REASON_CODES, frozenset)
 

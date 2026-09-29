@@ -32,7 +32,13 @@ from app.utils.session_anchors import et_date_at_ms
 
 
 class BudgetUnavailable(ValueError):
-    """A named unknown prevents authorizing money; it is never a zero."""
+    """A named unknown prevents authorizing money; it is never a zero.
+
+    ``reason_code`` names the unknown for a caller that refuses with a code;
+    ``None`` leaves the caller's own code in force.
+    """
+
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True)

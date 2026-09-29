@@ -16,13 +16,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
     FILL_VISIBILITY_GRACE_MS,
-    LIVE_ENVELOPE_CASH_EXCEEDED,
     LIVE_ENVELOPE_UNOBSERVED,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
@@ -46,13 +46,14 @@ from app.broker.contract.models import (
 )
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
-from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_RISK_REVISION,
     NOON,
     TODAY_OPEN,
     _TestClock,
     complete_fee_evidence,
 )
+from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
 SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
@@ -726,7 +727,9 @@ async def test_a_stopped_sync_refuses_to_start_again(
 # stamp, so the stamp is the instant the reads were *issued*. Stamped when
 # they returned, a fill recorded during the round trip -- which the broker's
 # answer may well predate -- was released from its reservation, and a second
-# instance was admitted against cash the first had already spent.
+# instance was admitted against cash the first had already spent. Each of the
+# two instances is deployed with a $1,000.01 budget, so the account's reading
+# holds $2,000.02 before the first one's $1,000 fill.
 
 # Each half of a synthetic broker round trip, on the repo clock. Longer than
 # the fill-visibility grace, so the grace alone cannot hide a stamp taken on
@@ -780,6 +783,7 @@ def _observed_gate(*, cash: float, simulated: bool) -> LiveEnvelopeGate:
             risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0), risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
             last_equity_usd=cash,
             position_count=0,
+            risk_revision=ENVELOPE_RISK_REVISION,
         )
     )
     return gate
@@ -820,24 +824,25 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     two_active_instances: tuple[tuple[str, str], tuple[str, str]],
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    """Two instances share $1,000.01, and the first's $1,000 fill lands mid-read.
+    """The first instance's $1,000 fill lands mid-read.
 
     The first ENTER needs its $1,000 notional and its one-cent fee provision.
-    The broker answers $1,000.01 -- its snapshot predates the fill -- so only the
-    first ENTER's reservation stands between the second instance and cash
-    already spent. One account round trip is enough, because the fault was the
-    stamp; the positions endpoint is no longer part of this equity-only verdict.
+    The broker answers $2,000.02 -- its snapshot predates the fill -- so the
+    reading cannot describe the executions the second instance would be
+    admitted beside. One account round trip is enough, because the fault was
+    the stamp; the positions endpoint is no longer part of this equity-only
+    verdict.
     """
     first_instance, second_instance = two_active_instances
     first = _enter(
         envelope_repo,
         first_instance,
         symbol="SPY",
-        envelope=_observed_gate(cash=1_000.01, simulated=False),
+        envelope=_observed_gate(cash=2_000.02, simulated=False),
     )
     read = _FillLandsMidRead(
         clock=envelope_clock,
-        cash=1_000.01,
+        cash=2_000.02,
         record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
     )
     sync = make_sync(envelope_repo, read, simulated=False)
@@ -871,30 +876,32 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     Alpaca promises no ordering between the two, so a fill the Clerk recorded
     up to ``FILL_VISIBILITY_GRACE_MS`` before the read was issued -- the
     boundary, inclusive -- is not trusted to be in the answer. Here the broker
-    still reports the pre-fill $1,000.01, and the second instance is refused
-    rather than admitted against it. The 1 ms case is the one a zero grace
+    still reports the pre-fill $2,000.02, so the account's money read keeps
+    the fill's $1,000 claimed beside it, and the second instance is admitted
+    only against what is truly left. The 1 ms case is the one a zero grace
     would release; the boundary case is the one a grace applied off by one
     would.
     """
-    first_instance, second_instance = two_active_instances
+    first_instance, _second_instance = two_active_instances
     first = _enter(
         envelope_repo,
         first_instance,
         symbol="SPY",
-        envelope=_observed_gate(cash=1_000.01, simulated=False),
+        envelope=_observed_gate(cash=2_000.02, simulated=False),
     )
     _fill_all_ten(envelope_repo, envelope_clock, first)()
     envelope_clock.advance(recorded_before_read_ms)
     sync = make_sync(
-        envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=1_000.01), simulated=False
+        envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=2_000.02), simulated=False
     )
 
     reading = await sync.observe()
 
     assert reading.observation.observed_at_ms == T0 + recorded_before_read_ms
-    with pytest.raises(AdmissionBlockedError) as refused:
-        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+    budget = envelope_repo.account_budget(
+        cash=reading.observation.cash_available_usd, seen_before_ms=reading.observation.fills_seen_before_ms,
+    )
+    assert budget.order_claims == Decimal(1_000)
 
 
 

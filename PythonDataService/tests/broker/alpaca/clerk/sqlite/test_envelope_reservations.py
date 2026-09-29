@@ -12,42 +12,50 @@ remainder.
 
 An ENTER is reserved by passing the envelope gate, never a hand-built
 reservation: what gets written is whatever ``require_envelope_admission``
-admitted, so these tests exercise the same seam production does.
+admitted, so these tests exercise the same seam production does. What an
+order claims is read back through ``entry_cash_claims``, the one claim query
+every money read prices from.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.live_envelope import (
-    AccountObservation,
-    LiveEnvelopeGate,
-)
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED
 from app.broker.alpaca.clerk.sqlite import schema
-from app.broker.alpaca.clerk.sqlite.budget_authority import (
-    ENTRY_FEE_PROVISION_UNRECORDED,
-    commit_budget_authority_cutover,
-)
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
-from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryFeeProvisionUnrecorded
+from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
+from app.broker.alpaca.clerk.sqlite.enter import (
+    EnterSubmission,
+    accept_enter,
+    resolve_enter_submission,
+    submit_accepted_enter,
+)
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
+    EntryFeeProvisionUnrecorded,
+    entry_cash_claims,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_failed,
     fold_order_acknowledgement,
     fold_order_evidence,
+    submit_absence_grace_ms,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -61,8 +69,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_ACCOUNT_ID as ACCOUNT_ID,
 )
@@ -73,15 +81,21 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_RUN_ID_B,
     ENVELOPE_SID_B,
     _clock_at,
+    _FakeTradePort,
     _register_active,
+    _start_legacy_run,
     _TestClock,
     complete_fee_evidence,
+    switch_to_budgets,
 )
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_SID as SID,
 )
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_T0 as T0,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    envelope_gate as _gate,
 )
 
 # The trailing-fill timeline: terminal ack, then the cash observation, then the
@@ -113,23 +127,18 @@ def _leg(**overrides: Any) -> BrokerOrderLeg:
     return BrokerOrderLeg(**base)
 
 
-def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
-    """A gate holding one observation fresh at ``T0`` — enough cash to admit."""
-    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
-    gate.publish(
-        AccountObservation(
-            observed_at_ms=T0,
-            broker_cash_usd=cash,
-            cash_available_usd=cash,
-            equity_usd=cash,
-            last_equity_usd=cash,
-            position_count=0,
-            risk_cash_flow_evidence_complete=True,
-            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0),
-            risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
-        )
+def _claimed(repo: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
+    """What entry orders claim beyond a cash reading that saw fills recorded before ``seen_before_ms``.
+
+    Each claim's parts as ``budget_projection`` adds them to the account's
+    ``order_claims``: the unfilled remainder's cost and fee, and the unseen
+    fills' actual cost.
+    """
+    return sum(
+        (claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee
+         for claim in entry_cash_claims(repo._conn, seen_before_ms=seen_before_ms)),
+        Decimal(0),
     )
-    return gate
 
 
 def _observed_order(
@@ -220,7 +229,7 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clo
     clerk = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
-    _register_active(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    _start_legacy_run(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
     accept_enter(
         clerk,
         account_id=ACCOUNT_ID,
@@ -284,11 +293,10 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clo
 def test_accepting_an_enter_records_its_price_and_fee_provision_in_the_same_commit(
     envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
-    """#2553: an ENTER admitted before the budget cutover records its fee too.
+    """#2553: the provision is the entry requirement's own fee, recorded with the ENTER.
 
-    The provision is the entry requirement's own fee -- 10 shares of CAT,
-    rounded up to the cent -- carried by ``ENTER_ACCEPTED``'s facts, so the
-    claim is that recorded cent and never a zero.
+    10 shares of CAT, rounded up to the cent, carried by ``ENTER_ACCEPTED``'s
+    facts, so the claim is that recorded cent and never a zero.
     """
     sid, run_id = active_instance
     accepted = accept_enter(
@@ -309,13 +317,13 @@ def test_accepting_an_enter_records_its_price_and_fee_provision_in_the_same_comm
     assert (row["quantity"], Decimal(row["exact_reference_price"]), row["fee_provision_cents"], row["reserved_at_ms"]) == (
         10.0, Decimal(100), 1, T0,
     )
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == Decimal("1000.01")
+    assert _claimed(envelope_repo, seen_before_ms=T0) == Decimal("1000.01")
 
 
 @pytest.mark.parametrize(
     ("broker_state", "fills", "seen_before_ms", "expected"),
-    # Every unfilled remainder also claims its share of the recorded one-cent
-    # fee provision, rounded up to the cent; no remainder claims no fee.
+    # Every unfilled remainder also claims the whole recorded one-cent fee
+    # provision (owner decision 2026-09-29); no remainder claims no fee.
     [
         (None, [], T0, "1000.01"),  # working, unacked: full
         ("new", [(4, T0 - 1)], T0, "600.01"),  # 4 filled before the observation: remainder
@@ -355,7 +363,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
 
     # The "filled before the observation" cases wind the fixture clock back
     # past the acceptance for brevity; that is harmless here because
-    # ``reserved_cash_decimal`` never reads ``reserved_at_ms`` — only the
+    # the claim never reads ``reserved_at_ms`` — only the
     # fill's ``recorded_at_ms`` against the observation.
     if fills:
         for index, (cumulative_qty, recorded_at_ms) in enumerate(fills, start=1):
@@ -385,7 +393,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
             ),
         )
 
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=seen_before_ms) == Decimal(expected)
+    assert _claimed(envelope_repo, seen_before_ms=seen_before_ms) == Decimal(expected)
 
 
 def _refuse_coverage_conflict() -> TransitionInput:
@@ -491,7 +499,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     )
     assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
 
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal(1_000)
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal(1_000)
 
 
 def _append_slice(
@@ -590,7 +598,7 @@ def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
 @pytest.mark.parametrize(
     ("original_qty", "corrected_qty", "expected"),
     [
-        (10.0, 5.0, "500.01"),  # downward: the restated 5 units are unfilled cash again, with their fee share
+        (10.0, 5.0, "500.01"),  # downward: the restated 5 units are unfilled cash again, with the whole fee
         (5.0, 10.0, "0"),  # upward: the whole ENTER is filled, nothing left to reserve
     ],
 )
@@ -650,7 +658,7 @@ def test_a_corrected_fill_reserves_at_its_restated_size(
         ).fetchone()["broker_state"]
         is None
     )
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal(expected)
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal(expected)
 
 
 def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
@@ -692,11 +700,11 @@ def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
 
     # The observation at T2 cannot see a fill recorded at T3: reserve the
     # 1,011.25 the fill actually cost, not the 1,000 the close estimated.
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal("1011.25")
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal("1011.25")
 
     # The next broker read supersedes it: once the fill counts as seen, the
     # filled order reserves nothing.
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T3_TRAILING_FILL + 1) == 0
+    assert _claimed(envelope_repo, seen_before_ms=T3_TRAILING_FILL + 1) == 0
 
 
 def test_a_working_order_blends_actual_fill_cost_with_the_decision_price(
@@ -734,9 +742,9 @@ def test_a_working_order_blends_actual_fill_cost_with_the_decision_price(
         source_event_at_ms=T3_TRAILING_FILL,
     )
 
-    # 4 x 102 + the 0.50 fee, then 6 x 100 plus the unfilled 6/10 of the
-    # recorded one-cent provision, rounded up to the cent.
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal("1008.51")
+    # 4 x 102 + the 0.50 fee, then 6 x 100 plus the whole recorded one-cent
+    # provision, which the remainder claims while any of the order is unfilled.
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal("1008.51")
 
 
 def test_a_dead_order_prices_its_unseen_fill_at_cost(
@@ -776,7 +784,7 @@ def test_a_dead_order_prices_its_unseen_fill_at_cost(
         ),
     )
 
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal(303)
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal(303)
 
 
 def test_reservations_sum_across_instances(
@@ -797,32 +805,43 @@ def test_reservations_sum_across_instances(
         )
 
     # Each ENTER's notional plus its own recorded one-cent provision.
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == Decimal("1000.02")
+    assert _claimed(envelope_repo, seen_before_ms=T0) == Decimal("1000.02")
 
 
 def test_a_mirror_rebuild_restores_the_recorded_reservation_and_replays_older_entries(tmp_path: Path) -> None:
     """Replay-compatible (#2553): the reservation folds back from ``ENTER_ACCEPTED``'s facts.
 
-    An ENTER recorded without a reservation (here, one admitted with no
-    envelope) keeps its exact bytes: the rebuilt chain has the same row
-    hashes, and it still reserves nothing.
+    An ENTER recorded without a reservation (here, one a version-1 store
+    admitted with no envelope, which never reached the broker) keeps its exact
+    bytes through the account's switch to budgets: the rebuilt chain has the
+    same row hashes, it still reserves nothing, and the budgeted ENTER's
+    recorded claim folds back unchanged.
     """
     clock = _clock_at(T0)
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     try:
         complete_fee_evidence(repo)
+        _start_legacy_run(repo, clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
+        older = accept_enter(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
+            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=10),
+        )
+        _refuse_before_contact(repo, older)
+        submit_stop_run(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, lifecycle_run_id=ENVELOPE_RUN_ID_B,
+            clock=clock,
+        )
         _register_active(repo, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-        _register_active(repo, clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
         accept_enter(
             repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="d1", lifecycle_run_id=RUN_ID,
             leg=_leg(quantity=10), envelope=_gate(), reference_price=100.0,
         )
-        accept_enter(
-            repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
-            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=10),
-        )
         chain = [(row["sequence"], row["row_hash"]) for row in repo.custody_transitions()]
-        assert repo.reserved_cash_decimal(seen_before_ms=T0) == Decimal("1000.01")
+        claims = entry_cash_claims(repo._conn, seen_before_ms=T0)
+        assert [(claim.strategy_instance_id, claim.unfilled_cost, claim.unfilled_fee) for claim in claims] == [
+            (SID, Decimal(1_000), Decimal("0.01")),
+        ]
+        assert _claimed(repo, seen_before_ms=T0) == Decimal("1000.01")
         database = repo.db_path
     finally:
         repo.close()
@@ -831,17 +850,30 @@ def test_a_mirror_rebuild_restores_the_recorded_reservation_and_replays_older_en
     rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     try:
         assert [(row["sequence"], row["row_hash"]) for row in rebuilt.custody_transitions()] == chain
-        assert rebuilt.reserved_cash_decimal(seen_before_ms=T0) == Decimal("1000.01")
+        assert entry_cash_claims(rebuilt._conn, seen_before_ms=T0) == claims
+        assert _claimed(rebuilt, seen_before_ms=T0) == Decimal("1000.01")
     finally:
         rebuilt.close()
 
 
-def _legacy_enter(repo: ClerkSqliteRepository, sid: str, run_id: str) -> EnterSubmission:
-    """An ENTER whose reservation an earlier build wrote beside the transition (#2553).
+def _refuse_before_contact(repo: ClerkSqliteRepository, accepted: EnterSubmission) -> None:
+    """The Clerk's own pre-contact refusal: the effect fails, the broker never hears of the order."""
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+    fold_failed(
+        repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+        transition_kind="ENTER_SUBMISSION_REFUSED", summary_code="MARKET_LIVENESS_BLOCKED",
+        reason="The Clerk refused the entry before contacting the broker.",
+        why="The market closed before the order was sent.",
+    )
 
-    That build priced 10 SPY at a float 100 and recorded no fee provision,
-    outside the hashed facts. Nothing writes this shape any more, but a store
-    written before the change can still hold one.
+
+def _legacy_enter(repo: ClerkSqliteRepository, sid: str, run_id: str) -> EnterSubmission:
+    """An ENTER a version-1 store admitted, its reservation written beside the transition (#2553).
+
+    That earlier build priced 10 SPY at a float 100 and recorded no fee
+    provision, outside the hashed facts. Nothing writes this shape any more --
+    a version-1 account admits no ENTER at all -- but a store written before
+    the change can still hold one.
     """
     accepted = accept_enter(
         repo,
@@ -860,32 +892,33 @@ def _legacy_enter(repo: ClerkSqliteRepository, sid: str, run_id: str) -> EnterSu
     return accepted
 
 
+def _stop(repo: ClerkSqliteRepository, sid: str, run_id: str) -> None:
+    submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id, clock=repo.clock)
+
+
 def test_a_legacy_reservation_with_an_unfilled_remainder_refuses_instead_of_claiming_no_fee(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
 ) -> None:
-    """Regression (#2553): an unknown fee is refused under its own code, never priced at zero."""
-    (sid_a, run_a), (sid_b, run_b) = two_active_instances
-    legacy = _legacy_enter(envelope_repo, sid_a, run_a)
+    """Regression (#2553): an unknown fee is refused under its own code, never priced at zero.
+
+    The account is switched to budgets while the earlier entry still works at
+    Alpaca. Every money read -- a Deploy's included -- refuses until that
+    order ends; then its unfilled remainder is cancelled quantity, never cash.
+    """
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
     assert legacy.effect_operation_id is not None and legacy.order_ref is not None
+    _stop(envelope_repo, SID, RUN_ID)
+    switch_to_budgets(envelope_repo)
 
-    with pytest.raises(EntryFeeProvisionUnrecorded):
-        envelope_repo.reserved_cash_decimal(seen_before_ms=T0)
-    before = envelope_repo.control_meta_snapshot().control_revision
-    with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
-            envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, decision_id="d1",
-            lifecycle_run_id=run_b, leg=_leg(symbol="QQQ", quantity=1), envelope=_gate(), reference_price=100.0,
-        )
-    assert exc_info.value.decision.reason_code == ENTRY_FEE_PROVISION_UNRECORDED
-    # Account-scoped and self-ending: the refused ENTER retries on the next decision clock.
-    assert classify_admission_refusal(ENTRY_FEE_PROVISION_UNRECORDED) is RefusalClass.TRANSIENT
-    assert envelope_repo.control_meta_snapshot().control_revision == before
+    with pytest.raises(EntryFeeProvisionUnrecorded) as unknown:
+        envelope_repo.account_budget(cash=100_000, seen_before_ms=T0)
+    assert unknown.value.reason_code == ENTRY_FEE_PROVISION_UNRECORDED
+    with pytest.raises(BudgetUnavailable, match="no recorded fee estimate"):
+        _register_active(envelope_repo, envelope_clock, strategy_instance_id="blocked-bot", symbol="QQQ", run_id="run-blocked")
     # Home still places the bot among those holding money.
-    assert envelope_repo.bots_holding_money() == frozenset({sid_a})
+    assert envelope_repo.bots_holding_money() == frozenset({SID})
 
-    # The order ends: its unrecorded remainder is cancelled quantity, never cash.
     envelope_clock.value = T1_TERMINAL_ACK
     fold_order_evidence(
         envelope_repo,
@@ -895,43 +928,180 @@ def test_a_legacy_reservation_with_an_unfilled_remainder_refuses_instead_of_clai
             source_event_at_ms=T1_TERMINAL_ACK,
         ),
     )
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == 0
+    assert envelope_repo.account_budget(cash=100_000, seen_before_ms=T0).order_claims == 0
     assert envelope_repo.bots_holding_money() == frozenset()
+    _register_active(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
     assert accept_enter(
-        envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, decision_id="d2",
-        lifecycle_run_id=run_b, leg=_leg(symbol="QQQ", quantity=1), envelope=_gate(), reference_price=100.0,
+        envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
+        lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1),
+        envelope=_gate(observed_at_ms=T1_TERMINAL_ACK), reference_price=100.0,
     ).created
 
 
+def test_a_legacy_remainder_a_correction_reopens_refuses_the_next_enter_under_its_own_code(
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
+) -> None:
+    """A filled legacy entry claims no fee; a correction that reopens its remainder makes the fee unknown again.
+
+    The refused ENTER is transient: account-scoped, retried on the next
+    decision clock, and it writes nothing.
+    """
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
+    _append_slice(envelope_repo, legacy, execution_id="legacy-fill", quantity=10.0, source_event_at_ms=T0)
+    _stop(envelope_repo, SID, RUN_ID)
+    _register_active(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
+
+    envelope_clock.value = T1_TERMINAL_ACK
+    _append_correction(
+        envelope_repo, legacy, execution_id="legacy-corrected", superseded_execution_ref="legacy-fill",
+        quantity=5.0, source_event_at_ms=T1_TERMINAL_ACK,
+    )
+    before = envelope_repo.control_meta_snapshot().control_revision
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
+            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1), reference_price=100.0,
+            envelope=_gate(observed_at_ms=T1_TERMINAL_ACK, fill_sequence=risk_fill_sequence(envelope_repo)),
+        )
+    assert exc_info.value.decision.reason_code == ENTRY_FEE_PROVISION_UNRECORDED
+    assert classify_admission_refusal(ENTRY_FEE_PROVISION_UNRECORDED) is RefusalClass.TRANSIENT
+    assert envelope_repo.control_meta_snapshot().control_revision == before
+
+
 def test_a_legacy_reservation_with_no_remainder_still_claims_its_unseen_fills_at_cost(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    active_instance: tuple[str, str],
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
 ) -> None:
     """Only the unknown fee refuses: a fully filled legacy ENTER still reads (replay-compatible)."""
-    sid, run_id = active_instance
-    legacy = _legacy_enter(envelope_repo, sid, run_id)
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
 
     envelope_clock.value = T3_TRAILING_FILL
     _append_slice(
         envelope_repo, legacy, execution_id="legacy-fill", quantity=10.0, price=101.0, fee=1.25,
         source_event_at_ms=T3_TRAILING_FILL,
     )
+    _stop(envelope_repo, SID, RUN_ID)
 
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T2_OBSERVATION) == Decimal("1011.25")
+    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal("1011.25")
 
 
-def test_a_legacy_reservation_that_outlives_the_budget_cutover_withholds_budget_money(
-    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+# ── An ENTER the broker never knew (#2553 review; research #2469) ─────────────
+
+
+@pytest.mark.parametrize(
+    "ends",
+    [
+        pytest.param(_refuse_before_contact, id="refused-before-contact"),
+        pytest.param(
+            lambda repo, accepted: fold_failed(
+                repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+                summary_code="ORDER_SUBMIT_FAILED", reason="The order did not reach the broker.",
+                why="potential wash trade detected. use complex orders",
+            ),
+            id="broker-refused-the-submit",
+        ),
+    ],
+)
+@pytest.mark.parametrize("switched", [True, False], ids=["switched-to-budgets", "still-on-version-1"])
+def test_a_legacy_entry_that_never_reached_alpaca_claims_nothing(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    ends: Callable[[ClerkSqliteRepository, EnterSubmission], None],
+    switched: bool,
 ) -> None:
-    """A pre-cutover working ENTER is retained through the cutover; its unknown fee refuses budgets."""
-    sid, run_id = active_instance
-    _legacy_enter(envelope_repo, sid, run_id)
-    submit_stop_run(
-        envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id,
-        clock=envelope_repo.clock,
-    )
-    commit_budget_authority_cutover(envelope_repo, actor="owner", reviewed_token="reviewed", stop_receipt="stopped")
+    """Review major (#2553): a dead entry never blocks the account.
 
-    with pytest.raises(EntryFeeProvisionUnrecorded, match="no recorded fee"):
-        envelope_repo.account_budget(cash=100_000, seen_before_ms=T0)
+    Its effect failed and the broker never acknowledged it, so it can never
+    fill: the unrecorded fee of its (cancelled) remainder is not an unknown.
+    On a switched account the next bot is deployed and enters; on one still on
+    version 1 the next ENTER is refused for that reason alone.
+    """
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
+    ends(envelope_repo, legacy)
+    _stop(envelope_repo, SID, RUN_ID)
+
+    [claim] = entry_cash_claims(envelope_repo._conn, seen_before_ms=T0)
+    assert (claim.unfilled_cost, claim.unseen_fill_cost, claim.unfilled_fee) == (0, 0, 0)
+    assert envelope_repo.bots_holding_money() == frozenset()
+    if switched:
+        _register_active(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
+        assert envelope_repo.account_budget(cash=100_000, seen_before_ms=T0).order_claims == 0
+        assert accept_enter(
+            envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
+            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1), envelope=_gate(), reference_price=100.0,
+        ).created
+    else:
+        _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
+        with pytest.raises(AdmissionBlockedError) as exc_info:
+            accept_enter(
+                envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
+                lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1), envelope=_gate(),
+                reference_price=100.0,
+            )
+        assert exc_info.value.decision.reason_code == BUDGETS_NOT_SWITCHED_ON
+
+
+@pytest.mark.parametrize("refusal", ["broker-refused-the-submit", "refused-before-contact"])
+async def test_a_budgeted_enter_that_never_reached_the_book_releases_its_claim_and_the_stopped_bot_is_finished(
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str], refusal: str
+) -> None:
+    """Research #2469's leak: a refused entry's cash stayed claimed after Stop, and the bot never showed Finished."""
+    sid, run_id = active_instance
+    leg = _leg(quantity=10)
+    accepted = accept_enter(
+        envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id="d1", lifecycle_run_id=run_id,
+        leg=leg, envelope=_gate(), reference_price=100.0,
+    )
+    if refusal == "broker-refused-the-submit":
+        await submit_accepted_enter(
+            envelope_repo, accepted=accepted, leg=leg,
+            trade=_FakeTradePort(submit_error=BrokerOrderRejected("potential wash trade detected. use complex orders")),
+        )
+    else:
+        await submit_accepted_enter(
+            envelope_repo, accepted=accepted, leg=leg, trade=_FakeTradePort(),
+            before_submit=lambda: "The market closed before the order was sent.",
+        )
+    effect = envelope_repo.effect_operation(accepted.effect_operation_id or "")
+    assert effect is not None and effect.state == "failed"
+    _stop(envelope_repo, sid, run_id)
+
+    budget = envelope_repo.account_budget(cash=100_000, seen_before_ms=T0)
+
+    assert budget.order_claims == 0
+    assert budget.deployments[0].pending_orders == 0
+    assert sid not in envelope_repo.bots_holding_money()
+
+
+async def test_an_enter_whose_submission_is_unknown_keeps_its_whole_claim_until_it_is_resolved(
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock, active_instance: tuple[str, str]
+) -> None:
+    """An unknown outcome is not a dead order: the claim stands until absence is proven.
+
+    The submit's answer is lost, so the effect is ``unknown`` and the order
+    may yet be working at the broker. Only once the absence grace has passed
+    and the exact lookup still finds nothing is the entry dead.
+    """
+    sid, run_id = active_instance
+    leg = _leg(quantity=10)
+    accepted = accept_enter(
+        envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id="d1", lifecycle_run_id=run_id,
+        leg=leg, envelope=_gate(), reference_price=100.0,
+    )
+    assert accepted.order_ref is not None
+    absent = _FakeTradePort(submit_error=BrokerUnavailable("The submit's answer was lost."), lookup_absent=True)
+    await submit_accepted_enter(envelope_repo, accepted=accepted, leg=leg, trade=absent)
+
+    effect = envelope_repo.effect_operation(accepted.effect_operation_id or "")
+    assert effect is not None and effect.state == "unknown"
+    assert _claimed(envelope_repo, seen_before_ms=T0) == Decimal("1000.01")
+    assert envelope_repo.bots_holding_money() == frozenset({sid})
+
+    envelope_clock.advance(submit_absence_grace_ms())
+    await resolve_enter_submission(envelope_repo, order_ref=accepted.order_ref, trade=absent)
+
+    effect = envelope_repo.effect_operation(accepted.effect_operation_id or "")
+    assert effect is not None and effect.state == "failed"
+    assert _claimed(envelope_repo, seen_before_ms=T0) == 0

@@ -75,9 +75,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
-from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
-from app.broker.alpaca.clerk.sqlite.arming_admission import require_arming_admission
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_COMMITMENT_MISSING
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
@@ -173,7 +171,6 @@ def accept_enter(
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
     decision_receipt: AtomicDecisionReceipt | None = None,
-    arming: ArmingGate | None = None,
     envelope: LiveEnvelopeGate | None = None,
     reference_price: float | Decimal | None = None,
 ) -> EnterSubmission:
@@ -192,18 +189,15 @@ def accept_enter(
     durable yet, so there is nothing for recovery to duplicate, only to
     resolve.
 
-    ``arming`` is the live authority's per-instance arming gate (ADR 0059
-    D11). When supplied it runs after ``require_admission`` and **before**
-    the envelope, so an unarmed instance never reserves cash; ``None`` means
-    no arming check runs (paper, shadow).
-
     ``envelope`` is the ADR 0059 risk envelope (see
     :func:`~.envelope_admission.require_envelope_admission`). When supplied it
-    bounds this ENTER against observed cash and yields the reservation that
-    cash claims until the fills are observed; its exact price and recorded fee
-    provision ride the ``ENTER_ACCEPTED`` facts, whose fold writes the row in
-    the same transaction. ``None`` means no envelope is configured for this
-    authority and no envelope check runs.
+    refuses every ENTER on an account not yet switched to budgets (#2553),
+    bounds this ENTER by its deployment's budget and yields the reservation
+    that cash claims until the fills are observed; its exact price and
+    recorded fee provision ride the ``ENTER_ACCEPTED`` facts, whose fold
+    writes the row in the same transaction. Every account authority supplies
+    one; ``None`` means no envelope is configured (a scratch rehearsal store)
+    and no envelope check runs.
     ``reference_price`` is the decision-bar price a market leg is priced at; a
     limit leg is priced at its own limit and ignores it.
     """
@@ -235,8 +229,6 @@ def accept_enter(
                 allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
                 why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
             ))
-        if arming is not None and repo.budget_authority_version() < 2:
-            require_arming_admission(arming, strategy_instance_id=strategy_instance_id, now_ms=repo.clock())
         reservation = (
             None
             if envelope is None

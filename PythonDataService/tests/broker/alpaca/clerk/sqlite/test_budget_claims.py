@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca import regulatory_fees
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, _external_cash_claim
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
@@ -449,7 +450,12 @@ def test_same_state_broker_quantity_changes_are_retained_exactly(day_pnl_repo, p
     assert repo.custody_transitions() == after
 
 
-def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Path) -> None:
+def test_a_partly_filled_entry_keeps_claiming_its_whole_fee_provision(tmp_path: Path) -> None:
+    """Owner decision 2026-09-29 (#2553): no proportional share of the recorded fee.
+
+    While any of the order is unfilled, its remainder claims the whole
+    provision the ENTER was admitted with, until the order fills or ends.
+    """
     repo = _new_budget_repo(tmp_path)
     try:
         _deploy(repo)
@@ -461,18 +467,16 @@ def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Pat
         _append_slice(repo, accepted, execution_id="filled-part", quantity=3000, price=.1, source_event_at_ms=NOON)
         projection = repo.account_budget(cash=1000, seen_before_ms=NOON)
         own = projection.deployments[0]
-        # CAT: 3000 filled shares settle to .01 in the fee attribution. The
-        # recorded .02 provision claims only its unfilled quarter, rounded up
-        # to the cent (.005 -> .01): it may not survive whole alongside the
-        # filled-share fee projection.
+        # CAT: 3000 filled shares settle to .01 in the fee attribution; the
+        # unfilled 1000 still claim the whole recorded .02 provision.
         assert own.fees == Decimal(".01")
-        assert own.pending_orders == Decimal("100.01")
-        assert own.free == Decimal("599.98")
+        assert own.pending_orders == Decimal("100.02")
+        assert own.free == Decimal("599.97")
         assert projection.available == 0
         _append_correction(repo, accepted, execution_id="corrected-part", superseded_execution_ref="filled-part",
                            quantity=2000, source_event_at_ms=NOON + 1)
         corrected = repo.account_budget(cash=1000, seen_before_ms=NOON)
-        assert corrected.deployments[0].pending_orders == Decimal("200.01")
+        assert corrected.deployments[0].pending_orders == Decimal("200.02")
     finally:
         repo.close()
 
@@ -480,8 +484,8 @@ def test_partial_fill_prices_only_remaining_quantity_fee_provision(tmp_path: Pat
 @pytest.mark.parametrize(("filled", "pending"), [
     # Nothing filled: the whole recorded .02 provision (4000 x $0.000003 CAT, rounded up).
     (0, Decimal("400.02")),
-    # 3000 filled: the recorded .02 apportioned to the unfilled 1000 (.005, rounded up).
-    (3000, Decimal("100.01")),
+    # 3000 filled: the unfilled 1000 still claim the whole recorded .02.
+    (3000, Decimal("100.02")),
 ])
 def test_a_reservation_claims_its_recorded_fee_provision_after_a_fee_model_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filled: int, pending: Decimal,

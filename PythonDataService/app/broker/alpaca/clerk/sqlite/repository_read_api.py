@@ -12,10 +12,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
+from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -806,11 +805,6 @@ class ClerkSqliteRepositoryReadApi:
                 strategy_instance_id=strategy_instance_id,
                 subject_id=subject_id,
             )
-
-    def reserved_cash_decimal(self: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
-        """Cash the accepted ENTERs claim beyond the fills recorded before ``seen_before_ms``, exactly."""
-        with self._write_lock:
-            return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)
 
     def deployment_budget(self: ClerkSqliteRepository, strategy_instance_id: str) -> dict | None:
         """Immutable consent and its durable launch/release outcome."""

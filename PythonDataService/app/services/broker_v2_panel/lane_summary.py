@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
 )
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
@@ -147,7 +148,7 @@ async def lane_attention_read() -> LaneAttentionRead:
     items.extend(await asyncio.to_thread(_bot_items, repository, world=world, already_named=named))
     if repository.budget_authority_version() < 2:
         items.append(LaneAttentionItem(
-            condition_id="legacy-budget", reason_code="BUDGETS_NOT_SWITCHED_ON", kind="legacy_budget",
+            condition_id="legacy-budget", reason_code=BUDGETS_NOT_SWITCHED_ON, kind="legacy_budget",
             severity="warning", headline=LEGACY_BUDGET_DETAIL,
             action=LaneAttentionAction(label="Open Settings", destination="settings"),
         ))

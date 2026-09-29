@@ -1,8 +1,9 @@
 """The ADR 0059 risk envelope, as pure values and rules (Decision 4).
 
-Formula: cash bound admits iff ``entry requirement + reserved <= cash_available``
-  (``budgets.entry_requirement``: notional plus the recorded fee provision,
-  judged by ``sqlite/envelope_admission.py``); loss limit
+Formula: an ENTER is admitted by ``budgets.budget_entry_decision``: its entry
+  requirement (``budgets.entry_requirement``: notional plus the recorded fee
+  provision) against its deployment's free budget and the account's cash
+  after every other claim, judged by ``sqlite/envelope_admission.py``; loss limit
   ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached iff
   ``day_pnl <= −L``.
 Reference: ADR 0059 Decision 4; owner rulings 2026-09-08 (plan R1–R4).
@@ -28,7 +29,7 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
 # that declares every cause the Clerk can record, and it imports nothing from
 # the Clerk itself. It is re-exported below so the admission set can be stated
-# once, here, beside the three refusals this module does own.
+# once, here, beside the refusals this module does own.
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
@@ -39,16 +40,22 @@ if TYPE_CHECKING:
 
 LIVE_ENVELOPE_CASH_EXCEEDED = "LIVE_ENVELOPE_CASH_EXCEEDED"
 LIVE_ENVELOPE_DISAGREEMENT = "LIVE_ENVELOPE_DISAGREEMENT"
-# The composition refusal, defined here with the three admission codes so the
+# The composition refusal, defined here with the admission codes so the
 # arming ceremony imports it rather than repeating the literal (ADR 0059 D4).
 LIVE_ENVELOPE_MISSING = "LIVE_ENVELOPE_MISSING"
 LIVE_ENVELOPE_UNOBSERVED = "LIVE_ENVELOPE_UNOBSERVED"
+# Envelope evidence that cannot be judged, named apart from the unobserved
+# account: an entry order reserved before fee provisions were recorded (#2553)
+# is still open, so the fee it claims is unknown and is never priced as zero.
+# It ends when that order fills or ends (``sqlite/envelope_reservations.py``).
+ENTRY_FEE_PROVISION_UNRECORDED = "ENTRY_FEE_PROVISION_UNRECORDED"
 ENVELOPE_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ENVELOPE_CASH_EXCEEDED,
         LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
         LIVE_ENVELOPE_DISAGREEMENT,
         LIVE_ENVELOPE_UNOBSERVED,
+        ENTRY_FEE_PROVISION_UNRECORDED,
     }
 )
 ENVELOPE_SYNC_INTERVAL_S = 15.0
@@ -372,6 +379,7 @@ class LiveEnvelopeGate:
 
 
 __all__ = [
+    "ENTRY_FEE_PROVISION_UNRECORDED",
     "ENVELOPE_ADMISSION_REASON_CODES",
     "ENVELOPE_SETTINGS_FIELDS",
     "ENVELOPE_SYNC_INTERVAL_S",

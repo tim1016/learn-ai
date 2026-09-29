@@ -1,8 +1,10 @@
 """Envelope admission at the ENTER seam (ADR 0059 D4, plan R1).
 
 ``accept_enter`` gains a second gate beside ``require_admission``: the
-envelope's cash bound. These tests drive it through the public entry point —
-no direct call to ``require_envelope_admission`` — so what they pin is the
+envelope, which judges an ENTER by its deployment's budget and the account's
+cash after every other claim, and admits none on an account not yet switched
+to budgets (#2553). These tests drive it through the public entry point — no
+direct call to ``require_envelope_admission`` — so what they pin is the
 observable behaviour of accepting an ENTER: which legs are admitted, which
 refusal each unobservable fact produces, and that a refusal writes nothing.
 
@@ -23,42 +25,37 @@ from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
     OBSERVATION_MAX_AGE_MS,
-    AccountObservation,
     LiveEnvelopeGate,
     LiveEnvelopeValues,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import entry_cash_claims
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    RefusalClass,
+    classify_admission_refusal,
+)
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_RUN_ID,
+    ENVELOPE_SID,
+    _start_legacy_run,
+    _TestClock,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_T0 as T0,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    envelope_gate as _gate,
 )
 
 
-def _gate(
-    *,
-    cash: float = 100_000.0,
-    observed_at_ms: int = T0,
-    sealed: LiveEnvelopeValues | None = None,
-) -> LiveEnvelopeGate:
-    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=sealed, custody_is_simulated=True)
-    gate.publish(
-        AccountObservation(
-            observed_at_ms=observed_at_ms,
-            broker_cash_usd=cash,
-            cash_available_usd=cash,
-            equity_usd=cash,
-            last_equity_usd=cash,
-            position_count=0,
-            risk_cash_flow_evidence_complete=True,
-            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
-            risk_equity_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
-        )
-    )
-    return gate
+def _order_claims(repo: ClerkSqliteRepository) -> Decimal:
+    """What the account's money read claims for working ENTERs at ``T0``."""
+    return repo.account_budget(cash=100_000, seen_before_ms=T0).order_claims
 
 
 def _leg(**overrides: Any) -> BrokerOrderLeg:
@@ -100,7 +97,7 @@ def test_an_affordable_market_enter_is_admitted_and_reserved(
     accepted = _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate())
     assert accepted.created
     # The notional plus the recorded fee provision (100 shares of CAT, rounded up to the cent).
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == Decimal("10000.01")
+    assert _order_claims(envelope_repo) == Decimal("10000.01")
 
 
 def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
@@ -113,7 +110,7 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
     assert "100100.01 USD" in (exc_info.value.decision.why or "")
     assert envelope_repo.control_meta_snapshot().control_revision == before
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == 0
+    assert _order_claims(envelope_repo) == 0
 
 
 def test_fractional_cent_shortage_is_refused_without_float_tolerance(
@@ -131,11 +128,10 @@ def test_fractional_cent_shortage_is_refused_without_float_tolerance(
 def test_the_entry_requirement_includes_the_fee_provision(
     envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
-    """Regression (#2553): cash that covers only the notional cannot admit the ENTER.
+    """Cash that covers only the notional cannot admit the ENTER.
 
-    Before the budget cutover the requirement is still the one entry
-    requirement a budgeted ENTER is judged by: the notional plus its fee
-    provision, which the reservation then records and claims.
+    The one entry requirement is the notional plus its fee provision, which
+    the reservation then records and claims (#2553).
     """
     sid, run_id = active_instance
     with pytest.raises(AdmissionBlockedError) as exc_info:
@@ -150,14 +146,18 @@ def test_the_entry_requirement_includes_the_fee_provision(
 def test_two_instances_cannot_spend_the_same_cash(
     envelope_repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
+    """Each bot owns a $1,000.01 budget; the account's cash after the other's claims still bounds it."""
     (a, run_a), (b, run_b) = two_active_instances
-    gate = _gate()
-    _accept(envelope_repo, a, run_a, decision_id="d1", leg=_leg(quantity=600), envelope=gate)
+    _accept(envelope_repo, a, run_a, decision_id="d1", leg=_leg(quantity=6), envelope=_gate(cash=2_000.02))
+    # Cash falls to $1,500: A's 600.01 order and its 400.00 still free are
+    # claimed, so B's own budget covers 6 shares but the cash left does not.
+    after_fall = _gate(cash=1_500.0)
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=600), envelope=gate)
+        _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=6), envelope=after_fall)
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    # 60,000.01 is claimed; 399 shares need 39,900.01 of the 39,999.99 left.
-    _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=399), envelope=gate)
+    assert "account cash after other claims is 499.99 USD" in (exc_info.value.decision.why or "")
+    # 4 shares need 400.01 of the 499.99 left.
+    _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=4), envelope=after_fall)
 
 
 def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
@@ -239,20 +239,45 @@ def test_a_disagreement_is_named_even_when_nothing_has_been_observed(
 
 
 def test_no_envelope_means_no_envelope_check(
-    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
 ) -> None:
-    sid, run_id = active_instance
+    """A store no account authority composed (a rehearsal) has no envelope, so nothing is checked or reserved."""
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID, symbol="SPY", run_id=ENVELOPE_RUN_ID)
     accepted = _accept(
         envelope_repo,
-        sid,
-        run_id,
+        ENVELOPE_SID,
+        ENVELOPE_RUN_ID,
         decision_id="d1",
         leg=_leg(quantity=1_000_000),
         envelope=None,
         reference_price=None,
     )
     assert accepted.created
-    assert envelope_repo.reserved_cash_decimal(seen_before_ms=T0) == 0
+    assert entry_cash_claims(envelope_repo._conn, seen_before_ms=T0) == ()
+
+
+def test_an_account_not_switched_to_budgets_refuses_every_enter(
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
+) -> None:
+    """Owner decision 2026-09-29 (#2553): a version-1 account opens no position, and is never switched for you.
+
+    Its bot keeps running -- the refusal is transient, retried on the next
+    decision clock -- and the reason tells the owner where the switch is.
+    """
+    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID, symbol="SPY", run_id=ENVELOPE_RUN_ID)
+    before = envelope_repo.control_meta_snapshot().control_revision
+
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        _accept(envelope_repo, ENVELOPE_SID, ENVELOPE_RUN_ID, decision_id="d1", leg=_leg(quantity=1), envelope=_gate())
+
+    assert _refusal(exc_info) == BUDGETS_NOT_SWITCHED_ON
+    assert exc_info.value.decision.why == (
+        "This account has not switched to budgets, so no bot on it can open a new position. "
+        "Switch this account to budgets in Settings, then deploy each bot again with its own dollar budget."
+    )
+    assert classify_admission_refusal(BUDGETS_NOT_SWITCHED_ON) is RefusalClass.TRANSIENT
+    assert envelope_repo.control_meta_snapshot().control_revision == before
+    assert envelope_repo.budget_authority_version() == 1
 
 
 def test_a_sell_leg_cannot_be_an_envelope_enter(

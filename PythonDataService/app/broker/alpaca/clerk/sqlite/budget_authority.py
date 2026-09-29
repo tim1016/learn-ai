@@ -1,9 +1,12 @@
 """One durable authorization cutover, replayed by the existing custody mirror.
 
 Schema compatibility excludes older writers before they acquire the lease.
-Within this compatible runtime, version 1 alone permits legacy Start/arming;
-version 2 alone permits fresh budget-backed Deploy. The cutover requires every
-old runner stopped; positions, orders, fees and reducing recovery remain facts.
+Within this compatible runtime, version 1 alone permits legacy Start; version
+2 alone permits fresh budget-backed Deploy. Only version 2 admits a new entry
+(#2553): an account still on version 1 refuses every ENTER under
+``BUDGETS_NOT_SWITCHED_ON`` until its owner switches it in Settings -- never
+automatically. The cutover requires every old runner stopped; positions,
+orders, fees and reducing recovery remain facts.
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import json
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -26,11 +30,17 @@ BUDGET_AUTHORIZATION = 2
 # is retried on the next decision clock until the operator resolves it with a
 # fresh Deploy.
 BUDGET_COMMITMENT_MISSING = "BUDGET_COMMITMENT_MISSING"
-# An entry order reserved before fee provisions were recorded (#2553) still
-# has an unfilled remainder, so the fee it claims is unknown; never priced as
-# zero. Transient too: it ends when that order fills or is cancelled.
-ENTRY_FEE_PROVISION_UNRECORDED = "ENTRY_FEE_PROVISION_UNRECORDED"
-BUDGET_ADMISSION_REASON_CODES: frozenset[str] = frozenset({BUDGET_COMMITMENT_MISSING, ENTRY_FEE_PROVISION_UNRECORDED})
+# The account is still on version 1 (#2553, owner decision 2026-09-29): no
+# entry is admitted until its owner switches it to budgets in Settings; it is
+# never switched automatically. The same code names the account's attention
+# item (``lane_summary``). Account-scoped, so transient like the rest -- a bot
+# is never halted for it, and its exits keep working.
+BUDGETS_NOT_SWITCHED_ON = "BUDGETS_NOT_SWITCHED_ON"
+BUDGETS_NOT_SWITCHED_ON_WHY = (
+    "This account has not switched to budgets, so no bot on it can open a new position. "
+    "Switch this account to budgets in Settings, then deploy each bot again with its own dollar budget."
+)
+BUDGET_ADMISSION_REASON_CODES: frozenset[str] = frozenset({BUDGET_COMMITMENT_MISSING, BUDGETS_NOT_SWITCHED_ON})
 SCHEMA_V21_STATEMENTS = (
     "ALTER TABLE control_meta ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1 CHECK(authorization_version IN (1,2))",
     "CREATE TRIGGER trg_budget_authority_monotonic BEFORE UPDATE OF authorization_version ON control_meta "
@@ -75,7 +85,6 @@ def fold_budget_authority_cutover(conn: sqlite3.Connection, payload: dict[str, A
 
 def commit_budget_authority_cutover(repo: ClerkSqliteRepository, *, actor: str, reviewed_token: str, stop_receipt: str) -> None:
     """Caller owns the lane mutation/intake fence through Stop and this commit."""
-    from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
     with repo._write_lock:
         if authorization_version(repo._conn) == BUDGET_AUTHORIZATION:
             return

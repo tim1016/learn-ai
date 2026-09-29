@@ -28,7 +28,13 @@ from app.broker.alpaca.clerk.account_money import (
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
-from app.broker.alpaca.clerk.budgets import AccountBudget, DeploymentBudget, budget_entry_decision, entry_requirement
+from app.broker.alpaca.clerk.budgets import (
+    AccountBudget,
+    BudgetUnavailable,
+    DeploymentBudget,
+    budget_entry_decision,
+    entry_requirement,
+)
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, AccountObservation
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
@@ -42,7 +48,6 @@ from app.broker.alpaca.clerk.money import (
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import RiskReadiness, current_risk_readiness
@@ -727,7 +732,7 @@ def _parts_view(parts: BarParts) -> MoneyParts:
 
 
 def budget_error(exc: BudgetUnavailable) -> PanelRunnerError:
-    return PanelRunnerError("Deployment budget is unavailable.", detail=str(exc), next_action="Review the current budget and account evidence, then retry.", http_status=409, operation_attempted=False)
+    return PanelRunnerError("Deployment budget is unavailable.", detail=str(exc), next_action="Review the current budget and account evidence, then retry.", http_status=409, operation_attempted=False, reason_code=exc.reason_code)
 
 
 def money_error(exc: BudgetUnavailable) -> PanelRunnerError:
@@ -735,4 +740,5 @@ def money_error(exc: BudgetUnavailable) -> PanelRunnerError:
     return PanelRunnerError(
         "This account's money cannot be read right now.", detail=str(exc),
         next_action="Open the account's Settings to see why, then retry.", http_status=503, operation_attempted=False,
+        reason_code=exc.reason_code,
     )

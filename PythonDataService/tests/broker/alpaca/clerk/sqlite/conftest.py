@@ -5,12 +5,19 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, LiveEnvelopeValues
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -30,7 +37,9 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 
 
 class _TestClock:
@@ -302,7 +311,10 @@ async def _make_held_position(
 # ── The live-envelope admission harness (ADR 0059 D4) ─────────────────────────
 # One authority, one pinned clock, and the registered instances the envelope's
 # two SQLite suites drive ``accept_enter`` through. Both files judge the same
-# seam, so a second copy of this block is a second thing to keep true.
+# seam, so a second copy of this block is a second thing to keep true. Only an
+# account switched to budgets admits an ENTER (#2553), so an active instance
+# is a budgeted Deploy; ``_start_legacy_run`` is the pre-cutover (version 1)
+# Start, for the stores such an account left behind.
 
 ENVELOPE_ACCOUNT_ID = "PA-ENVELOPE"
 ENVELOPE_SID = "spy-bot"
@@ -313,6 +325,59 @@ ENVELOPE_RUN_ID_B = "run-2"
 # 17:46:40 ET: on or after 2026-09-01, so every regulatory fee a BUY owes is
 # pinned and an ENTER's recorded fee provision can be priced (#2553).
 ENVELOPE_T0 = 1_788_644_800_000
+
+
+# The harness account's daily loss limit is the envelope's own values, applied
+# as the owner's revision 1; every observation a gate publishes names it.
+ENVELOPE_RISK_REVISION = 1
+ENVELOPE_EXIT_TERMS = ExitTerms(band_multiple=2.0, spread_cap_bps=100.0, exit_allowance_bps=5.0, provenance="deployed")
+# One bot's budget unless a test names its own: the default gate's whole cash.
+ENVELOPE_BUDGET_CENTS = 10_000_000
+# Each of two bots' budget: one $1,000 ENTER (10 x $100) and its one-cent fee.
+# Another bot's unspent budget is a claim on cash, so both fit only in a
+# reading of at least $2,000.02.
+ENVELOPE_PAIR_BUDGET_CENTS = 100_001
+
+
+def envelope_gate(
+    *,
+    cash: float = 100_000.0,
+    observed_at_ms: int = ENVELOPE_T0,
+    sealed: LiveEnvelopeValues | None = None,
+    fill_sequence: int = 0,
+) -> LiveEnvelopeGate:
+    """A gate holding one observation of ``cash``, fresh at ``observed_at_ms``.
+
+    ``fill_sequence`` is the executions the reading saw (``day_pnl.risk_fill_sequence``);
+    a reading older than the newest fill admits nothing.
+    """
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=sealed, custody_is_simulated=True)
+    gate.publish(
+        AccountObservation(
+            observed_at_ms=observed_at_ms,
+            broker_cash_usd=cash,
+            cash_available_usd=cash,
+            equity_usd=cash,
+            last_equity_usd=cash,
+            position_count=0,
+            risk_revision=ENVELOPE_RISK_REVISION,
+            risk_fill_sequence=fill_sequence,
+            risk_cash_flow_evidence_complete=True,
+            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
+            risk_equity_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
+        )
+    )
+    return gate
+
+
+def switch_to_budgets(repo: ClerkSqliteRepository) -> None:
+    """The owner's switch in Settings, and a daily loss limit; each only once."""
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="reviewed", stop_receipt="stopped")
+    if repo.account_risk_policy() is None:
+        append_risk_policy(repo, policy=AccountRiskPolicy(
+            ENVELOPE_RISK_REVISION, TEST_ENVELOPE_VALUES.loss_fraction, TEST_ENVELOPE_VALUES.loss_usd,
+            "profile", 1, "owner", repo.clock(),
+        ), expected_revision=0)
 
 
 @pytest.fixture
@@ -339,8 +404,37 @@ def _register_active(
     strategy_instance_id: str,
     symbol: str,
     run_id: str,
+    committed_cents: int = ENVELOPE_BUDGET_CENTS,
 ) -> None:
-    """Register one instance and start its run — every stamp from ``clock``."""
+    """Register one instance and deploy it with a budget -- every stamp from ``clock``.
+
+    The account is switched to budgets first. The Deploy is reviewed against
+    a million-dollar reading, so any budgets a test names fit beside each
+    other; each ENTER is then judged against the gate its test publishes.
+    """
+    switch_to_budgets(repo)
+    repo.register_strategy_instance(
+        strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1", exit_terms=ENVELOPE_EXIT_TERMS,
+    )
+    submit_budgeted_deploy(
+        repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=run_id, world="real_paper",
+        committed_cents=committed_cents, configuration_hash="h1",
+        exit_terms_hash=canonical_sha256(ENVELOPE_EXIT_TERMS.model_dump(mode="json")),
+        risk_revision=ENVELOPE_RISK_REVISION, actor="owner",
+        envelope=envelope_gate(cash=1_000_000.0, observed_at_ms=clock(), fill_sequence=risk_fill_sequence(repo)),
+        minimum_position_cost=Decimal("0.01"),
+    )
+
+
+def _start_legacy_run(
+    repo: ClerkSqliteRepository,
+    clock: _TestClock,
+    *,
+    strategy_instance_id: str,
+    symbol: str,
+    run_id: str,
+) -> None:
+    """Register one instance and Start it on an account still on version 1."""
     repo.register_strategy_instance(
         strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
     )
@@ -377,6 +471,7 @@ def two_active_instances(
         strategy_instance_id=ENVELOPE_SID,
         symbol="SPY",
         run_id=ENVELOPE_RUN_ID,
+        committed_cents=ENVELOPE_PAIR_BUDGET_CENTS,
     )
     _register_active(
         envelope_repo,
@@ -384,6 +479,7 @@ def two_active_instances(
         strategy_instance_id=ENVELOPE_SID_B,
         symbol="QQQ",
         run_id=ENVELOPE_RUN_ID_B,
+        committed_cents=ENVELOPE_PAIR_BUDGET_CENTS,
     )
     return (ENVELOPE_SID, ENVELOPE_RUN_ID), (ENVELOPE_SID_B, ENVELOPE_RUN_ID_B)
 
