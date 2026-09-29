@@ -2,8 +2,6 @@
 .claude/worktrees/
 .superpowers/
 .playwright-mcp/
-.design-cache/
-.tmp_audit_files/
 
 # Python local environments and generated caches
 PythonDataService/.venv/

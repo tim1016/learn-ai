@@ -59,7 +59,7 @@ held to the same live-navigation guarantee.
 | `docs/architecture/engine-authority-map.md` | Engine ownership map | Tim | 2026-05-04 |
 | `docs/architecture/numerical-authority-migration-plan.md` | Math authority consolidation | Tim | 2026-05-04 |
 | `docs/math-sources-of-truth.md` | All mathematical authorities | Tim | ongoing |
-| `README.md` | Public-facing project intro | Tim | — |
+| `README.md` | Short personal-project note (deliberately modest; setup lives in `docs/runbooks/`) | Tim | 2026-09-28 |
 | `AGENTS.md` | Agent operating instructions | Tim | — |
 | `CLAUDE.md` | Claude Code project instructions | Tim | — |
 
