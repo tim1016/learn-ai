@@ -92,7 +92,14 @@ def cents_spendable(amount: Decimal) -> int:
 
 
 def display_cents(amount: Decimal) -> int:
-    """Half-even whole cents for a figure that is shown, never admitted."""
+    """Half-even whole cents for a figure that is shown, never admitted.
+
+    Only an exact ``Decimal`` is rounded: a float here is a derived value
+    whose own binary rounding can already sit across a half cent (#2556).
+    A recorded float enters through ``normalize_money`` first.
+    """
+    if not isinstance(amount, Decimal):
+        raise TypeError("display_cents rounds an exact Decimal, never a float")
     with money_context() as context:
         context.traps[Inexact] = False
         return int((amount * 100).to_integral_value(rounding=ROUND_HALF_EVEN))

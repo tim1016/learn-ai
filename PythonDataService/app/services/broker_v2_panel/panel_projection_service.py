@@ -15,11 +15,12 @@ lets the idempotency key make double-clicks safe (§11).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
-from app.broker.alpaca.clerk.money import display_cents, dollars, money_context, normalize_money
+from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
     ActionId,
@@ -722,21 +723,22 @@ def select_primary_action(
     return next((action_id for action_id in _RUNNING_STOP_ACTION_IDS if action_id in action_ids), None)
 
 
-def open_pnl_fields(open_pnl: float | None) -> dict[str, object]:
+def open_pnl_fields(exact_open_pnl: Decimal | None) -> dict[str, object]:
     """A bot's open P&L with the words the owner reads it in (PRD #2560 D12).
 
     The one writer of ``BotPanelView.open_pnl_usd`` and
-    ``open_pnl_direction``: half-even display cents through the canonical
-    money helpers, and the direction those cents point, so a loss that rounds
-    to "0.00" reads flat rather than red. ``None`` for all three when the
-    figure is unknown (no current price).
+    ``open_pnl_direction``: half-even display cents rounded once from
+    canonical FIFO's exact open valuation (``EconomicSnapshot.exact_open_pnl``),
+    never from its float view, whose own rounding can cross a half cent
+    (#2556); and the direction those cents point, so a loss that rounds to
+    "0.00" reads flat rather than red. ``open_pnl`` is the float view.
+    ``None`` for all three when the figure is unknown (no current price).
     """
-    if open_pnl is None:
+    if exact_open_pnl is None:
         return {"open_pnl": None, "open_pnl_usd": None, "open_pnl_direction": None}
-    with money_context():
-        cents = display_cents(normalize_money(open_pnl))
+    cents = display_cents(exact_open_pnl)
     direction = "gain" if cents > 0 else "loss" if cents < 0 else "flat"
-    return {"open_pnl": open_pnl, "open_pnl_usd": dollars(cents), "open_pnl_direction": direction}
+    return {"open_pnl": float(exact_open_pnl), "open_pnl_usd": dollars(cents), "open_pnl_direction": direction}
 
 
 def build_panel(
@@ -748,7 +750,7 @@ def build_panel(
     exposure: dict[str, float],
     fills_today: int | None,
     realized_pnl_today: float | None,
-    open_pnl: float | None,
+    exact_open_pnl: Decimal | None,
     latest_decision: DecisionReceipt | None,
     last_bar_at_ms: int | None,
     journal_tail_ref: str,
@@ -923,5 +925,5 @@ def build_panel(
         recent_fills=fill_views,
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
-        **open_pnl_fields(open_pnl),
+        **open_pnl_fields(exact_open_pnl),
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -103,9 +104,9 @@ async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
             from_ms=from_ms,
             to_ms=to_ms,
             attribution_rows=(),
-            realized_pnl_total=12.5,
-            start_open_pnl_total=0.0,
-            open_pnl_total=0.0,
+            exact_realized_pnl_total=Decimal("12.5"),
+            exact_start_open_pnl_total=Decimal(0),
+            exact_open_pnl_total=Decimal(0),
             fee_total=0.0,
             fee_fidelity="reported",
             execution_coverage="complete",

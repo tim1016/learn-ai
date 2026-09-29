@@ -18,10 +18,10 @@ def _compose(**parts: object):
     base: dict[str, object] = dict(
         since_ms=_SINCE,
         observed_at_ms=_NOW,
-        realized_usd=0.0,
+        realized_usd=Decimal(0),
         fees_usd=Decimal("0"),
-        start_open_usd=0.0,
-        open_usd=0.0,
+        start_open_usd=Decimal(0),
+        open_usd=Decimal(0),
         prices_read=True,
         outside_activity=False,
     )
@@ -31,10 +31,10 @@ def _compose(**parts: object):
 
 def test_net_is_the_displayed_parts_added_in_whole_cents() -> None:
     statement = _compose(
-        realized_usd=12.345,  # half-to-even on the exact decimal reading: 12.34
+        realized_usd=Decimal("12.345"),  # half-to-even on the exact decimal reading: 12.34
         fees_usd=Decimal("0.41"),
-        start_open_usd=1.005,
-        open_usd=-2.0,  # change -3.005 -> -3.00 (half-to-even), never float-rounded to -3.01
+        start_open_usd=Decimal("1.005"),
+        open_usd=Decimal("-2.0"),  # change -3.005 -> -3.00 (half-to-even), never float-rounded to -3.01
     )
     assert statement.model_dump() == {
         "state": "ready",
@@ -51,12 +51,12 @@ def test_net_is_the_displayed_parts_added_in_whole_cents() -> None:
 def test_a_lot_carried_overnight_counts_only_its_move_since_the_close() -> None:
     # Bought at 400, closed last night at 402, worth 405 now: today moved it +3,
     # not the +5 it has gained since it was bought.
-    statement = _compose(start_open_usd=2.0, open_usd=5.0)
+    statement = _compose(start_open_usd=Decimal("2.0"), open_usd=Decimal("5.0"))
     assert (statement.open_change_usd, statement.net_usd) == ("3.00", "3.00")
 
 
 def test_unread_prices_leave_the_change_and_net_unknown_never_zero() -> None:
-    statement = _compose(realized_usd=1.0, fees_usd=Decimal("0.02"), open_usd=None, prices_read=False)
+    statement = _compose(realized_usd=Decimal("1.0"), fees_usd=Decimal("0.02"), open_usd=None, prices_read=False)
     assert statement.state == "unavailable"
     assert (statement.realized_usd, statement.fees_usd, statement.open_change_usd, statement.net_usd) == (
         "1.00", "0.02", None, None,
@@ -67,7 +67,7 @@ def test_unread_prices_leave_the_change_and_net_unknown_never_zero() -> None:
 
 
 def test_a_book_flat_at_both_ends_needs_no_price() -> None:
-    statement = _compose(realized_usd=1.0, fees_usd=Decimal("0.02"), prices_read=False)
+    statement = _compose(realized_usd=Decimal("1.0"), fees_usd=Decimal("0.02"), prices_read=False)
     assert (statement.state, statement.open_change_usd, statement.net_usd) == ("ready", "0.00", "0.98")
 
 
@@ -81,7 +81,7 @@ def test_a_share_held_now_without_a_price_leaves_the_change_unknown() -> None:
 
 
 def test_a_share_held_at_the_close_without_its_closing_price_leaves_the_change_unknown() -> None:
-    statement = _compose(realized_usd=0.5, start_open_usd=None)
+    statement = _compose(realized_usd=Decimal("0.5"), start_open_usd=None)
     assert statement.state == "unavailable"
     assert (statement.realized_usd, statement.open_change_usd, statement.net_usd) == ("0.50", None, None)
     assert statement.detail == (
@@ -91,7 +91,7 @@ def test_a_share_held_at_the_close_without_its_closing_price_leaves_the_change_u
 
 
 def test_unfinished_fee_evidence_leaves_fees_and_net_unknown() -> None:
-    statement = _compose(realized_usd=-2.5, fees_usd=None, outside_activity=True)
+    statement = _compose(realized_usd=Decimal("-2.5"), fees_usd=None, outside_activity=True)
     assert statement.state == "unavailable"
     assert (statement.realized_usd, statement.fees_usd, statement.open_change_usd, statement.net_usd) == (
         "-2.50", None, "0.00", None,
