@@ -180,3 +180,32 @@ async def test_the_route_serves_the_read_and_refuses_without_the_accounts_clerk(
     assert served.status_code == 200
     assert {bot["strategy_instance_id"] for bot in served.json()["bots"]} >= {"done", "live", "dry-1"}
     assert refused.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shadow rehearses on the live account in ``shadow:<account>``; once the
+    account is live, that database still holds the Shadow bots' history."""
+    shadow = ClerkSqliteRepository.initialize(
+        account_id=f"shadow:{_ACCOUNT}", artifacts_root=lane.db_path.parents[3], clock=_TestClock(NOON),
+    )
+    try:
+        _register(shadow, "rehearsal")
+        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+    finally:
+        shadow.close()
+    monkeypatch.setattr(
+        bot_history, "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id=_ACCOUNT, account_mode="live", repository=lane),
+    )
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
+    assert (rehearsal.world, rehearsal.world_label) == ("shadow", "SHADOW · simulated fills on your live account")
+    assert rehearsal.status == "finished" and rehearsal.account_id == _ACCOUNT
+    # The account's own bots are read from its own database, as before.
+    assert {"done", "live"} <= {bot.strategy_instance_id for bot in history.bots}

@@ -47,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.bot_history import (
 )
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
 from app.broker.ibkr.config import live_artifacts_root
 from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
@@ -154,7 +155,7 @@ async def account_bot_history(broker: str, account_id: str) -> AccountBotHistory
 
     gaps: list[BotHistoryGap] = []
     now_ms = now_ms_utc()
-    for source in (*_sibling_sources(facade.account_id, facade.account_mode), *_dry_run_sources(broker)):
+    for source in (*_sibling_sources(facade), *_dry_run_sources(broker)):
         try:
             history = await asyncio.to_thread(
                 read_custody_history, source.path, now_ms=now_ms,
@@ -174,19 +175,20 @@ async def account_bot_history(broker: str, account_id: str) -> AccountBotHistory
     return AccountBotHistory(account_id=resolved, observed_at_ms=now_ms, bots=tuple(bots), gaps=tuple(gaps))
 
 
-def _sibling_sources(custody_account_id: str, account_mode: str) -> tuple[_Source, ...]:
+def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
     """A Live account's other world, when its database exists (see module doc).
 
-    No running Clerk owns it, so its fee evidence is not fresh: a real Live
+    It sits in the same account tree as the account's own database. No
+    running Clerk owns it, so its fee evidence is not fresh: a real Live
     database read this way shows its money as unknown, never as zero.
     """
-    if is_shadow_account_id(custody_account_id):
-        sibling = live_account_id_for_shadow_account(custody_account_id)
-    elif account_mode == "live":
-        sibling = shadow_account_id_for_live_account(custody_account_id)
+    if is_shadow_account_id(facade.account_id):
+        sibling = live_account_id_for_shadow_account(facade.account_id)
+    elif facade.account_mode == "live":
+        sibling = shadow_account_id_for_live_account(facade.account_id)
     else:
         return ()
-    path = confined_account_file(live_artifacts_root(), sibling, DB_FILENAME)
+    path = facade.repository.neighbour_custody_file(sibling)
     if not path.is_file():
         return ()
     return (_Source(path=path, world=authority_kind_for_account(sibling, account_mode="live"),
