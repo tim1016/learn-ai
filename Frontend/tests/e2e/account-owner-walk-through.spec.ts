@@ -254,7 +254,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // Every command was aimed at this bot, in the sequence's order.
     const botCommands = world.sent.filter((command) => command.path.includes(`/bots/${WALKED_BOT}/`));
     expect(botCommands.map((command) => `${command.path.split('/').slice(-2).join('/')} ${(command.body as { action_id: string }).action_id}`)).toEqual([
-      'actions/quiesce stop',
+      'actions/quiesce stop_bot_decisions',
       'actions/quiesce reconcile_now',
       'recovery-actions/check prepare_safe_flatten',
       'actions/quiesce execute_safe_flatten',
