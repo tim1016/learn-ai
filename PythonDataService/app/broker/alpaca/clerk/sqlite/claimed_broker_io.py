@@ -75,6 +75,20 @@ class ClaimedBrokerIO:
         self._renew()
         return bound
 
+    def bind_run_end_close_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind a Dry Run's run-end close price under the operation lease.
+
+        Only a simulation can close at a price it already saw; any other port
+        refuses, so a run-end close never reaches a real broker.
+        """
+        self._renew()
+        bind = getattr(self.trade, "bind_run_end_close_bar", None)
+        if not callable(bind):
+            return False
+        bound = bool(bind(client_order_id, symbol=symbol))
+        self._renew()
+        return bound
+
     async def cancel(self, broker_order_id: str, *, order_ref: str) -> None:
         self._renew()
         try:

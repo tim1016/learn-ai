@@ -1099,7 +1099,7 @@ _SIMULATED_OUTCOMES = {
         "simulation has; nothing was checked with Alpaca."
     ),
     "execute_safe_flatten": (
-        "Simulated sale recorded at the last price this Dry Run received; "
+        "Simulated sale recorded at IBKR's live price when it went out; "
         "nothing was sent to Alpaca."
     ),
 }

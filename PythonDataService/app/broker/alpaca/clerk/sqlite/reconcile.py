@@ -11,6 +11,7 @@ from typing import Literal
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.sqlite.dry_run_close import close_exposure_of_ended_dry_runs
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS, pause_exit_recovery
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
@@ -1167,6 +1168,12 @@ async def _reconcile_account_serialized(
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
+    # authority, whatever an ended run left is closed at the last price it saw.
+    await close_exposure_of_ended_dry_runs(
+        repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
+    )
 
     # A failed ENTER that filled and closed while trade_updates was down is
     # absent from the open-order snapshot; fold it before the verdict so its

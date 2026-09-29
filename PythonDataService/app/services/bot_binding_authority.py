@@ -10,6 +10,7 @@ and runtime-release lifecycle without branching on ``binding.mode``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
@@ -52,6 +53,8 @@ from app.services.bot_start_admission import (
 )
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import Clock, now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 #: How long boot's Dry Run restoration waits, in all, for the execution
 #: leases a dead predecessor left on its Dry Runs' accounts before calling one
@@ -99,6 +102,10 @@ class BindingAuthority:
 
     async def release_if_unused(self) -> None:
         return
+
+    async def release_after_run_end(self) -> None:
+        """Release once a run has ended; an authority with run-end work does it first."""
+        await self.release_if_unused()
 
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         return ()
@@ -289,6 +296,31 @@ class SyntheticBindingAuthority(BindingAuthority):
                 unregister_clerk_runtime(self.account_id)
                 await runtime.close()
             self.brokers.pop(self.account_id, None)
+
+    async def release_after_run_end(self) -> None:
+        """Close what the ended run left, then release (owner decision 2026-09-29).
+
+        The pass boot and every reopening run (``recover``) closes a Dry
+        Run's leftover position (``dry_run_close``); running it here, while
+        the authority is still open, stamps that simulated sale when the run
+        ended instead of whenever the bot is next read. A failure is logged
+        and the authority still released: the close is derived from durable
+        facts, so the next opening retries it.
+        """
+        async with self.runtime_access.hold():
+            runtime = get_clerk_runtime(self.account_id)
+            if runtime is not None and runtime.clerk is not None and not self.runtime_in_use(
+                self.binding.strategy_instance_id
+            ):
+                try:
+                    await runtime.clerk.recover()
+                except Exception:
+                    logger.exception(
+                        "a Dry Run's run-end reconciliation failed; its next opening closes the position",
+                        extra={"action": "dry_run_run_end_reconcile_failed", "account_id": self.account_id,
+                               "strategy_instance_id": self.binding.strategy_instance_id},
+                    )
+        await self.release_if_unused()
 
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         runtime = get_clerk_runtime(self.account_id)

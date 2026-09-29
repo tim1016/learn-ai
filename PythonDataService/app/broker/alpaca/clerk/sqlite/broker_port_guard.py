@@ -204,6 +204,14 @@ class GuardedBrokerTradePort:
             return True
         return bool(bind(client_order_id, symbol=symbol, side=side))
 
+    def bind_run_end_close_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind a Dry Run's run-end close price; a port that is not a simulation refuses."""
+        self._assert_unfenced("bind_run_end_close_bar")
+        bind = getattr(self._inner, "bind_run_end_close_bar", None)
+        if not callable(bind):
+            return False
+        return bool(bind(client_order_id, symbol=symbol))
+
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:
             raise BrokerCallUnderIntakeError(method)

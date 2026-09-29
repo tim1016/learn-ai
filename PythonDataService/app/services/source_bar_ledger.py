@@ -48,6 +48,12 @@ SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
 # A no-submit world's recovery fill price: the live IBKR quote it sold (or
 # bought) at, retained as its own stream so it never mixes with a run's bars.
 RECOVERY_QUOTE_PROVIDER = "ibkr.recovery_quote"
+# A Dry Run's run-end close (owner decision 2026-09-29): the last price the
+# run saw, re-stated at the instant the simulation sold, on its own stream.
+RUN_END_CLOSE_PROVIDER = "sim.run_end_close"
+# The streams a no-submit world writes for its own fills; neither is a price
+# the market delivered to a run.
+_FILL_EVIDENCE_PROVIDERS = (RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER)
 """Indexed durable authority store for retained source observations."""
 
 SOURCE_BAR_STREAM_CAPACITY = 200_000
@@ -451,6 +457,16 @@ class SourceBarLedger:
         """
         if bar.feed_id != RECOVERY_QUOTE_PROVIDER:
             raise ValueError(f"a recovery quote is retained only as {RECOVERY_QUOTE_PROVIDER!r}")
+        return self._append(bar, delivery="live", run_id=None)
+
+    def retain_run_end_close(self, bar: MarketDataBar) -> RetainedSourceBar:
+        """Retain the price a Dry Run's run-end close fills at, stamped when it sold.
+
+        Like a recovery quote it is evidence for no run -- the run has ended
+        -- so it is journaled without one, on ``RUN_END_CLOSE_PROVIDER``.
+        """
+        if bar.feed_id != RUN_END_CLOSE_PROVIDER:
+            raise ValueError(f"a run-end close is retained only as {RUN_END_CLOSE_PROVIDER!r}")
         return self._append(bar, delivery="live", run_id=None)
 
     def append_history(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
@@ -946,6 +962,21 @@ class SourceBarLedger:
             ).fetchone()
         return None if row is None else _retained_row(row)
 
+    def latest_market_bar(self, symbol: str) -> RetainedSourceBar | None:
+        """The newest bar the market delivered for ``symbol``: the last price a run saw.
+
+        A no-submit world's own fill-evidence streams are excluded -- they
+        restate a price, they never deliver one.
+        """
+        placeholders = ", ".join("?" for _ in _FILL_EVIDENCE_PROVIDERS)
+        with self._lock:
+            row = self._conn.execute(
+                f"{_BARS_WITH_JOURNAL} WHERE b.symbol = ? AND b.provider NOT IN ({placeholders}) "
+                "ORDER BY b.end_ms DESC, b.seq DESC LIMIT 1",
+                (symbol, *_FILL_EVIDENCE_PROVIDERS),
+            ).fetchone()
+        return None if row is None else _retained_row(row)
+
     def providers_for(self, symbol: str) -> list[str]:
         """Return the distinct providers with retained evidence for one symbol."""
         with self._lock:
@@ -1185,6 +1216,7 @@ def _same_market_payload(existing: RetainedSourceBar, candidate: RetainedSourceB
 
 __all__ = [
     "RECOVERY_QUOTE_PROVIDER",
+    "RUN_END_CLOSE_PROVIDER",
     "SOURCE_BAR_LEDGER_FILENAME",
     "SOURCE_BAR_STREAM_CAPACITY",
     "RetainedContinuityEvent",
