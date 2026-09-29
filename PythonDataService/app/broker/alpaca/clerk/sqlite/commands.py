@@ -23,13 +23,9 @@ see the pinned contract's §3a for the full rationale).
 from __future__ import annotations
 
 import hashlib
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.budgets import ReleaseAtStop
-from app.broker.alpaca.clerk.money import MoneyInputError
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.facts import (
     CommandRejectedFacts,
     RunStartedFacts,
@@ -54,7 +50,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.utils.timestamps import Clock, now_ms_utc
 
 __all__ = [
@@ -70,8 +65,6 @@ __all__ = [
     "submit_start_run",
     "submit_stop_run",
 ]
-
-logger = logging.getLogger(__name__)
 
 ACTION_START = "START"
 ACTION_STOP = "STOP"
@@ -315,7 +308,7 @@ def submit_stop_run(
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         # Valued under the same lock as the append: the release is exactly
         # the custody this transition ends (#2555).
-        release = _release_at_stop(repo, run_id=active.run_id)
+        release = repo.release_at_stop(run_id=active.run_id)
         facts = RunStoppedFacts(
             idempotency_key=idempotency_key,
             payload_hash=payload_hash,
@@ -347,24 +340,6 @@ def submit_stop_run(
         payload_hash=payload_hash,
         build_transition=build_transition,
     )
-
-
-def _release_at_stop(repo: ClerkSqliteRepository, *, run_id: str) -> ReleaseAtStop | None:
-    """What this Stop releases, when the budget it ends can be valued now (#2555).
-
-    ``None`` for a run with no budget. A Stop is never refused for money: when
-    the deployment's money cannot be valued at this instant (stale or
-    unresolved fee evidence, say) the Stop records no release -- the bot's
-    money then shows an estimate, labelled as one -- and the reason is logged.
-    """
-    try:
-        return repo.release_at_stop(run_id=run_id)
-    except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
-        logger.warning(
-            "Stop recorded no release: the deployment's money cannot be valued now",
-            extra={"action": "stop_release_unvalued", "account_id": repo.account_id, "run_id": run_id, "reason": str(exc)},
-        )
-        return None
 
 
 def submit_retire_strategy_instance(

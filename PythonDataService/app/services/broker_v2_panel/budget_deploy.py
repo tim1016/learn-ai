@@ -434,11 +434,14 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     """The bot's money, in the order the owner reads it (PRD #2560 D6).
 
     The caller holds the money context. A running bot shows where its balance
-    is; a stopped one shows what its Stop released (#2555), what has come
-    back since -- sales, entry orders that ended unfilled, less fees posted
-    after -- and what is still held, in the cents its slice on the account's
-    bar carries, so they add up to its balance -- or name what it spent
-    beyond it.
+    is; a stopped one shows what its Stop released (#2555), what its money did
+    after -- come back (sales, entry orders that ended unfilled) or charged
+    (a fee that posted above the one modelled at the Stop, an entry filled
+    above its reserved price), net and signed -- and what is still held, in
+    the cents its slice on the account's bar carries. They add up to its
+    balance, less "Over its budget by": what its shares and orders cost
+    beyond that balance, the overrun a running bot names too. An estimated
+    release is its money now, so it has no "after".
     """
     results = (
         BudgetStatementLine(label="Budget set aside at deploy", amount_usd=dollars(own.committed_cents)),
@@ -448,18 +451,21 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     )
     if not own.active:
         stopped = stopped_holding(own)
+        balance = display_cents(own.balance)
         in_shares, in_orders = display_cents(own.position_cost), display_cents(own.pending_orders)
-        since = display_cents(own.balance) - stopped.released_cents - in_shares - in_orders
+        over = max(0, in_shares + in_orders - balance)
         released = "Released at stop (estimate)" if stopped.released_estimated else "Released at stop"
         lines = [*results, BudgetStatementLine(label=released, amount_usd=dollars(stopped.released_cents))]
-        if since > 0:
-            lines.append(BudgetStatementLine(label="Came back since it stopped", amount_usd=dollars(since)))
+        since = 0 if stopped.released_estimated else balance + over - stopped.released_cents - in_shares - in_orders
+        if since:
+            label = "Came back since it stopped" if since > 0 else "Charged since it stopped"
+            lines.append(BudgetStatementLine(label=label, amount_usd=dollars(since)))
         lines += [
             BudgetStatementLine(label="Still in shares, at cost", amount_usd=dollars(in_shares)),
             BudgetStatementLine(label="Still in entry orders", amount_usd=dollars(in_orders)),
         ]
-        if since < 0:
-            lines.append(BudgetStatementLine(label="Over its budget by", amount_usd=dollars(-since)))
+        if over:
+            lines.append(BudgetStatementLine(label="Over its budget by", amount_usd=dollars(over)))
         return tuple(lines)
     lines = [
         *results,
@@ -477,21 +483,24 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
 
 
 def _stopped_copy(own: DeploymentBudget) -> tuple[str, str]:
-    """A stopped bot's headline, and what its Stop released and left claimed (#2555)."""
-    release = own.release
-    if release is None:
-        stop = ("Its free budget was released when it stopped, before the amount was recorded, "
-                "so the released figure is an estimate from its money now.")
-    elif release.held_cents:
-        stop = (f"It released ${dollars(release.released_cents)} when it stopped; "
-                f"${dollars(release.held_cents)} stayed claimed.")
+    """A stopped bot's headline, and what its Stop released and left claimed (#2555).
+
+    A Stop that recorded no amount -- one from before they were recorded, or
+    one whose money could not be valued -- says only that, never why.
+    """
+    stopped = stopped_holding(own)
+    if stopped.released_estimated:
+        stop = "Its Stop did not record what it released, so that figure is an estimate from its money now."
+    elif stopped.held_cents:
+        stop = (f"It released ${dollars(stopped.released_cents)} when it stopped; "
+                f"${dollars(stopped.held_cents)} stayed claimed.")
     else:
-        stop = f"It released ${dollars(release.released_cents)} when it stopped."
+        stop = f"It released ${dollars(stopped.released_cents)} when it stopped."
     if own.position_cost > 0:
         return "Stopped · still holds shares", f"{stop} The money in its shares comes back when they are sold."
     if own.pending_orders > 0:
         return "Stopped · waiting on entry orders", f"{stop} The rest comes back when its entry orders finish."
-    return "Stopped · fully released", f"{stop} Nothing it held is still claimed."
+    return "Stopped · finished", f"{stop} Nothing it held is still claimed."
 
 
 def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:

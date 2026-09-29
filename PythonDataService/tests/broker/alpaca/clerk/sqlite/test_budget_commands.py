@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.budgets import ReleaseAtStop
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
+from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite import budget_projection
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
@@ -19,12 +23,14 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import RunStoppedFacts
-from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
+from app.broker.alpaca.clerk.sqlite.fee_evidence import FeeEvidenceFacts, record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.models import BrokerOrderLeg
 from app.schemas.exit_terms import ExitTerms
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -146,6 +152,8 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
     facts = RunStoppedFacts.from_facts_json(stop["facts_json"])
     assert (facts.released_cents, facts.held_cents) == (39_999, 60_001)
     assert expected.deployments[0].release == ReleaseAtStop(released_cents=39_999, held_cents=60_001)
+    # The Stop's fold keeps them on the budget row, where every money read takes them.
+    assert _release_on_budget_row(budget_repo, "a") == (NOON, 39_999, 60_001)
     database = budget_repo.db_path
     budget_repo.close()
     database.rename(database.with_suffix(".saved"))
@@ -154,10 +162,140 @@ def test_stop_retains_order_claim_and_mirror_rebuild_keeps_it(tmp_path: Path) ->
         # Fee freshness is the rebuilt process's own producer read; it adds nothing.
         assert not record_fee_evidence(rebuilt, [], checked_at_ms=NOON, history_complete=True)
         assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
-        assert rebuilt.deployment_budget("a")["released_at_ms"] == NOON
+        assert _release_on_budget_row(rebuilt, "a") == (NOON, 39_999, 60_001)
         verify_database(rebuilt.db_path, expected_account_id="BUDGET-PAPER")
     finally:
         rebuilt.close()
+
+
+def _release_on_budget_row(repo: ClerkSqliteRepository, sid: str) -> tuple[int | None, int | None, int | None]:
+    row = repo.deployment_budget(sid)
+    assert row is not None
+    return row["released_at_ms"], row["released_cents"], row["held_cents"]
+
+
+def _stop_facts(repo: ClerkSqliteRepository) -> RunStoppedFacts:
+    stop = next(row for row in repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
+    return RunStoppedFacts.from_facts_json(stop["facts_json"])
+
+
+def _unvaluable(failure: Exception):
+    def value_release(*_args: object, **_kwargs: object) -> ReleaseAtStop:
+        raise failure
+
+    return value_release
+
+
+def _validation_error() -> ValidationError:
+    with pytest.raises(ValidationError) as caught:
+        FeeEvidenceFacts.model_validate_json("{}")
+    return caught.value
+
+
+@pytest.mark.parametrize("failure", [
+    pytest.param(lambda: BudgetUnavailable("Fee evidence is unresolved."), id="unresolved-fee-evidence"),
+    pytest.param(lambda: EconomicProjectionError("SQLite fill has invalid side 'x'"), id="corrupt-fill-row"),
+    pytest.param(lambda: MoneyInputError("not a finite amount"), id="bad-money-value"),
+    pytest.param(lambda: RateNotPinnedError(["sec"]), id="unpinned-fee-rate"),
+    pytest.param(_validation_error, id="corrupt-fee-evidence"),
+])
+def test_a_stop_always_commits_when_what_it_releases_cannot_be_valued(
+    budget_repo, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure,
+) -> None:
+    """#2555 review: every Stop now values its release, and a corrupt fill row
+    or fee-evidence record raised out of the operator's Stop, the sweep's
+    retirement and boot recovery alike. A Stop is never refused for money: it
+    commits without amounts, and the reason is logged with its traceback."""
+    _deploy(budget_repo)
+    monkeypatch.setattr(budget_projection, "value_release", _unvaluable(failure()))
+
+    with caplog.at_level(logging.WARNING):
+        submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a",
+                        lifecycle_run_id="run-a", clock=budget_repo.clock)
+
+    assert budget_repo.active_run("a") is None
+    assert _stop_facts(budget_repo).released_cents is None
+    assert _release_on_budget_row(budget_repo, "a") == (NOON, None, None)
+    logged = [record for record in caplog.records if getattr(record, "action", None) == "stop_release_unvalued"]
+    assert len(logged) == 1 and logged[0].exc_info is not None
+    assert (logged[0].run_id, logged[0].account_id) == ("a:run-a", "BUDGET-PAPER")
+
+
+async def test_a_clerk_restart_records_what_each_bot_it_stops_released(tmp_path: Path) -> None:
+    """#2555 review: boot recovery stops every running bot before this process
+    has read any fee evidence, and fee freshness lives in memory, so a Stop
+    that demanded fresh evidence recorded no release for any of them. A Stop
+    spends nothing: it values its release from the evidence already recorded
+    (owner decision 2026-09-29)."""
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+    from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade
+
+    before_restart = _new_budget_repo(tmp_path)
+    _deploy(before_restart, cents=60_000)
+    before_restart.record_deploy_launched(strategy_instance_id="a", lifecycle_run_id="run-a")
+    before_restart.close()
+
+    restarted = ClerkSqliteRepository.open(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON + 600_000))
+    try:
+        assert not restarted.account_id.startswith(("sim:", "shadow:"))
+        await SqliteAlpacaClerkFacade(account_mode="paper", repo=restarted, read=_FakeRead(), trade=_FakeTrade()).recover()
+
+        assert restarted.active_run("a") is None
+        facts = _stop_facts(restarted)
+        assert facts.operator_reason == "service_restart_recovery"
+        assert (facts.released_cents, facts.held_cents) == (60_000, 0)
+        assert _release_on_budget_row(restarted, "a") == (NOON + 600_000, 60_000, 0)
+    finally:
+        restarted.close()
+
+
+def test_a_money_read_never_searches_the_journal_for_a_stops_release(budget_repo) -> None:
+    """#2555 review: each stopped bot's release was read back by searching the
+    whole custody journal, once per deployment, on every money read -- account
+    money, budget, ENTER admission and Deploy preview -- under the writer. The
+    commitments are read from their own rows, which carry the release."""
+    _deploy(budget_repo, cents=30_000)
+    submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
+    _deploy(budget_repo, sid="b", cents=30_000)
+    statements: list[str] = []
+    with budget_repo.write_fence() as conn:
+        conn.set_trace_callback(statements.append)
+        try:
+            budget = budget_repo.account_budget(cash=1000, seen_before_ms=NOON)
+        finally:
+            conn.set_trace_callback(None)
+
+    assert [item.release for item in budget.deployments] == [ReleaseAtStop(30_000, 0), None]
+    commitments = [statement for statement in statements if "deployment_budgets" in statement]
+    assert commitments and not [statement for statement in commitments if "custody_transitions" in statement]
+
+
+def test_a_v21_database_takes_its_recorded_releases_onto_its_budget_rows(tmp_path: Path) -> None:
+    """Schema v22 (#2555 review): the release columns arrive filled from the
+    Stops already recorded, so an upgraded file reads what a rebuild would."""
+    import sqlite3
+
+    budget_repo = _new_budget_repo(tmp_path)
+    _deploy(budget_repo)
+    submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
+    database = budget_repo.db_path
+    budget_repo.close()
+    conn = sqlite3.connect(database)
+    try:
+        # The v21 shape: the Stop's facts carry the amounts, the row has no columns for them.
+        conn.execute("ALTER TABLE deployment_budgets DROP COLUMN held_cents")
+        conn.execute("ALTER TABLE deployment_budgets DROP COLUMN released_cents")
+        conn.execute("UPDATE control_meta SET schema_version = 21 WHERE id = 1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    upgraded = ClerkSqliteRepository.open(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    try:
+        assert _release_on_budget_row(upgraded, "a") == (NOON, 100_000, 0)
+        verify_database(upgraded.db_path, expected_account_id="BUDGET-PAPER")
+    finally:
+        upgraded.close()
 
 
 def test_a_stop_that_records_no_release_keeps_the_facts_bytes_every_earlier_stop_has() -> None:
@@ -175,30 +313,28 @@ def test_a_stop_that_records_no_release_keeps_the_facts_bytes_every_earlier_stop
         RunStoppedFacts.from_facts_json(earlier[:-1] + ',"released_cents":1}')
 
 
-def test_a_chain_stopped_before_releases_were_recorded_replays_and_verifies(tmp_path: Path) -> None:
-    """#2555: a Stop the release could not be valued at (the fee evidence is
-    stale) records the earlier bytes; that chain rebuilds, verifies and reads
-    the same budget, its release unrecorded rather than invented."""
-    from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
-    from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
-
+def test_a_stop_that_recorded_no_release_replays_verifies_and_stays_unrecorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2555: a Stop whose release could not be valued records the bytes every
+    earlier Stop has; that chain rebuilds, verifies and reads the same budget,
+    its release unrecorded rather than invented."""
     budget_repo = _new_budget_repo(tmp_path)
     _deploy(budget_repo)
-    _walk_clock_to(budget_repo, NOON + FEE_EVIDENCE_MAX_AGE_MS + 1)
-    submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
-    stop = next(row for row in budget_repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
-    assert RunStoppedFacts.from_facts_json(stop["facts_json"]).released_cents is None
-    now = budget_repo.clock()
-    record_fee_evidence(budget_repo, [], checked_at_ms=now, history_complete=True)
-    expected = budget_repo.account_budget(cash=1000, seen_before_ms=now)
+    with monkeypatch.context() as patched:
+        patched.setattr(budget_projection, "value_release", _unvaluable(BudgetUnavailable("Fee evidence is unresolved.")))
+        submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
+    assert _stop_facts(budget_repo).released_cents is None
+    expected = budget_repo.account_budget(cash=1000, seen_before_ms=NOON)
     assert expected.deployments[0].release is None and not expected.deployments[0].active
     database = budget_repo.db_path
     budget_repo.close()
     database.rename(database.with_suffix(".saved"))
-    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(now))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
     try:
-        record_fee_evidence(rebuilt, [], checked_at_ms=now, history_complete=True)
-        assert rebuilt.account_budget(cash=1000, seen_before_ms=now) == expected
+        record_fee_evidence(rebuilt, [], checked_at_ms=NOON, history_complete=True)
+        assert rebuilt.account_budget(cash=1000, seen_before_ms=NOON) == expected
+        assert _release_on_budget_row(rebuilt, "a") == (NOON, None, None)
         verify_database(rebuilt.db_path, expected_account_id="BUDGET-PAPER")
     finally:
         rebuilt.close()

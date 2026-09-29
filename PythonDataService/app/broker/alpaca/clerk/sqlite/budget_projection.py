@@ -13,6 +13,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from pydantic import ValidationError
+
 from app.broker.alpaca.clerk.account_money import (
     AccountMoney,
     Holding,
@@ -30,14 +32,14 @@ from app.broker.alpaca.clerk.budgets import (
 )
 from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
+from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
-from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError, effective_fill_records
 from app.broker.alpaca.clerk.sqlite.envelope_reservations import EntryCashClaim, entry_cash_claims
-from app.broker.alpaca.clerk.sqlite.facts import RunStoppedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.reads import external_orders
+from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.models import OrderSide
 
 if TYPE_CHECKING:
@@ -359,13 +361,9 @@ def read_bot_results(
         conn.close()
 
 
-# Each commitment with its run's state and its Stop's facts: the one
-# RUN_STOPPED that released it (``budget_folds.release_stopped_budget``).
-_COMMITMENTS = (
-    "SELECT b.*, r.state AS run_state, (SELECT t.facts_json FROM custody_transitions t "
-    "WHERE t.run_id=b.run_id AND t.transition_kind='RUN_STOPPED' ORDER BY t.sequence LIMIT 1) AS stop_facts "
-    "FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
-)
+# Each commitment with its run's state. A stopped one's row carries what its
+# Stop released, folded from the Stop's facts (``budget_folds.release_stopped_budget``).
+_COMMITMENTS = "SELECT b.*, r.state AS run_state FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
 
 
 def _deployment_budget(
@@ -387,16 +385,22 @@ def _deployment_budget(
         realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
         position_cost=sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO),
         pending_orders=sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO),
-        release=_recorded_release(commitment["stop_facts"]),
+        release=_recorded_release(commitment),
     )
 
 
-def _recorded_release(stop_facts: str | None) -> ReleaseAtStop | None:
-    """The release a Stop recorded; ``None`` while running, or for a Stop that recorded none."""
-    facts = None if stop_facts is None else RunStoppedFacts.from_facts_json(stop_facts)
-    if facts is None or facts.released_cents is None or facts.held_cents is None:
+def _recorded_release(commitment: sqlite3.Row) -> ReleaseAtStop | None:
+    """The release its Stop recorded; ``None`` while running, or for a Stop that recorded none."""
+    if commitment["released_cents"] is None:
         return None
-    return ReleaseAtStop(released_cents=facts.released_cents, held_cents=facts.held_cents)
+    return ReleaseAtStop(released_cents=commitment["released_cents"], held_cents=commitment["held_cents"])
+
+
+# Why a Stop could not value what it releases -- an unknown in the custody
+# it reads, never a reason to refuse the Stop: it records no amounts instead.
+RELEASE_VALUATION_FAILURES: tuple[type[Exception], ...] = (
+    BudgetUnavailable, EconomicProjectionError, MoneyInputError, RateNotPinnedError, ValidationError,
+)
 
 
 def value_release(conn: sqlite3.Connection, *, run_id: str, fees: BudgetFees) -> ReleaseAtStop:
@@ -406,7 +410,7 @@ def value_release(conn: sqlite3.Connection, *, run_id: str, fees: BudgetFees) ->
     FIFO, attributed fees and entry orders' unfilled remainder, none of which
     depends on account cash -- so ``BudgetUnavailable`` (unresolved fee
     evidence, an unexplained short) means its release cannot be known at this
-    instant.
+    instant; ``RELEASE_VALUATION_FAILURES`` names every such unknown.
     Formula: ``account_money.release_at_stop`` over ``_deployment_budget``.
     """
     commitment = conn.execute(_COMMITMENTS + " WHERE b.run_id=?", (run_id,)).fetchone()

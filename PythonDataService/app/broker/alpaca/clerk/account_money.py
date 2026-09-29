@@ -120,6 +120,9 @@ class StoppedHolding:
     position_cost: Decimal
     still_claimed: Decimal
     released_cents: int
+    # What stayed claimed when it stopped, in display cents: the Stop's
+    # record, or -- for an estimate or a pre-budget bot -- what is claimed now.
+    held_cents: int
     # The release is an estimate from its money now, not the Stop's record.
     released_estimated: bool = False
 
@@ -146,7 +149,7 @@ def stopped_holding(item: DeploymentBudget) -> StoppedHolding:
     release = item.release if item.release is not None else release_at_stop(item)
     return StoppedHolding(
         item.strategy_instance_id, item.position_cost, item.pending_orders, release.released_cents,
-        released_estimated=item.release is None,
+        release.held_cents, released_estimated=item.release is None,
     )
 
 
@@ -193,7 +196,8 @@ def account_money(
     with money_context():
         stopped = [stopped_holding(item) for item in budget.deployments if not item.active] + [
             # A pre-budget bot reserved nothing, so its Stop released nothing.
-            StoppedHolding(item.strategy_instance_id, item.position_cost, item.pending_orders, 0)
+            StoppedHolding(item.strategy_instance_id, item.position_cost, item.pending_orders, 0,
+                           display_cents(item.position_cost) + display_cents(item.pending_orders))
             for item in holdings if item.strategy_instance_id is not None
         ]
         cash = budget.cash - unseen_fills + unseen_sales

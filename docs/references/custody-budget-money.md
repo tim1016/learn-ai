@@ -80,14 +80,23 @@ Under the same lock as its append, `RUN_STOPPED` values the deployment exactly
 as every money read does (`budget_projection.value_release`) and records the
 display cents it released (`account_money.release_at_stop`: its positive free
 budget, as the remainder of its balance) and what stayed claimed in shares and
-entry orders. Money that comes back afterwards -- a sale, an entry order that
-ends unfilled, less any fee posted later -- is shown as having come back since
-the Stop and is never added to the released figure; what is still held shrinks
-only as its own orders and shares settle. A Stop is never refused for money:
-when the deployment cannot be valued at that instant (stale or unresolved fee
-evidence), the Stop records no amounts and keeps the byte-identical facts every
-earlier Stop has, and the bot's money shows a released figure estimated from
-its money now, labelled as an estimate.
+entry orders; its fold copies both onto the budget row (schema v22), where
+every money read takes them without searching the journal. A Stop spends
+nothing, so it values the fee evidence already recorded however old -- a
+restart's recovery stops every running bot before the process has read any
+(owner decision 2026-09-29); every other fee refusal stands. A fee not yet
+posted at the Stop is withheld from the release as its modelled amount; the
+account's charges carry it until the account's cash shows it. What the bot's money does
+afterwards is one signed line: come back (a sale, an entry order that ends
+unfilled) or charged (a posted fee above the one modelled, a re-split fee
+day). It is never added to the released figure, and "Over its budget by" is
+only ever what its shares and orders cost beyond its balance -- the running
+bot's test; what is still held shrinks only as its own orders and shares
+settle. A Stop is never refused for money: when the deployment cannot be
+valued (unresolved fee evidence, a corrupt fill or evidence record), the Stop
+commits with no amounts, byte-identical to every earlier Stop, the reason is
+logged with its traceback, and the bot's money shows a released figure
+estimated from its money now, labelled as an estimate.
 
 Independent conservation fixtures in `test_budgets.py` cover the $1,000/$600
 example, partial fills, observed cash, settlement replacement and historical

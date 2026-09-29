@@ -948,12 +948,62 @@ def test_a_stopped_bots_released_money_stays_what_its_stop_released(authority: t
     assert record_fee_evidence(repo, [posted], checked_at_ms=repo.clock(), history_complete=True)
     later = _read_view(runtime, gate, cash=700)
 
-    before, after = _lines(at_stop), _lines(later)
-    assert after["Fees"] != before["Fees"]  # the stopped bot's own money did move
-    assert after["Released at stop"] == before["Released at stop"] == "99.99"
+    assert _statement(at_stop) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "-0.01", False),
+        ("Balance", "199.99", True),
+        ("Released at stop", "99.99", False),
+        ("Still in shares, at cost", "100.00", False),
+        ("Still in entry orders", "0.00", False),
+    ]
+    # The day's posted fee came to a cent more than the one modelled at Stop:
+    # a charge after Stop, on its own signed line -- never a change to the
+    # release, and never an overrun while its shares are inside its balance.
+    assert _statement(later) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "-0.02", False),
+        ("Balance", "199.98", True),
+        ("Released at stop", "99.99", False),
+        ("Charged since it stopped", "-0.01", False),
+        ("Still in shares, at cost", "100.00", False),
+        ("Still in entry orders", "0.00", False),
+    ]
     assert at_stop.segment is not None and later.segment is not None
     assert later.segment.released_usd == at_stop.segment.released_usd == "99.99"
     assert not later.segment.released_estimated
+
+
+def test_a_bot_over_its_budget_when_it_stopped_reads_as_over_not_as_charged_since(authority: tuple) -> None:
+    """#2555 review: the overrun a bot carried into its Stop is named once, as
+    the running bot names it -- shares beyond the balance -- and nothing reads
+    as charged or come back since the Stop while its money has not moved."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    held = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                        lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                        reference_price=100, envelope=gate)
+    # The market filled it well above its reference: $201 of shares on a $200 budget.
+    _append_slice(repo, held, execution_id="held-fill", quantity=1, price=201, source_event_at_ms=NOON, fee=0)
+    _stop(repo)
+    repo.clock.advance(10_000)
+
+    view = _read_view(runtime, gate, cash=799)
+
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("Released at stop", "0.00", False),
+        ("Still in shares, at cost", "201.00", False),
+        ("Still in entry orders", "0.00", False),
+        ("Over its budget by", "1.00", False),
+    ]
 
 
 def test_money_a_stopped_bot_gets_back_after_stop_is_never_counted_as_released(authority: tuple) -> None:
@@ -976,7 +1026,7 @@ def test_money_a_stopped_bot_gets_back_after_stop_is_never_counted_as_released(a
 
     view = _read_view(runtime, gate, cash=1010)
 
-    assert view.headline == "Stopped · fully released" and view.segment is None
+    assert view.headline == "Stopped · finished" and view.segment is None
     assert _statement(view) == [
         ("Budget set aside at deploy", "200.00", False),
         ("Realized gains and losses", "10.00", False),
@@ -1033,14 +1083,16 @@ def test_a_stopped_bots_still_claimed_money_shrinks_only_as_its_own_order_settle
     assert settled.detail.startswith("It released $99.99 when it stopped; $100.01 stayed claimed.")
 
 
-def test_a_bot_stopped_before_its_release_was_recorded_shows_an_estimate_so_labelled(authority: tuple) -> None:
+def test_a_bot_whose_stop_recorded_no_release_shows_an_estimate_so_labelled(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#2555: a Stop that recorded no release -- every Stop before #2555, or
     one whose money could not be valued at that instant -- still renders, as
-    an estimate from the bot's money now and labelled so, never as a fact."""
+    an estimate from the bot's money now and labelled so, never as a fact.
+    Its copy says only what is true of both: the Stop recorded no amount."""
+    from app.broker.alpaca.clerk.sqlite import budget_projection
     from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-    from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
     from app.broker.contract.models import BrokerOrderLeg
-    from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
     from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
     repo, runtime, gate = _committed_view(authority)
@@ -1048,15 +1100,28 @@ def test_a_bot_stopped_before_its_release_was_recorded_shows_an_estimate_so_labe
                         lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
                         reference_price=100, envelope=gate)
     _append_slice(repo, held, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
-    # The account's fee evidence is stale at the Stop, so its money cannot be valued then.
-    _walk_clock_to(repo, repo.clock() + FEE_EVIDENCE_MAX_AGE_MS + 1)
-    _stop(repo)
+
+    def unvaluable(*_args: object, **_kwargs: object) -> None:
+        raise BudgetUnavailable("Fee evidence is unresolved.")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(budget_projection, "value_release", unvaluable)
+        _stop(repo)
     stop = next(row for row in repo.custody_transitions() if row["transition_kind"] == "RUN_STOPPED")
     assert "released_cents" not in stop["facts_json"]
-    record_fee_evidence(repo, [], checked_at_ms=repo.clock(), history_complete=True)
+    repo.clock.advance(10_000)
 
     view = _read_view(runtime, gate, cash=900)
 
-    assert ("Released at stop (estimate)", "100.00", False) in _statement(view)
-    assert "estimate" in view.detail
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("Released at stop (estimate)", "100.00", False),
+        ("Still in shares, at cost", "100.00", False),
+        ("Still in entry orders", "0.00", False),
+    ]
+    assert view.detail == ("Its Stop did not record what it released, so that figure is an estimate from its money now. "
+                           "The money in its shares comes back when they are sold.")
     assert view.segment is not None and (view.segment.released_usd, view.segment.released_estimated) == ("100.00", True)

@@ -257,9 +257,9 @@ class DeploymentBudgetView(BaseModel):
     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
     it, in order: a running bot's budget, results, balance and where the
     balance is; a stopped bot's balance, what its Stop released (the Stop's
-    recorded figure, #2555), what has come back since and what is still
-    held, which add up to that balance. It is empty unless ``state`` is
-    ``ready``.
+    recorded figure, #2555), what came back or was charged since, signed,
+    and what is still held, which add up to that balance less any "Over its
+    budget by". It is empty unless ``state`` is ``ready``.
     ``segment`` is this bot's slice exactly as the account's money bar draws
     it (a running ``bot`` or a ``stopped`` slice), widened to fill a bar of
     its own; ``None`` when the bot is finished and holds no money any more.
