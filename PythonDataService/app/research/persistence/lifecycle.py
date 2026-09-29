@@ -111,9 +111,17 @@ def resume_refusal(
         return f"the {noun} is still running"
     if uncommitted_changes(row):
         return f"the {noun} was launched from a working tree with uncommitted changes and cannot be resumed; launch a fresh {noun}"
-    recorded = CodeIdentity(**row.receipt["code_identity"])
-    if not recorded.matches(identity or resolve_code_identity()):
+    recorded = CodeIdentity.from_dict(row.receipt["code_identity"])
+    current = identity or resolve_code_identity()
+    if recorded.digest_scheme != current.digest_scheme:
+        return (
+            f"the {noun} was launched before this service recorded its installed library versions, "
+            f"so a library change since launch cannot be ruled out; launch a fresh {noun}"
+        )
+    if recorded.source_digest != current.source_digest:
         return f"the engine or strategy code changed since launch; launch a fresh {noun}"
+    if recorded.environment_digest != current.environment_digest:
+        return f"the Python interpreter or an installed library changed since launch; launch a fresh {noun}"
     if not verify_data:
         return None
     moved = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), roots_for(row))

@@ -216,7 +216,7 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
 
 
 async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival_catch() -> None:
-    """B5: Resume/Retire/Archive dispatch through this shared executor, not
+    """B5: Archive dispatches through this shared executor, not
     ``sqlite_panel_source.execute_sqlite_panel_action`` (which returns
     ``None`` for ``SQLITE_PANEL_LIFECYCLE_ACTION_IDS`` and defers here).
     That module already lets ``ExecutionLeaseLost``/``RepositoryPoisoned``
@@ -225,7 +225,7 @@ async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival
     Before this fix, this executor's blanket ``except Exception`` wrapped
     both into ``ActionOutcomeUnknownError`` (an opaque 500) before
     ``run_action`` ever got a chance to attempt a revival -- silently
-    denying these three actions the same self-cure every other action gets.
+    denying it the same self-cure every other action gets.
     """
 
     async def _perform(_operator: str, _reason: str | None) -> str:
@@ -234,11 +234,11 @@ async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival
     store = IdempotencyStore()
     with pytest.raises(ExecutionLeaseLost):
         await execute_action(
-            _request(action_id="retire", key="lease-lost"),
+            _request(action_id="archive", key="lease-lost"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"retire": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=store,
         )
@@ -250,7 +250,7 @@ async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival
     # the write path later revives needs this ORIGINAL key free for the
     # operator's same-key re-POST; burning it here left a revived leg
     # permanently unflattenable under its own key.
-    assert (_SID, "retire", "lease-lost") not in store._records
+    assert (_SID, "archive", "lease-lost") not in store._records
 
 
 async def test_a_lease_lost_after_broker_io_is_outcome_unknown_with_a_burned_key() -> None:
@@ -267,16 +267,16 @@ async def test_a_lease_lost_after_broker_io_is_outcome_unknown_with_a_burned_key
     store = IdempotencyStore()
     with pytest.raises(ActionOutcomeUnknownError) as unknown:
         await execute_action(
-            _request(action_id="retire", key="lost-after-io"),
+            _request(action_id="archive", key="lost-after-io"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"retire": _perform},
+            performers={"archive": _perform},
             operator_identity="op",
             store=store,
         )
 
-    assert store._records[(_SID, "retire", "lost-after-io")].state == "failed"
+    assert store._records[(_SID, "archive", "lost-after-io")].state == "failed"
     assert "may have been placed or cancelled" in (unknown.value.detail or "")
 
 
@@ -543,13 +543,14 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.recorded_at_ms == legacy_observed_at_ms
 
 
-@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue"])
+@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire"])
 async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
     tmp_path: Path, retired_action_id: str,
 ) -> None:
-    """#2550 review: a bot's ledger written before Resume/Pause/Continue were
-    retired must still load. Those receipts remain readable history, and the
-    bot's next command -- Stop included -- runs instead of failing the load."""
+    """#2550 review: a bot's ledger written before Resume/Pause/Continue (and,
+    since #2578, Retire) were retired must still load. Those receipts remain
+    readable history, and the bot's next command -- Stop included -- runs
+    instead of failing the load."""
     path = tmp_path / "panel_action_receipts.json"
     compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
     history = {
@@ -633,11 +634,11 @@ def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
 async def test_unwired_action_is_typed_not_available() -> None:
     with pytest.raises(ActionNotAvailableError) as exc:
         await execute_action(
-            _request(action_id="retire"),
+            _request(action_id="cancel_order"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op, reason: _noop()},  # retire not wired
+            performers={"stop": lambda op, reason: _noop()},  # cancel_order not wired
             operator_identity="op",
             store=IdempotencyStore(),
         )
@@ -968,16 +969,16 @@ async def test_not_available_action_releases_key() -> None:
 
     with pytest.raises(ActionNotAvailableError):
         await execute_action(
-            _request(action_id="retire", key="na"),
+            _request(action_id="cancel_order", key="na"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op, reason: _noop()},  # retire not wired
+            performers={"stop": lambda op, reason: _noop()},  # cancel_order not wired
             operator_identity="op",
             store=store,
         )
 
-    assert (_SID, "retire", "na") not in store._records
+    assert (_SID, "cancel_order", "na") not in store._records
 
 
 async def test_duplicate_concurrent_posts_run_mutation_once() -> None:

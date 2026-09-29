@@ -1619,7 +1619,6 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert len(panel.rail.stations) == 6
     action_ids = {a.action_id for a in panel.actions}
     assert action_ids == {
-        "retire",
         "archive",
         "stop",
         "flatten_stop",
@@ -1922,33 +1921,12 @@ def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() 
     assert row.effect_operation_id is None
 
 
-def test_a_registration_with_no_runtime_presents_retire_enabled() -> None:
-    """Wiring guard for #1778 S5.
-
-    The retire policy is tested on its own context, so it stays green even
-    if nobody resolves `strategy_runtime_missing`. This pins the panel
-    actually resolving it: a stopped, flat bot whose strategy key the
-    runtime no longer knows must be offered retire.
-    """
-    panel = _panel(
-        _status(running=False, strategy_key="strategy_that_no_longer_exists"),
-        _clerk_status(),
-        [],
-        exposure={},
-    )
-
-    assert _action(panel, "retire").enabled is True
-
-
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
     changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
 
-    # retire is now presented (#1778, S5) but stays disabled for a runnable
-    # strategy -- narrow retire is registration cleanup, not "end this bot".
-    retire = _action(panel, "retire")
-    assert retire.enabled is False
-    assert "cancel_order" not in {action.action_id for action in panel.actions}
+    # Retire is gone (#2578): Clear's archive is the one lifecycle exit.
+    assert {"retire", "cancel_order"}.isdisjoint(action.action_id for action in panel.actions)
     confirmation = _action(panel, "flatten_stop").confirmation
     assert confirmation is not None
     assert confirmation.required_token == "FLATTEN"
@@ -2702,33 +2680,22 @@ def test_primary_action_rejects_a_dangling_reference() -> None:
         BotPanelView.model_validate(payload)
 
 
-def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
-    """Retire must not be stripped on the way to Angular (#1778, S5).
+def test_archive_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
+    """Archive must not be stripped on the way to Angular (#1778, S5).
 
     The adapter replaces the generic policy's actions with SQLite-owned
     recovery actions, preserving only the bot-lifecycle actions it names.
-    Retire is a bot-lifecycle action -- SQLite owns broker recovery, not the
-    roster -- so omitting it from that set silently deletes the action after
-    the guard, the performer, and the lens have all been wired. The feature
-    would be complete everywhere except where an operator can reach it.
+    Archive -- Clear on Home -- is a bot-lifecycle action: SQLite owns broker
+    recovery, not the roster, so omitting it from that set would silently
+    delete the one way off Home after its guard and performer were wired.
     """
     base = _panel(_status(running=False), _clerk_status(), [])
-    retire = PanelAction(
-        action_id="retire",
-        label="Retire",
-        explanation="Clear a registration the runtime can no longer honour.",
-        enabled=True,
-        blockers=[],
-        confirmation=None,
-        revision=1,
-        concurrency_token="generic-token",
-    )
-    base = base.model_copy(update={"actions": [*base.actions, retire]})
     projection = _rail_projection(orders=())
 
     adapted = adapt_sqlite_panel(base, projection)
 
-    assert "retire" in [action.action_id for action in adapted.actions]
+    assert [action.action_id for action in base.actions if action.action_id == "archive"] == ["archive"]
+    assert "archive" in [action.action_id for action in adapted.actions]
 
 
 @pytest.mark.parametrize(

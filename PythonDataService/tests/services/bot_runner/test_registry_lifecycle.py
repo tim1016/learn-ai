@@ -795,10 +795,10 @@ async def test_bar_stream_end_is_exited_unverified(tmp_path: Path) -> None:
 
 
 class _CustodyThatAcquiresExposure:
-    """Flat while the bot deploys, exposed by the time Retire is clicked.
+    """Flat while the bot deploys, exposed by the time Archive is clicked.
 
     Models the race the commit-time re-proof exists for: a fill lands between
-    the panel authoring an enabled Retire and the operator clicking it.
+    the panel authoring an enabled Archive and the operator clicking it.
     """
 
     def __init__(self) -> None:
@@ -818,40 +818,6 @@ class _CustodyThatAcquiresExposure:
                 "working_orders": CustodyCountFact(state="non_zero", count=1),
             }
         ), ProgramLegPolicy.regular_only(), DEPLOY_EXIT_TERMS
-
-
-@pytest.mark.asyncio
-async def test_retire_reproves_custody_and_refuses_to_strand_exposure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Retirement is irreversible, so it re-proves its own preconditions.
-
-    The panel's guard refuses exposure and working orders, but that decision
-    is authored at presentation time and the operator clicks later. Between
-    those two moments a fill can land. Re-checking only `running` at the
-    commit would retire a registration that still holds custody -- and there
-    is no undo. The committing operation answers the same shared rule again
-    against a freshly reconciled snapshot (#1778, S5).
-    """
-    feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
-    custody = _CustodyThatAcquiresExposure()
-    registry = _registry(tmp_path, feed, start_custody_guard=custody)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
-
-    # The registration outlived its strategy: deployable when created, its key
-    # since removed. That is what makes Retire eligible at all -- so reaching
-    # the custody guard proves the commit-time re-proof, not an earlier
-    # refusal.
-    monkeypatch.setattr(bot_runner_module, "_STRATEGY_REGISTRY", {})
-    custody.exposed = True
-
-    with pytest.raises(BotRunnerError) as blocked:
-        await registry.retire("alpaca", _SID, updated_by="operator")
-
-    assert "custody" in str(blocked.value).lower()
-    assert registry.status("alpaca", _SID).phase != "RETIRED"
 
 
 @pytest.mark.asyncio
@@ -963,9 +929,9 @@ async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
 ) -> None:
     """Archive is irreversible, so it re-proves its own precondition.
 
-    Same race as retire's: the panel authors an enabled Archive against a
-    projected snapshot and the operator clicks later. A fill landing in
-    between must refuse the command, not be stranded by it.
+    The panel authors an enabled Archive against a projected snapshot and the
+    operator clicks later. A fill landing in between must refuse the command,
+    not be stranded by it.
     """
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
     custody = _CustodyThatAcquiresExposure()

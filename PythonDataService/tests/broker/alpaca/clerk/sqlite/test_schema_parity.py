@@ -292,7 +292,7 @@ def _assert_migration_from_version_reaches_current_intact(tmp_path: Path, from_v
     already at v19/v20) and runs the new ALTERs on its first open after
     #2550. A reviewer proved by hand that positions/orders/runs survive,
     ``authorization_version`` defaults to 1, and no ``deployment_budgets``
-    rows appear; this pins that for v18, v19, and v20."""
+    rows appear; this pins that for v18 through v21."""
     import pytest
 
     db_path = tmp_path / f"clerk-{from_version}.db"
@@ -352,6 +352,10 @@ def test_v19_migration_preserves_evidence_and_defaults_authorization_version(tmp
 
 def test_v20_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
     _assert_migration_from_version_reaches_current_intact(tmp_path, 20)
+
+
+def test_v21_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
+    _assert_migration_from_version_reaches_current_intact(tmp_path, 21)
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
