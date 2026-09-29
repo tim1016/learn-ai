@@ -153,7 +153,6 @@ function panelView(overrides: Partial<BotPanelView> = {}): BotPanelView {
 function fakePanelService(getEvidence = vi.fn(() => Promise.resolve(evidencePage()))) {
   return {
     getEvidence,
-    getRunHistory: vi.fn().mockResolvedValue({ runs: [], next_cursor: null }),
   };
 }
 

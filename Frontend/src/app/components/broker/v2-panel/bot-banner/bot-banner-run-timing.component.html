@@ -13,7 +13,7 @@
     @if (run?.terminal_outcome; as outcome) {
       <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" granularity="time" />
     } @else if (run) {
-      {{ run.process?.state === 'RUNNING' ? 'Running' : 'No end' }}
+      {{ run.process.state === 'RUNNING' ? 'Running' : 'No end' }}
     } @else {
       {{ runState().loading ? 'Loading…' : 'Unavailable' }}
     }

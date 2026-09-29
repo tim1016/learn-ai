@@ -56,6 +56,13 @@ LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S = 40.0
 #: 110 s as a lane-wide stop; a clear cut off anyway is safe to resend under
 #: its key (cleared legs replay as no-ops).
 BOTS_CLEAR_READ_TIMEOUT_S = 110.0
+#: The coordinator -> lane read bound of ``bot_history_read`` (#2574). One
+#: account's history reads its own Clerk database and then each of its Dry
+#: Runs' own ``sim:`` databases, each on a fresh snapshot with its lifetime
+#: fee projection, so an account with a long Dry Run history outlasts the
+#: 10 s default. It is read on demand, never polled, so a longer bound costs
+#: nothing between reads; a lane that still overruns it is named as a gap.
+BOT_HISTORY_READ_TIMEOUT_S = 30.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
 
 

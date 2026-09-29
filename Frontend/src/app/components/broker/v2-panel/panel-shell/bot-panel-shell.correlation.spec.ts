@@ -132,7 +132,6 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
         as_of_ms: 1_753_800_000_000,
       }),
       getCurrentRun: vi.fn().mockRejectedValue(new Error('No current run fixture.')),
-      getRunHistory: vi.fn().mockResolvedValue({ runs: [], next_cursor: null }),
       getPanel: vi.fn().mockResolvedValue(panelAtRevision(INITIAL_REVISION)),
       getEvidence: vi.fn().mockResolvedValue(
         evidenceReceipt(0, 0, INITIAL_REVISION),

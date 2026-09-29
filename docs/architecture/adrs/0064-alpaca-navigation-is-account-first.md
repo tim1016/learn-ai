@@ -58,3 +58,14 @@ PRD #2560 (the money map) reshapes the workspace this ADR introduced. The accoun
 - **Lane colour frames the account** (D4): Live red (the existing bear red), Paper cyan, Shadow violet — one token each — draw the workspace frame, the header wash, the open tab's underline, the mode badge, the Accounts cards and the pills. The mode is always worded beside the colour ("LIVE · real money", "PAPER · practice money", "SHADOW · simulated fills on your live account"), so colour never carries it alone. A mode not yet read frames the workspace neutrally and reads "Reading account mode…" (the pill: "Reading…"), never a real-money warning; a failed or unknown read stays loud. Dry Run is never a lane colour.
 - **Window titles** (Decision 6) read "Home · Paper".
 - **The broker-wide `/brokers/alpaca/settings` and `/configuration` addresses** land on the account list (FR-096), like the retired Bots and Gallery choosers: Settings is one lane's page, and the list is where the account is chosen.
+
+## Amendment 2026-09-29 — History: every bot across all accounts (#2574)
+
+Owner decisions of 2026-09-28 (#2574) add a fourth tab and a second page that shows every account at once. The account-first decisions otherwise stand.
+
+- **The tabs are Home · Activity · History · Settings.** History lists every bot across Live, Paper and Shadow, with each account's Dry Runs and the bots cleared from Home, newest first: when it ran, how it ended, its trades, and its money.
+- **Decision 2 is narrowed.** The account list is no longer the *only* page that shows more than one account: History does too, by the owner's decision. It is the same list from any account's workspace, so it is lane-scoped like Settings (`…/clerks/:clerkId/history`, reachable without a confirmed account) and opens with no filter selected. A filter narrows it to one account.
+- **The rejected option "Paper and Live on one Bots page" is still rejected for control surfaces.** History carries no command: every row opens that bot's own page in its own account's workspace. Each row names its account in the lane colour with the mode worded, so real-money and practice bots are never told apart by colour alone.
+- **FR-093 holds per account.** The fleet coordinator reads each account's own `bot_history_read` and merges the rows, combining no value across accounts (ADR 0062 Decision 1). An account it cannot read, one of its Dry Runs, or one bot whose own records cannot be read is named above the list; it is never silently left out, and a bad bot never hides its siblings.
+- **Home's Finished fold links to History filtered to cleared bots.** This replaces the separate "Cleared bots" list PRD #2560 had agreed. A cleared bot's own page is read-only, and Deploy again works from it.
+- **The bot page's one-run-at-a-time run pager is removed.** Its Runs fold shows the current run and links to History narrowed to that one bot, with all of its runs (owner decision 2026-09-29).

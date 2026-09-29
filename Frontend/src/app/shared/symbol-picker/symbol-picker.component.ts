@@ -6,7 +6,7 @@ import {
   InstrumentCardComponent,
   type InstrumentCardAppearance,
 } from '../ticker-range-picker/parts/instrument-card.component';
-import type { TickerRange } from '../ticker-range-picker/ticker-range-picker.types';
+import type { TickerOption, TickerRange } from '../ticker-range-picker/ticker-range-picker.types';
 
 /**
  * Symbol-only picker: the shared instrument card bound to a bare `string`.
@@ -15,7 +15,9 @@ import type { TickerRange } from '../ticker-range-picker/ticker-range-picker.typ
  * news filter, a live chain lookup — this is the whole integration: bind
  * `[(symbol)]`, name the tree the host's run reads through
  * `adjustmentMode`, and the card supplies the joined catalog, the coverage
- * badge and the ensure-coverage gate. The `TickerRange` projection pins
+ * badge and the ensure-coverage gate. A host that owns its membership
+ * outright passes `universe` instead: a closed list, never gated (ADR 0066).
+ * The `TickerRange` projection pins
  * `from`/`to` to placeholders so the card's snap-to-held-window behavior is
  * a no-op here, exactly as `app-ticker-date-picker` does for its date
  * half: only the symbol crosses back.
@@ -29,6 +31,7 @@ import type { TickerRange } from '../ticker-range-picker/ticker-range-picker.typ
       [appearance]="appearance()"
       [adjustmentMode]="adjustmentMode()"
       [label]="label()"
+      [universe]="universe()"
       [value]="projection()"
       (valueChange)="onRangePatch($event)"
     />
@@ -45,6 +48,10 @@ export class SymbolPickerComponent {
 
   /** The picker's landmark and combobox name — name every picker on a page. */
   readonly label = input('Symbol');
+
+  /** A closed list the host owns outright, passed to the card; `null` (the
+   * default) is the joined catalog with its lake gate. */
+  readonly universe = input<readonly TickerOption[] | null>(null);
 
   protected readonly projection = computed<TickerRange>(() => ({
     symbol: this.symbol(),
