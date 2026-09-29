@@ -12,7 +12,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade, Strategy
@@ -28,16 +28,11 @@ def run_strategy_over_bars(strategy: Strategy, bars: list[TradeBar]) -> list[Log
     strategy-parity synthetic fixtures use (see
     ``app/engine/strategy/spec/tests/_parity_helpers.py::run_strategy``).
     """
-    start_date = ny_datetime(min(bar.start_ms for bar in bars)).date()
-    end_date = ny_datetime(max(bar.end_ms for bar in bars)).date()
-    orig_init = strategy.initialize
-
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(start_date.year, start_date.month, start_date.day)
-        strategy.set_end_date(end_date.year, end_date.month, end_date.day)
-
-    strategy.initialize = _patched_init  # type: ignore[method-assign]
+    pin_strategy_window(
+        strategy,
+        ny_datetime(min(bar.start_ms for bar in bars)).date(),
+        ny_datetime(max(bar.end_ms for bar in bars)).date(),
+    )
     engine = BacktestEngine(
         data_source=InMemoryDataReader(bars),  # type: ignore[arg-type]
         fill_model=FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, commission_per_order=Decimal("0")),

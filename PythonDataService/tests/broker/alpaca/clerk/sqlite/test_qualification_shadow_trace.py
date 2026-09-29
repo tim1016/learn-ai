@@ -9,6 +9,7 @@ place an external Alpaca paper order.
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from app.broker.alpaca.clerk.active_authority import (
     register_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
+    IncompleteReferenceReplayError,
     ShadowTraceDivergence,
     ShadowTraceDivergenceError,
     UnsupportedShadowProgramError,
@@ -166,6 +168,23 @@ async def test_shadow_trace_evaluation_rejects_a_key_this_build_retired() -> Non
         await run_shadow_trace_evaluation("retired-strategy-not-in-this-build", "SPY", None, [])
 
     assert "is not registered in this build" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_shadow_trace_evaluation_refuses_bars_the_reference_backtest_did_not_read() -> None:
+    """The reference backtest must process every bar it is handed (#2608).
+
+    A bar its reader drops -- here one for another symbol -- would make the
+    comparison silently partial, so the reference raises instead of
+    returning traces for the bars it happened to read.
+    """
+    bars = _load_bars_through_first_round_trip()
+    unread = replace(bars[-1], symbol="QQQ")
+
+    with pytest.raises(IncompleteReferenceReplayError) as excinfo:
+        await run_shadow_trace_evaluation("ema_crossover_signal", "SPY", None, [*bars, unread])
+
+    assert f"{len(bars)} of the {len(bars) + 1} bars" in str(excinfo.value)
 
 
 def test_compare_canonical_traces_accepts_identical_sequences() -> None:
