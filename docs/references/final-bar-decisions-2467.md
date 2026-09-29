@@ -1,27 +1,29 @@
 # Final-bar decisions: how many backtest trades, and how the backtest should model them (#2467)
 
-**Status:** research note, 2026-09-29. Code examined at `8e138f73` (master, after #2440 merged as `d4c521b2`). Parent #2439; owner decision #2431; live change #2440.
+**Status:** research note, 2026-09-29, revised the same day after an independent review. Code examined at `8e138f73` (master, after #2440 merged as `d4c521b2`). Parent #2439; owner decision #2431; live change #2440; live bug #2596.
 
 ## The answer
 
+**First, a live-money bug this research found: live does not reliably refuse an entry decided on the last bar.** Nothing on the ENTER path compares the decision instant with the session close. The gate trusts the broker clock's OPEN flag, which is polled once a second and trusted for 5 s, and it drops the `next_close_ms` the clock reported. A 16:00 decision lands about 0.6 s after the close. Whenever the freshest clock reading was answered before 16:00:00, the ENTER passes, goes out as a market DAY order, and Alpaca fills it at the next open. That is filed as **#2596 (P1)**, and a fix is in progress. The code path is under [Other findings](#the-final-bar-enter-race-2596).
+
 For the EMA crossover program that runs on the clerk lanes, **7.2% of backtest trades on SPY are decided on the session's final bar** (6 of 83 over 590 sessions: 5 entries, 1 exit). The paper-only 30–70 RSI variant has 9.7% (54 of 559: 36 entries, 18 exits). Deployment Validation has none, because it stops deciding 15 minutes before the close.
 
-Live cannot trade those decisions the way the backtest does. The backtest fills them at the final minute's close. Live decides that bar just after the close. Its gate then normally refuses an ENTER, and it sends an EXIT as an after-hours limit (#2440).
+The backtest fills those decisions at the final minute's close. Live decides that bar just after the close. Once #2596 lands, live refuses a final-bar ENTER and sends a final-bar EXIT as an after-hours limit (#2440).
 
-The entries matter most. Skipping the five final-bar entries removes **17.56 of the backtest's 50.03 points per share (35%)** for the sealed EMA settings, and 49% for the variant. The exits barely matter. On all 589 sessions, the first after-hours print sits **0.42 bps** from the close on average. The next open sits **42 bps** away.
+The entries matter most. Skipping the five final-bar entries removes **17.56 of the backtest's 50.03 points per share (35%)** for the sealed EMA settings. That rests on 5 trades, 4 of them winners. For the variant it is 49%, over 36 entries. The exits matter far less. The first price an after-close order can get is the open of the first minute that starts after the decision. It sits **3.74 bps** from the close on average (median 2.80). The next open sits **42 bps** away.
 
 **Recommendation:** model the two kinds differently.
 
-- **ENTER on the final bar: skip it.** That is what live does when its gate works.
-- **EXIT on the final bar: fill at the after-hours price.** Use the first after-hours minute that reaches the limit live would send.
-- **Do not fill at the next open.** It is 10–100× further from what live gets for an exit. It also credits entries that live never takes.
+- **ENTER on the final bar: skip it.** This models live correctly only once #2596 lands. Until then, live sometimes fills such an entry at the next open.
+- **EXIT on the final bar: fill at the after-hours price.** Use the open of the first minute that starts after the decision, floored at the limit live sends. If no minute reaches the limit before after-hours ends, the position stays open.
+- **Do not fill at the next open.** It is about 11× further from what live gets for an exit, and it credits entries live is meant to refuse.
 
-Two live findings sharpen this:
+Two other findings:
 
-1. The ENTER refusal hangs on the broker clock's once-a-second poll, so at 16:00 it can lose a race.
-2. The check built to prove that live and backtest group bars the same way has compared nothing since March 2026. With its date window corrected, the two groupings match on every bar held.
+1. **Bar grouping matches.** Given the same complete one-minute bars, the bot's decision seam and the backtest engine produce identical decision traces on every bar held, final bars included.
+2. **A broken parity check.** The check built to show that has compared nothing since March 2026, so no receipt ever showed the match.
 
-Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-B](#follow-ups) (the ENTER race), [#FOLLOWUP-C](#follow-ups) (the parity check), [#FOLLOWUP-D](#follow-ups) (dead machinery).
+Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-C](#follow-ups) (the parity check), [#FOLLOWUP-D](#follow-ups) (dead machinery). The entry race is #2596.
 
 ## Which strategies run live, and how that was determined
 
@@ -50,7 +52,7 @@ Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-B]
 **Live** (paper and real money):
 
 - The runner scans each bar's close (`app/services/bot_trade_strategy.py:558-576`), so it decides the final bucket as soon as the close arrives (`app/services/decision_clock.py:3-9`). The held receipts time it: `paper-ema-spy-0924` recorded its 16:00 decision at **16:00:00.595**, and `paper-ema-spy-0923` at 16:00:05.4.
-- **ENTER.** Only the market-liveness gate stands between a final-bar ENTER and the broker (`bot_trade_strategy.py:963-997`; Clerk recheck `app/broker/alpaca/clerk/sqlite/runtime.py:1118-1145`). #2440's own documentation assumes this gate refuses it ([alpaca-extended-hours.md, "The regular close"](alpaca-extended-hours.md#the-regular-close-an-exit-sent-after-the-session-it-was-decided-in-2440)). The ENTER leg stays a market DAY order (`app/broker/alpaca/clerk/program_leg.py:527-528`).
+- **ENTER.** Only the market-liveness gate stands between a final-bar ENTER and the broker (`bot_trade_strategy.py:963-997`; Clerk recheck `app/broker/alpaca/clerk/sqlite/runtime.py:1118-1145`). That gate reads the broker clock only, so a pre-close OPEN reading lets the ENTER through (#2596). The ENTER leg is a market DAY order (`app/broker/alpaca/clerk/program_leg.py:527-528`). #2440's documentation says the gate refuses a closed-market ENTER ([alpaca-extended-hours.md, "The regular close"](alpaca-extended-hours.md#the-regular-close-an-exit-sent-after-the-session-it-was-decided-in-2440)). That holds only once #2596 lands.
 - **EXIT.** The EXIT is exempt from both the liveness and lateness gates (`bot_trade_strategy.py:1133-1192`). #2440 sends it as an extended-hours DAY limit at `floor_tick(close × (1 − exit_bps/10⁴))` (`program_leg.py:537-575`, `app/broker/alpaca/marketable_limit.py:51-79`). The limit is anchored on the IBKR decision bar's close and lives until 20:00, or 17:00 on a half-day (`app/services/session_authority.py:172-197`).
 - If the EXIT is unfilled, the operator gets `EXIT_NOT_FLAT`, and the next try is the 04:00 pre-market re-drive (owner decisions on #2440).
 
@@ -58,7 +60,7 @@ Follow-up drafts: [#FOLLOWUP-A](#follow-ups) (the backtest model), [#FOLLOWUP-B]
 
 ## Measurements
 
-Everything below comes from `PythonDataService/scripts/measure_final_bar_decisions.py`. Its full output is committed as [final-bar-decisions-2467.json](final-bar-decisions-2467.json). "Points" means price points per share, summed over trades. Session closes and half-days come from `app/lean_sidecar/trading_calendar.py`.
+Everything below comes from `PythonDataService/scripts/measure_final_bar_decisions.py`. Its full output is committed as [final-bar-decisions-2467.json](final-bar-decisions-2467.json). "Points" means price points per share, summed over trades. Session closes and half-days come from `app/lean_sidecar/trading_calendar.py`. The symbol, the bucket width and the warmup lookback come from the measured strategies and their registered signal-program contracts.
 
 **Window.** SPY, 2024-05-20 to 2026-09-25, from the lake's `polygon_split_adjusted` root. That is 590 sessions, and the calendar expects 590, so none are missing. Six are half-days: 2024-07-03, 2024-11-29, 2024-12-24, 2025-07-03, 2025-11-28 and 2025-12-24. Every zip was verified against its sidecar `file_sha256`. The Postgres catalog receipt was not checked, because the shared Postgres is off-limits to research.
 
@@ -80,32 +82,47 @@ None of the 60 final-bar trades fell on a half-day. The classifier would still c
 |---|---|---|
 | Close fill (today) | 83 / **+50.03** | 559 / **+62.24** |
 | Live: final-bar ENTER skipped, EXIT at the close | 78 / **+32.47** | 523 / **+31.74** |
-| &nbsp;&nbsp;plus EXIT at the after-hours price (first after-hours minute's open, floored at the limit) | +0.04 more | +0.18 more (5–50 bps allowance) |
+| &nbsp;&nbsp;plus EXIT at the after-hours price (the open of the first minute after the decision, floored at the limit) | +1.17 more (one exit) | +3.84 more at a 10–50 bps allowance (+3.87 at 5, +4.64 at 0) |
 | &nbsp;&nbsp;plus EXIT at the limit itself (the `limit_touch_fill` rule) | −0.27 (5 bps) to −2.64 (50 bps) | −5.67 (5 bps) to −55.83 (50 bps) |
 | Next open (the LEAN-compatibility path) | 83 / +49.88 | 559 / +60.05 |
 | Skip both kinds (the EXIT retries on the next bar, 09:45 next day) | 78 / +48.28 | 520 / +52.43 |
 
-**The skipped entries.** They were mostly winners: four of the five for the sealed default, worth +1.71 to +8.65 points each. Their removal is the whole gap between +50.03 and +32.47.
+**The skipped entries.** For the sealed default they are five trades. Four were winners, worth +1.71 to +8.65 points each, and one lost 1.87. Their removal is the whole gap between +50.03 and +32.47. A five-trade sample makes the 35% a measure of this window, not a stable rate.
 
-**The next-open total is a coincidence.** It lands close to the close-fill total only by chance. Its five entries cost 13.64 points, and its one exit gained 13.49 from a +2.6% overnight gap on 2025-04-22.
+**The one sealed exit.** The sealed default's only final-bar exit is 2025-04-22. SPY moved after the close that day: the first minute after the decision opened 22 bps above the close, and the next session opened 2.6% higher. That single trade is the whole +1.17. The variant's 18 exits average +4.4 bps at a 0 bps allowance (median +2.2).
+
+**The next-open total is a coincidence.** It lands close to the close-fill total only by chance. Its five entries cost 13.64 points, and its one exit gained 13.49 from the same 2025-04-22 gap.
 
 **The skip-both model** keeps the 2025-04-22 exit alive into the next morning, and that is why it scores higher.
 
-**Unfilled exits.** No after-hours exit went unfilled at any allowance from 0 to 50 bps.
+**Unfilled exits.** None of the final-bar exits in the table went unfilled, at any allowance from 0 to 50 bps.
 
 ### 3. After-hours price against the next open, every session
 
 589 sessions; the last session has no next open inside the window.
 
+**Which prices an after-close order can get.** Live decides the final bar just after the close (16:00:00.595 in `paper-ema-spy-0924`), so its order exists only partway into the minute that starts at the close. That minute's open is the first print at or after 16:00:00.000, which comes before the order. So the model credits only minutes that start after the close. On an ordinary day that is 16:01 onwards.
+
 | Price, against the final minute's close | Mean abs. diff. | Median abs. diff. | p95 abs. diff. | Max abs. diff. |
 |---|---:|---:|---:|---:|
-| First after-hours minute's **open** | 0.42 bps | 0.30 bps | 1.04 bps | 27.98 bps |
-| First after-hours minute's **close** | 3.64 bps | 2.72 bps | 10.41 bps | 33.74 bps |
+| **Open of the first minute after the decision** (the proxy) | **3.74 bps** | 2.80 bps | 10.59 bps | 33.88 bps |
+| Close of the minute that starts at the close (16:00) | 3.64 bps | 2.72 bps | 10.41 bps | 33.74 bps |
 | Next session's **open** | 42.28 bps | 28.10 bps | 119.85 bps | 400.39 bps |
+| *Not reachable:* open of the 16:00 minute (prints before the order exists) | 0.42 bps | 0.30 bps | 1.04 bps | 27.98 bps |
 
-**Fill rate.** A sell limit at `marketable_limit_price(close, b)` was reached before after-hours ended on **589 of 589** sessions, for every b in {0, 5, 10, 25, 50} bps. That includes all six half-days, where after-hours ends at 17:00 and SPY printed in 26 to 50 of those 240 minutes.
+**No drift.** The proxy's signed mean is +0.17 bps (median −0.17), so it moves the price by a few bps either way, not in one direction.
 
-**Which proxy is closer.** The 16:00 minute's open is probably the closing cross, which a limit sent at 16:00:00.6 cannot reach. That minute's close is the later bound. A real fill most likely lands between the two, within a few bps of the close. The next open is an order of magnitude further away.
+**The 16:00 minute's open is not established as the closing auction.** The minute bars cannot say which print it is. SPY's 16:00 minute has a median volume of 283K shares, against 1.76M for the 15:59 minute and 112K for the first minute after the decision. The model needs only the fact that the print comes before the order.
+
+**Fill rate.** A sell limit at `marketable_limit_price(close, b)` was reached after the decision and before after-hours ended on:
+
+- **571 of 589** sessions at b = 0 bps;
+- **587 of 589** at 5 bps;
+- **589 of 589** at 10, 25 and 50 bps.
+
+**Half-days.** The lake holds no SPY minute between 13:01 and 15:59 on any of the six half-days. The first minute after a 13:00 decision is 16:00–16:02, and SPY printed in 25 to 49 minutes before the 17:00 end. The limit was reached on 2 of 6 half-days at 0 bps, 5 of 6 at 5 bps, and 6 of 6 at 10 bps. The lake cannot say whether nothing traded from 13:01 to 15:59, or the vendor's minute bars leave that window out.
+
+**Which proxy to use.** The open of the first minute after the decision is the earliest price the order can be credited with, and every print in that minute comes after the order. The 16:00 minute's close is about as far from the close (3.64 bps), but that minute also holds prints from before the order. On a thin minute its close can be one of them. The next open is an order of magnitude further away.
 
 ### 4. The final minute: the lake against what live saw
 
@@ -115,10 +132,10 @@ The comparison uses held IBKR one-minute bars from 246 source-ledger copies (234
 |---|---:|---:|---:|---:|
 | Every regular-session minute close | 4,768 | 3,635 (76%) | 0.014 bps | 0.79 bps |
 | Every 15-minute bucket close | 317 | 241 (76%) | — | — |
-| **Final minute close (16:00 bar close)** | **12** | **1 (8%)** | **0.40 bps (≈3¢)** | **0.79 bps (6¢)** |
+| **Final minute close (16:00 bar close)**, 12 sessions: 4 live-observed, 8 IBKR history | **12** | **1 (8%)** | **0.40 bps (≈3¢)** | **0.79 bps (6¢)** |
 | Final 15-minute bucket, full OHLC | 12 | 0 | — | — |
 
-**Live-observed minutes only.** Four of the 12 final minutes were observed live; the rest come from IBKR history. The live four differ by 0.00, +0.03, +0.01 and +0.05 dollars.
+**Mostly history, not live.** Only 4 of the 12 final minutes were observed live. The other 8 are IBKR history. The live four differ from the lake by 0.00, +0.03, +0.01 and +0.05 dollars.
 
 **History can stand in for live.** Where both a live and a history copy of the same regular-session minute are held, 2,217 of 2,433 (91%) are identical in OHLCV.
 
@@ -132,7 +149,9 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 
 ### 5. Does the bot's bar grouping match the backtest's? (Codex's open question)
 
-**Yes.** Both seams run the same `TradeBarConsolidator`. The live runner adds `scan` at each bar's close, which fires a complete bucket on its closing minute rather than on the next one. The contents are the same (`bot_trade_strategy.py:558-576`); only the timing differs.
+**Yes, for the decision seam.** Given the same complete one-minute bars, the bot's decision seam groups them into buckets and decides exactly as the backtest engine does. Both seams run the same `TradeBarConsolidator`. The live runner adds `scan` at each bar's close, which fires a complete bucket on its closing minute rather than on the next one. The contents are the same (`bot_trade_strategy.py:558-576`); only the timing differs.
+
+**What this does not cover.** The comparison starts from the one-minute bars the ledgers hold. It does not test how live builds those minutes. That happens upstream of this seam, in the 5-second-to-minute assembler and the sparse-minute timer that drops late prints outside regular hours (#2376).
 
 **The test.** The decision clock's floor has a parity test against the consolidator's (`app/services/decision_clock.py:48-81`). I ran both decision seams over the RTH minutes of each held IBKR ledger:
 
@@ -140,7 +159,7 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 - **Backtest seam:** the production `BacktestEngine`.
 - **Judge:** `compare_canonical_traces`.
 
-**The result.** 12 ledgers held AAPL, QQQ, SPY and TSLA from 2026-08-25 to 09-10; overlapping sessions were recorded independently. Across 24 runs, the two seams produced **1,688 EMA traces and 25,278 Deployment Validation traces, identical field for field, with no divergence.** That includes 63 final-bar traces for each program. It also includes one ledger with an incomplete bucket: neither seam decided it, and both produced the same trace sequence around it.
+**The result.** 12 ledgers held AAPL, QQQ, SPY and TSLA from 2026-08-25 to 09-10; overlapping sessions were recorded independently. A symbol was replayed when its ledger held every regular-session minute of at least one session. Across 24 runs, the two seams produced **1,688 EMA traces and 25,278 Deployment Validation traces, identical field for field, with no divergence.** That includes 63 final-bar traces for each program. It also includes one ledger with an incomplete bucket: neither seam decided it, and both produced the same trace sequence around it.
 
 **Why the receipts never showed this.** The production version of this very check compared **zero traces in all 24 runs**. It stopped at index 0 with "reference sequence exhausted". The cause:
 
@@ -153,39 +172,52 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 
 **1. A final-bar ENTER is skipped: discarded, not filled.**
 
-- Live's documented behaviour is to refuse it.
-- A next-open fill would credit trades live is not meant to take. Such fills are 42 bps from the close on average, and up to 400.
-- The skip removes 35% of the sealed EMA backtest's points (49% for the variant). That is the largest single live-vs-backtest gap found here.
-- The skip is only honest once live refuses deterministically (#FOLLOWUP-B).
+- It is what live does once #2596 lands: refuse the ENTER, settle the staged candidate DISCARD.
+- Until #2596 lands, live sometimes fills such an entry at the next open instead, so neither model matches live today.
+- A next-open fill would credit trades live is meant to refuse. Such fills are 42 bps from the close on average, and up to 400.
+- The skip removes 35% of the sealed EMA backtest's points (5 trades) and 49% of the variant's (36 trades). That is the largest single live-vs-backtest gap found here.
 
 **2. A final-bar EXIT fills at the after-hours price.**
 
 - The limit is `marketable_limit_price` at the decision close with the run's exit allowance.
-- It fills on the first extended-hours minute that reaches the limit, at the better of that minute's open and the limit.
+- It fills on the first minute that starts after the decision and reaches the limit. The fill price is the better of the first such minute's open and the limit.
 - If nothing reaches the limit before after-hours ends (20:00, or 17:00 on a half-day, per `order_session_state_at_ms`), the position stays open into the next session.
-- This sits within 0.42 bps of today's close fill on average, and was reached on 589 of 589 sessions.
-- Unlike a close fill, it still behaves correctly when after-hours is thin or the limit is out of reach. Filling at the limit itself would overstate the cost by the whole allowance, up to 55.8 points on the variant at 50 bps. Filling at the next open is wrong by 42 bps on average.
+- The proxy sits 3.74 bps from the close on average with no drift. At a 10 bps allowance or more the limit was reached on every session in the window.
+- Filling at the limit itself would overstate the cost by the whole allowance, up to 55.8 points on the variant at 50 bps. Filling at the next open is wrong by 42 bps on average.
 
-**3. The next-open path stays LEAN-only.** It reproduces LEAN's equity fill model for parity runs, and only there.
+**3. The next-open path stays LEAN-only.** It reproduces LEAN's equity fill for parity runs, and only there.
 
-**4. The model needs extended-hours minutes for the fill only.** Decisions keep using regular-session bars. The lake already holds after-hours minutes for all 590 SPY sessions.
+**4. Where the model applies.**
 
-**5. Owner decisions the follow-up needs.**
+- It is the default for every run outside the LEAN-compatibility profile: Engine Lab and Strategy Lab runs, grid search, walk-forward, and the grades built on them. It is not opt-in, because an opt-in model would leave those numbers crediting the 35% by default. Each run records which final-bar model it used.
+- It applies under every fill mode outside that profile, including the decision-minute open proposed in #2599. The backtest emits the final bucket on the next session's first minute, so without this rule each mode fills the decision either at a close live cannot trade at, or on the next day.
+- The LEAN-compatibility profile is exempt. It exists to match LEAN, which fills a stale signal at the next open.
+- **Deploy's gate is a LEAN-parity proof.** Deploy admits a strategy on its validation record or a Golden validation case (`app/services/strategy_validation_admission.py`). A Golden case needs a LEAN companion run (`app/research/golden_validation/service.py:190-211`). A run only gets one under the LEAN-compatibility profile (`app/services/parity_companion.py:80`). So the evidence that gates Deploy fills a final-bar ENTER at the next open, and this model does not change what Deploy admits. Whether Deploy should also see the live-model result is an owner decision.
+
+**5. The model needs extended-hours minutes for the fill only.** Decisions keep using regular-session bars. The lake already holds after-hours minutes for all 590 SPY sessions.
+
+**6. Owner decisions the follow-up needs.**
 
 - **Allowance.** Which exit allowance does a backtest use? Options: a run setting, refusing the run like Start does, or the account's sealed value.
-- **Proxy.** Should the fill use the first after-hours minute's open (recommended), or its close (more conservative)?
+- **Proxy.** The open of the first minute after the decision, floored at the limit (recommended)? Or the limit itself (the most conservative, which costs the whole allowance)?
+- **Deploy.** Should Deploy show or require a result under the live final-bar model, beside the LEAN-parity proof?
 
 ## Other findings in the investigated area
 
-**The final-bar ENTER race (live).**
+### The final-bar ENTER race (#2596)
 
-- The gate reads the Alpaca clock, polled every 1.0 s (`app/broker/alpaca/market_liveness.py:43`, `:153-156`), and trusts a reading for 5 s (`app/services/market_liveness.py:35`).
-- A reading answered just before 16:00:00 still says OPEN at a 16:00:00.595 decision. The gate then passes the ENTER, and the Clerk's recheck repeats the same test. The leg is a market DAY order, which Alpaca queues for the next trading day ([vendor facts pinned in alpaca-extended-hours.md](alpaca-extended-hours.md#vendor-facts-pinned-2026-09-08)).
-- **Reproduction:** `compose_market_liveness` with an OPEN clock observed 300 ms before the close, evaluated 595 ms after it, gives `TRADABLE`, and `liveness_blocks_entry` returns `False`. The calendar's own send-time rule, `recovery_reduction.market_leg_sendable`, returns `False` for the same instant. With the clock observed 200 ms after the close, it gives `MARKET_CLOSED` and blocked.
-- The window is the poll interval, so how often it happens is unmeasured. No held receipt shows a final-bar ENTER.
-- **Fix direction:** refuse a regular-hours ENTER when `market_leg_sendable` is false, which is the rule every EXIT already obeys (#FOLLOWUP-B).
+Filed as #2596 (P1) after the first draft of this note; a fix is in progress. The code path, at `8e138f73`:
 
-**The backtest's entry cutoff cannot see the final bucket.**
+- **The strategy gate.** `bot_trade_strategy.py:969-970` → `_liveness_blocks_entry` → `MarketEntryPolicy.refusal` → `liveness_blocks_entry` (`app/services/market_liveness.py:313-318`). With `use_rth` and a TRADABLE fact, the ENTER passes.
+- **The clock reading.** An OPEN clock reading composes to TRADABLE while it is under 5 s old (`app/services/market_liveness.py:35`). The clock is polled every 1.0 s (`app/broker/alpaca/market_liveness.py:43`) and stamped when the answer arrives (`app/broker/alpaca/adapter.py:528`).
+- **The dropped close.** The adapter captures the clock's `next_close_ms` (`adapter.py:527`), but `clock_liveness_evidence` drops it (`app/services/market_liveness.py:357-364`). So nothing on the path can see that the close has passed.
+- **The Clerk.** The Clerk's recheck (`runtime.py:1125-1144`) and its `before_submit` guard (`app/broker/alpaca/clerk/sqlite/enter.py:388-390`) repeat the same clock-only test.
+- **The order.** The ENTER leg is a market DAY order (`program_leg.py:527-528`), which Alpaca queues for the next trading day ([vendor facts pinned in alpaca-extended-hours.md](alpaca-extended-hours.md#vendor-facts-pinned-2026-09-08)). The calendar's send-time rule, `recovery_reduction.market_leg_sendable`, is used only on EXIT and recovery paths (`runtime.py:1062`, `open_replacement.py`, `exit_watchdog.py`).
+- **Reproduction** (scratch): `compose_market_liveness` with an OPEN clock observed 300 ms before the close, evaluated 595 ms after it, gives `TRADABLE`, and `liveness_blocks_entry` returns `False`. `market_leg_sendable` returns `False` for the same instant.
+
+**Consequence for this note.** Recommendation 1 (skip a final-bar entry) is the correct model only once #2596 lands.
+
+### The backtest's entry cutoff cannot see the final bucket
 
 - `ExecutionConfig.session_entry_cutoff` compares the current minute's wall-clock time (`app/engine/engine.py:388-405`).
 - The final bucket is decided while the engine processes the next session's 09:30 minute, so no cutoff can reach it.
@@ -198,36 +230,39 @@ This replay cannot tell grouping apart from vendor data. Section 5 answers the g
 | What | Evidence | Proposed removal |
 |---|---|---|
 | `app/services/daily_session_schedule.py` and `tests/services/test_daily_session_schedule.py` | No production caller since `69bbeabe` (2026-08-07, "retire legacy execution paths") removed the last `start_boundary_verdict` call. It states a daily stop the live runner does not apply. | Delete both (#FOLLOWUP-D) |
-| `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. (#FOLLOWUP-D) |
+| `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. This settles #2602's `LiveConfig.sizing` criterion by removal: no code outside the dead module constructs a `LiveConfig`, so no run id hashes one today. (#FOLLOWUP-D) |
 | `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Decide inside #FOLLOWUP-A: derive them from the calendar, or remove them with the contract regenerated |
+| `FinalBarPolicyEngine` in this note's script | It overrides the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). The script checks the hook exists and ran, so a rename fails loudly. | Delete it inside #FOLLOWUP-A, once the engine models final bars itself |
 | The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replace it when #FOLLOWUP-C lands |
 
 ## Follow-ups
 
-Drafted, not filed; the orchestrator files them.
+- **#2596 (filed, P1):** a last-bar ENTER can pass the market-closed check and fill at the next open.
+
+Drafted, not filed; the orchestrator files them:
 
 - **#FOLLOWUP-A:** backtest models a final-bar decision the way live executes it.
-- **#FOLLOWUP-B:** a final-bar ENTER can pass the market-closed gate on a pre-close clock reading.
 - **#FOLLOWUP-C:** run-replay engine parity compares against an empty backtest after March 2026.
 - **#FOLLOWUP-D:** remove the retired daily-stop schedule and the unused `LiveConfig`.
 
 ## Method and reproduction
 
-From `PythonDataService/`. The ledger and clerk inputs are copies, opened with `mode=ro&immutable=1`. `POLYGON_API_KEY` is empty, so nothing can reach a vendor.
+From `PythonDataService/` in any checkout or worktree. The lake lives beside the main checkout, so the command finds it through git. The ledger and clerk inputs are copies, opened with `mode=ro&immutable=1`. `POLYGON_API_KEY` is empty, so nothing can reach a vendor. The run took about 8 minutes.
 
 ```sh
+MAIN="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.measure_final_bar_decisions \
-  --lake-root ../data-lake-volume/lake/polygon_split_adjusted \
-  --raw-lake-root ../data-lake-volume/lake/raw \
+  --lake-root "$MAIN/data-lake-volume/lake/polygon_split_adjusted" \
+  --raw-lake-root "$MAIN/data-lake-volume/lake/raw" \
   --start 2024-05-20 --end 2026-09-25 \
   --ibkr-ledger <copies of artifacts/**/source_bars.sqlite3> \
-  --ibkr-jsonl 'artifacts/live_bars/*/1m/*.jsonl' \
+  --ibkr-jsonl "$MAIN/PythonDataService/artifacts/live_bars/*/1m/*.jsonl" \
   --receipts-db <copy of the paper clerk.db> \
   --grouping-ledger <the 12 non-fleet ledger copies> \
   --out final-bar-decisions-2467.json
 ```
 
-**The models.** Each model runs the production `BacktestEngine`, with one change: a subclass settles a final-bar stage DISCARD instead of COMMIT. That is the settlement live applies to a refused ENTER. Two runs of the full measurement produced identical backtest and session-wide numbers.
+**The models.** Each model runs the production `BacktestEngine`, with one change: a subclass settles a final-bar stage DISCARD instead of COMMIT. That is the settlement live applies to a refused ENTER. The script refuses to load if the engine hook it overrides is renamed, and refuses a run in which the engine never called it. The revised run reproduced the first run's share, model, closing-print, receipt-replay and grouping numbers exactly; only the after-hours prices changed.
 
 **Scratch checks, not committed:**
 
@@ -236,6 +271,7 @@ POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.meas
 
 **Limits.**
 
-- The lake-vs-live closing comparison covers 12 SPY sessions (4 of them live-observed). The share and model numbers rest on 590 sessions of one symbol.
-- After-hours fill prices are inferred from one-minute trade bars, not from quotes.
+- The lake-vs-live closing comparison covers 12 SPY sessions, 8 of them IBKR history rather than live-observed. The share and model numbers rest on 590 sessions of one symbol, and the 35% on five trades.
+- After-hours fill prices are inferred from one-minute trade bars, not from quotes. A minute's open is its first trade, not the bid a sell limit would meet.
+- On half-days the lake has no minute between 13:01 and 15:59, so the model's first after-decision price is three hours after the decision there.
 - The live lane's own clerk DB was not read.

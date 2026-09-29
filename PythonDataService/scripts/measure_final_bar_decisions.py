@@ -19,6 +19,12 @@ The session close always comes from the canonical calendar
 bar is its 12:59 minute. After-hours prices come from the lake's own
 extended-hours minutes; the after-hours end comes from
 ``session_authority.order_session_state_at_ms`` (17:00 on an early-close day).
+An after-hours fill is credited only to minutes that start after the close:
+live decides the final bar just after it, so the minute that starts at the
+close opens on prints that predate the order (``after_the_decision``).
+
+Symbol, bucket width and warmup lookback come from the strategies measured
+and their registered signal-program contracts, not from literals.
 
 Lake reads skip the Postgres catalog-receipt check (the shared Postgres is
 off-limits to research); every adjusted zip is still verified against its
@@ -76,12 +82,14 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import Settlement, trace_root
 from app.lean_sidecar.trading_calendar import (
+    expected_sessions,
     is_early_close,
     is_trading_day,
     next_trading_day,
     session_close_ms_utc,
     session_open_ms_utc,
 )
+from app.marketdata.feed import warmup_window_start_ms
 from app.services.run_replay_proof import engine_parity_over_bars
 from app.services.session_authority import order_session_state_at_ms
 from app.services.spec_strategy_runner import InMemoryDataReader
@@ -131,6 +139,24 @@ LIVE_STRATEGIES: tuple[LiveStrategy, ...] = (
 )
 
 
+def measured_symbol(strategies: Sequence[LiveStrategy]) -> str:
+    """The one symbol every measured configuration trades; refuses a mixed set."""
+    symbols = {live.params["symbol"] for live in strategies}
+    if len(symbols) != 1:
+        raise ValueError(f"the lake measurement covers one symbol; the live strategies trade {sorted(symbols)}")
+    return symbols.pop()
+
+
+def decision_timeframe_ms(strategy_key: str) -> int:
+    """The strategy's decision bucket width, from its registered signal-program contract."""
+    return _STRATEGY_REGISTRY[strategy_key].signal_program_contract.decision_timeframe_ms
+
+
+def warmup_lookback_days(strategy_key: str) -> int:
+    """The sealed warmup lookback a live run of this strategy starts with."""
+    return _STRATEGY_REGISTRY[strategy_key].signal_program_contract.warmup_lookback_days
+
+
 # ---------------------------------------------------------------------------
 # Lake access
 # ---------------------------------------------------------------------------
@@ -162,6 +188,19 @@ def is_final_bar_close(bar_close_ms: int) -> bool:
     return is_trading_day(day) and bar_close_ms == session_close_ms_utc(day)
 
 
+def after_the_decision(bar: TradeBar, close_ms: int) -> bool:
+    """True when every print in ``bar`` postdates a final-bar decision taken at ``close_ms``.
+
+    Live decides the final bar just after its close (``paper-ema-spy-0924``
+    recorded 16:00:00.595), so the after-hours limit it sends exists only
+    partway into the minute that starts at the close. That minute's open --
+    the first print at or after the close -- is a price the order could not
+    reach. The first minute a fill can be credited to is the first one that
+    starts after the close.
+    """
+    return bar.start_ms > close_ms
+
+
 def after_hours_end_ms(close_ms: int) -> int:
     """When an after-hours DAY limit sent at ``close_ms`` ends (20:00, or 17:00 on an early close)."""
     state = order_session_state_at_ms(now_ms=close_ms, extended_window=ALPACA_EXTENDED_HOURS_WINDOW)
@@ -179,6 +218,16 @@ class DiscardedDecision:
     kind: str
 
 
+#: The engine's private per-bar settlement hook this script overrides. Checked
+#: at import so a rename in ``app/engine/engine.py`` fails loudly here instead
+#: of silently measuring the unmodified engine.
+_ENGINE_SETTLEMENT_HOOK = "_commit_staged_signal_program"
+if not callable(getattr(BacktestEngine, _ENGINE_SETTLEMENT_HOOK, None)):
+    raise ImportError(
+        f"BacktestEngine.{_ENGINE_SETTLEMENT_HOOK} no longer exists; FinalBarPolicyEngine cannot apply its models"
+    )
+
+
 class FinalBarPolicyEngine(BacktestEngine):
     """The production engine, settling a final-bar decision the way a model says.
 
@@ -189,6 +238,11 @@ class FinalBarPolicyEngine(BacktestEngine):
     its next bar, exactly as a live rejected EXIT would be retried.
     ``discard_before_ms`` discards every decision before that instant, which
     is how a live run's warmup treats historical candidates.
+
+    It overrides a private engine hook, so it is research scaffolding, not a
+    model: delete it when #2467's backtest follow-up (FOLLOWUP-A) makes the
+    engine settle final-bar decisions itself. ``settlement_calls`` lets every
+    caller prove the override actually ran (``require_settlement_hook``).
     """
 
     def __init__(
@@ -202,8 +256,17 @@ class FinalBarPolicyEngine(BacktestEngine):
         self._discard = discard
         self._discard_before_ms = discard_before_ms
         self.discarded: list[DiscardedDecision] = []
+        self.settlement_calls = 0
+
+    def require_settlement_hook(self) -> None:
+        """Refuse a run in which the engine never called the overridden hook."""
+        if self.settlement_calls == 0:
+            raise RuntimeError(
+                f"BacktestEngine never called {_ENGINE_SETTLEMENT_HOOK}; the final-bar model was not applied"
+            )
 
     def _commit_staged_signal_program(self, strategy: Strategy) -> None:  # type: ignore[override]
+        self.settlement_calls += 1
         program = strategy.signal_program
         if program is None:
             return
@@ -260,6 +323,7 @@ def run_model(
         data_source=reader, execution_config=ExecutionConfig(), fill_model=fill_model, discard=_MODEL_DISCARDS[model]
     )
     result = engine.run(strategy, retain_bars=False)
+    engine.require_settlement_hook()
     return result, strategy, engine.discarded
 
 
@@ -298,14 +362,26 @@ def trade_rows(strategy: Strategy) -> list[TradeRow]:
 # ---------------------------------------------------------------------------
 @dataclass
 class CloseContext:
-    """What the lake shows around one session close."""
+    """What the lake shows around one session close.
+
+    ``close_minute_*`` is the minute that starts at the close (16:00, or
+    13:00 on a half-day). Its open is the first print at or after the close,
+    which predates a final-bar order, so it is recorded for comparison only.
+    ``after_decision_*`` is the first minute that starts after the close:
+    the earliest price a final-bar order can be credited with.
+    """
 
     session_date: str
     early_close: bool
     close_ms: int
     close: str
-    first_after_hours_open: str | None
-    first_after_hours_close: str | None
+    final_minute_volume: int
+    close_minute_open: str | None
+    close_minute_close: str | None
+    close_minute_volume: int | None
+    after_decision_start_ms: int | None
+    after_decision_open: str | None
+    after_decision_volume: int | None
     next_open_ms: int | None
     next_open: str | None
     after_hours_bars: int
@@ -325,6 +401,12 @@ class LakeSessions:
             self._cache[day] = self._reader.read_day(self._symbol, day)
         return self._cache[day]
 
+    def after_decision_bars(self, day: date) -> list[TradeBar]:
+        """The after-hours minutes a final-bar order can fill in: after the decision, before the after-hours end."""
+        close_ms = session_close_ms_utc(day)
+        ah_end = after_hours_end_ms(close_ms)
+        return [b for b in self.bars(day) if after_the_decision(b, close_ms) and b.end_ms <= ah_end]
+
     def context(self, day: date) -> CloseContext | None:
         close_ms = session_close_ms_utc(day)
         open_ms = session_open_ms_utc(day)
@@ -332,8 +414,8 @@ class LakeSessions:
         rth = [b for b in day_bars if open_ms <= b.start_ms < close_ms]
         if not rth or rth[-1].end_ms != close_ms:
             return None
-        ah_end = after_hours_end_ms(close_ms)
-        after = [b for b in day_bars if b.start_ms >= close_ms and b.end_ms <= ah_end]
+        close_minute = next((b for b in day_bars if b.start_ms == close_ms), None)
+        after = self.after_decision_bars(day)
         following = next_trading_day(day)
         next_bars = [
             b
@@ -345,8 +427,13 @@ class LakeSessions:
             early_close=is_early_close(day),
             close_ms=close_ms,
             close=str(rth[-1].close),
-            first_after_hours_open=str(after[0].open) if after else None,
-            first_after_hours_close=str(after[0].close) if after else None,
+            final_minute_volume=rth[-1].volume,
+            close_minute_open=str(close_minute.open) if close_minute else None,
+            close_minute_close=str(close_minute.close) if close_minute else None,
+            close_minute_volume=close_minute.volume if close_minute else None,
+            after_decision_start_ms=after[0].start_ms if after else None,
+            after_decision_open=str(after[0].open) if after else None,
+            after_decision_volume=after[0].volume if after else None,
             next_open_ms=next_bars[0].start_ms if next_bars else None,
             next_open=str(next_bars[0].open) if next_bars else None,
             after_hours_bars=len(after),
@@ -356,29 +443,23 @@ class LakeSessions:
     def after_hours_sell_fill(
         self, day: date, *, anchor: Decimal, allowance_bps: Decimal
     ) -> tuple[Decimal | None, Decimal | None]:
-        """(touch fill, marketable fill) for a sell limit sent at the close.
+        """(touch fill, marketable fill) for a sell limit sent just after the close.
 
         The limit is ``marketable_limit_price`` -- the live anchor formula.
-        *Touch* is ``fill_models.limit_touch_fill``'s rule: the first
-        after-hours minute whose high reaches the limit fills at the limit.
-        *Marketable* credits the price improvement a limit below the bid
-        gets: the first after-hours minute's open when it is at or above the
-        limit, else the touch price. ``None`` when nothing reached the limit
-        before the after-hours end.
+        Only minutes that start after the decision are eligible
+        (``after_the_decision``). *Touch* is ``fill_models.limit_touch_fill``'s
+        rule: the first eligible minute whose high reaches the limit fills at
+        the limit. *Marketable* credits the price improvement a limit below
+        the market gets: the first eligible minute's open when it is at or
+        above the limit, else the touch price. ``None`` when nothing reached
+        the limit before the after-hours end.
         """
-        close_ms = session_close_ms_utc(day)
-        ah_end = after_hours_end_ms(close_ms)
         limit = marketable_limit_price(side=OrderSide.SELL, anchor=anchor, allowance_bps=allowance_bps)
-        after = [b for b in self.bars(day) if b.start_ms >= close_ms and b.end_ms <= ah_end]
-        touch: Decimal | None = None
-        for bar in after:
-            if bar.high >= limit:
-                touch = limit
-                break
-        if touch is None:
+        after = self.after_decision_bars(day)
+        if not any(bar.high >= limit for bar in after):
             return None, None
         marketable = after[0].open if after[0].open >= limit else limit
-        return touch, marketable
+        return limit, marketable
 
 
 def bps_of(delta: Decimal, base: Decimal) -> float:
@@ -489,14 +570,18 @@ class ClosingPrintRow:
     ibkr_close: str
     close_diff: str
     bucket_ohlc_equal: bool
-    first_after_hours_lake_open: str | None
-    first_after_hours_ibkr_open: str | None
+    close_minute_lake_open: str | None
+    close_minute_ibkr_open: str | None
 
 
 def compare_closing_prints(
-    held: dict[tuple[str, int], list[HeldMinute]], lake_root: Path
+    held: dict[tuple[str, int], list[HeldMinute]], lake_root: Path, *, bucket_ms: int
 ) -> tuple[list[ClosingPrintRow], dict[str, Any]]:
-    """Lake vs held IBKR minutes, per symbol: the final minute, the final bucket, every RTH minute."""
+    """Lake vs held IBKR minutes, per symbol: the final minute, the final bucket, every RTH minute.
+
+    ``bucket_ms`` is the decision bucket width of the strategy whose buckets
+    are compared (the sealed EMA's, from its signal-program contract).
+    """
     reader = LakeFileReader([lake_root], session="extended")
     rows: list[ClosingPrintRow] = []
     per_symbol: dict[str, dict[str, Any]] = {}
@@ -518,7 +603,7 @@ def compare_closing_prints(
                 continue
             minute, _ = canonical_minute(copies)
             stats["rth_close_bps"].append(bps_of(minute.close - lake[start].close, lake[start].close))
-            if (start + MINUTE_MS - open_ms) % (15 * MINUTE_MS) == 0:
+            if (start + MINUTE_MS - open_ms) % bucket_ms == 0:
                 stats["bucket_closes"] += 1
                 stats["bucket_close_equal"] += minute.close == lake[start].close
         last = close_ms - MINUTE_MS
@@ -527,7 +612,7 @@ def compare_closing_prints(
             continue
         minute, agree = canonical_minute(copies)
         stats["final_close_bps"].append(bps_of(minute.close - lake[last].close, lake[last].close))
-        bucket = range(close_ms - 15 * MINUTE_MS, close_ms, MINUTE_MS)
+        bucket = range(close_ms - bucket_ms, close_ms, MINUTE_MS)
         ibkr_bucket = [held.get((symbol, s)) for s in bucket]
         bucket_equal = all(c is not None for c in ibkr_bucket) and all(s in lake for s in bucket)
         if bucket_equal:
@@ -539,7 +624,7 @@ def compare_closing_prints(
                 and min(b.low for b in ibkr_bars) == min(b.low for b in lake_bars)
                 and ibkr_bars[-1].close == lake_bars[-1].close
             )
-        ah_copies = held.get((symbol, close_ms))
+        close_minute_copies = held.get((symbol, close_ms))
         rows.append(
             ClosingPrintRow(
                 symbol=symbol,
@@ -550,8 +635,8 @@ def compare_closing_prints(
                 ibkr_close=str(minute.close),
                 close_diff=str(minute.close - lake[last].close),
                 bucket_ohlc_equal=bucket_equal,
-                first_after_hours_lake_open=str(lake[close_ms].open) if close_ms in lake else None,
-                first_after_hours_ibkr_open=str(canonical_minute(ah_copies)[0].open) if ah_copies else None,
+                close_minute_lake_open=str(lake[close_ms].open) if close_ms in lake else None,
+                close_minute_ibkr_open=str(canonical_minute(close_minute_copies)[0].open) if close_minute_copies else None,
             )
         )
     summary = {
@@ -617,14 +702,26 @@ def _divergence_text(divergence: ShadowTraceDivergence | None) -> str | None:
     return f"index {divergence.index} {divergence.field}: expected {divergence.expected}, observed {divergence.observed}"
 
 
+def _holds_a_complete_session(bars: Sequence[TradeBar]) -> bool:
+    """True when ``bars`` hold every regular-session minute of at least one session (canonical calendar)."""
+    held_per_day: dict[date, int] = {}
+    for bar in bars:
+        day = session_date_of(bar.start_ms)
+        held_per_day[day] = held_per_day.get(day, 0) + 1
+    return any(
+        count == (session_close_ms_utc(day) - session_open_ms_utc(day)) // MINUTE_MS
+        for day, count in held_per_day.items()
+    )
+
+
 def _symbols_with_a_full_session(ledger: Path) -> list[str]:
-    """Symbols whose ledger holds at least one regular session's worth of IBKR minutes."""
+    """Symbols whose ledger holds every regular-session IBKR minute of at least one session."""
     conn = sqlite3.connect(f"file:{ledger}?mode=ro&immutable=1", uri=True)
     try:
         symbols = [row[0] for row in conn.execute("SELECT DISTINCT symbol FROM source_bars WHERE provider = 'ibkr'")]
     finally:
         conn.close()
-    return [symbol for symbol in sorted(symbols) if len(_held_rth_bars(ledger, symbol)) >= 390]
+    return [symbol for symbol in sorted(symbols) if _holds_a_complete_session(_held_rth_bars(ledger, symbol))]
 
 
 def grouping_parity(ledger: Path, live: LiveStrategy) -> GroupingParity:
@@ -690,8 +787,8 @@ _RECEIPT_CANDIDATE: dict[str, str | None] = {"no_action": None, "enter_intent": 
 def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
     """Recompute each EMA run's trace digests from lake buckets and compare with its receipts.
 
-    The live warmup window is the sealed ``warmup_lookback_days`` (five
-    24-hour days) before the run's start (``marketdata.feed.warmup_window_start_ms``);
+    The live warmup window is the strategy's sealed ``warmup_lookback_days``
+    before the run's start (``marketdata.feed.warmup_window_start_ms``);
     historical candidates in it are discarded, as live warmup discards them.
     Equal digests mean the lake's bucket closes reproduce, digit for digit,
     every indicator value live computed from IBKR bars.
@@ -725,12 +822,13 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
         run_receipts = by_run.get(run_id)
         if key != "ema_crossover_signal" or not run_receipts:
             continue
-        warmup_start_ms = started_ms - 5 * 86_400_000
+        warmup_start_ms = warmup_window_start_ms(warmup_lookback_days(key), now_ms=started_ms)
         last_ms = max(close for close, _, _ in run_receipts)
         live = LiveStrategy(label=sid, strategy_key=key, params={"symbol": config["symbol"], **config["strategy_params"]}, evidence="")
         strategy = build_strategy(live, session_date_of(warmup_start_ms), session_date_of(last_ms))
         engine = FinalBarPolicyEngine(data_source=_WindowReader(reader, warmup_start_ms), discard_before_ms=started_ms)
         engine.run(strategy, retain_bars=False)
+        engine.require_settlement_hook()
         assert strategy.signal_program is not None
         traces = {t.bar_close_ms: t for t in strategy.signal_program.session.traces}
         reproduced = 0
@@ -898,11 +996,22 @@ def _after_hours_exit_models(rows: Sequence[TradeRow], sessions: LakeSessions) -
 
 
 def session_wide_distributions(sessions: LakeSessions, days: Sequence[date]) -> dict[str, Any]:
-    """Every session in the window: after-hours and next-open prices against the final close."""
-    first_open: list[float] = []
-    first_close: list[float] = []
+    """Every session in the window: prices after the close against the final minute's close.
+
+    ``after_decision_open`` is the proxy a final-bar exit can be credited
+    with. ``close_minute_open`` is the first print at or after the close; it
+    predates a final-bar order and is reported only to show what counting it
+    would overstate. Volumes are the medians of the final minute, the minute
+    that starts at the close, and the first minute after the decision.
+    """
+    after_decision_open: list[float] = []
+    close_minute_open: list[float] = []
+    close_minute_close: list[float] = []
     next_open: list[float] = []
-    no_after_hours = 0
+    final_volume: list[int] = []
+    close_minute_volume: list[int] = []
+    after_decision_volume: list[int] = []
+    no_minute_after_decision = 0
     fill_rates: dict[str, dict[str, Any]] = {}
     contexts: list[tuple[date, CloseContext]] = []
     for day in days:
@@ -911,11 +1020,17 @@ def session_wide_distributions(sessions: LakeSessions, days: Sequence[date]) -> 
             continue
         contexts.append((day, context))
         close = Decimal(context.close)
-        if context.first_after_hours_open is None or context.first_after_hours_close is None:
-            no_after_hours += 1
+        final_volume.append(context.final_minute_volume)
+        if context.after_decision_open is None or context.after_decision_volume is None:
+            no_minute_after_decision += 1
         else:
-            first_open.append(bps_of(Decimal(context.first_after_hours_open) - close, close))
-            first_close.append(bps_of(Decimal(context.first_after_hours_close) - close, close))
+            after_decision_open.append(bps_of(Decimal(context.after_decision_open) - close, close))
+            after_decision_volume.append(context.after_decision_volume)
+        if context.close_minute_open is not None and context.close_minute_close is not None:
+            close_minute_open.append(bps_of(Decimal(context.close_minute_open) - close, close))
+            close_minute_close.append(bps_of(Decimal(context.close_minute_close) - close, close))
+        if context.close_minute_volume is not None:
+            close_minute_volume.append(context.close_minute_volume)
         if context.next_open is not None:
             next_open.append(bps_of(Decimal(context.next_open) - close, close))
     for allowance in EXIT_ALLOWANCES_BPS:
@@ -934,10 +1049,18 @@ def session_wide_distributions(sessions: LakeSessions, days: Sequence[date]) -> 
         }
     return {
         "sessions": len(contexts),
-        "sessions_without_after_hours_minutes": no_after_hours,
-        "first_after_hours_open_bps_vs_close": describe(first_open),
-        "first_after_hours_close_bps_vs_close": describe(first_close),
+        "sessions_without_a_minute_after_the_decision": no_minute_after_decision,
+        "after_decision_open_bps_vs_close": describe(after_decision_open),
+        "close_minute_close_bps_vs_close": describe(close_minute_close),
+        "close_minute_open_bps_vs_close_predates_the_order": describe(close_minute_open),
         "next_open_bps_vs_close": describe(next_open),
+        "median_volume": {
+            "final_minute": statistics.median(final_volume) if final_volume else None,
+            "close_minute": statistics.median(close_minute_volume) if close_minute_volume else None,
+            "first_minute_after_the_decision": (
+                statistics.median(after_decision_volume) if after_decision_volume else None
+            ),
+        },
         "after_hours_sell_limit": fill_rates,
     }
 
@@ -964,14 +1087,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     regular = LakeFileReader([args.lake_root], session="regular")
     extended = LakeFileReader([args.lake_root], session="extended")
-    symbol = "SPY"
+    symbol = measured_symbol(LIVE_STRATEGIES)
     sessions = LakeSessions(extended, symbol)
     days = [d for d in regular.iter_dates(symbol, args.start, args.end) if is_trading_day(d)]
-    expected: list[date] = []
-    cursor = args.start if is_trading_day(args.start) else next_trading_day(args.start)
-    while cursor <= args.end:
-        expected.append(cursor)
-        cursor = next_trading_day(cursor)
+    expected = expected_sessions(args.start, args.end)
     missing = sorted(set(expected) - set(days))
 
     report: dict[str, Any] = {
@@ -990,7 +1109,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     if args.ibkr_ledger or args.ibkr_jsonl:
         held = load_held_minutes(args.ibkr_ledger, args.ibkr_jsonl)
-        rows, summary = compare_closing_prints(held, args.raw_lake_root or args.lake_root)
+        rows, summary = compare_closing_prints(
+            held, args.raw_lake_root or args.lake_root, bucket_ms=decision_timeframe_ms(LIVE_STRATEGIES[0].strategy_key)
+        )
         report["closing_prints"] = {"summary": summary, "rows": [asdict(r) for r in rows]}
     if args.receipts_db is not None:
         report["receipt_replay"] = [asdict(r) for r in replay_receipts(args.receipts_db, args.lake_root)]
