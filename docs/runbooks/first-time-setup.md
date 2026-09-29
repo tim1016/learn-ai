@@ -4,8 +4,8 @@ How to bring the stack up on a Mac. For Windows, use
 [`windows-onboarding.md`](windows-onboarding.md).
 
 Moved out of the README on 2026-09-28 and checked that day against
-`compose.yaml`, `setup-macos.sh`, and `restart.sh`. Everything runs as
-containers under Podman Compose; the host needs Homebrew and little else.
+`compose.yaml`, `compose.fleet.dev.yaml`, `setup-macos.sh`, and `restart.sh`.
+Everything runs as containers under Podman Compose.
 
 ## 1. Prerequisites
 
@@ -15,27 +15,43 @@ containers under Podman Compose; the host needs Homebrew and little else.
 - A [Polygon.io](https://polygon.io/) API key. Optional: a
   [FRED](https://fred.stlouisfed.org/) key for risk-free rate curves.
 
-`setup-macos.sh` installs the rest (`podman`, `docker-compose`, `node`).
+`setup-macos.sh` installs `podman`, `docker-compose`, and `node`. Backend
+tests also need the .NET 10 SDK on the host, which the script does not
+install.
 
-## 2. Before the first start
+## 2. First run
 
-These steps are the same on every OS, so they live in one place — sections
-2–4 of [`windows-onboarding.md`](windows-onboarding.md):
+Order matters, because `setup-macos.sh` is what installs Podman and starts its
+VM. The host directories, environment files, and first-run ceremonies are the
+same on every OS, so they live in one place: sections 2–4 of
+[`windows-onboarding.md`](windows-onboarding.md).
 
-- **§2 Host directories.** Rootless Podman does not create missing bind-mount
-  paths; `compose up` fails with `statfs ... no such file or directory`.
-- **§3 Environment files.** The repo-root `.env`, `PythonDataService/.env`,
-  and `Frontend/src/environments/environment.development.ts`.
-- **§4a Alpaca Clerk volume.** `learn-ai-alpaca-clerk-data` is an external
-  volume; the data plane exits 78 until it holds `_compose_volume_ready`.
-- **§4b Data-lake root identity.** The data plane exits 3 until the lake
-  root is claimed; this one needs the data plane booted once, so do it after
-  step 3 below.
+1. **Host directories and environment files** — Windows runbook §2 and §3.
+   Rootless Podman does not create missing bind-mount paths, and the frontend
+   crash-loops without `Frontend/src/environments/environment.development.ts`.
+2. **Run the setup script:**
+
+   ```bash
+   ./setup-macos.sh
+   ```
+
+   It sizes and starts the Podman VM, copies any missing `.env` file from its
+   template, sets the data-plane control secret, builds the images (5–10
+   minutes the first time), and starts the stack. On a fresh machine this
+   first run ends with "❌ … the stack is NOT usable": the data plane refuses
+   to start until step 3 is done. That is expected.
+3. **First-run ceremonies** — Windows runbook §4a (the Alpaca Clerk volume
+   marker; without it the data plane exits 78) and §4b (the data-lake root
+   identity; without it the data plane exits 3).
+4. **Start the stack:** `podman compose up -d`, then check it (section 3).
+
+The script's closing message still tells you to run `ng serve` on the host.
+Skip that: the frontend runs in its own container on port 4200.
 
 **The data-plane control secret.** Compose refuses to start the data plane and
 the frontend proxy while `DATA_PLANE_CONTROL_SECRET` in the root `.env` is
-missing or blank; there is no checked-in development credential.
-`setup-macos.sh` generates one on a fresh checkout and rotates the retired
+missing or blank; there is no checked-in development credential. The script
+generates one on a fresh checkout and rotates the retired
 `local-dev-control-secret` value on an upgrade, without overwriting a value
 you set. By hand:
 
@@ -43,34 +59,12 @@ you set. By hand:
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-**Broker configuration is not an environment setting.** Alpaca API credentials
-stay in `PythonDataService/.env` — they are the credential *slots* a profile
-refers to by name — but the endpoint mode (paper/live) and the six real-money
-risk-envelope values are a **saved broker profile** on the Clerk volume,
-created and edited in the browser and made effective by pressing Apply and
-restarting (ADR 0060). An installation upgrading from the
-environment-configured layout imports its existing values once with
-`python -m scripts.manage_broker_configuration plan --plan-out …`, then deletes
-the retired `ALPACA_MODE` / `ALPACA_LIVE_*` lines; the worker refuses to bind
-while any of them is still set, and names the ones to remove. See
+**Broker settings are not environment settings.** Alpaca credentials go in
+`PythonDataService/.env` as named credential slots; paper/live mode and the
+risk limits are a broker profile saved in the browser (ADR 0060). See
 [`alpaca-credential-slots.md`](../references/alpaca-credential-slots.md).
 
-## 3. Run the setup script
-
-```bash
-./setup-macos.sh
-```
-
-It sizes and starts the Podman VM, copies any missing `.env` files from their
-templates, sets the control secret, builds the images, starts the stack, and
-waits for the data plane and backend to report healthy. It is safe to re-run.
-The first build takes 5–10 minutes.
-
-Its closing message still tells you to run `ng serve` on the host. Skip that:
-the frontend runs in its own container on port 4200, and a host `ng serve`
-would collide with it.
-
-## 4. Check it
+## 3. Check it
 
 `podman compose ps` should show five containers, all `(healthy)`. Every port
 is bound to `127.0.0.1` only.
@@ -83,25 +77,57 @@ is bound to `127.0.0.1` only.
 | PostgreSQL | `my-postgres` | `localhost:5432` |
 | Redis | `my-redis` | `localhost:6379` |
 
-Running the frontend on the host instead: the proxy config reads
-`DATA_PLANE_CONTROL_SECRET` from the repo-root `.env` (an exported shell value
-takes precedence). For a non-default service location set
-`BACKEND_PROXY_TARGET` or `DATA_PLANE_PROXY_TARGET`; do not replace
-`proxy.conf.js` with a target-only proxy config.
+To run the frontend on the host instead, stop its container first
+(`podman stop my-frontend`; it has `restart: always`, so the next `up` brings
+it back). The proxy config reads `DATA_PLANE_CONTROL_SECRET` from the
+repo-root `.env` (an exported shell value takes precedence). For a
+non-default service location set `BACKEND_PROXY_TARGET` or
+`DATA_PLANE_PROXY_TARGET`; do not replace `proxy.conf.js` with a target-only
+proxy config.
+
+## 4. Two postures: combined and fleet
+
+What section 2 gives you is the **combined** posture: one data-plane process
+does every job. `setup-macos.sh` and any plain `podman compose` command run
+it.
+
+`./restart.sh` runs the **fleet** posture. It also loads
+`compose.fleet.dev.yaml`, which adds one clerk container per Alpaca account
+(`alpaca-live-clerk`, `alpaca-paper-clerk`), so seven containers. It needs the
+gitignored lane files `deploy/fleet/env/live.env` and `paper.env`; until they
+exist it fails with `env file … not found`. Setting them up:
+[`fleet-dev-two-lane-posture.md`](fleet-dev-two-lane-posture.md) and
+[`add-an-alpaca-account.md`](add-an-alpaca-account.md).
+
+**Once the fleet runs, every compose command must name the same files
+`restart.sh` does.** A plain `podman compose up` recreates the data plane in
+combined posture on the Live account's volume while `alpaca-live-clerk` still
+runs on it: two processes writing one account's state. For the same reason,
+don't re-run `setup-macos.sh` on a fleet machine; use `./restart.sh`.
+
+The commands below take the file list as `COMPOSE_ARGS`:
+
+```bash
+# Fleet posture (the list restart.sh builds):
+COMPOSE_ARGS=(--file compose.yaml --file compose.fleet.dev.yaml)
+[[ -f compose.override.yaml ]] && COMPOSE_ARGS+=(--file compose.override.yaml)
+
+# Combined posture:
+COMPOSE_ARGS=(--file compose.yaml)
+```
 
 ## 5. Day to day
 
 ```bash
-./restart.sh               # fresh containers, rebuilding changed layers
-./restart.sh --no-cache    # full rebuild from scratch (~5 min)
+./restart.sh               # fleet: fresh containers, rebuilding changed layers
+./restart.sh --no-cache    # fleet: full rebuild from scratch (~5 min)
 ```
 
 To rebuild one service after changing its code, recreate it rather than
-restarting it:
+restarting it (a restart keeps the old image and environment):
 
 ```bash
-podman compose down backend && podman compose up -d --build backend
-podman compose down python-service && podman compose up -d --build python-service
+podman compose "${COMPOSE_ARGS[@]}" up -d --build --no-deps --force-recreate backend
 ```
 
 The backend applies EF Core migrations on startup, so a new empty database is
@@ -109,12 +135,17 @@ created and upgraded automatically. Reset the database only when you mean to
 discard local data:
 
 ```bash
-podman compose down db
+podman compose "${COMPOSE_ARGS[@]}" down
 podman volume rm learn-ai_pgdata
-podman compose up -d
+podman compose "${COMPOSE_ARGS[@]}" up -d
 ```
 
-Do not use a volume reset as a schema-change workflow. To adopt a populated
+**Never run `podman compose down -v` here.** With the fleet file loaded it
+deletes the Paper account's custody volume (`learn-ai-alpaca-paper-clerk-data`)
+and the fleet registry (`learn-ai_alpaca-fleet-control`) along with the
+database. To reset only Postgres, remove `learn-ai_pgdata` as above.
+
+Do not use a database reset as a schema-change workflow. To adopt a populated
 database that was created with `EnsureCreated()`, follow
 [`ef-migrations-adoption.md`](ef-migrations-adoption.md) after taking a
 restorable backup.
@@ -122,21 +153,17 @@ restorable backup.
 **Debugging:**
 
 ```bash
-podman compose logs -f python-service                                # live logs
-podman compose exec python-service bash                              # shell in
+podman logs -f polygon-data-service                                  # live logs
+podman exec -it polygon-data-service bash                            # shell in
 podman inspect --format='{{json .State.Health}}' polygon-data-service # health
 ```
 
-**Backups:** PostgreSQL data lives in the `pgdata` named volume and survives
+**Backups:** PostgreSQL data lives in the `learn-ai_pgdata` volume and survives
 `podman compose down`.
 
 ```bash
 podman exec my-postgres pg_dump -U postgres postgres > backup.sql
 ```
-
-`podman compose down -v` deletes the non-external named volumes: `pgdata`
-and the qualification Clerk's volume. It leaves the live Clerk volume
-(`external: true`) and the bind-mounted data lake alone.
 
 **Production images:** `compose.yaml` is the dev config (source mounted,
 hot reload). The Dockerfiles build lean runtime images; to check they still
@@ -144,7 +171,7 @@ build:
 
 ```bash
 podman build -t learn-ai-backend ./Backend
-podman build -t learn-ai-python ./PythonDataService
+podman build --target runtime -t learn-ai-python ./PythonDataService
 ```
 
 ## 6. Tests
@@ -165,6 +192,6 @@ end-to-end coverage run daily in GitHub Actions. See
 ## 7. Stopping
 
 ```bash
-podman compose down
+podman compose "${COMPOSE_ARGS[@]}" down
 podman machine stop    # also stop the VM
 ```
