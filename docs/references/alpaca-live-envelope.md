@@ -501,6 +501,20 @@ after-hours fills belong to the next loss window. Regression cases cover an
 after-close BUY with no prior-close position and an after-close SELL whose
 realized gain must not leak into the previous close baseline.
 
+Equity, the retained baseline and open P&L read canonical FIFO's exact
+fields (`exact_realized_pnl`, `exact_open_pnl`) and the exact retained bar
+close, never a float view normalized back into money (#2556). The
+observation's `equity_usd` and `unrealized_pl_usd` carry the exact `Decimal`
+(a real account's `equity_usd` stays the broker's float), and the money view
+Deploy and Home draw renders both from it unchanged. A whole-cent boundary
+pins it for both a Dry Run and Shadow: $1,000.01 of starting cash, BUY
+0.048360857 at $100 marked at $100.3101682007 (open P&L exactly
+$0.0149999999999999999) and the buy's $0.01 modelled fee give equity of
+exactly $1,000.0149999999999999999, shown as $1,000.01 with open P&L $0.01,
+where the float views showed $1,000.02 and $0.02. `last_equity_usd` and the
+day P&L stay binary floats -- the loss hold compares and seals them -- so
+`day_pnl_at` rounds the exact equity once, there.
+
 Cash assertions use exact Decimal equality. Existing canonical FIFO outputs
 use absolute tolerance `1e-9`, relative tolerance zero; this is composition of
 the repository's mathematical authorities, not a new external numerical port.

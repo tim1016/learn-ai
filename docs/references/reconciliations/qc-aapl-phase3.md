@@ -97,8 +97,8 @@ Replaced the Phase 3.0 daily/single-day fixture in place on 2026-05-12; git hist
 ## How to re-run
 
 ```bash
-podman exec polygon-data-service python -m pytest \
-  /app/tests/research/parity/test_qc_aapl_phase3_trade_parity.py -v -s
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
+  tests/research/parity/test_qc_aapl_phase3_trade_parity.py -v -s)
 ```
 
 The success report is rendered to

@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -155,7 +156,12 @@ class ExecutionPage:
 
 @dataclass(frozen=True)
 class EconomicSnapshot:
-    """One coherent bot-economic view at one SQLite control revision."""
+    """One coherent bot-economic view at one SQLite control revision.
+
+    ``exact_open_pnl`` is canonical FIFO's exact open valuation
+    (``OpenPnLResult.exact_value``) -- the one a displayed dollar figure is
+    rounded from (#2556). ``open_pnl`` is its float display view.
+    """
 
     account_id: str
     strategy_instance_id: str
@@ -167,12 +173,17 @@ class EconomicSnapshot:
     fills_today: int
     exposure: dict[str, float]
     realized_pnl_today: float
-    open_pnl: float | None
+    exact_open_pnl: Decimal | None
     marks_complete: bool
     mark_observed_at_ms: dict[str, int]
     fee_fidelity: FeeFidelity
     execution_coverage: ExecutionCoverage
     last_activity_at_ms: int | None
+
+    @property
+    def open_pnl(self) -> float | None:
+        """Display view of ``exact_open_pnl``, rounded once."""
+        return None if self.exact_open_pnl is None else float(self.exact_open_pnl)
 
 
 @dataclass(frozen=True)
@@ -203,7 +214,14 @@ class FifoAttributionRow:
 
 @dataclass(frozen=True)
 class AccountPnlAttribution:
-    """Complete account FIFO attribution for one inclusive UTC-ms window."""
+    """Complete account FIFO attribution for one inclusive UTC-ms window.
+
+    The ``exact_*`` totals are canonical FIFO's exact values: the window's
+    closed-lot ``exact_realized_pnl`` summed exactly, and the exact open
+    valuation at the start and end marks. A displayed dollar figure is
+    rounded from them (#2556); the float totals are their display views,
+    each rounded once.
+    """
 
     account_id: str
     authority_generation: int
@@ -211,15 +229,30 @@ class AccountPnlAttribution:
     from_ms: int
     to_ms: int
     attribution_rows: tuple[FifoAttributionRow, ...]
-    realized_pnl_total: float
-    start_open_pnl_total: float | None
-    open_pnl_total: float | None
+    exact_realized_pnl_total: Decimal
+    exact_start_open_pnl_total: Decimal | None
+    exact_open_pnl_total: Decimal | None
     fee_total: float | None
     fee_fidelity: FeeFidelity
     execution_coverage: ExecutionCoverage
     marks_complete: bool
     start_mark_observed_at_ms: dict[str, int]
     mark_observed_at_ms: dict[str, int]
+
+    @property
+    def realized_pnl_total(self) -> float:
+        """Display view of ``exact_realized_pnl_total``, rounded once."""
+        return float(self.exact_realized_pnl_total)
+
+    @property
+    def start_open_pnl_total(self) -> float | None:
+        """Display view of ``exact_start_open_pnl_total``, rounded once."""
+        return None if self.exact_start_open_pnl_total is None else float(self.exact_start_open_pnl_total)
+
+    @property
+    def open_pnl_total(self) -> float | None:
+        """Display view of ``exact_open_pnl_total``, rounded once."""
+        return None if self.exact_open_pnl_total is None else float(self.exact_open_pnl_total)
 
 
 __all__ = [

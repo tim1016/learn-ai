@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.broker.alpaca.clerk.money import ZERO
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
@@ -210,8 +211,11 @@ class AccountObservation:
     cash_available_usd: float | Decimal
     last_equity_usd: float | None
     position_count: int | None
-    equity_usd: float | None = None
-    unrealized_pl_usd: float = 0.0  # simulation diagnostic; never the loss authority
+    # The broker's float under real custody; simulated custody's exact
+    # ``Decimal`` (FIFO's exact fields, #2556), shown to the owner unchanged.
+    equity_usd: float | Decimal | None = None
+    # Simulated custody's exact FIFO open P&L, for display; never the loss authority.
+    unrealized_pl_usd: Decimal = ZERO
     risk_cash_flows: tuple[BrokerActivity, ...] = ()
     risk_cash_flow_evidence_complete: bool = False
     risk_cash_flow_window_start_ms: int | None = None

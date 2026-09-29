@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 
 from app.broker.alpaca.clerk.et_day import ActivityPeriod, activity_period_start_ms
-from app.broker.alpaca.clerk.money import display_cents, dollars, money_context, normalize_money
+from app.broker.alpaca.clerk.money import display_cents, dollars, money_context
 from app.broker.alpaca.clerk.sqlite.custody_subjects import OUTSIDE_ORDER_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
@@ -108,10 +108,10 @@ async def today_statement(port: BrokerReadPort) -> TodayStatement:
     return compose_today_statement(
         since_ms=since_ms,
         observed_at_ms=now,
-        realized_usd=pnl.realized_pnl_total,
+        realized_usd=pnl.exact_realized_pnl_total,
         fees_usd=custody_fees if fees.known else None,
-        start_open_usd=pnl.start_open_pnl_total,
-        open_usd=pnl.open_pnl_total,
+        start_open_usd=pnl.exact_start_open_pnl_total,
+        open_usd=pnl.exact_open_pnl_total,
         prices_read=positions is not None,
         outside_activity=bool(outside) or fees.unattributed != 0,
     )
@@ -140,10 +140,10 @@ def compose_today_statement(
     *,
     since_ms: int,
     observed_at_ms: int,
-    realized_usd: float,
+    realized_usd: Decimal,
     fees_usd: Decimal | None,
-    start_open_usd: float | None,
-    open_usd: float | None,
+    start_open_usd: Decimal | None,
+    open_usd: Decimal | None,
     prices_read: bool,
     outside_activity: bool,
 ) -> TodayStatement:
@@ -155,7 +155,9 @@ def compose_today_statement(
       ``(since, now]``; ``open_start`` values the lots held at the prior
       regular-session close at that close's prices; ``open_end`` the lots
       held now at current prices; ``fees`` the custody fee attribution for
-      today's ET fee day, bots and this app's orders only.
+      today's ET fee day, bots and this app's orders only. Every part is
+      exact: FIFO's exact totals (``AccountPnlAttribution.exact_*``), never
+      their float views, whose one rounding can cross a half cent (#2556).
     Reference: ``CONTEXT.md`` "Account day P&L" (the prior-close anchor, and
       why lifetime unrealized P&L is not a day figure); the C3 local delta in
       ``app/services/account_pnl_reconciliation.py``; FIFO per
@@ -171,12 +173,12 @@ def compose_today_statement(
     A missing part is never read as zero: its figure and the net are
     ``None`` and ``detail`` names why.
     """
-    realized = display_cents(normalize_money(realized_usd))
+    realized = display_cents(realized_usd)
     fees = None if fees_usd is None else display_cents(fees_usd)
     change: int | None = None
     if start_open_usd is not None and open_usd is not None:
         with money_context():
-            change = display_cents(normalize_money(open_usd) - normalize_money(start_open_usd))
+            change = display_cents(open_usd - start_open_usd)
     net = None if fees is None or change is None else realized - fees + change
     detail: str | None
     if change is None and not prices_read:

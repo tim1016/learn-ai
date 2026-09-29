@@ -60,7 +60,7 @@ export class TypedHaltConfirmComponent {
    * Optional, and on the same footing as `assetSymbol` above: a *structured
    * identity fact* the host supplies beside the backend-authored prose, never
    * prose this component composes. Hosts whose backend copy already names the
-   * account in its body — the `flatten_stop` / `retire` / `archive` family —
+   * account in its body — the `flatten_stop` / `archive` family —
    * leave it unset rather than printing the number twice. */
   readonly accountId = input<string | null>(null);
   /** Explicit consequence copy authored by the backend. */

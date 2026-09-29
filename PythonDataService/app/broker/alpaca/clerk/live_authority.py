@@ -18,7 +18,7 @@ refuse every boot.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -63,12 +63,11 @@ LIVE_CONTROL_UNAUTHENTICATED = "LIVE_CONTROL_UNAUTHENTICATED"
 
 # The runner's sealed bindings on one live account: ``strategy_instance_id``
 # -> that instance's current sealed-program hash. Built in the composition
-# root (``main.py``, beside ``_alpaca_roster_symbols``) and injected, so the
-# clerk layer never learns the runner's root and never imports the binding
-# repository — the ``roster_symbols`` pattern, one argument wider because the
-# composition root learns the live account's id only from this selector's own
-# broker read. ``None`` means no seals, which means no instance is armed:
-# fail closed, never a default.
+# root (``main.py``'s ``_alpaca_instance_seals``) and injected, so the clerk
+# layer never learns the runner's root and never imports the binding
+# repository. It takes the live account's id because the composition root
+# learns that id only from this selector's own broker read. ``None`` means no
+# seals, which means no instance is armed: fail closed, never a default.
 type InstanceSealsForAccount = Callable[[str], Mapping[str, str]]
 
 
@@ -85,7 +84,6 @@ async def select_live_clerk_runtime(
     execution_lease_wait_timeout_s: float,
     execution_lease_retry_interval_s: float,
     stream_health_gate: StreamHealthGate | None,
-    roster_symbols: Callable[[], Sequence[str]] | None,
     live_envelope_values: LiveEnvelopeValues | None,
     instance_seals: InstanceSealsForAccount | None,
     control_unauthenticated: bool,
@@ -165,7 +163,6 @@ async def select_live_clerk_runtime(
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
-            roster_symbols=roster_symbols,
             # Real custody: the broker's cash already reflects this Clerk's
             # own fills, so the envelope subtracts nothing (ADR 0059 D4).
             live_envelope=LiveEnvelopeGate(values=live_envelope_values, custody_is_simulated=False),

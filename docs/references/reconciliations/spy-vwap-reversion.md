@@ -60,6 +60,6 @@ would still fail the suite.
 ## Reproduce
 
 ```
-podman exec polygon-data-service python -m pytest \
-  tests/integration/reconciliation/test_spy_vwap_reversion_qc.py -v
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
+  tests/integration/reconciliation/test_spy_vwap_reversion_qc.py -v)
 ```

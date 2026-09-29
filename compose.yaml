@@ -70,6 +70,10 @@ services:
   python-service:
     build:
       context: ./PythonDataService
+      # The always-on data plane ships no test tooling. The Dockerfile's last
+      # stage is `qualification` (it installs requirements-dev.txt), so a build
+      # that names no target would get it -- name the stage (#2576).
+      target: runtime
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
     container_name: polygon-data-service
@@ -101,15 +105,6 @@ services:
       # Development liveness diagnostics: the image can receive GIT_SHA at
       # build time, while the bind-mounted dev service can read HEAD directly.
       - ./.git:/app/.git:ro,z
-      # Mount pytest.ini so ad-hoc `podman exec polygon-data-service pytest`
-      # picks up `asyncio_mode = auto` without rebuilding the image after
-      # local config tweaks. Baked into the image too — see Dockerfile.
-      - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
-      # Ruff config — keep the in-container linter in lockstep with CI
-      # (which runs ``ruff check app/ tests/`` from PythonDataService/).
-      # Without this, ``podman exec ... ruff check`` silently runs with
-      # the default ruleset and misses every SIM/UP/I issue CI flags.
-      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
       # Golden-fixture manifest — read at runtime by GET /api/golden-fixtures.
       # Mounted so manifest edits are visible without rebuild; baked into the
       # image too (see Dockerfile) so prod images don't depend on the mount.

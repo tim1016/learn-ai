@@ -141,6 +141,7 @@ jobs:
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
       - run: npx eslint src/
+      - run: npx eslint tests/e2e --max-warnings 0
 
   frontend-typecheck:
     name: Frontend Type Check
@@ -158,6 +159,7 @@ jobs:
       - run: npm ci
       - run: npm run codegen:check
       - run: npx tsc --noEmit
+      - run: npx tsc --noEmit -p tests/e2e/tsconfig.json
 
   frontend-test-shard:
     name: Frontend Test Shard ${{ matrix.shard }}/6

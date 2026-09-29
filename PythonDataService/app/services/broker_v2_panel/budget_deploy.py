@@ -632,8 +632,12 @@ def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation
     }
 
 
-def _known_usd(value: float | None) -> Decimal | None:
-    """A broker figure, or ``None`` when it is absent or not a finite number."""
+def _known_usd(value: float | Decimal | None) -> Decimal | None:
+    """A broker figure, or ``None`` when it is absent or not a finite number.
+
+    A simulated account's equity is already exact (#2556) and passes through
+    unchanged; a real broker's float is normalized once.
+    """
     return None if value is None or not math.isfinite(value) else normalize_money(value)
 
 
@@ -642,14 +646,13 @@ def _open_pnl(money: AccountMoney, observation: AccountObservation) -> tuple[str
 
     Flat, it is zero (FIFO values no lot). Simulated custody values its own
     lots with its own marks (``SimulatedAccountProjection.observe`` ->
-    ``fifo.open_pnl``) on the observation. Real custody has no mark in this
+    the exact ``fifo.exact_open_pnl``) on the observation. Real custody has no mark in this
     read, so the figure is withheld with its reason -- never equity less cost.
     """
     if not money.holds_positions:
         return "0.00", None
     if observation.simulation_session_start_ms is not None:
-        with money_context():
-            return dollars(display_cents(normalize_money(observation.unrealized_pl_usd))), None
+        return dollars(display_cents(observation.unrealized_pl_usd)), None
     return None, _OPEN_PNL_UNPRICED
 
 

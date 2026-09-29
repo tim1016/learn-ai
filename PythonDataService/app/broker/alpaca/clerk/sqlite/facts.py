@@ -135,7 +135,7 @@ class StrategyInstanceRetiredFacts:
     """Retirement is instance-scoped, so it carries no ``lifecycle_run_id``.
 
     A registration is retired once, when it has no active run — the guards in
-    ``evaluate_retirement`` prove that before the command is submitted — so
+    ``evaluate_archive`` prove that before the command is submitted — so
     there is no run for the fact to name.
     """
 

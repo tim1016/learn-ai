@@ -147,16 +147,15 @@ describe('BotBannerComponent', () => {
     expect(manual.getAttribute('href')).toContain('accountId=PA9');
   });
 
-  it('never offers Retire or Archive, even when the backend presents them armed (owner decision 2026-09-28)', async () => {
+  it('never offers Archive, even when the backend presents it armed (owner decision 2026-09-28)', async () => {
     // Clearing a finished bot is Home's Finished fold alone; the backend still
-    // presents both actions because the bulk clear reads archive's token.
+    // presents archive because the bulk clear reads its token.
     await renderBanner(stopped({
-      actions: [fakePanelAction('retire', { label: 'Retire' }), fakePanelAction('archive', { label: 'Archive' })],
+      actions: [fakePanelAction('archive', { label: 'Archive' })],
     }));
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions for this bot' }));
     expect(screen.getByRole('link', { name: 'Manual order' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
   });
 
@@ -190,7 +189,7 @@ describe('BotBannerComponent', () => {
   });
 
   it.each([
-    ['running', { actions: [fakePanelAction('stop'), fakePanelAction('retire', { label: 'Retire' })], primary_action: 'stop' as const }],
+    ['running', { actions: [fakePanelAction('stop'), fakePanelAction('archive', { label: 'Archive' })], primary_action: 'stop' as const }],
     ['stopped Dry Run', stopped({ mode: 'dry_run' })],
   ])('has no detectable accessibility violations (%s)', async (_name, overrides) => {
     await renderBanner(overrides);

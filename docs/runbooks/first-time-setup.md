@@ -3,9 +3,10 @@
 How to bring the stack up on a Mac. For Windows, use
 [`windows-onboarding.md`](windows-onboarding.md).
 
-Moved out of the README on 2026-09-28 and checked that day against
-`compose.yaml`, `compose.fleet.dev.yaml`, `setup-macos.sh`, and `restart.sh`.
-Everything runs as containers under Podman Compose.
+Moved out of the README on 2026-09-28 and checked against `compose.yaml`,
+`compose.fleet.dev.yaml`, `setup-macos.sh`, and `restart.sh`; updated
+2026-09-29 (#2575) when the script learned the first-run steps. Everything
+runs as containers under Podman Compose, the frontend included.
 
 ## 1. Prerequisites
 
@@ -21,32 +22,59 @@ install.
 
 ## 2. First run
 
-Order matters, because `setup-macos.sh` is what installs Podman and starts its
-VM. The host directories, environment files, and first-run ceremonies are the
-same on every OS, so they live in one place: sections 2–4 of
-[`windows-onboarding.md`](windows-onboarding.md).
+```bash
+./setup-macos.sh
+```
 
-1. **Host directories and environment files** — Windows runbook §2 and §3.
-   Rootless Podman does not create missing bind-mount paths, and the frontend
-   crash-loops without `Frontend/src/environments/environment.development.ts`.
-2. **Run the setup script:**
+It refuses to run on a machine that already runs the fleet posture (section 4).
+On a fresh Mac it does everything a first run needs, in this order:
 
-   ```bash
-   ./setup-macos.sh
-   ```
+1. Sizes and starts the Podman VM.
+2. Copies any missing environment file from its template: the root `.env`,
+   `PythonDataService/.env`, and
+   `Frontend/src/environments/environment.development.ts` (the frontend
+   container crash-loops without it). It also sets the data-plane control
+   secret.
+3. Creates the bind-mount host directories, which rootless Podman does not
+   create itself: `../Lean/Data`, `data-lake-volume/`,
+   `PythonDataService/cache/`, `PythonDataService/lean-cache/`, and
+   `PythonDataService/artifacts/alpaca_clerk/`.
+4. Builds the images (5–10 minutes the first time).
+5. Creates the Alpaca Clerk volume and marks it ready, then claims the
+   data-lake root under a newly minted UUID and records it as
+   `DATA_LAKE_ROOT_ID` in `PythonDataService/.env`. The data plane refuses to
+   start without these two (it exits 78 and 3).
+   [`windows-onboarding.md`](windows-onboarding.md) §4a and §4b describe
+   them. Both act only on a first install (below).
+6. Starts the stack and waits for the data plane, the backend, and the
+   frontend.
 
-   It sizes and starts the Podman VM, copies any missing `.env` file from its
-   template, sets the data-plane control secret, builds the images (5–10
-   minutes the first time), and starts the stack. On a fresh machine this
-   first run ends with "❌ … the stack is NOT usable": the data plane refuses
-   to start until step 3 is done. That is expected.
-3. **First-run ceremonies** — Windows runbook §4a (the Alpaca Clerk volume
-   marker; without it the data plane exits 78) and §4b (the data-lake root
-   identity; without it the data plane exits 3).
-4. **Start the stack:** `podman compose up -d`, then check it (section 3).
+Re-running is safe, but not free: it restarts the Podman VM to re-apply its
+resources, which restarts every container. The two ceremonies act only on a
+first install, and otherwise stop with the next step rather than adopt
+something the script did not create:
 
-The script's closing message still tells you to run `ng serve` on the host.
-Skip that: the frontend runs in its own container on port 4200 (#2575).
+- **Clerk volume.** If the volume or the older
+  `PythonDataService/artifacts/alpaca_clerk` tree already holds data, the
+  volume is not marked and the script points you at
+  [`alpaca-sqlite-clerk-recovery-and-cutover.md`](alpaca-sqlite-clerk-recovery-and-cutover.md).
+- **Data-lake root.** An id is minted only when both the lake's identity
+  marker and `DATA_LAKE_ROOT_ID` are absent. An id with no marker (a
+  re-cloned or emptied `data-lake-volume/`), a marker with no id, and an id
+  that differs from the marker all stop the run: claiming would either adopt
+  a directory that is not the root that id named, or mislabel a real one. To
+  look at the marker, run `podman compose run --rm --no-deps python-service
+  python -m scripts.manage_data_root inspect`; a lake stamped before ids
+  existed shows the all-zero id, and that goes in `DATA_LAKE_ROOT_ID`.
+  `manage_data_root init` claims an empty root and `stamp` one that already
+  holds data (`--help` explains both). The script never runs either one for
+  you.
+
+The script warns while `POLYGON_API_KEY` in `.env` is still the placeholder.
+Put your key in the root `.env` and in `PythonDataService/.env` (the running
+data plane reads only the second file), then recreate the data plane with
+`podman compose up -d python-service`. If you have a PrimeNG license key, set
+`primeUiLicense` in the frontend environment file.
 
 **The data-plane control secret.** Compose refuses to start the data plane and
 the frontend proxy while `DATA_PLANE_CONTROL_SECRET` in the root `.env` is
@@ -102,8 +130,8 @@ exist it fails with `env file … not found`. Setting them up:
 **Once the fleet runs, every compose command must name the same files
 `restart.sh` does.** A plain `podman compose up` recreates the data plane in
 combined posture on the Live account's volume while `alpaca-live-clerk` still
-runs on it: two processes writing one account's state. For the same reason,
-don't re-run `setup-macos.sh` on a fleet machine; use `./restart.sh`.
+runs on it: two processes writing one account's state. For the same reason
+`setup-macos.sh` refuses to run once the lane files exist; use `./restart.sh`.
 
 The commands below take the file list as `COMPOSE_ARGS`:
 
