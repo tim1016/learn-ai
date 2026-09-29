@@ -1,0 +1,3476 @@
+{
+  "generated_for": "issue #2467",
+  "window": {
+    "start": "2024-05-20",
+    "end": "2026-09-25",
+    "symbol": "SPY"
+  },
+  "lake_sessions": 590,
+  "calendar_sessions": 590,
+  "missing_sessions": [],
+  "early_close_sessions": [
+    "2024-07-03",
+    "2024-11-29",
+    "2024-12-24",
+    "2025-07-03",
+    "2025-11-28",
+    "2025-12-24"
+  ],
+  "strategies": [
+    {
+      "label": "ema_sealed_default",
+      "strategy_key": "ema_crossover_signal",
+      "params": {
+        "symbol": "SPY",
+        "gap": 0.2,
+        "gap_bps": 0.0,
+        "rsi_min": 50.0,
+        "rsi_max": 70.0
+      },
+      "evidence": "paper pt-ema-spy-0916/0918, paper-ema-spy-0923/0924; live live-ema-spy-0917/0923/0924",
+      "sessions": 590,
+      "early_close_sessions": 6,
+      "fills": 166,
+      "trades": 83,
+      "final_bar_enter": 5,
+      "final_bar_exit": 1,
+      "final_bar_trades": 6,
+      "final_bar_trade_share": 0.07228915662650602,
+      "models": {
+        "close": {
+          "trades": 83,
+          "points": "50.0320"
+        },
+        "live": {
+          "trades": 78,
+          "points": "32.4720",
+          "discarded": [
+            {
+              "bar_close_ms": 1738875600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1742587200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1754596800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1756929600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1783022400000,
+              "kind": "ENTER"
+            }
+          ],
+          "after_hours_exit": {
+            "0": {
+              "final_bar_exits": 1,
+              "unfilled": 0,
+              "touch_points_vs_close": "0.00",
+              "marketable_points_vs_close": "1.17",
+              "touch_bps_vs_close": {
+                "n": 1,
+                "mean": 0.0,
+                "median": 0.0,
+                "stdev": 0.0,
+                "p05": 0.0,
+                "p95": 0.0,
+                "mean_abs": 0.0,
+                "median_abs": 0.0,
+                "p95_abs": 0.0,
+                "max_abs": 0.0
+              },
+              "marketable_bps_vs_close": {
+                "n": 1,
+                "mean": 22.203666451588415,
+                "median": 22.203666451588415,
+                "stdev": 0.0,
+                "p05": 22.203666451588415,
+                "p95": 22.203666451588415,
+                "mean_abs": 22.203666451588415,
+                "median_abs": 22.203666451588415,
+                "p95_abs": 22.203666451588415,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "5": {
+              "final_bar_exits": 1,
+              "unfilled": 0,
+              "touch_points_vs_close": "-0.27",
+              "marketable_points_vs_close": "1.17",
+              "touch_bps_vs_close": {
+                "n": 1,
+                "mean": -5.123923027289634,
+                "median": -5.123923027289634,
+                "stdev": 0.0,
+                "p05": -5.123923027289634,
+                "p95": -5.123923027289634,
+                "mean_abs": 5.123923027289634,
+                "median_abs": 5.123923027289634,
+                "p95_abs": 5.123923027289634,
+                "max_abs": 5.123923027289634
+              },
+              "marketable_bps_vs_close": {
+                "n": 1,
+                "mean": 22.203666451588415,
+                "median": 22.203666451588415,
+                "stdev": 0.0,
+                "p05": 22.203666451588415,
+                "p95": 22.203666451588415,
+                "mean_abs": 22.203666451588415,
+                "median_abs": 22.203666451588415,
+                "p95_abs": 22.203666451588415,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "10": {
+              "final_bar_exits": 1,
+              "unfilled": 0,
+              "touch_points_vs_close": "-0.53",
+              "marketable_points_vs_close": "1.17",
+              "touch_bps_vs_close": {
+                "n": 1,
+                "mean": -10.058071127642616,
+                "median": -10.058071127642616,
+                "stdev": 0.0,
+                "p05": -10.058071127642616,
+                "p95": -10.058071127642616,
+                "mean_abs": 10.058071127642616,
+                "median_abs": 10.058071127642616,
+                "p95_abs": 10.058071127642616,
+                "max_abs": 10.058071127642616
+              },
+              "marketable_bps_vs_close": {
+                "n": 1,
+                "mean": 22.203666451588415,
+                "median": 22.203666451588415,
+                "stdev": 0.0,
+                "p05": 22.203666451588415,
+                "p95": 22.203666451588415,
+                "mean_abs": 22.203666451588415,
+                "median_abs": 22.203666451588415,
+                "p95_abs": 22.203666451588415,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "25": {
+              "final_bar_exits": 1,
+              "unfilled": 0,
+              "touch_points_vs_close": "-1.32",
+              "marketable_points_vs_close": "1.17",
+              "touch_bps_vs_close": {
+                "n": 1,
+                "mean": -25.050290355638214,
+                "median": -25.050290355638214,
+                "stdev": 0.0,
+                "p05": -25.050290355638214,
+                "p95": -25.050290355638214,
+                "mean_abs": 25.050290355638214,
+                "median_abs": 25.050290355638214,
+                "p95_abs": 25.050290355638214,
+                "max_abs": 25.050290355638214
+              },
+              "marketable_bps_vs_close": {
+                "n": 1,
+                "mean": 22.203666451588415,
+                "median": 22.203666451588415,
+                "stdev": 0.0,
+                "p05": 22.203666451588415,
+                "p95": 22.203666451588415,
+                "mean_abs": 22.203666451588415,
+                "median_abs": 22.203666451588415,
+                "p95_abs": 22.203666451588415,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "50": {
+              "final_bar_exits": 1,
+              "unfilled": 0,
+              "touch_points_vs_close": "-2.64",
+              "marketable_points_vs_close": "1.17",
+              "touch_bps_vs_close": {
+                "n": 1,
+                "mean": -50.10058071127643,
+                "median": -50.10058071127643,
+                "stdev": 0.0,
+                "p05": -50.10058071127643,
+                "p95": -50.10058071127643,
+                "mean_abs": 50.10058071127643,
+                "median_abs": 50.10058071127643,
+                "p95_abs": 50.10058071127643,
+                "max_abs": 50.10058071127643
+              },
+              "marketable_bps_vs_close": {
+                "n": 1,
+                "mean": 22.203666451588415,
+                "median": 22.203666451588415,
+                "stdev": 0.0,
+                "p05": 22.203666451588415,
+                "p95": 22.203666451588415,
+                "mean_abs": 22.203666451588415,
+                "median_abs": 22.203666451588415,
+                "p95_abs": 22.203666451588415,
+                "max_abs": 22.203666451588415
+              }
+            }
+          }
+        },
+        "next_open": {
+          "trades": 83,
+          "points": "49.8820",
+          "discarded": []
+        },
+        "skip_all": {
+          "trades": 78,
+          "points": "48.2807",
+          "discarded": [
+            {
+              "bar_close_ms": 1738875600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1742587200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1745352000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1754596800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1756929600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1783022400000,
+              "kind": "ENTER"
+            }
+          ]
+        }
+      },
+      "final_bar_decisions": [
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1738875600000,
+            "exit_ms": 1738943100000,
+            "entry_price": "606.34",
+            "exit_price": "604.47",
+            "pnl_points": "-1.87",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-02-06",
+            "early_close": false,
+            "close_ms": 1738875600000,
+            "close": "606.34",
+            "final_minute_volume": 822724,
+            "close_minute_open": "606.37",
+            "close_minute_close": "605.63",
+            "close_minute_volume": 790524,
+            "after_decision_start_ms": 1738875660000,
+            "after_decision_open": "605.63",
+            "after_decision_volume": 253180,
+            "next_open_ms": 1738938600000,
+            "next_open": "606.89",
+            "after_hours_bars": 172,
+            "after_hours_high": "606.4055"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1742587200000,
+            "exit_ms": 1742827500000,
+            "entry_price": "564.19",
+            "exit_price": "572.84",
+            "pnl_points": "8.65",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-21",
+            "early_close": false,
+            "close_ms": 1742587200000,
+            "close": "564.19",
+            "final_minute_volume": 2732221,
+            "close_minute_open": "564.15",
+            "close_minute_close": "564.25",
+            "close_minute_volume": 253887,
+            "after_decision_start_ms": 1742587260000,
+            "after_decision_open": "564.24",
+            "after_decision_volume": 180969,
+            "next_open_ms": 1742823000000,
+            "next_open": "570.8",
+            "after_hours_bars": 171,
+            "after_hours_high": "565.11"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1745347500000,
+            "exit_ms": 1745352000000,
+            "entry_price": "526.08",
+            "exit_price": "526.94",
+            "pnl_points": "0.86",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-04-22",
+            "early_close": false,
+            "close_ms": 1745352000000,
+            "close": "526.94",
+            "final_minute_volume": 1347469,
+            "close_minute_open": "526.98",
+            "close_minute_close": "528.01",
+            "close_minute_volume": 265341,
+            "after_decision_start_ms": 1745352060000,
+            "after_decision_open": "528.11",
+            "after_decision_volume": 96110,
+            "next_open_ms": 1745415000000,
+            "next_open": "540.43",
+            "after_hours_bars": 235,
+            "after_hours_high": "537.83"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1754596800000,
+            "exit_ms": 1754664300000,
+            "entry_price": "632.3",
+            "exit_price": "636.5",
+            "pnl_points": "4.2",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-08-07",
+            "early_close": false,
+            "close_ms": 1754596800000,
+            "close": "632.3",
+            "final_minute_volume": 2096296,
+            "close_minute_open": "632.29",
+            "close_minute_close": "632.74",
+            "close_minute_volume": 505500,
+            "after_decision_start_ms": 1754596860000,
+            "after_decision_open": "632.77",
+            "after_decision_volume": 144930,
+            "next_open_ms": 1754659800000,
+            "next_open": "634.06",
+            "after_hours_bars": 205,
+            "after_hours_high": "633.83"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1756929600000,
+            "exit_ms": 1756997100000,
+            "entry_price": "643.64",
+            "exit_price": "645.35",
+            "pnl_points": "1.71",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-09-03",
+            "early_close": false,
+            "close_ms": 1756929600000,
+            "close": "643.64",
+            "final_minute_volume": 2323660,
+            "close_minute_open": "643.67",
+            "close_minute_close": "643.8504",
+            "close_minute_volume": 426614,
+            "after_decision_start_ms": 1756929660000,
+            "after_decision_open": "643.87",
+            "after_decision_volume": 316890,
+            "next_open_ms": 1756992600000,
+            "next_open": "644.42",
+            "after_hours_bars": 168,
+            "after_hours_high": "644.05"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1783022400000,
+            "exit_ms": 1783349100000,
+            "entry_price": "744.8",
+            "exit_price": "749.67",
+            "pnl_points": "4.87",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-07-02",
+            "early_close": false,
+            "close_ms": 1783022400000,
+            "close": "744.8",
+            "final_minute_volume": 2954337,
+            "close_minute_open": "744.8799",
+            "close_minute_close": "744.42",
+            "close_minute_volume": 366409,
+            "after_decision_start_ms": 1783022460000,
+            "after_decision_open": "744.48",
+            "after_decision_volume": 209526,
+            "next_open_ms": 1783344600000,
+            "next_open": "748.74",
+            "after_hours_bars": 207,
+            "after_hours_high": "745.85"
+          }
+        }
+      ]
+    },
+    {
+      "label": "ema_q_variant",
+      "strategy_key": "ema_crossover_signal",
+      "params": {
+        "symbol": "SPY",
+        "gap": 0.0,
+        "gap_bps": 0.0,
+        "rsi_min": 30.0,
+        "rsi_max": 70.0
+      },
+      "evidence": "paper pt-ema-q-0916",
+      "sessions": 590,
+      "early_close_sessions": 6,
+      "fills": 1118,
+      "trades": 559,
+      "final_bar_enter": 36,
+      "final_bar_exit": 18,
+      "final_bar_trades": 54,
+      "final_bar_trade_share": 0.09660107334525939,
+      "models": {
+        "close": {
+          "trades": 559,
+          "points": "62.2409"
+        },
+        "live": {
+          "trades": 523,
+          "points": "31.7373",
+          "discarded": [
+            {
+              "bar_close_ms": 1716926400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1719864000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1720468800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1724270400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1725912000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1727985600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1731358800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1731704400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1733518800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1735333200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1738270800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1738875600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1742587200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1742932800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1744315200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1747339200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1747684800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1748548800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1751918400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1753732800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1754596800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1756929600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1757361600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1757966400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1759176000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1764882000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1765227600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1766178000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1771534800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1775678400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1776715200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1778270400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1780430400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1781294400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1783022400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1787860800000,
+              "kind": "ENTER"
+            }
+          ],
+          "after_hours_exit": {
+            "0": {
+              "final_bar_exits": 18,
+              "unfilled": 0,
+              "touch_points_vs_close": "0.00",
+              "marketable_points_vs_close": "4.64",
+              "touch_bps_vs_close": {
+                "n": 18,
+                "mean": 0.0,
+                "median": 0.0,
+                "stdev": 0.0,
+                "p05": 0.0,
+                "p95": 0.0,
+                "mean_abs": 0.0,
+                "median_abs": 0.0,
+                "p95_abs": 0.0,
+                "max_abs": 0.0
+              },
+              "marketable_bps_vs_close": {
+                "n": 18,
+                "mean": 4.400284114833627,
+                "median": 2.236793375084562,
+                "stdev": 5.469130241145245,
+                "p05": 0.0,
+                "p95": 9.540387641013623,
+                "mean_abs": 4.400284114833627,
+                "median_abs": 2.236793375084562,
+                "p95_abs": 9.540387641013623,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "5": {
+              "final_bar_exits": 18,
+              "unfilled": 0,
+              "touch_points_vs_close": "-5.67",
+              "marketable_points_vs_close": "3.87",
+              "touch_bps_vs_close": {
+                "n": 18,
+                "mean": -5.086129944894921,
+                "median": -5.096831245779309,
+                "stdev": 0.04336191067292133,
+                "p05": -5.137894457703527,
+                "p95": -5.021256653165065,
+                "mean_abs": 5.086129944894921,
+                "median_abs": 5.096831245779309,
+                "p95_abs": 5.137894457703527,
+                "max_abs": 5.155925155925156
+              },
+              "marketable_bps_vs_close": {
+                "n": 18,
+                "mean": 3.7157054855865814,
+                "median": 2.236793375084562,
+                "stdev": 6.13537867485797,
+                "p05": -2.6932853030787616,
+                "p95": 9.540387641013623,
+                "mean_abs": 5.084862744080671,
+                "median_abs": 3.2373052779487486,
+                "p95_abs": 9.540387641013623,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "10": {
+              "final_bar_exits": 18,
+              "unfilled": 0,
+              "touch_points_vs_close": "-11.24",
+              "marketable_points_vs_close": "3.84",
+              "touch_bps_vs_close": {
+                "n": 18,
+                "mean": -10.082471405805634,
+                "median": -10.085708180957123,
+                "stdev": 0.03596872129523998,
+                "p05": -10.145530145530145,
+                "p95": -10.041527673769487,
+                "mean_abs": 10.082471405805634,
+                "median_abs": 10.085708180957123,
+                "p95_abs": 10.145530145530145,
+                "max_abs": 10.153940998349984
+              },
+              "marketable_bps_vs_close": {
+                "n": 18,
+                "mean": 3.687339588203052,
+                "median": 2.236793375084562,
+                "stdev": 6.177136344908024,
+                "p05": -2.6932853030787616,
+                "p95": 9.540387641013623,
+                "mean_abs": 5.113228641464201,
+                "median_abs": 3.2373052779487486,
+                "p95_abs": 9.540387641013623,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "25": {
+              "final_bar_exits": 18,
+              "unfilled": 0,
+              "touch_points_vs_close": "-27.94",
+              "marketable_points_vs_close": "3.84",
+              "touch_bps_vs_close": {
+                "n": 18,
+                "mean": -25.059495138224033,
+                "median": -25.059395746232795,
+                "stdev": 0.03529423291600745,
+                "p05": -25.10976123173152,
+                "p95": -25.014495154476933,
+                "mean_abs": 25.059495138224033,
+                "median_abs": 25.059395746232795,
+                "p95_abs": 25.10976123173152,
+                "max_abs": 25.114345114345113
+              },
+              "marketable_bps_vs_close": {
+                "n": 18,
+                "mean": 3.687339588203052,
+                "median": 2.236793375084562,
+                "stdev": 6.177136344908024,
+                "p05": -2.6932853030787616,
+                "p95": 9.540387641013623,
+                "mean_abs": 5.113228641464201,
+                "median_abs": 3.2373052779487486,
+                "p95_abs": 9.540387641013623,
+                "max_abs": 22.203666451588415
+              }
+            },
+            "50": {
+              "final_bar_exits": 18,
+              "unfilled": 0,
+              "touch_points_vs_close": "-55.83",
+              "marketable_points_vs_close": "3.84",
+              "touch_bps_vs_close": {
+                "n": 18,
+                "mean": -50.076338999237265,
+                "median": -50.06180352475515,
+                "stdev": 0.04862210088541538,
+                "p05": -50.16243876984194,
+                "p95": -50.01109906898398,
+                "mean_abs": 50.076338999237265,
+                "median_abs": 50.06180352475515,
+                "p95_abs": 50.16243876984194,
+                "max_abs": 50.17246785826278
+              },
+              "marketable_bps_vs_close": {
+                "n": 18,
+                "mean": 3.687339588203052,
+                "median": 2.236793375084562,
+                "stdev": 6.177136344908024,
+                "p05": -2.6932853030787616,
+                "p95": 9.540387641013623,
+                "mean_abs": 5.113228641464201,
+                "median_abs": 3.2373052779487486,
+                "p95_abs": 9.540387641013623,
+                "max_abs": 22.203666451588415
+              }
+            }
+          }
+        },
+        "next_open": {
+          "trades": 559,
+          "points": "60.0509",
+          "discarded": []
+        },
+        "skip_all": {
+          "trades": 520,
+          "points": "52.4317",
+          "discarded": [
+            {
+              "bar_close_ms": 1716926400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1719864000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1720468800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1724270400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1725912000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1727985600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1731358800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1731704400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1733173200000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1733518800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1735246800000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1735333200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1738270800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1738875600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1739394000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1740517200000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1740776400000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1741896000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1742587200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1742846400000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1742932800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1743105600000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1744315200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1745352000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1747252800000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1747339200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1747684800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1748548800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1750276800000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1751918400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1753732800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1754596800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1755547200000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1756929600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1757361600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1757966400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1759176000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1760558400000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1764882000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1765227600000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1765918800000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1766178000000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1770238800000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1771534800000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1774382400000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1775160000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1775678400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1776715200000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1778270400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1780430400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1781294400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1783022400000,
+              "kind": "ENTER"
+            },
+            {
+              "bar_close_ms": 1787688000000,
+              "kind": "EXIT"
+            },
+            {
+              "bar_close_ms": 1787860800000,
+              "kind": "ENTER"
+            }
+          ]
+        }
+      },
+      "final_bar_decisions": [
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1716926400000,
+            "exit_ms": 1716993900000,
+            "entry_price": "529.87",
+            "exit_price": "526.93",
+            "pnl_points": "-2.94",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-05-28",
+            "early_close": false,
+            "close_ms": 1716926400000,
+            "close": "529.87",
+            "final_minute_volume": 2386360,
+            "close_minute_open": "529.89",
+            "close_minute_close": "530.16",
+            "close_minute_volume": 220492,
+            "after_decision_start_ms": 1716926460000,
+            "after_decision_open": "530.17",
+            "after_decision_volume": 210458,
+            "next_open_ms": 1716989400000,
+            "next_open": "525.68",
+            "after_hours_bars": 134,
+            "after_hours_high": "530.17"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1719864000000,
+            "exit_ms": 1719931500000,
+            "entry_price": "545.37",
+            "exit_price": "545.3",
+            "pnl_points": "-0.07",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-07-01",
+            "early_close": false,
+            "close_ms": 1719864000000,
+            "close": "545.37",
+            "final_minute_volume": 1079928,
+            "close_minute_open": "545.37",
+            "close_minute_close": "545.4",
+            "close_minute_volume": 136472,
+            "after_decision_start_ms": 1719864060000,
+            "after_decision_open": "545.45",
+            "after_decision_volume": 339965,
+            "next_open_ms": 1719927000000,
+            "next_open": "543.7",
+            "after_hours_bars": 128,
+            "after_hours_high": "545.46"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1720468800000,
+            "exit_ms": 1720536300000,
+            "entry_price": "555.34",
+            "exit_price": "556.64",
+            "pnl_points": "1.30",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-07-08",
+            "early_close": false,
+            "close_ms": 1720468800000,
+            "close": "555.34",
+            "final_minute_volume": 1721936,
+            "close_minute_open": "555.38",
+            "close_minute_close": "555.18",
+            "close_minute_volume": 221872,
+            "after_decision_start_ms": 1720468860000,
+            "after_decision_open": "555.2",
+            "after_decision_volume": 55091,
+            "next_open_ms": 1720531800000,
+            "next_open": "556.26",
+            "after_hours_bars": 159,
+            "after_hours_high": "556.45"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1724270400000,
+            "exit_ms": 1724337900000,
+            "entry_price": "560.7",
+            "exit_price": "560.72",
+            "pnl_points": "0.02",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-08-21",
+            "early_close": false,
+            "close_ms": 1724270400000,
+            "close": "560.7",
+            "final_minute_volume": 1192350,
+            "close_minute_open": "560.7",
+            "close_minute_close": "560.83",
+            "close_minute_volume": 204577,
+            "after_decision_start_ms": 1724270460000,
+            "after_decision_open": "560.83",
+            "after_decision_volume": 46691,
+            "next_open_ms": 1724333400000,
+            "next_open": "562.56",
+            "after_hours_bars": 145,
+            "after_hours_high": "561.23"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1725912000000,
+            "exit_ms": 1725979500000,
+            "entry_price": "546.42",
+            "exit_price": "546.334",
+            "pnl_points": "-0.086",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-09-09",
+            "early_close": false,
+            "close_ms": 1725912000000,
+            "close": "546.42",
+            "final_minute_volume": 1382429,
+            "close_minute_open": "546.39",
+            "close_minute_close": "546.58",
+            "close_minute_volume": 172024,
+            "after_decision_start_ms": 1725912060000,
+            "after_decision_open": "546.61",
+            "after_decision_volume": 58973,
+            "next_open_ms": 1725975000000,
+            "next_open": "548.36",
+            "after_hours_bars": 175,
+            "after_hours_high": "547.52"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1727985600000,
+            "exit_ms": 1728053100000,
+            "entry_price": "567.78",
+            "exit_price": "569.35",
+            "pnl_points": "1.57",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-10-03",
+            "early_close": false,
+            "close_ms": 1727985600000,
+            "close": "567.78",
+            "final_minute_volume": 928879,
+            "close_minute_open": "567.77",
+            "close_minute_close": "567.79",
+            "close_minute_volume": 132483,
+            "after_decision_start_ms": 1727985660000,
+            "after_decision_open": "567.79",
+            "after_decision_volume": 93582,
+            "next_open_ms": 1728048600000,
+            "next_open": "572.35",
+            "after_hours_bars": 191,
+            "after_hours_high": "568.26"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1731358800000,
+            "exit_ms": 1731426300000,
+            "entry_price": "598.72",
+            "exit_price": "597.57",
+            "pnl_points": "-1.15",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-11-11",
+            "early_close": false,
+            "close_ms": 1731358800000,
+            "close": "598.72",
+            "final_minute_volume": 2355736,
+            "close_minute_open": "598.71",
+            "close_minute_close": "598.36",
+            "close_minute_volume": 350613,
+            "after_decision_start_ms": 1731358860000,
+            "after_decision_open": "598.3504",
+            "after_decision_volume": 32626,
+            "next_open_ms": 1731421800000,
+            "next_open": "598.68",
+            "after_hours_bars": 171,
+            "after_hours_high": "598.81"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1731704400000,
+            "exit_ms": 1731944700000,
+            "entry_price": "585.7",
+            "exit_price": "588.07",
+            "pnl_points": "2.37",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-11-15",
+            "early_close": false,
+            "close_ms": 1731704400000,
+            "close": "585.7",
+            "final_minute_volume": 1160220,
+            "close_minute_open": "585.76",
+            "close_minute_close": "586.31",
+            "close_minute_volume": 386425,
+            "after_decision_start_ms": 1731704460000,
+            "after_decision_open": "586.32",
+            "after_decision_volume": 108724,
+            "next_open_ms": 1731940200000,
+            "next_open": "586.22",
+            "after_hours_bars": 163,
+            "after_hours_high": "586.52"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1733168700000,
+            "exit_ms": 1733173200000,
+            "entry_price": "603.71",
+            "exit_price": "603.65",
+            "pnl_points": "-0.06",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-12-02",
+            "early_close": false,
+            "close_ms": 1733173200000,
+            "close": "603.65",
+            "final_minute_volume": 1137526,
+            "close_minute_open": "603.66",
+            "close_minute_close": "603.8",
+            "close_minute_volume": 157086,
+            "after_decision_start_ms": 1733173260000,
+            "after_decision_open": "603.82",
+            "after_decision_volume": 57543,
+            "next_open_ms": 1733236200000,
+            "next_open": "603.39",
+            "after_hours_bars": 145,
+            "after_hours_high": "604.2"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1733518800000,
+            "exit_ms": 1733759100000,
+            "entry_price": "607.88",
+            "exit_price": "605.98",
+            "pnl_points": "-1.90",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-12-06",
+            "early_close": false,
+            "close_ms": 1733518800000,
+            "close": "607.88",
+            "final_minute_volume": 1113997,
+            "close_minute_open": "607.89",
+            "close_minute_close": "607.94",
+            "close_minute_volume": 396784,
+            "after_decision_start_ms": 1733518860000,
+            "after_decision_open": "607.94",
+            "after_decision_volume": 58703,
+            "next_open_ms": 1733754600000,
+            "next_open": "607.69",
+            "after_hours_bars": 150,
+            "after_hours_high": "608.065"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1735242300000,
+            "exit_ms": 1735246800000,
+            "entry_price": "601.41",
+            "exit_price": "601.25",
+            "pnl_points": "-0.16",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-12-26",
+            "early_close": false,
+            "close_ms": 1735246800000,
+            "close": "601.25",
+            "final_minute_volume": 663808,
+            "close_minute_open": "601.28",
+            "close_minute_close": "601.24",
+            "close_minute_volume": 290184,
+            "after_decision_start_ms": 1735246860000,
+            "after_decision_open": "601.33",
+            "after_decision_volume": 17389,
+            "next_open_ms": 1735309800000,
+            "next_open": "597.54",
+            "after_hours_bars": 139,
+            "after_hours_high": "601.4"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1735333200000,
+            "exit_ms": 1735573500000,
+            "entry_price": "594.99",
+            "exit_price": "586.658",
+            "pnl_points": "-8.332",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2024-12-27",
+            "early_close": false,
+            "close_ms": 1735333200000,
+            "close": "594.99",
+            "final_minute_volume": 2714096,
+            "close_minute_open": "595",
+            "close_minute_close": "595.12",
+            "close_minute_volume": 208120,
+            "after_decision_start_ms": 1735333260000,
+            "after_decision_open": "595.13",
+            "after_decision_volume": 78884,
+            "next_open_ms": 1735569000000,
+            "next_open": "587.89",
+            "after_hours_bars": 146,
+            "after_hours_high": "595.29"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1738270800000,
+            "exit_ms": 1738338300000,
+            "entry_price": "604.98",
+            "exit_price": "609.02",
+            "pnl_points": "4.04",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-01-30",
+            "early_close": false,
+            "close_ms": 1738270800000,
+            "close": "604.98",
+            "final_minute_volume": 872594,
+            "close_minute_open": "604.95",
+            "close_minute_close": "605.32",
+            "close_minute_volume": 218977,
+            "after_decision_start_ms": 1738270860000,
+            "after_decision_open": "605.39",
+            "after_decision_volume": 26742,
+            "next_open_ms": 1738333800000,
+            "next_open": "607.5",
+            "after_hours_bars": 187,
+            "after_hours_high": "606.25"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1738875600000,
+            "exit_ms": 1738943100000,
+            "entry_price": "606.34",
+            "exit_price": "604.47",
+            "pnl_points": "-1.87",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-02-06",
+            "early_close": false,
+            "close_ms": 1738875600000,
+            "close": "606.34",
+            "final_minute_volume": 822724,
+            "close_minute_open": "606.37",
+            "close_minute_close": "605.63",
+            "close_minute_volume": 790524,
+            "after_decision_start_ms": 1738875660000,
+            "after_decision_open": "605.63",
+            "after_decision_volume": 253180,
+            "next_open_ms": 1738938600000,
+            "next_open": "606.89",
+            "after_hours_bars": 172,
+            "after_hours_high": "606.4055"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1739389500000,
+            "exit_ms": 1739394000000,
+            "entry_price": "603.55",
+            "exit_price": "603.36",
+            "pnl_points": "-0.19",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-02-12",
+            "early_close": false,
+            "close_ms": 1739394000000,
+            "close": "603.36",
+            "final_minute_volume": 887451,
+            "close_minute_open": "603.39",
+            "close_minute_close": "603.49",
+            "close_minute_volume": 316722,
+            "after_decision_start_ms": 1739394060000,
+            "after_decision_open": "603.46",
+            "after_decision_volume": 478760,
+            "next_open_ms": 1739457000000,
+            "next_open": "604.48",
+            "after_hours_bars": 171,
+            "after_hours_high": "604.689"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1740512700000,
+            "exit_ms": 1740517200000,
+            "entry_price": "595.31",
+            "exit_price": "594.21",
+            "pnl_points": "-1.10",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-02-25",
+            "early_close": false,
+            "close_ms": 1740517200000,
+            "close": "594.21",
+            "final_minute_volume": 1245815,
+            "close_minute_open": "594.22",
+            "close_minute_close": "594.6",
+            "close_minute_volume": 577605,
+            "after_decision_start_ms": 1740517260000,
+            "after_decision_open": "594.62",
+            "after_decision_volume": 78991,
+            "next_open_ms": 1740580200000,
+            "next_open": "595.93",
+            "after_hours_bars": 195,
+            "after_hours_high": "595.97"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1740771900000,
+            "exit_ms": 1740776400000,
+            "entry_price": "587.42",
+            "exit_price": "594.07",
+            "pnl_points": "6.65",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-02-28",
+            "early_close": false,
+            "close_ms": 1740776400000,
+            "close": "594.07",
+            "final_minute_volume": 3847128,
+            "close_minute_open": "594.06",
+            "close_minute_close": "593.93",
+            "close_minute_volume": 577892,
+            "after_decision_start_ms": 1740776460000,
+            "after_decision_open": "593.91",
+            "after_decision_volume": 414393,
+            "next_open_ms": 1741012200000,
+            "next_open": "596.18",
+            "after_hours_bars": 206,
+            "after_hours_high": "594.3"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1741891500000,
+            "exit_ms": 1741896000000,
+            "entry_price": "554.06",
+            "exit_price": "551.51",
+            "pnl_points": "-2.55",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-13",
+            "early_close": false,
+            "close_ms": 1741896000000,
+            "close": "551.51",
+            "final_minute_volume": 2198637,
+            "close_minute_open": "551.48",
+            "close_minute_close": "551.9",
+            "close_minute_volume": 276347,
+            "after_decision_start_ms": 1741896060000,
+            "after_decision_open": "551.9",
+            "after_decision_volume": 224361,
+            "next_open_ms": 1741959000000,
+            "next_open": "556.11",
+            "after_hours_bars": 222,
+            "after_hours_high": "559.1292"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1742587200000,
+            "exit_ms": 1742827500000,
+            "entry_price": "564.19",
+            "exit_price": "572.84",
+            "pnl_points": "8.65",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-21",
+            "early_close": false,
+            "close_ms": 1742587200000,
+            "close": "564.19",
+            "final_minute_volume": 2732221,
+            "close_minute_open": "564.15",
+            "close_minute_close": "564.25",
+            "close_minute_volume": 253887,
+            "after_decision_start_ms": 1742587260000,
+            "after_decision_open": "564.24",
+            "after_decision_volume": 180969,
+            "next_open_ms": 1742823000000,
+            "next_open": "570.8",
+            "after_hours_bars": 171,
+            "after_hours_high": "565.11"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1742841900000,
+            "exit_ms": 1742846400000,
+            "entry_price": "573.3499",
+            "exit_price": "574.02",
+            "pnl_points": "0.6701",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-24",
+            "early_close": false,
+            "close_ms": 1742846400000,
+            "close": "574.02",
+            "final_minute_volume": 1673001,
+            "close_minute_open": "574.02",
+            "close_minute_close": "574.28",
+            "close_minute_volume": 993376,
+            "after_decision_start_ms": 1742846460000,
+            "after_decision_open": "574.23",
+            "after_decision_volume": 123026,
+            "next_open_ms": 1742909400000,
+            "next_open": "575.3",
+            "after_hours_bars": 180,
+            "after_hours_high": "574.57"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1742932800000,
+            "exit_ms": 1743000300000,
+            "entry_price": "575.36",
+            "exit_price": "573.45",
+            "pnl_points": "-1.91",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-25",
+            "early_close": false,
+            "close_ms": 1742932800000,
+            "close": "575.36",
+            "final_minute_volume": 640708,
+            "close_minute_open": "575.39",
+            "close_minute_close": "575.6",
+            "close_minute_volume": 189916,
+            "after_decision_start_ms": 1742932860000,
+            "after_decision_open": "575.56",
+            "after_decision_volume": 57953,
+            "next_open_ms": 1742995800000,
+            "next_open": "575.19",
+            "after_hours_bars": 164,
+            "after_hours_high": "576.19"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1743101100000,
+            "exit_ms": 1743105600000,
+            "entry_price": "568.48",
+            "exit_price": "567",
+            "pnl_points": "-1.48",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-03-27",
+            "early_close": false,
+            "close_ms": 1743105600000,
+            "close": "567",
+            "final_minute_volume": 1615510,
+            "close_minute_open": "567.04",
+            "close_minute_close": "567.41",
+            "close_minute_volume": 181762,
+            "after_decision_start_ms": 1743105660000,
+            "after_decision_open": "567.43",
+            "after_decision_volume": 135561,
+            "next_open_ms": 1743168600000,
+            "next_open": "565.53",
+            "after_hours_bars": 177,
+            "after_hours_high": "567.51"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1744315200000,
+            "exit_ms": 1744382700000,
+            "entry_price": "524.7",
+            "exit_price": "525.3",
+            "pnl_points": "0.6",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-04-10",
+            "early_close": false,
+            "close_ms": 1744315200000,
+            "close": "524.7",
+            "final_minute_volume": 2229301,
+            "close_minute_open": "524.72",
+            "close_minute_close": "524.55",
+            "close_minute_volume": 539860,
+            "after_decision_start_ms": 1744315260000,
+            "after_decision_open": "524.56",
+            "after_decision_volume": 324509,
+            "next_open_ms": 1744378200000,
+            "next_open": "523.01",
+            "after_hours_bars": 230,
+            "after_hours_high": "527.5"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1745347500000,
+            "exit_ms": 1745352000000,
+            "entry_price": "526.08",
+            "exit_price": "526.94",
+            "pnl_points": "0.86",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-04-22",
+            "early_close": false,
+            "close_ms": 1745352000000,
+            "close": "526.94",
+            "final_minute_volume": 1347469,
+            "close_minute_open": "526.98",
+            "close_minute_close": "528.01",
+            "close_minute_volume": 265341,
+            "after_decision_start_ms": 1745352060000,
+            "after_decision_open": "528.11",
+            "after_decision_volume": 96110,
+            "next_open_ms": 1745415000000,
+            "next_open": "540.43",
+            "after_hours_bars": 235,
+            "after_hours_high": "537.83"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1747248300000,
+            "exit_ms": 1747252800000,
+            "entry_price": "587.81",
+            "exit_price": "587.56",
+            "pnl_points": "-0.25",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-05-14",
+            "early_close": false,
+            "close_ms": 1747252800000,
+            "close": "587.56",
+            "final_minute_volume": 2826469,
+            "close_minute_open": "587.52",
+            "close_minute_close": "587.22",
+            "close_minute_volume": 233900,
+            "after_decision_start_ms": 1747252860000,
+            "after_decision_open": "587.23",
+            "after_decision_volume": 67363,
+            "next_open_ms": 1747315800000,
+            "next_open": "585.56",
+            "after_hours_bars": 200,
+            "after_hours_high": "587.66"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1747339200000,
+            "exit_ms": 1747406700000,
+            "entry_price": "590.41",
+            "exit_price": "589.437",
+            "pnl_points": "-0.973",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-05-15",
+            "early_close": false,
+            "close_ms": 1747339200000,
+            "close": "590.41",
+            "final_minute_volume": 2795681,
+            "close_minute_open": "590.41",
+            "close_minute_close": "590.48",
+            "close_minute_volume": 374666,
+            "after_decision_start_ms": 1747339260000,
+            "after_decision_open": "590.47",
+            "after_decision_volume": 374413,
+            "next_open_ms": 1747402200000,
+            "next_open": "591.25",
+            "after_hours_bars": 178,
+            "after_hours_high": "590.72"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1747684800000,
+            "exit_ms": 1747752300000,
+            "entry_price": "594.94",
+            "exit_price": "593.935",
+            "pnl_points": "-1.005",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-05-19",
+            "early_close": false,
+            "close_ms": 1747684800000,
+            "close": "594.94",
+            "final_minute_volume": 1492053,
+            "close_minute_open": "594.93",
+            "close_minute_close": "594.48",
+            "close_minute_volume": 268303,
+            "after_decision_start_ms": 1747684860000,
+            "after_decision_open": "594.47",
+            "after_decision_volume": 135291,
+            "next_open_ms": 1747747800000,
+            "next_open": "593.09",
+            "after_hours_bars": 200,
+            "after_hours_high": "596.05"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1748548800000,
+            "exit_ms": 1748616300000,
+            "entry_price": "590",
+            "exit_price": "589.1",
+            "pnl_points": "-0.9",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-05-29",
+            "early_close": false,
+            "close_ms": 1748548800000,
+            "close": "590",
+            "final_minute_volume": 1531497,
+            "close_minute_open": "590.01",
+            "close_minute_close": "589.73",
+            "close_minute_volume": 258618,
+            "after_decision_start_ms": 1748548860000,
+            "after_decision_open": "589.73",
+            "after_decision_volume": 39008,
+            "next_open_ms": 1748611800000,
+            "next_open": "588.93",
+            "after_hours_bars": 195,
+            "after_hours_high": "590.06"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1750272300000,
+            "exit_ms": 1750276800000,
+            "entry_price": "600.375",
+            "exit_price": "597.46",
+            "pnl_points": "-2.915",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-06-18",
+            "early_close": false,
+            "close_ms": 1750276800000,
+            "close": "597.46",
+            "final_minute_volume": 1457029,
+            "close_minute_open": "597.47",
+            "close_minute_close": "598.07",
+            "close_minute_volume": 252474,
+            "after_decision_start_ms": 1750276860000,
+            "after_decision_open": "598.03",
+            "after_decision_volume": 81513,
+            "next_open_ms": 1750426200000,
+            "next_open": "598.38",
+            "after_hours_bars": 193,
+            "after_hours_high": "598.23"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1751918400000,
+            "exit_ms": 1751985900000,
+            "entry_price": "620.78",
+            "exit_price": "621.07",
+            "pnl_points": "0.29",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-07-07",
+            "early_close": false,
+            "close_ms": 1751918400000,
+            "close": "620.78",
+            "final_minute_volume": 1859849,
+            "close_minute_open": "620.76",
+            "close_minute_close": "620.29",
+            "close_minute_volume": 306175,
+            "after_decision_start_ms": 1751918460000,
+            "after_decision_open": "620.29",
+            "after_decision_volume": 99975,
+            "next_open_ms": 1751981400000,
+            "next_open": "621.35",
+            "after_hours_bars": 204,
+            "after_hours_high": "620.7972"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1753732800000,
+            "exit_ms": 1753800300000,
+            "entry_price": "636.92",
+            "exit_price": "637.2",
+            "pnl_points": "0.28",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-07-28",
+            "early_close": false,
+            "close_ms": 1753732800000,
+            "close": "636.92",
+            "final_minute_volume": 1217860,
+            "close_minute_open": "636.91",
+            "close_minute_close": "637.1",
+            "close_minute_volume": 356804,
+            "after_decision_start_ms": 1753732860000,
+            "after_decision_open": "637.11",
+            "after_decision_volume": 72251,
+            "next_open_ms": 1753795800000,
+            "next_open": "638.35",
+            "after_hours_bars": 148,
+            "after_hours_high": "637.45"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1754596800000,
+            "exit_ms": 1754664300000,
+            "entry_price": "632.3",
+            "exit_price": "636.5",
+            "pnl_points": "4.2",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-08-07",
+            "early_close": false,
+            "close_ms": 1754596800000,
+            "close": "632.3",
+            "final_minute_volume": 2096296,
+            "close_minute_open": "632.29",
+            "close_minute_close": "632.74",
+            "close_minute_volume": 505500,
+            "after_decision_start_ms": 1754596860000,
+            "after_decision_open": "632.77",
+            "after_decision_volume": 144930,
+            "next_open_ms": 1754659800000,
+            "next_open": "634.06",
+            "after_hours_bars": 205,
+            "after_hours_high": "633.83"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1755542700000,
+            "exit_ms": 1755547200000,
+            "entry_price": "643.115",
+            "exit_price": "643.27",
+            "pnl_points": "0.155",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-08-18",
+            "early_close": false,
+            "close_ms": 1755547200000,
+            "close": "643.27",
+            "final_minute_volume": 986663,
+            "close_minute_open": "643.28",
+            "close_minute_close": "643.24",
+            "close_minute_volume": 254882,
+            "after_decision_start_ms": 1755547260000,
+            "after_decision_open": "643.23",
+            "after_decision_volume": 64940,
+            "next_open_ms": 1755610200000,
+            "next_open": "643.12",
+            "after_hours_bars": 175,
+            "after_hours_high": "644.16"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1756929600000,
+            "exit_ms": 1756997100000,
+            "entry_price": "643.64",
+            "exit_price": "645.35",
+            "pnl_points": "1.71",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-09-03",
+            "early_close": false,
+            "close_ms": 1756929600000,
+            "close": "643.64",
+            "final_minute_volume": 2323660,
+            "close_minute_open": "643.67",
+            "close_minute_close": "643.8504",
+            "close_minute_volume": 426614,
+            "after_decision_start_ms": 1756929660000,
+            "after_decision_open": "643.87",
+            "after_decision_volume": 316890,
+            "next_open_ms": 1756992600000,
+            "next_open": "644.42",
+            "after_hours_bars": 168,
+            "after_hours_high": "644.05"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1757361600000,
+            "exit_ms": 1757429100000,
+            "entry_price": "648.8",
+            "exit_price": "647.69",
+            "pnl_points": "-1.11",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-09-08",
+            "early_close": false,
+            "close_ms": 1757361600000,
+            "close": "648.8",
+            "final_minute_volume": 4012727,
+            "close_minute_open": "648.85",
+            "close_minute_close": "648.7701",
+            "close_minute_volume": 924242,
+            "after_decision_start_ms": 1757361660000,
+            "after_decision_open": "648.77",
+            "after_decision_volume": 226674,
+            "next_open_ms": 1757424600000,
+            "next_open": "648.97",
+            "after_hours_bars": 179,
+            "after_hours_high": "649.55"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1757966400000,
+            "exit_ms": 1758033900000,
+            "entry_price": "660.85",
+            "exit_price": "659.79",
+            "pnl_points": "-1.06",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-09-15",
+            "early_close": false,
+            "close_ms": 1757966400000,
+            "close": "660.85",
+            "final_minute_volume": 2365524,
+            "close_minute_open": "660.88",
+            "close_minute_close": "660.57",
+            "close_minute_volume": 441365,
+            "after_decision_start_ms": 1757966460000,
+            "after_decision_open": "660.57",
+            "after_decision_volume": 156040,
+            "next_open_ms": 1758029400000,
+            "next_open": "661.47",
+            "after_hours_bars": 167,
+            "after_hours_high": "660.74"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1759176000000,
+            "exit_ms": 1759243500000,
+            "entry_price": "663.61",
+            "exit_price": "662.37",
+            "pnl_points": "-1.24",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-09-29",
+            "early_close": false,
+            "close_ms": 1759176000000,
+            "close": "663.61",
+            "final_minute_volume": 1560626,
+            "close_minute_open": "663.63",
+            "close_minute_close": "663.72",
+            "close_minute_volume": 314761,
+            "after_decision_start_ms": 1759176060000,
+            "after_decision_open": "663.72",
+            "after_decision_volume": 67200,
+            "next_open_ms": 1759239000000,
+            "next_open": "662.93",
+            "after_hours_bars": 175,
+            "after_hours_high": "663.76"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1760553900000,
+            "exit_ms": 1760558400000,
+            "entry_price": "665.03",
+            "exit_price": "665.08",
+            "pnl_points": "0.05",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-10-15",
+            "early_close": false,
+            "close_ms": 1760558400000,
+            "close": "665.08",
+            "final_minute_volume": 5651470,
+            "close_minute_open": "665.08",
+            "close_minute_close": "665.53",
+            "close_minute_volume": 328209,
+            "after_decision_start_ms": 1760558460000,
+            "after_decision_open": "665.56",
+            "after_decision_volume": 849503,
+            "next_open_ms": 1760621400000,
+            "next_open": "666.82",
+            "after_hours_bars": 192,
+            "after_hours_high": "666.19"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1764882000000,
+            "exit_ms": 1764949500000,
+            "entry_price": "684.4",
+            "exit_price": "687.71",
+            "pnl_points": "3.31",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-12-04",
+            "early_close": false,
+            "close_ms": 1764882000000,
+            "close": "684.4",
+            "final_minute_volume": 1165622,
+            "close_minute_open": "684.42",
+            "close_minute_close": "684.35",
+            "close_minute_volume": 398953,
+            "after_decision_start_ms": 1764882060000,
+            "after_decision_open": "684.33",
+            "after_decision_volume": 330585,
+            "next_open_ms": 1764945000000,
+            "next_open": "685.47",
+            "after_hours_bars": 200,
+            "after_hours_high": "684.8103"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1765227600000,
+            "exit_ms": 1765295100000,
+            "entry_price": "683.63",
+            "exit_price": "684.47",
+            "pnl_points": "0.84",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-12-08",
+            "early_close": false,
+            "close_ms": 1765227600000,
+            "close": "683.63",
+            "final_minute_volume": 2790723,
+            "close_minute_open": "683.63",
+            "close_minute_close": "683.55",
+            "close_minute_volume": 503900,
+            "after_decision_start_ms": 1765227660000,
+            "after_decision_open": "683.57",
+            "after_decision_volume": 129210,
+            "next_open_ms": 1765290600000,
+            "next_open": "683.15",
+            "after_hours_bars": 228,
+            "after_hours_high": "684.86"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1765914300000,
+            "exit_ms": 1765918800000,
+            "entry_price": "677.935",
+            "exit_price": "678.86",
+            "pnl_points": "0.925",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-12-16",
+            "early_close": false,
+            "close_ms": 1765918800000,
+            "close": "678.86",
+            "final_minute_volume": 4260743,
+            "close_minute_open": "678.85",
+            "close_minute_close": "678.75",
+            "close_minute_volume": 766134,
+            "after_decision_start_ms": 1765918860000,
+            "after_decision_open": "678.74",
+            "after_decision_volume": 116022,
+            "next_open_ms": 1765981800000,
+            "next_open": "679.89",
+            "after_hours_bars": 216,
+            "after_hours_high": "679.1113"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1766178000000,
+            "exit_ms": 1766418300000,
+            "entry_price": "680.59",
+            "exit_price": "683.72",
+            "pnl_points": "3.13",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2025-12-19",
+            "early_close": false,
+            "close_ms": 1766178000000,
+            "close": "680.59",
+            "final_minute_volume": 3766254,
+            "close_minute_open": "680.59",
+            "close_minute_close": "680.46",
+            "close_minute_volume": 255277,
+            "after_decision_start_ms": 1766178060000,
+            "after_decision_open": "680.47",
+            "after_decision_volume": 400742,
+            "next_open_ms": 1766413800000,
+            "next_open": "683.94",
+            "after_hours_bars": 216,
+            "after_hours_high": "681.5"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1770234300000,
+            "exit_ms": 1770238800000,
+            "entry_price": "686.58",
+            "exit_price": "686.12",
+            "pnl_points": "-0.46",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-02-04",
+            "early_close": false,
+            "close_ms": 1770238800000,
+            "close": "686.12",
+            "final_minute_volume": 1543353,
+            "close_minute_open": "686.12",
+            "close_minute_close": "686.54",
+            "close_minute_volume": 133654,
+            "after_decision_start_ms": 1770238860000,
+            "after_decision_open": "686.69",
+            "after_decision_volume": 103904,
+            "next_open_ms": 1770301800000,
+            "next_open": "680.94",
+            "after_hours_bars": 229,
+            "after_hours_high": "689.74"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1771534800000,
+            "exit_ms": 1771602300000,
+            "entry_price": "684.52",
+            "exit_price": "688.05",
+            "pnl_points": "3.53",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-02-19",
+            "early_close": false,
+            "close_ms": 1771534800000,
+            "close": "684.52",
+            "final_minute_volume": 1095234,
+            "close_minute_open": "684.53",
+            "close_minute_close": "684.45",
+            "close_minute_volume": 150384,
+            "after_decision_start_ms": 1771534860000,
+            "after_decision_open": "684.43",
+            "after_decision_volume": 54157,
+            "next_open_ms": 1771597800000,
+            "next_open": "682.32",
+            "after_hours_bars": 230,
+            "after_hours_high": "685.49"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1774377900000,
+            "exit_ms": 1774382400000,
+            "entry_price": "655.32",
+            "exit_price": "653.2",
+            "pnl_points": "-2.12",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-03-24",
+            "early_close": false,
+            "close_ms": 1774382400000,
+            "close": "653.2",
+            "final_minute_volume": 1487237,
+            "close_minute_open": "653.26",
+            "close_minute_close": "653.37",
+            "close_minute_volume": 380476,
+            "after_decision_start_ms": 1774382460000,
+            "after_decision_open": "653.26",
+            "after_decision_volume": 64787,
+            "next_open_ms": 1774445400000,
+            "next_open": "658.67",
+            "after_hours_bars": 237,
+            "after_hours_high": "660.41"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1775155500000,
+            "exit_ms": 1775160000000,
+            "entry_price": "654.34",
+            "exit_price": "655.88",
+            "pnl_points": "1.54",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-04-02",
+            "early_close": false,
+            "close_ms": 1775160000000,
+            "close": "655.88",
+            "final_minute_volume": 2044977,
+            "close_minute_open": "655.89",
+            "close_minute_close": "655.78",
+            "close_minute_volume": 147210,
+            "after_decision_start_ms": 1775160060000,
+            "after_decision_open": "655.8",
+            "after_decision_volume": 76401,
+            "next_open_ms": 1775482200000,
+            "next_open": "655.86",
+            "after_hours_bars": 227,
+            "after_hours_high": "656.4"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1775678400000,
+            "exit_ms": 1775745900000,
+            "entry_price": "675.87",
+            "exit_price": "674.29",
+            "pnl_points": "-1.58",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-04-08",
+            "early_close": false,
+            "close_ms": 1775678400000,
+            "close": "675.87",
+            "final_minute_volume": 2675053,
+            "close_minute_open": "675.92",
+            "close_minute_close": "675.82",
+            "close_minute_volume": 225413,
+            "after_decision_start_ms": 1775678460000,
+            "after_decision_open": "675.82",
+            "after_decision_volume": 282784,
+            "next_open_ms": 1775741400000,
+            "next_open": "674.84",
+            "after_hours_bars": 227,
+            "after_hours_high": "676.2"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1776715200000,
+            "exit_ms": 1776782700000,
+            "entry_price": "708.69",
+            "exit_price": "709.885",
+            "pnl_points": "1.195",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-04-20",
+            "early_close": false,
+            "close_ms": 1776715200000,
+            "close": "708.69",
+            "final_minute_volume": 1486909,
+            "close_minute_open": "708.69",
+            "close_minute_close": "708.61",
+            "close_minute_volume": 110363,
+            "after_decision_start_ms": 1776715260000,
+            "after_decision_open": "708.62",
+            "after_decision_volume": 323948,
+            "next_open_ms": 1776778200000,
+            "next_open": "710.28",
+            "after_hours_bars": 220,
+            "after_hours_high": "710"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1778270400000,
+            "exit_ms": 1778510700000,
+            "entry_price": "737.53",
+            "exit_price": "738.94",
+            "pnl_points": "1.41",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-05-08",
+            "early_close": false,
+            "close_ms": 1778270400000,
+            "close": "737.53",
+            "final_minute_volume": 3133035,
+            "close_minute_open": "737.55",
+            "close_minute_close": "737.29",
+            "close_minute_volume": 484854,
+            "after_decision_start_ms": 1778270460000,
+            "after_decision_open": "737.37",
+            "after_decision_volume": 69670,
+            "next_open_ms": 1778506200000,
+            "next_open": "736.45",
+            "after_hours_bars": 196,
+            "after_hours_high": "737.9966"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1780430400000,
+            "exit_ms": 1780497900000,
+            "entry_price": "759.45",
+            "exit_price": "756.46",
+            "pnl_points": "-2.99",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-06-02",
+            "early_close": false,
+            "close_ms": 1780430400000,
+            "close": "759.45",
+            "final_minute_volume": 780400,
+            "close_minute_open": "759.47",
+            "close_minute_close": "759.55",
+            "close_minute_volume": 112605,
+            "after_decision_start_ms": 1780430460000,
+            "after_decision_open": "759.51",
+            "after_decision_volume": 20339,
+            "next_open_ms": 1780493400000,
+            "next_open": "758.15",
+            "after_hours_bars": 212,
+            "after_hours_high": "760.14"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1781294400000,
+            "exit_ms": 1781534700000,
+            "entry_price": "741.63",
+            "exit_price": "753.32",
+            "pnl_points": "11.69",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-06-12",
+            "early_close": false,
+            "close_ms": 1781294400000,
+            "close": "741.63",
+            "final_minute_volume": 1111018,
+            "close_minute_open": "741.66",
+            "close_minute_close": "741.6",
+            "close_minute_volume": 273448,
+            "after_decision_start_ms": 1781294460000,
+            "after_decision_open": "741.65",
+            "after_decision_volume": 74066,
+            "next_open_ms": 1781530200000,
+            "next_open": "751.85",
+            "after_hours_bars": 195,
+            "after_hours_high": "742.74"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1783022400000,
+            "exit_ms": 1783349100000,
+            "entry_price": "744.8",
+            "exit_price": "749.67",
+            "pnl_points": "4.87",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-07-02",
+            "early_close": false,
+            "close_ms": 1783022400000,
+            "close": "744.8",
+            "final_minute_volume": 2954337,
+            "close_minute_open": "744.8799",
+            "close_minute_close": "744.42",
+            "close_minute_volume": 366409,
+            "after_decision_start_ms": 1783022460000,
+            "after_decision_open": "744.48",
+            "after_decision_volume": 209526,
+            "next_open_ms": 1783344600000,
+            "next_open": "748.74",
+            "after_hours_bars": 207,
+            "after_hours_high": "745.85"
+          }
+        },
+        {
+          "kind": "EXIT",
+          "trade": {
+            "entry_ms": 1787683500000,
+            "exit_ms": 1787688000000,
+            "entry_price": "765.54",
+            "exit_price": "765.83",
+            "pnl_points": "0.29",
+            "final_bar_entry": false,
+            "final_bar_exit": true,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-08-25",
+            "early_close": false,
+            "close_ms": 1787688000000,
+            "close": "765.83",
+            "final_minute_volume": 909222,
+            "close_minute_open": "765.85",
+            "close_minute_close": "765.76",
+            "close_minute_volume": 114198,
+            "after_decision_start_ms": 1787688060000,
+            "after_decision_open": "765.76",
+            "after_decision_volume": 33825,
+            "next_open_ms": 1787751000000,
+            "next_open": "764.73",
+            "after_hours_bars": 183,
+            "after_hours_high": "766.28"
+          }
+        },
+        {
+          "kind": "ENTER",
+          "trade": {
+            "entry_ms": 1787860800000,
+            "exit_ms": 1787928300000,
+            "entry_price": "771.07",
+            "exit_price": "773.39",
+            "pnl_points": "2.32",
+            "final_bar_entry": true,
+            "final_bar_exit": false,
+            "synthetic_exit": false
+          },
+          "close_context": {
+            "session_date": "2026-08-27",
+            "early_close": false,
+            "close_ms": 1787860800000,
+            "close": "771.07",
+            "final_minute_volume": 1410209,
+            "close_minute_open": "771.03",
+            "close_minute_close": "771.08",
+            "close_minute_volume": 344912,
+            "after_decision_start_ms": 1787860860000,
+            "after_decision_open": "771.08",
+            "after_decision_volume": 62572,
+            "next_open_ms": 1787923800000,
+            "next_open": "771.76",
+            "after_hours_bars": 198,
+            "after_hours_high": "771.1"
+          }
+        }
+      ]
+    },
+    {
+      "label": "deployment_validation",
+      "strategy_key": "deployment_validation",
+      "params": {
+        "symbol": "SPY",
+        "trade_symbol": "SPY"
+      },
+      "evidence": "paper pt-dv-spy-0916, paper-dv-spy-0928; live Dry Run live-dry-dv-spy-0928",
+      "sessions": 590,
+      "early_close_sessions": 6,
+      "fills": 46778,
+      "trades": 23389,
+      "final_bar_enter": 0,
+      "final_bar_exit": 0,
+      "final_bar_trades": 0,
+      "final_bar_trade_share": 0.0,
+      "models": {
+        "close": {
+          "trades": 23389,
+          "points": "3381.8112"
+        }
+      },
+      "final_bar_decisions": []
+    }
+  ],
+  "session_wide": {
+    "sessions": 589,
+    "sessions_without_a_minute_after_the_decision": 0,
+    "after_decision_open_bps_vs_close": {
+      "n": 589,
+      "mean": 0.17222987350040533,
+      "median": -0.1711508181009105,
+      "stdev": 5.350984233598557,
+      "p05": -6.610009442870632,
+      "p95": 8.307584679064886,
+      "mean_abs": 3.7437746955615996,
+      "median_abs": 2.802459570399433,
+      "p95_abs": 10.585624039610723,
+      "max_abs": 33.87784772798969
+    },
+    "close_minute_close_bps_vs_close": {
+      "n": 589,
+      "mean": 0.15706499913831976,
+      "median": -0.3880681965177347,
+      "stdev": 5.201338986228669,
+      "p05": -6.831853098495326,
+      "p95": 8.349258771360187,
+      "mean_abs": 3.6448063493001457,
+      "median_abs": 2.721131990908218,
+      "p95_abs": 10.414888168004097,
+      "max_abs": 33.740690449738715
+    },
+    "close_minute_open_bps_vs_close_predates_the_order": {
+      "n": 589,
+      "mean": 0.1195400199616717,
+      "median": 0.0,
+      "stdev": 1.2572939803427992,
+      "p05": -0.7192692224699705,
+      "p95": 0.9472003464046981,
+      "mean_abs": 0.41844706660278386,
+      "median_abs": 0.29519859485468847,
+      "p95_abs": 1.0359473738734073,
+      "max_abs": 27.980084763197958
+    },
+    "next_open_bps_vs_close": {
+      "n": 589,
+      "mean": 5.274022559246452,
+      "median": 8.948603888103545,
+      "stdev": 64.06372646997717,
+      "p05": -99.39588727196977,
+      "p95": 91.80129850520912,
+      "mean_abs": 42.2828411866187,
+      "median_abs": 28.10214518859856,
+      "p95_abs": 119.84902136269893,
+      "max_abs": 400.39025854628693
+    },
+    "median_volume": {
+      "final_minute": 1758415,
+      "close_minute": 283453,
+      "first_minute_after_the_decision": 112136
+    },
+    "after_hours_sell_limit": {
+      "0": {
+        "sessions": 589,
+        "sell_limit_filled": 571,
+        "marketable_bps_vs_close": {
+          "n": 571,
+          "mean": 2.018693302826537,
+          "median": 0.0,
+          "stdev": 3.701789765082181,
+          "p05": 0.0,
+          "p95": 8.62417463953645,
+          "mean_abs": 2.0207579952076498,
+          "median_abs": 0.0,
+          "p95_abs": 8.62417463953645,
+          "max_abs": 33.87784772798969
+        }
+      },
+      "5": {
+        "sessions": 589,
+        "sell_limit_filled": 587,
+        "marketable_bps_vs_close": {
+          "n": 587,
+          "mean": 0.5121246400604081,
+          "median": -0.16546703069413418,
+          "stdev": 4.750650152567172,
+          "p05": -5.100330792882852,
+          "p95": 8.307584679064886,
+          "mean_abs": 3.417222363649167,
+          "median_abs": 2.7951550645547716,
+          "p95_abs": 8.307584679064886,
+          "max_abs": 33.87784772798969
+        }
+      },
+      "10": {
+        "sessions": 589,
+        "sell_limit_filled": 589,
+        "marketable_bps_vs_close": {
+          "n": 589,
+          "mean": 0.2672123472894102,
+          "median": -0.1711508181009105,
+          "stdev": 5.084154983952242,
+          "p05": -6.610009442870632,
+          "p95": 8.307584679064886,
+          "mean_abs": 3.6487922217725943,
+          "median_abs": 2.802459570399433,
+          "p95_abs": 10.015201645354557,
+          "max_abs": 33.87784772798969
+        }
+      },
+      "25": {
+        "sessions": 589,
+        "sell_limit_filled": 589,
+        "marketable_bps_vs_close": {
+          "n": 589,
+          "mean": 0.17222987350040533,
+          "median": -0.1711508181009105,
+          "stdev": 5.350984233598557,
+          "p05": -6.610009442870632,
+          "p95": 8.307584679064886,
+          "mean_abs": 3.7437746955615996,
+          "median_abs": 2.802459570399433,
+          "p95_abs": 10.585624039610723,
+          "max_abs": 33.87784772798969
+        }
+      },
+      "50": {
+        "sessions": 589,
+        "sell_limit_filled": 589,
+        "marketable_bps_vs_close": {
+          "n": 589,
+          "mean": 0.17222987350040533,
+          "median": -0.1711508181009105,
+          "stdev": 5.350984233598557,
+          "p05": -6.610009442870632,
+          "p95": 8.307584679064886,
+          "mean_abs": 3.7437746955615996,
+          "median_abs": 2.802459570399433,
+          "p95_abs": 10.585624039610723,
+          "max_abs": 33.87784772798969
+        }
+      }
+    }
+  },
+  "closing_prints": {
+    "summary": {
+      "AAPL": {
+        "rth_minutes_compared": 1560,
+        "rth_minute_close_equal": 955,
+        "rth_minute_close_diff_bps": {
+          "n": 1560,
+          "mean": 0.021589022501563655,
+          "median": 0.0,
+          "stdev": 0.1433906759164042,
+          "p05": -0.15416634548678024,
+          "p95": 0.15887390178415392,
+          "mean_abs": 0.05766206948411142,
+          "median_abs": 0.0,
+          "p95_abs": 0.15896482108509388,
+          "max_abs": 2.209735463097418
+        },
+        "bucket_closes_compared": 104,
+        "bucket_close_equal": 62,
+        "final_minutes_compared": 4,
+        "final_minute_close_equal": 2,
+        "final_minute_close_diff_bps": {
+          "n": 4,
+          "mean": 0.19358230579719893,
+          "median": 0.07947230390209012,
+          "stdev": 0.2520243920392701,
+          "p05": 0.0,
+          "p95": 0.6153846153846154,
+          "mean_abs": 0.19358230579719893,
+          "median_abs": 0.07947230390209012,
+          "p95_abs": 0.6153846153846154,
+          "max_abs": 0.6153846153846154
+        }
+      },
+      "SPY": {
+        "rth_minutes_compared": 4768,
+        "rth_minute_close_equal": 3635,
+        "rth_minute_close_diff_bps": {
+          "n": 4768,
+          "mean": 0.005964328492162554,
+          "median": 0.0,
+          "stdev": 0.04222877221451021,
+          "p05": -0.013072220094355285,
+          "p95": 0.0653342828582442,
+          "mean_abs": 0.013718402804946581,
+          "median_abs": 0.0,
+          "p95_abs": 0.06546687703356487,
+          "max_abs": 0.7870503974604507
+        },
+        "bucket_closes_compared": 317,
+        "bucket_close_equal": 241,
+        "final_minutes_compared": 12,
+        "final_minute_close_equal": 1,
+        "final_minute_close_diff_bps": {
+          "n": 12,
+          "mean": 0.16376462781015597,
+          "median": 0.19561071074129915,
+          "stdev": 0.4594905031015653,
+          "p05": -0.3890697342653715,
+          "p95": 0.7833511763323497,
+          "mean_abs": 0.4028010920921756,
+          "median_abs": 0.3885589261159997,
+          "p95_abs": 0.7833511763323497,
+          "max_abs": 0.7870503974604507
+        }
+      },
+      "TSLA": {
+        "rth_minutes_compared": 780,
+        "rth_minute_close_equal": 452,
+        "rth_minute_close_diff_bps": {
+          "n": 780,
+          "mean": 0.02520056134194708,
+          "median": 0.0,
+          "stdev": 0.2781611337008341,
+          "p05": -0.028838306499289135,
+          "p95": 0.14419402748338164,
+          "mean_abs": 0.06843367393616494,
+          "median_abs": 0.0,
+          "p95_abs": 0.1442980620770263,
+          "max_abs": 6.046819660802211
+        },
+        "bucket_closes_compared": 52,
+        "bucket_close_equal": 27,
+        "final_minutes_compared": 2,
+        "final_minute_close_equal": 1,
+        "final_minute_close_diff_bps": {
+          "n": 2,
+          "mean": 0.1433650648010093,
+          "median": 0.1433650648010093,
+          "stdev": 0.1433650648010093,
+          "p05": 0.0,
+          "p95": 0.2867301296020186,
+          "mean_abs": 0.1433650648010093,
+          "median_abs": 0.1433650648010093,
+          "p95_abs": 0.2867301296020186,
+          "max_abs": 0.2867301296020186
+        }
+      }
+    },
+    "rows": [
+      {
+        "symbol": "AAPL",
+        "session_date": "2026-08-27",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "314.575",
+        "ibkr_close": "314.58",
+        "close_diff": "0.005",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "314.58",
+        "close_minute_ibkr_open": "314.54"
+      },
+      {
+        "symbol": "AAPL",
+        "session_date": "2026-08-28",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "319.64",
+        "ibkr_close": "319.64",
+        "close_diff": "0.00",
+        "bucket_ohlc_equal": true,
+        "close_minute_lake_open": "319.7",
+        "close_minute_ibkr_open": "319.65"
+      },
+      {
+        "symbol": "AAPL",
+        "session_date": "2026-09-01",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "325.14",
+        "ibkr_close": "325.14",
+        "close_diff": "0.00",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "325.13",
+        "close_minute_ibkr_open": "325.19"
+      },
+      {
+        "symbol": "AAPL",
+        "session_date": "2026-09-02",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "325",
+        "ibkr_close": "325.02",
+        "close_diff": "0.02",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "324.96",
+        "close_minute_ibkr_open": "324.99"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-08-25",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "765.83",
+        "ibkr_close": "765.82",
+        "close_diff": "-0.01",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "765.85",
+        "close_minute_ibkr_open": "765.82"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-08-26",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "766.01",
+        "ibkr_close": "765.95",
+        "close_diff": "-0.06",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "766.01",
+        "close_minute_ibkr_open": "765.97"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-08-27",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "771.07",
+        "ibkr_close": "771.04",
+        "close_diff": "-0.03",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "771.03",
+        "close_minute_ibkr_open": "771.04"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-08-28",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "769.34",
+        "ibkr_close": "769.37",
+        "close_diff": "0.03",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "769.36",
+        "close_minute_ibkr_open": "769.37"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-08-31",
+        "ibkr_live": true,
+        "copies_agree": true,
+        "lake_close": "766.95",
+        "ibkr_close": "766.95",
+        "close_diff": "0.00",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "766.95",
+        "close_minute_ibkr_open": "766.95"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-01",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "761.66",
+        "ibkr_close": "761.65",
+        "close_diff": "-0.01",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "761.64",
+        "close_minute_ibkr_open": "761.65"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-02",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "765.14",
+        "ibkr_close": "765.16",
+        "close_diff": "0.02",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "765.18",
+        "close_minute_ibkr_open": "765.15"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-03",
+        "ibkr_live": true,
+        "copies_agree": true,
+        "lake_close": "773.1",
+        "ibkr_close": "773.13",
+        "close_diff": "0.03",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "773.17",
+        "close_minute_ibkr_open": "773.12"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-04",
+        "ibkr_live": true,
+        "copies_agree": true,
+        "lake_close": "770.23",
+        "ibkr_close": "770.24",
+        "close_diff": "0.01",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "770.23",
+        "close_minute_ibkr_open": "770.22"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-08",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "765.94",
+        "ibkr_close": "766.0",
+        "close_diff": "0.06",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "766",
+        "close_minute_ibkr_open": "766.0"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-09",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "762.34",
+        "ibkr_close": "762.4",
+        "close_diff": "0.06",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "762.4",
+        "close_minute_ibkr_open": "762.41"
+      },
+      {
+        "symbol": "SPY",
+        "session_date": "2026-09-10",
+        "ibkr_live": true,
+        "copies_agree": true,
+        "lake_close": "757.83",
+        "ibkr_close": "757.88",
+        "close_diff": "0.05",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "757.87",
+        "close_minute_ibkr_open": "757.83"
+      },
+      {
+        "symbol": "TSLA",
+        "session_date": "2026-08-27",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "354.59",
+        "ibkr_close": "354.59",
+        "close_diff": "0.00",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "354.81",
+        "close_minute_ibkr_open": "354.62"
+      },
+      {
+        "symbol": "TSLA",
+        "session_date": "2026-08-28",
+        "ibkr_live": false,
+        "copies_agree": true,
+        "lake_close": "348.76",
+        "ibkr_close": "348.77",
+        "close_diff": "0.01",
+        "bucket_ohlc_equal": false,
+        "close_minute_lake_open": "348.75",
+        "close_minute_ibkr_open": "348.76"
+      }
+    ]
+  },
+  "receipt_replay": [
+    {
+      "strategy_instance_id": "pt-ema-spy-0916",
+      "run_started_ms": 1789577021209,
+      "receipts": 1,
+      "reproduced": 0,
+      "same_decision": 1,
+      "first_mismatch_bar_close_ms": 1789577100000,
+      "final_bar_receipts": 0,
+      "final_bar_reproduced": 0
+    },
+    {
+      "strategy_instance_id": "pt-ema-q-0916",
+      "run_started_ms": 1789577507674,
+      "receipts": 2,
+      "reproduced": 0,
+      "same_decision": 2,
+      "first_mismatch_bar_close_ms": 1789578000000,
+      "final_bar_receipts": 0,
+      "final_bar_reproduced": 0
+    },
+    {
+      "strategy_instance_id": "pt-ema-q-0916",
+      "run_started_ms": 1789580903147,
+      "receipts": 10,
+      "reproduced": 0,
+      "same_decision": 7,
+      "first_mismatch_bar_close_ms": 1789402500000,
+      "final_bar_receipts": 1,
+      "final_bar_reproduced": 0
+    },
+    {
+      "strategy_instance_id": "pt-ema-spy-0918",
+      "run_started_ms": 1789744596974,
+      "receipts": 19,
+      "reproduced": 0,
+      "same_decision": 19,
+      "first_mismatch_bar_close_ms": 1789745400000,
+      "final_bar_receipts": 1,
+      "final_bar_reproduced": 0
+    },
+    {
+      "strategy_instance_id": "paper-ema-spy-0923",
+      "run_started_ms": 1790170241937,
+      "receipts": 27,
+      "reproduced": 0,
+      "same_decision": 27,
+      "first_mismatch_bar_close_ms": 1790107200000,
+      "final_bar_receipts": 2,
+      "final_bar_reproduced": 0
+    },
+    {
+      "strategy_instance_id": "paper-ema-spy-0924",
+      "run_started_ms": 1790256675149,
+      "receipts": 26,
+      "reproduced": 0,
+      "same_decision": 26,
+      "first_mismatch_bar_close_ms": 1790257500000,
+      "final_bar_receipts": 1,
+      "final_bar_reproduced": 0
+    }
+  ],
+  "grouping_parity": [
+    {
+      "ledger": "accounts_alpaca_paper_TSLA-test_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 2487,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 167,
+      "windowed_final_bar_traces": 6,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_TSLA-test_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 2487,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 2487,
+      "windowed_final_bar_traces": 6,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_Test-bot1_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 1949,
+      "first_session": "2026-08-25",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 129,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_Test-bot1_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 1949,
+      "first_session": "2026-08-25",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 1949,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_akjsdfh_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 3510,
+      "first_session": "2026-08-25",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 234,
+      "windowed_final_bar_traces": 9,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_akjsdfh_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 3510,
+      "first_session": "2026-08-25",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 3510,
+      "windowed_final_bar_traces": 9,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_asdasdasdasd_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "AAPL",
+      "rth_minutes": 2730,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 182,
+      "windowed_final_bar_traces": 7,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_asdasdasdasd_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "AAPL",
+      "rth_minutes": 2730,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 2730,
+      "windowed_final_bar_traces": 7,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_ema-cross-01_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 2150,
+      "first_session": "2026-08-26",
+      "last_session": "2026-09-03",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 144,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_ema-cross-01_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 2150,
+      "first_session": "2026-08-26",
+      "last_session": "2026-09-03",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 2150,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_ema-relaxed-01_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 1560,
+      "first_session": "2026-08-26",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 104,
+      "windowed_final_bar_traces": 4,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_ema-relaxed-01_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 1560,
+      "first_session": "2026-08-26",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 1560,
+      "windowed_final_bar_traces": 4,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_qqqbot123_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "QQQ",
+      "rth_minutes": 1950,
+      "first_session": "2026-08-31",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 130,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_qqqbot123_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "QQQ",
+      "rth_minutes": 1950,
+      "first_session": "2026-08-31",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 1950,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_sw0902-ema-spy_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 2164,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-03",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 145,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_sw0902-ema-spy_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 2164,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-03",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 2164,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_sw0902-ema-tsla_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "TSLA",
+      "rth_minutes": 2488,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 167,
+      "windowed_final_bar_traces": 6,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_sw0902-ema-tsla_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "TSLA",
+      "rth_minutes": 2488,
+      "first_session": "2026-08-27",
+      "last_session": "2026-09-04",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 2488,
+      "windowed_final_bar_traces": 6,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_testbot2_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "AAPL",
+      "rth_minutes": 390,
+      "first_session": "2026-08-31",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 26,
+      "windowed_final_bar_traces": 1,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_paper_testbot2_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "AAPL",
+      "rth_minutes": 390,
+      "first_session": "2026-08-31",
+      "last_session": "2026-08-31",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 390,
+      "windowed_final_bar_traces": 1,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_shadow-evidence_sh-ema-spy-0910_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 1950,
+      "first_session": "2026-09-03",
+      "last_session": "2026-09-10",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 130,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "accounts_alpaca_shadow-evidence_sh-ema-spy-0910_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 1950,
+      "first_session": "2026-09-03",
+      "last_session": "2026-09-10",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 1950,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "shadow-rehearsal_paper_accounts_alpaca_paper_pt-ema-spy-0910_source_bars.sqlite3",
+      "strategy_key": "ema_crossover_signal",
+      "symbol": "SPY",
+      "rth_minutes": 1950,
+      "first_session": "2026-09-03",
+      "last_session": "2026-09-10",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 130,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    },
+    {
+      "ledger": "shadow-rehearsal_paper_accounts_alpaca_paper_pt-ema-spy-0910_source_bars.sqlite3",
+      "strategy_key": "deployment_validation",
+      "symbol": "SPY",
+      "rth_minutes": 1950,
+      "first_session": "2026-09-03",
+      "last_session": "2026-09-10",
+      "production_check_compared": 0,
+      "production_check_divergence": "index 0 trace_presence: expected <reference sequence exhausted>, observed <unexpected extra observed trace>",
+      "windowed_compared": 1950,
+      "windowed_final_bar_traces": 5,
+      "windowed_divergence": null
+    }
+  ]
+}
