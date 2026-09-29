@@ -30,8 +30,6 @@ The Interactive Brokers bot list and bot control panel are deprecated:
 
 Work in the deprecated IBKR areas is allowed only when the task explicitly concerns removal, decommissioning, migration away from IBKR, or the user explicitly overrides this rule.
 
-The README's auto-generated Features inventory (the `AUTO-UPDATED:FEATURES` block managed by `auto-readme-tick`) still *documents* the IBKR paper-trading surfaces because that code physically exists. That inventory is descriptive, not an endorsement: this rule and the README's top-of-file deprecation banner govern what to build on. New bot-control work targets Alpaca Broker V2 (`/brokers/alpaca/...`) regardless of what the generated feature list enumerates.
-
 ## STOP: legacy IBKR broker navigation is deprecated
 
 The **Interactive Broker** sidebar group and its former application pages are
