@@ -1322,7 +1322,7 @@ def test_retired_registration_reaches_the_roster_phase_from_a_real_authority(
         repo.close()
 
 
-def _retire(repo: ClerkSqliteRepository, account_id: str, sid: str, at_ms: int) -> None:
+def _clear(repo: ClerkSqliteRepository, account_id: str, sid: str, at_ms: int) -> None:
     submit_retire_strategy_instance(
         repo,
         account_id=account_id,
@@ -1361,8 +1361,8 @@ def test_roster_membership_spares_only_the_inert_retired_registrations(
     try:
         for sid in ("inert-bot", "troubled-bot", "live-bot"):
             _register(repo, sid)
-        _retire(repo, account_id, "inert-bot", 1_710_000_000_000)
-        _retire(repo, account_id, "troubled-bot", 1_710_000_000_001)
+        _clear(repo, account_id, "inert-bot", 1_710_000_000_000)
+        _clear(repo, account_id, "troubled-bot", 1_710_000_000_001)
         repo.append_transition(
             TransitionInput(
                 strategy_instance_id="troubled-bot",

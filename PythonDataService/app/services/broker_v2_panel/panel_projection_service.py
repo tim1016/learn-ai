@@ -766,7 +766,6 @@ def build_panel(
     feed_continuity_run_id: str | None = None,
     warmup_join: RetainedWarmupJoin | None = None,
     startup_join: RetainedStartupJoin | None = None,
-    symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -855,7 +854,6 @@ def build_panel(
         working_order_count=len(working_orders),
         account_working_order_count=_account_working_order_count(entries),
         account_expected_exposure={},
-        symbol_unresolvable=symbol_unresolvable,
     )
 
     resolved_authority_account_id = authority_account_id or default_authority_account_id(

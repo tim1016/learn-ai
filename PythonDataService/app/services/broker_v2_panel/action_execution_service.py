@@ -13,7 +13,7 @@ backend capability that performs the action:
 
 The dispatch wires Stop, flatten-and-stop,
 reconciliation, clear-hold, and guarded inventory recovery. Unsupported
-closed-set actions such as Retire and Cancel order are not presented and raise
+closed-set actions such as Cancel order are not presented and raise
 ``ActionNotAvailableError`` if called directly.
 """
 
@@ -722,7 +722,7 @@ async def execute_action(
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise outcome_unknown_after_broker_io(err) from err
     except ExecutionLeaseLost:
-        # Retire/Archive dispatch through this executor rather than
+        # Archive dispatches through this executor rather than
         # sqlite_panel_source.execute_sqlite_panel_action (that module returns
         # None for the SQLITE_PANEL_LIFECYCLE_ACTION_IDS and defers here). That
         # module lets ExecutionLeaseLost/RepositoryPoisoned propagate unwrapped

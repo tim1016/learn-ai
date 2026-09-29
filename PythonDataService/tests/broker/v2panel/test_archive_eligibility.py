@@ -1,16 +1,15 @@
-"""Archive eligibility: the sanctioned exit for a bot you are finished with (ADR 0052).
+"""Archive eligibility: the one exit for a bot you are finished with (ADR 0052).
 
-``retire`` clears a registration that is *provably dead* (#1795) and refuses
-every healthy stopped bot with ``STRATEGY_STILL_RUNNABLE`` -- correctly, for
-what it covers. The consequence measured in #1911 is that a bot you are done
-with can be stopped but never removed, so catalog rows only accumulate, and
-#1801 measured both read and deploy cost as linear in exactly that number.
+#1911 measured that a bot you are done with could be stopped but never
+removed, so catalog rows only accumulated, and #1801 measured both read and
+deploy cost as linear in exactly that number. Archive -- Clear on Home's
+Finished fold -- is that exit, and since #2578 the only one: Retire and its
+provably-dead proofs are gone.
 
-Archive is the destructive lifecycle action #1795 deferred. Its enabling
-proof is custody rather than inadmissibility: the registration is stopped,
-flat, and holds no working orders. That difference is what these tests pin --
-above all that the proof must be *believable* before it is believed, which is
-why a frozen account refuses even though it reports no exposure.
+Its enabling proof is custody: the registration is stopped, settled, flat,
+and holds no working orders. These tests pin that proof -- above all that it
+must be *believable* before it is believed, which is why a frozen account
+refuses even though it reports no exposure.
 """
 
 from __future__ import annotations
@@ -52,7 +51,7 @@ def _archive(ctx: ActionGuardContext) -> tuple[bool, list]:
 
 
 def test_a_stopped_flat_bot_is_archive_eligible() -> None:
-    """The case #1795 deliberately excluded and #1911 asked for."""
+    """The case #1911 asked for."""
     enabled, blockers = _archive(_ctx())
 
     assert enabled is True
@@ -115,13 +114,12 @@ def test_archive_refuses_while_an_order_is_still_working() -> None:
 
 
 def test_archive_refuses_when_the_clerk_cannot_prove_flatness() -> None:
-    """The load-bearing difference from retire's guard ordering.
+    """The load-bearing guard ordering.
 
     Under an account freeze the Clerk cannot observe the broker, so
     ``has_exposure=False`` reports its ignorance rather than the bot's
     flatness. Archive's *enabling* proof is that reading, so it must refuse
-    rather than treat an unproven fact as an enabling one -- where retire's
-    custody check is only a backstop behind an independent proof.
+    rather than treat an unproven fact as an enabling one.
     """
     enabled, blockers = _archive(_ctx(freeze_active=True))
 
@@ -179,18 +177,19 @@ def test_a_disabled_archive_offers_no_confirmation() -> None:
     assert actions["archive"].confirmation is None
 
 
-def test_archive_and_retire_answer_independently() -> None:
-    """Neither rule is expressed in terms of the other (#1795 is untouched).
+def test_archive_is_the_only_lifecycle_exit_the_panel_presents() -> None:
+    """#2578: Clear is the one way off Home, so Retire is gone from the registry
+    and a stopped bot is presented Archive and no Retire."""
+    from app.broker.v2panel.action_policy import build_actions_from_registry
 
-    A healthy stopped bot is archive-eligible and retire-blocked; a bot whose
-    strategy is gone is retire-eligible and, being equally stopped and flat,
-    archive-eligible too. Archive never widens what retire admits.
-    """
-    healthy = _ctx()
-    assert _archive(healthy)[0] is True
-    retire_enabled, retire_blockers = ACTION_REGISTRY["retire"].guard(healthy)
-    assert retire_enabled is False
-    assert [b.condition.id for b in retire_blockers] == ["STRATEGY_STILL_RUNNABLE"]
+    presented = [
+        action.action_id
+        for action in build_actions_from_registry(_ctx(), revision=1, broker="alpaca")
+    ]
+
+    assert "retire" not in ACTION_REGISTRY
+    assert "archive" in presented
+    assert "retire" not in presented
 
 
 def test_the_shared_rule_is_what_the_guard_renders() -> None:
