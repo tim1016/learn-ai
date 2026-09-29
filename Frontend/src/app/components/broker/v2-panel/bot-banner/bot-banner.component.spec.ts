@@ -23,7 +23,6 @@ function fakeRun(overrides: Partial<BotRunView> = {}): BotRunView {
     configuration_hash: 'a'.repeat(64),
     launch_reason: 'deploy',
     started_at_ms: 1_753_800_000_000,
-    is_current: true,
     process: {
       strategy_instance_id: 'spy-momentum-01',
       run_id: 'run-current',
@@ -160,6 +159,45 @@ describe('BotBannerComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions for this bot' }));
     expect(screen.getByRole('link', { name: 'Manual order' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
+  });
+
+  it("renders a cleared bot's page read-only, with Deploy again and the way to History (#2574)", async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'cleared',
+    }));
+
+    expect(screen.getByRole('note').textContent).toContain('its records here are read-only');
+    expect(screen.getByRole('link', { name: 'Every cleared bot is in History' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/history?status=cleared');
+    expect(screen.getByRole('link', { name: 'Deploy again' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/pa9/deploy?from=spy-momentum-01');
+    expect(screen.queryByRole('button', { name: 'More actions for this bot' })).toBeNull();
+  });
+
+  it('reads cleared from the backend alone: a retired bot it calls finished is not read-only', async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'finished',
+    }));
+
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByRole('button', { name: 'More actions for this bot' })).toBeTruthy();
+  });
+
+  it("keeps the cure on a retired bot that still holds shares: the backend says it is holding, not cleared", async () => {
+    const panel = fakeBotPanelView();
+    await renderBanner(stopped({
+      health: { ...panel.health, running: false, desired_state: 'STOPPED', phase: 'RETIRED' },
+      status: 'holding',
+      actions: [fakePanelAction('execute_safe_flatten', { label: 'Flatten' })],
+      primary_action: 'execute_safe_flatten',
+    }));
+
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByRole('button', { name: /Flatten/ })).toBeTruthy();
   });
 
   it('offers a Dry Run bot no manual ticket on the account', async () => {

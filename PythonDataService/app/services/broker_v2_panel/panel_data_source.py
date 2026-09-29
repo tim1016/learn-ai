@@ -85,6 +85,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, custody_facade
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
+    custody_bot_status,
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
@@ -435,6 +436,7 @@ async def _get_panel_with_entries_from_authority(
         status,
         clerk,
         entries,
+        bot_status=custody_bot_status(facade.repository, sid, running=status.running),
         account_id=resolved,
         authority_account_id=authority_account_id,
         exposure=dict(economics.exposure),

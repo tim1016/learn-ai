@@ -768,6 +768,7 @@ export class OwnerWalkWorld {
         ? { state: 'working', label: 'Working', explanation: 'The runtime is on duty.', next_action: 'Monitor decisions.', evaluated_at_ms: NOW_MS }
         : { state: 'off_duty', label: 'Off duty', explanation: 'The bot is stopped.', next_action: null, evaluated_at_ms: NOW_MS },
       primary_action: running ? 'stop_bot_decisions' : null,
+      status: running ? 'running' : holding ? 'holding' : 'finished',
       exposure: running || holding ? { SPY: 1 } : {},
       fills_today: running || holding ? 1 : 2,
     });

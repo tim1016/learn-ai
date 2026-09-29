@@ -36,6 +36,12 @@
         [health]="panel().health"
         (retryRequested)="retryRequested.emit()"
       />
+      @if (cleared()) {
+        <p class="bot-banner__cleared" role="note">
+          Cleared: this bot will not run again, and its records here are read-only.
+          <a [routerLink]="history().commands" [queryParams]="history().queryParams">Every cleared bot is in History</a>.
+        </p>
+      }
     </div>
 
     <div class="bot-banner__actions">

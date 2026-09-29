@@ -133,15 +133,42 @@ def terminal_duty_outcome(
     (:func:`duty_outcome_view`, :func:`duty_outcome_view_from_receipt`), so
     the shape of the fact stays single-sourced either way.
     """
-    projected = duty_outcome_view(lifecycle)
     latest = repository.latest_run(strategy_instance_id)
-    if projected is not None and (not running or (latest is not None and projected.run_id == latest.lifecycle_run_id)):
+    return latest_run_duty_outcome(
+        strategy_instance_id,
+        lifecycle,
+        None if latest is None else latest.lifecycle_run_id,
+        running=running,
+    )
+
+
+def latest_run_duty_outcome(
+    strategy_instance_id: str,
+    lifecycle: BotLifecycleStateRecord | None,
+    latest_lifecycle_run_id: str | None,
+    *,
+    running: bool,
+) -> BotDutyOutcomeView | None:
+    """:func:`terminal_duty_outcome` for a caller that already read the newest run.
+
+    Bot history reads its runs on its own snapshot of a custody file (#2574),
+    so it names the newest run itself; the precedence stays this one.
+    """
+    projected = duty_outcome_view(lifecycle)
+    if projected is not None and (
+        not running or (latest_lifecycle_run_id is not None and projected.run_id == latest_lifecycle_run_id)
+    ):
         return projected
-    if latest is None:
+    if latest_lifecycle_run_id is None:
         return None
+    return run_receipt_outcome(strategy_instance_id, latest_lifecycle_run_id)
+
+
+def run_receipt_outcome(strategy_instance_id: str, lifecycle_run_id: str) -> BotDutyOutcomeView | None:
+    """One run's create-once terminal receipt, or ``None`` when it wrote none."""
     try:
         receipt = live_state_binding_repository(live_artifacts_root()).read_outcome(
-            strategy_instance_id, latest.lifecycle_run_id
+            strategy_instance_id, lifecycle_run_id
         )
     except (OSError, ValueError) as exc:
         raise SqliteCatalogProjectionUnavailable(
@@ -333,7 +360,9 @@ __all__ = [
     "build_roster_status",
     "build_terminal_roster_status",
     "declared_configuration",
+    "latest_run_duty_outcome",
     "lifecycle_record",
     "roster_membership",
+    "run_receipt_outcome",
     "terminal_duty_outcome",
 ]

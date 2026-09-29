@@ -395,6 +395,7 @@ def _panel(
         program_build=program_build or _default_program_build(status.strategy_key),
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
+        bot_status="running" if status.running else "finished",
         feed_continuity_events=feed_continuity_events,
         feed_continuity_run_id=status.active_run_id,
     )
@@ -1876,6 +1877,7 @@ def test_build_panel_requires_program_build_evidence() -> None:
             journal_tail_seq=None,
             now_ms=_NOW,
             market_pulse=_MARKET_PULSE,
+            bot_status="running",
         )
 
 

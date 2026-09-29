@@ -119,11 +119,9 @@ def _build_agent_app(
     async def current_run(account_id: str, sid: str) -> JSONResponse:
         return JSONResponse({"account_id": account_id, "sid": sid, "run_id": "current"})
 
-    @agent.get(
-        "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history"
-    )
-    async def run_history(account_id: str, sid: str) -> JSONResponse:
-        return JSONResponse({"account_id": account_id, "sid": sid, "runs": []})
+    @agent.get("/api/brokers/alpaca/accounts/{account_id}/bot-history")
+    async def bot_history(account_id: str) -> JSONResponse:
+        return JSONResponse({"account_id": account_id, "bots": [], "gaps": []})
 
     @agent.get("/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence")
     async def decision_evidence(account_id: str, sid: str, request: Request) -> JSONResponse:
@@ -441,7 +439,7 @@ async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_la
             "/clerk/status",
             "/clerk/custody-diagnosis",
             f"/accounts/{ACCOUNT}/bots/sid-9/runs/current",
-            f"/accounts/{ACCOUNT}/bots/sid-9/runs/history?limit=1",
+            f"/accounts/{ACCOUNT}/bot-history",
         ):
             response = await client.get(f"{fleet.base}{path}")
             assert response.status_code == 200, path

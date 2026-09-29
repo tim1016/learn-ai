@@ -97,30 +97,18 @@ describe('BrokerV2PanelService run evidence', () => {
       configuration_hash: 'a'.repeat(64),
       launch_reason: 'deploy',
       started_at_ms: 1_753_800_000_000,
-      is_current: true,
-      process: null,
+      process: {
+        strategy_instance_id: 'sid/001',
+        run_id: 'run-current',
+        process_identity: null,
+        state: 'UNKNOWN',
+        registry_generation: 'registry-1',
+        observed_at_ms: 1_753_800_000_000,
+      },
       terminal_outcome: null,
     });
 
     await expect(response).resolves.toMatchObject({ run_id: 'run-current' });
-  });
-
-  it('loads exactly one previous run using the opaque server cursor', async () => {
-    const response = service.getRunHistory(
-      resourceTarget('alpaca', CLERK, { accountId: 'account/1', entityId: 'sid-001' }),
-      'sid-001',
-      'run/newest',
-    );
-    const request = http.expectOne(
-      (candidate) =>
-        candidate.url === '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/bots/sid-001/runs/history' &&
-        candidate.params.get('limit') === '1' &&
-        candidate.params.get('cursor') === 'run/newest',
-    );
-    expect(request.request.method).toBe('GET');
-    request.flush({ runs: [], next_cursor: null });
-
-    await expect(response).resolves.toEqual({ runs: [], next_cursor: null });
   });
 
   it('keeps historical exact-execution recovery outside the generic panel-action endpoint', async () => {

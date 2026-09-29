@@ -15,6 +15,15 @@
   }
 }
 
+.home-finished__history {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  a { color: var(--accent-text); }
+}
+
 .home-finished__empty {
   margin: 0;
   padding: 0 var(--space-4) var(--space-3);
