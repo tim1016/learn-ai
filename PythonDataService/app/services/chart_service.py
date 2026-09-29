@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import urllib3.exceptions
 
@@ -36,15 +37,16 @@ from app.lean_sidecar.trading_calendar import (
 from app.services.chart_bar_source import compose_chart_bars, split_sessions_at_boundary
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
+    IndicatorWindow,
     assert_canonical_bar_stream,
     calculate_indicators_then_trim,
-    compute_warmup_start_date,
     estimate_max_lookback,
     fetch_bars_chunked,
+    indicator_params_label,
+    resolve_indicator_window,
     trim_to_window,
 )
 from app.services.polygon_client import PolygonClientService
-from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -256,9 +258,9 @@ def get_allowed_timeframes(from_date: str, to_date: str, session: str) -> tuple[
 # ──────────────────────────────────────────────
 #: ``(key, label, session_count)`` — a preset means "the last N scheduled
 #: NYSE sessions". The unit→sessions counts mirror
-#: ``dataset_plan_service._SESSIONS_PER_UNIT`` (the repo's only other
-#: period→sessions mapping); that module imports this one, so the table is
-#: restated here rather than shared through a cycle.
+#: ``dataset_service.SESSIONS_PER_BAR_UNIT`` (the repo's only other
+#: period→sessions mapping); presets add the half-year span a bar unit has
+#: no use for, so the table is its own.
 RANGE_PRESETS: tuple[tuple[str, str, int], ...] = (
     ("1D", "Past day", 1),
     ("5D", "Past week", 5),
@@ -322,20 +324,6 @@ def resolve_request_dates(
             f"resolved window is inverted: from {resolved_from} is after to {resolved_to}"
         )
     return resolved_from, resolved_to
-
-
-def resolve_window_start_ms(from_date: str) -> int:
-    """The instant a resolved window begins: ET midnight of its first date.
-
-    The companion of :func:`resolve_request_dates`: the chart and the dataset
-    export both trim their indicator warm-up lead-in at this one bound
-    (#2458), so a picked window shows the same first bar on both surfaces.
-    ET midnight, not UTC midnight — during EST the prior session's 19:00–20:00
-    ET post-market bars carry the picked date's UTC-morning timestamps
-    (#2524 review) — and never the server's local midnight. DST-safe through
-    the NY zone.
-    """
-    return et_midnight_ms(date.fromisoformat(from_date))
 
 
 def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
@@ -518,14 +506,41 @@ def _classify_gap(before_ts: int, after_ts: int) -> str:
     return "unexpected"
 
 
+def _session_tags(timestamps: pd.Series, schedule: pd.DataFrame) -> pd.Series:
+    """Tag each bar ``rth``, ``post`` or ``pre`` against the scheduled sessions.
+
+    A bar belongs to the latest session whose open is at or before it: inside
+    ``[open, close)`` it is regular hours, inside ``[close, 20:00 ET)`` of that
+    day post-market, and anything else — the hours before an open, a day with
+    no session — pre-market. One ``searchsorted`` over the schedule instead of
+    one full-frame pass per session: a warm-up lead-in for a daily or longer
+    chart spans years of sessions (#2458).
+    """
+    opens = np.array([ts.value // 1_000_000 for ts in schedule["market_open"]], dtype="int64")
+    closes = np.array([ts.value // 1_000_000 for ts in schedule["market_close"]], dtype="int64")
+    # Post-market runs until 20:00 ET of the close's own day
+    post_ends = np.array(
+        [
+            ts.tz_convert(_ET).replace(hour=20, minute=0, second=0).value // 1_000_000
+            for ts in schedule["market_close"]
+        ],
+        dtype="int64",
+    )
+    ts_ms = timestamps.to_numpy(dtype="int64")
+    session_idx = np.searchsorted(opens, ts_ms, side="right") - 1
+    has_session = session_idx >= 0
+    session_idx = np.clip(session_idx, 0, None)
+    rth = has_session & (ts_ms < closes[session_idx])
+    post = has_session & ~rth & (ts_ms < post_ends[session_idx])
+    return pd.Series(np.where(rth, "rth", np.where(post, "post", "pre")), index=timestamps.index)
+
+
 def _preprocess_minute_bars(
     bars: list[dict[str, Any]],
-    from_date: str,
+    window: IndicatorWindow,
     to_date: str,
     session: str,
     forward_fill: bool,
-    *,
-    warmup_from: str | None = None,
 ) -> tuple[pd.DataFrame, QualityReport]:
     """
     Preprocess raw 1-minute bars:
@@ -534,12 +549,12 @@ def _preprocess_minute_bars(
     3. Optionally forward-fill gaps
     4. Compute quality metrics
 
-    ``warmup_from`` is the indicator warm-up fetch start. The session mask,
-    the session tags and the forward-fill span the lead-in sessions from it
-    too, so they reach indicator computation the way the export's do (#2458)
-    — a mask built from the visible dates alone dropped them. The quality
-    report describes only the visible window, which begins at
-    :func:`resolve_window_start_ms` of ``from_date``.
+    ``window`` is the resolved indicator window. The session mask, the
+    session tags and the forward-fill span its whole warm-up lead-in from
+    ``window.fetch_from``, so the lead-in reaches indicator computation the
+    way the export's does (#2458) — a mask built from the visible dates alone
+    dropped it. The quality report describes only the visible window, the
+    bars stamped at or after ``window.window_start_ms``.
     """
     quality = QualityReport(raw_bar_count=len(bars))
 
@@ -549,61 +564,41 @@ def _preprocess_minute_bars(
 
     assert_canonical_bar_stream(bars, "chart")
 
-    # Detect flat bars and OHLC violations (count only, don't remove)
-    if not df.empty:
-        flat_mask = (
-            (df["volume"] == 0) & (df["open"] == df["high"]) & (df["high"] == df["low"]) & (df["low"] == df["close"])
-        )
-        quality.flat_bars_detected = int(flat_mask.sum())
-
-        ohlc_bad = (
-            (df["high"] < df["open"])
-            | (df["high"] < df["close"])
-            | (df["low"] > df["open"])
-            | (df["low"] > df["close"])
-        )
-        quality.ohlc_violations_detected = int(ohlc_bad.sum())
+    # Detect flat bars and OHLC violations in the visible window (count only,
+    # don't remove); the lead-in before it is never shown.
+    raw_visible = df[df["timestamp"] >= window.window_start_ms]
+    flat_mask = (
+        (raw_visible["volume"] == 0)
+        & (raw_visible["open"] == raw_visible["high"])
+        & (raw_visible["high"] == raw_visible["low"])
+        & (raw_visible["low"] == raw_visible["close"])
+    )
+    quality.flat_bars_detected = int(flat_mask.sum())
+    ohlc_bad = (
+        (raw_visible["high"] < raw_visible["open"])
+        | (raw_visible["high"] < raw_visible["close"])
+        | (raw_visible["low"] > raw_visible["open"])
+        | (raw_visible["low"] > raw_visible["close"])
+    )
+    quality.ohlc_violations_detected = int(ohlc_bad.sum())
 
     # Convert to datetime for session masking (UTC internally)
     df["_dt_utc"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df["_dt_et"] = df["_dt_utc"].dt.tz_convert(_ET)
 
-    # Session mask using NYSE calendar, across the warm-up lead-in too
-    schedule = _get_trading_schedule(warmup_from or from_date, to_date)
-
-    if session == "rth" and not schedule.empty:
-        masks = []
-        for _, row in schedule.iterrows():
-            open_t = row["market_open"]
-            close_t = row["market_close"]
-            masks.append((df["_dt_utc"] >= open_t) & (df["_dt_utc"] < close_t))
-        if masks:
-            combined = masks[0]
-            for m in masks[1:]:
-                combined = combined | m
-            before_session = len(df)
-            df = df[combined].reset_index(drop=True)
-            logger.info(f"[SESSION] RTH filter: {before_session} → {len(df)} bars")
-
-    # Tag session per bar (based on close timestamp)
+    # Session tags from the NYSE calendar, across the warm-up lead-in too
+    schedule = _get_trading_schedule(window.fetch_from, to_date)
     if not schedule.empty:
-        df["session"] = "pre"  # default
-        for _, row in schedule.iterrows():
-            open_t = row["market_open"]
-            close_t = row["market_close"]
-            # RTH
-            rth_mask = (df["_dt_utc"] >= open_t) & (df["_dt_utc"] < close_t)
-            df.loc[rth_mask, "session"] = "rth"
-            # Post-market: after close until 20:00 ET
-            close_et = close_t.tz_convert(_ET)
-            post_end = close_et.replace(hour=20, minute=0, second=0)
-            post_end_utc = post_end.tz_convert("UTC")
-            post_mask = (df["_dt_utc"] >= close_t) & (df["_dt_utc"] < post_end_utc)
-            df.loc[post_mask, "session"] = "post"
+        df["session"] = _session_tags(df["timestamp"], schedule)
+        if session == "rth":
+            before_session = len(df)
+            df = df[df["session"] == "rth"].reset_index(drop=True)
+            logger.info(f"[SESSION] RTH filter: {before_session} → {len(df)} bars")
 
     # The quality report measures the visible window; the lead-in before it
     # exists only to warm the indicators up and is never shown.
-    window_start_ms = resolve_window_start_ms(from_date)
+    from_date = window.from_date
+    window_start_ms = window.window_start_ms
     visible = df[df["timestamp"] >= window_start_ms].reset_index(drop=True)
 
     # Gap detection + classification
@@ -659,6 +654,10 @@ def _forward_fill_bars(df: pd.DataFrame, schedule: pd.DataFrame, session: str) -
 
     filled_frames = []
     df["_dt_et"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_ET)
+    # Split by ET date once: a warm-up lead-in spans years of sessions (#2458),
+    # and re-deriving every bar's date per session is quadratic in them.
+    day_frames = {day: frame for day, frame in df.groupby(df["_dt_et"].dt.date)}
+    no_bars = df.iloc[0:0]
 
     for _, row in schedule.iterrows():
         open_t = row["market_open"].tz_convert(_ET)
@@ -675,8 +674,7 @@ def _forward_fill_bars(df: pd.DataFrame, schedule: pd.DataFrame, session: str) -
         _epoch = pd.Timestamp("1970-01-01", tz="UTC")
         minute_ts = ((minute_range.tz_convert("UTC") - _epoch).total_seconds() * 1000).astype("int64")
 
-        day_mask = df["_dt_et"].dt.date == open_t.date()
-        day_df = df[day_mask].copy()
+        day_df = day_frames.get(open_t.date(), no_bars)
 
         template = pd.DataFrame({"timestamp": minute_ts})
         merged = template.merge(
@@ -831,8 +829,12 @@ def _resample_with_lead_in(df: pd.DataFrame, timeframe: str, session: str, windo
     indicators asked for a lead-in. The window resamples exactly as it would
     alone; the lead-in adds only its bars stamped before the window — its
     share of a period the window also holds is dropped, never shown twice.
-    Intraday and daily bins never cross ET midnight, so for them this is one
-    resample of the whole frame.
+    Intraday and daily bins never cross ET midnight, so for them the two
+    resamples produce exactly the bars one resample of the whole frame would.
+
+    Known limit: a weekly bin is labelled at the Sunday that ends it, so when
+    the window starts on a Sunday the week before it is labelled exactly at
+    the window start and is dropped here — the lead-in skips that one week.
     """
     in_window = df["timestamp"] >= window_start_ms
     window = _resample_bars(df[in_window], timeframe, session)
@@ -857,6 +859,70 @@ def _compute_indicators(
     Reuses dataset_service.calculate_indicators_then_trim, the export's path.
     """
     return calculate_indicators_then_trim(df.copy(), indicators, trim_from_ts=trim_from_ts)
+
+
+def _uncomputed_indicators(
+    indicators: list[dict[str, Any]],
+    column_meta: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The requested indicators that produced no column at all."""
+    computed = {(meta["indicator"], meta["params"]) for meta in column_meta}
+    return [
+        {"name": spec.get("name", ""), "params": spec.get("params", {})}
+        for spec in indicators
+        if (spec.get("name", ""), indicator_params_label(spec.get("params", {}))) not in computed
+    ]
+
+
+def _bar_count(count: int) -> str:
+    return f"{count:,} bar" if count == 1 else f"{count:,} bars"
+
+
+def _indicator_warmup_report(
+    window: IndicatorWindow,
+    *,
+    lead_in_bars: int,
+    visible_bars: int,
+    uncomputed: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """What the chart's indicators actually warmed up on, and the note saying so (#2458).
+
+    Owner decision 2026-09-29, "warm up per timeframe": the lead-in is sized
+    so every visible value is warmed up whenever the history exists. When it
+    does not — the provider's history floor, a listing date, a gap — the
+    first ``cold_bars`` visible values are computed on fewer than the
+    ``required_bars`` earlier bars the chart warms up on, and an indicator
+    that could not be computed at all is named. The chart says both in
+    ``note`` instead of showing a silent blank or dropping a series; ``note``
+    is ``None`` only when every visible value is warmed up.
+    """
+    cold_bars = min(visible_bars, max(0, window.warmup_bars - lead_in_bars))
+    notes: list[str] = []
+    if cold_bars:
+        span = (
+            f"all {_bar_count(visible_bars)}"
+            if cold_bars == visible_bars
+            else f"the first {cold_bars:,} of {_bar_count(visible_bars)}"
+        )
+        notes.append(
+            f"Indicator values on {span} are not fully warmed up: the chart warms its indicators up on "
+            f"{_bar_count(window.warmup_bars)} of earlier history, and only {_bar_count(lead_in_bars)} "
+            "are available before this range."
+        )
+    if uncomputed:
+        names = ", ".join(
+            f"{spec['name'].upper()} ({indicator_params_label(spec['params'])})" for spec in uncomputed
+        )
+        notes.append(
+            f"Not shown: {names} could not be computed from the {_bar_count(lead_in_bars + visible_bars)} available."
+        )
+    return {
+        "required_bars": window.warmup_bars,
+        "lead_in_bars": lead_in_bars,
+        "cold_bars": cold_bars,
+        "uncomputed": uncomputed,
+        "note": " ".join(notes) or None,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -884,8 +950,7 @@ def _format_indicator_results(
     for ind_spec in indicators_requested:
         name = ind_spec.get("name", "")
         params = ind_spec.get("params", {})
-        param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else "default"
-        group_key = f"{name}|{param_str}"
+        group_key = f"{name}|{indicator_params_label(params)}"
         cols = grouped.get(group_key, [])
 
         if not cols:
@@ -1258,14 +1323,17 @@ def get_chart_data(
             "recommended_timeframe": recommended,
         }
 
-    # The window begins at ET midnight of from_date — the bound the export
-    # trims to as well. Indicators warm up on a lead-in fetched before it and
-    # are trimmed to the window only after they are computed, as the export's
-    # are (#2458); trimming first restarted every indicator cold.
-    window_start_ms = resolve_window_start_ms(from_date)
-    fetch_from = from_date
-    if indicators:
-        fetch_from = compute_warmup_start_date(from_date, estimate_max_lookback(indicators))
+    # Indicators warm up on a lead-in sized for this timeframe's bars and are
+    # trimmed to the window only after they are computed, through the one
+    # resolver the export uses too (#2458); trimming first restarted every
+    # indicator cold.
+    window = resolve_indicator_window(
+        from_date,
+        max_lookback=estimate_max_lookback(indicators) if indicators else 0,
+        bar_minutes=TIMEFRAME_DEFS[timeframe]["minutes"],
+    )
+    fetch_from = window.fetch_from
+    window_start_ms = window.window_start_ms
 
     # ── Layer 1: Fetch + Preprocess + Resample (cached, lead-in included) ──
     resample_key = _resample_cache_key(
@@ -1321,9 +1389,7 @@ def get_chart_data(
             }
 
         # Preprocess
-        df_preprocessed, quality = _preprocess_minute_bars(
-            bars, from_date, to_date, session, forward_fill, warmup_from=fetch_from
-        )
+        df_preprocessed, quality = _preprocess_minute_bars(bars, window, to_date, session, forward_fill)
         # A lead-in alone is not a chart: no bar inside the window (an empty
         # frame included) is no data.
         if (df_preprocessed["timestamp"] < window_start_ms).all():
@@ -1353,6 +1419,7 @@ def get_chart_data(
 
     # ── Layer 2: Indicator computation (cached) ──
     indicator_results: list[dict[str, Any]] = []
+    indicator_warmup: dict[str, Any] | None = None
     cache_hit_indicators = False
 
     if indicators:
@@ -1360,14 +1427,21 @@ def get_chart_data(
         cached_ind = _indicator_cache.get(ind_key)
 
         if cached_ind is not None:
-            indicator_results = cached_ind
+            indicator_results, uncomputed = cached_ind
             cache_hit_indicators = True
             logger.info("[CHART] Cache HIT for indicators")
         else:
             logger.info("[CHART] Cache MISS for indicators, computing...")
             df_with_ind, col_meta = _compute_indicators(df_warm, indicators, trim_from_ts=window_start_ms)
             indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators, compute_all_indicators)
-            _indicator_cache.put(ind_key, indicator_results)
+            uncomputed = _uncomputed_indicators(indicators, col_meta)
+            _indicator_cache.put(ind_key, (indicator_results, uncomputed))
+        indicator_warmup = _indicator_warmup_report(
+            window,
+            lead_in_bars=len(df_warm) - len(df_resampled),
+            visible_bars=len(df_resampled),
+            uncomputed=uncomputed,
+        )
 
     # ── Build response (vectorized — iterrows was 10-50x slower, audit § 5.4) ──
     df_bars = pd.DataFrame(
@@ -1441,4 +1515,6 @@ def get_chart_data(
     # path, so a flag-off response is byte-identical to today's.
     if bar_sources is not None:
         response["bar_sources"] = bar_sources
+    if indicator_warmup is not None:
+        response["indicator_warmup"] = indicator_warmup
     return response

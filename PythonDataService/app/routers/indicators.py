@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 import pandas as pd
 import pandas_ta as ta
@@ -12,11 +11,12 @@ from fastapi import APIRouter, HTTPException, status
 from app.models.requests import CalculateIndicatorsRequest, IndicatorTableRequest
 from app.models.responses import CalculateIndicatorsResponse, IndicatorTableResponse
 from app.services.dataset_service import (
-    compute_warmup_start_date,
+    bar_minutes_for,
     estimate_max_lookback,
     indicator_table_params_to_entries,
     preprocess_and_calculate,
     rename_to_indicator_table_columns,
+    resolve_indicator_window,
 )
 from app.services.polygon_client import PolygonClientService
 from app.services.ta_service import TechnicalAnalysisService
@@ -79,12 +79,14 @@ async def generate_indicator_table(request: IndicatorTableRequest):
         max_lookback = max(max_lookback, request.adx_length * 2)
         max_lookback = max(max_lookback, request.rsi_length + request.rsi_ma_length)
 
-        warmup_start = compute_warmup_start_date(
+        # The lead-in and the window start come from the one resolver the
+        # chart and the dataset export share (#2458).
+        window = resolve_indicator_window(
             request.from_date,
-            max_lookback,
-            request.timespan,
-            request.multiplier,
+            max_lookback=max_lookback,
+            bar_minutes=bar_minutes_for(request.timespan, request.multiplier),
         )
+        warmup_start = window.fetch_from
 
         logger.info(
             f"[STEP 1] Fetching {request.timespan} bars for {request.symbol} "
@@ -107,16 +109,14 @@ async def generate_indicator_table(request: IndicatorTableRequest):
                 error="No bars returned from Polygon",
             )
 
-        # Trim timestamp for warm-up removal
-        from_ts = int(datetime.strptime(request.from_date, "%Y-%m-%d").timestamp() * 1000)
-
         logger.info(f"[STEP 2] Processing {len(bars)} bars through shared pipeline")
         df, column_meta = preprocess_and_calculate(
             bars=bars,
             indicator_entries=indicator_entries,
             session=request.session,
             forward_fill=request.forward_fill,
-            trim_from_ts=from_ts,
+            trim_from_ts=window.window_start_ms,
+            gap_check_from_ts=window.window_start_ms,
             timespan=request.timespan,
             multiplier=request.multiplier,
         )

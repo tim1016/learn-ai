@@ -587,7 +587,7 @@ re-arms the server-authored timeframe auto-correct, and numeric
   premarket open — premarket-only "today" is not yet a preset target.
 - **Preset chip semantics are trading-session counts, not calendar anchors
   (low).** "6M" is the last 126 scheduled sessions, matching the repo's
-  `_SESSIONS_PER_UNIT` family. A calendar-month-anchored variant would need
+  `SESSIONS_PER_BAR_UNIT` family. A calendar-month-anchored variant would need
   a product decision and a resolver change only — the client applies
   whatever dates Python resolves.
 

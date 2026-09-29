@@ -26,6 +26,7 @@ from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.chart_service import get_allowed_timeframes, resolve_request_dates
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
+    SESSIONS_PER_BAR_UNIT,
     calculate_dynamic_indicators,
     project_output_columns,
     select_output_columns,
@@ -41,14 +42,6 @@ _TIMESPAN_UNIT_SECONDS: dict[str, int] = {
     "second": 1,
     "minute": 60,
     "hour": 3_600,
-}
-# Approximate scheduled sessions per bar unit for day-and-above timespans.
-_SESSIONS_PER_UNIT: dict[str, int] = {
-    "day": 1,
-    "week": 5,
-    "month": 21,
-    "quarter": 63,
-    "year": 252,
 }
 # Polygon grouped-daily aggregates carry o/h/l/c/v/vw/n for EVERY
 # timespan — vwap/transactions columns are projected regardless of recipe.
@@ -143,10 +136,10 @@ def _estimate_bars(
                 "pre/post-market bars are NOT included and increase the real count"
             )
     else:
-        sessions_per_bar = _SESSIONS_PER_UNIT[request.timespan] * request.multiplier
+        sessions_per_bar = SESSIONS_PER_BAR_UNIT[request.timespan] * request.multiplier
         estimated = max(1, len(sessions) // sessions_per_bar) if sessions else 0
         assumptions.append(
-            f"day-and-above estimate assumes ~{_SESSIONS_PER_UNIT[request.timespan]} scheduled sessions "
+            f"day-and-above estimate assumes ~{SESSIONS_PER_BAR_UNIT[request.timespan]} scheduled sessions "
             f"per {request.timespan} bar; holiday clustering shifts the real count"
         )
 

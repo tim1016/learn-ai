@@ -8,8 +8,10 @@ import io
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from datetime import date as Date
+from functools import lru_cache
 from numbers import Integral
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,13 +19,16 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pandas_ta as ta
 
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.lean_sidecar.trading_calendar import (
+    SessionWindow,
     session_close_ms_utc,
     session_window_for_date,
     session_windows_ms_utc,
 )
 from app.services.indicator_warmup_policy import INDICATOR_WARMUP_MULTIPLIER
 from app.services.polygon_client import PolygonClientService
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 
@@ -658,18 +663,130 @@ def forward_fill_gaps(
     return result
 
 
-def compute_warmup_start_date(
-    from_date: str,
-    max_lookback: int,
-    timespan: str = "minute",
-    multiplier: int = 1,
-) -> str:
-    """Step back from from_date enough calendar days to warm up indicators."""
+#: A regular NYSE session's span in minutes — the unit a bar of a session or
+#: longer is measured in: a daily bar spans one session (390), a weekly bar
+#: five, a monthly bar 21. This is the chart's ``TIMEFRAME_DEFS`` convention;
+#: intraday bars are sized against each session's real scheduled span.
+REGULAR_SESSION_MINUTES = 390
+
+#: Approximate scheduled sessions per Polygon bar unit of a day or more.
+SESSIONS_PER_BAR_UNIT: dict[str, int] = {
+    "day": 1,
+    "week": 5,
+    "month": 21,
+    "quarter": 63,
+    "year": 252,
+}
+
+
+def bar_minutes_for(timespan: str, multiplier: int) -> int:
+    """The span of one ``multiplier`` × ``timespan`` Polygon bar, in the unit
+    :func:`resolve_indicator_window` sizes a warm-up in.
+
+    Intraday units are wall-clock minutes (a second bar rounds up to one);
+    a day-or-longer unit counts its sessions at :data:`REGULAR_SESSION_MINUTES`
+    each, so a ``1 × day`` export bar and the chart's ``1D`` bar are the same
+    length. Raises ``ValueError`` for a unit Polygon does not serve.
+    """
+    count = max(1, multiplier)
+    if timespan in SESSIONS_PER_BAR_UNIT:
+        return count * SESSIONS_PER_BAR_UNIT[timespan] * REGULAR_SESSION_MINUTES
+    if timespan in ("second", "minute", "hour"):
+        return count * _BAR_WINDOW_MINUTES_PER_UNIT[timespan]
+    raise ValueError(f"unknown bar timespan {timespan!r}")
+
+
+@dataclass(frozen=True)
+class IndicatorWindow:
+    """Where an indicator computation fetches from, and where its window begins.
+
+    Rows stamped before ``window_start_ms`` are the warm-up lead-in: the
+    indicators run over them, then :func:`trim_to_window` drops them.
+    """
+
+    #: The picked window's first date (``YYYY-MM-DD``).
+    from_date: str
+    #: The first date to fetch — the lead-in's first session, or ``from_date``
+    #: when nothing needs warming up.
+    fetch_from: str
+    #: ET midnight of ``from_date`` as int64 ms UTC.
+    window_start_ms: int
+    #: Bars of the computation's own length the longest indicator warms up on
+    #: before the first visible bar; 0 when there are no indicators.
+    warmup_bars: int
+
+
+@lru_cache(maxsize=32)
+def _sessions_between(first: Date, last: Date) -> tuple[SessionWindow, ...]:
+    return tuple(session_windows_ms_utc(first, last))
+
+
+def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: int) -> IndicatorWindow:
+    """The ONE decision of a picked window's warm-up start and its visible start (#2458).
+
+    The Data Lab chart, the dataset export, the indicator table, the
+    indicator-reliability study and the quality report's indicator step all
+    size their lead-in here, keyed on the length of the bars their indicators
+    actually run on — the chart passes its timeframe's
+    ``TIMEFRAME_DEFS`` minutes, a Polygon-bar caller passes
+    :func:`bar_minutes_for` of its timespan and multiplier — so two surfaces
+    computing the same indicator on the same bars start from the same bar and
+    agree exactly.
+
+    * ``window_start_ms`` is ET midnight of ``from_date`` — never UTC or the
+      server's local midnight: during EST the prior session's 19:00–20:00 ET
+      post-market bars carry the picked date's UTC-morning timestamps (#2524
+      review). DST-safe through the NY zone.
+    * ``fetch_from`` is the earliest session the lead-in needs for
+      ``warmup_bars = max_lookback × INDICATOR_WARMUP_MULTIPLIER`` bars before
+      the window. It is counted in scheduled NYSE sessions from the canonical
+      calendar, walking back from the day before ``from_date`` — weekends and
+      holidays hold no bars, so a Monday window reaches back past its weekend.
+      An intraday bar counts ``ceil(session span / bar length)`` bars per
+      session, an early close contributing its shorter span; a bar of a
+      session or longer spans ``ceil(bar_minutes / REGULAR_SESSION_MINUTES)``
+      sessions.
+    * The lead-in never reaches before the provider's history floor
+      (:func:`polygon_history_floor` as of today's ET date): history the
+      provider does not serve cannot warm anything up, and asking for it
+      fails the whole fetch. When the floor — or a listing date, or a gap —
+      leaves fewer lead-in bars than ``warmup_bars``, the caller sees it in the
+      bars it gets and must say so; this resolver never pretends.
+
+    Formula: fetch_from = the latest session s with
+      Σ_{sessions in [s, from_date)} ceil(span / bar) ≥ max_lookback × INDICATOR_WARMUP_MULTIPLIER
+      (intraday), or the (warmup_bars × ceil(bar / 390))-th session back (a
+      session or longer); never before the provider's history floor.
+    Reference: repository-internal warm-up policy (``indicator_warmup_policy``;
+      owner decision 2026-09-29, "warm up per timeframe"); sessions from the
+      canonical NYSE calendar.
+    Canonical implementation: this file.
+    Validated against: tests/services/test_data_lab_chart_indicator_warmup.py
+    """
+    first = Date.fromisoformat(from_date)
+    window_start_ms = et_midnight_ms(first)
+    if max_lookback <= 0:
+        return IndicatorWindow(from_date, from_date, window_start_ms, 0)
     warmup_bars = max_lookback * INDICATOR_WARMUP_MULTIPLIER
-    bars_per_day = {"minute": 390, "hour": 7, "day": 1}
-    bpd = bars_per_day.get(timespan, 390) * multiplier
-    warmup_days = max(1, (warmup_bars // bpd) + 2)
-    return (datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+    floor = polygon_history_floor(et_date_at_ms(now_ms_utc()))
+    if floor >= first:
+        return IndicatorWindow(from_date, from_date, window_start_ms, warmup_bars)
+
+    sessions = _sessions_between(floor, first - timedelta(days=1))
+    fetch_from = floor
+    if bar_minutes < REGULAR_SESSION_MINUTES:
+        bar_span_ms = bar_minutes * 60_000
+        remaining = warmup_bars
+        for session in reversed(sessions):
+            remaining -= -(-(session.close_ms_utc - session.open_ms_utc) // bar_span_ms)
+            if remaining <= 0:
+                fetch_from = session.session_date
+                break
+    else:
+        needed_sessions = warmup_bars * -(-bar_minutes // REGULAR_SESSION_MINUTES)
+        if needed_sessions <= len(sessions):
+            fetch_from = sessions[-needed_sessions].session_date
+    return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars)
 
 
 def estimate_max_lookback(indicator_entries: list[dict[str, Any]]) -> int:
@@ -855,13 +972,21 @@ def calculate_indicators_then_trim(
     window, so its first value inside the window is already warm; only then
     does :func:`trim_to_window` drop the lead-in. Trimming first restarts
     every indicator cold at the window's first bar — the chart did exactly
-    that, and disagreed with the export for the same window.
+    that, and disagreed with the export for the same window. Where the
+    lead-in starts is :func:`resolve_indicator_window`'s decision.
 
     Formula: indicator_i(bars[fetch_start:])[t >= trim_from_ts, t < trim_to_ts]
     Reference: pandas-ta (external) through :func:`calculate_dynamic_indicators`.
     Canonical implementation: this file.
     Validated against: tests/services/test_data_lab_chart_indicator_warmup.py
-      (chart vs export at atol=1e-9, rtol=0 on the 6-dp values both publish).
+      — chart vs export at atol=1e-9, rtol=0 on the full-precision frames
+      (and on the 6-dp values both publish) for 1m, 5m, 15m and 30m bars,
+      regular and extended hours, on a mid-week, a Monday and a
+      post-holiday/early-close window. Those are the timeframes whose bars
+      the two surfaces build from the same minutes; the chart's 1h/4h bins
+      start at the session open where Polygon's start on the hour, and its
+      1D/1W/1M bars are its own resample of regular-hours minutes where the
+      export ships Polygon's aggregates, so no parity is defined there.
 
     ``calculate_dynamic_indicators`` adds its columns to ``df`` in place; a
     caller that keeps its frame (the chart's cached bars) passes a copy.
@@ -919,6 +1044,13 @@ def rename_to_indicator_table_columns(
     return df
 
 
+def indicator_params_label(params: dict[str, Any]) -> str:
+    """The ``params`` label :func:`calculate_dynamic_indicators` stamps on each
+    column it adds (``"length=20"``; ``"default"`` when there are none) — the
+    key a caller matches a requested indicator to its computed columns by."""
+    return ", ".join(f"{k}={v}" for k, v in params.items()) if params else "default"
+
+
 def calculate_dynamic_indicators(
     df: pd.DataFrame,
     indicator_entries: list[dict[str, Any]],
@@ -969,7 +1101,7 @@ def calculate_dynamic_indicators(
                 logger.warning(f"Indicator {ind_name} returned None")
                 continue
 
-            param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else "default"
+            param_str = indicator_params_label(params)
 
             if isinstance(result, pd.DataFrame):
                 for col in result.columns:
