@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { DEPLOY_VIEW } from '../../src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
+import { fakeAccountMoney } from '../../src/app/testing/account-money-fixtures';
+import { fakeCatalogBot } from '../../src/app/testing/bot-panel-fixtures';
 
 const PAPER_CLERK = 'clrk-paper-0001';
 const PAPER_ACCOUNT = 'paper-account-0001';
@@ -7,6 +9,7 @@ const LIVE_CLERK = 'clrk-live-0001';
 const LIVE_ACCOUNT = 'live-account-0001';
 const PAPER_SCOPE = `/api/brokers/alpaca/clerks/${PAPER_CLERK}`;
 const PAPER_ACCOUNT_SCOPE = `${PAPER_SCOPE}/accounts/${PAPER_ACCOUNT}`;
+const PAPER_WORKSPACE = `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`;
 
 const directory = {
   observed_at_ms: 1_789_310_400_000,
@@ -38,6 +41,8 @@ const directory = {
         confirmed_binding_generation: 4,
         endpoint_mode: 'paper',
         authority_state: 'real_paper',
+        running_count: 1,
+        dry_run_count: 0,
       },
       observed_at_ms: 1_789_310_400_000,
     },
@@ -83,6 +88,25 @@ const paperAccount = {
   observed_at_ms: 1_789_310_400_000,
 };
 
+/** The Paper account's one money read (PRD #2560 D12) as the backend authors
+ * it: one running bot and one stopped bot still holding. */
+const paperMoney = fakeAccountMoney({ account_id: PAPER_ACCOUNT });
+
+/** The Paper account's bots as the backend groups them — the money read's own
+ * two bot slices, joined by `strategy_instance_id`. */
+const paperCatalog = [
+  fakeCatalogBot({ strategy_instance_id: 'spy-ema-20260929-0931', account_id: PAPER_ACCOUNT }),
+  fakeCatalogBot({
+    strategy_instance_id: 'spy-ema-20260925-1402',
+    account_id: PAPER_ACCOUNT,
+    group: 'holding',
+    running: false,
+    phase: 'OFF_DUTY',
+    desired_state: 'STOPPED',
+    status_explanation: 'Stopped · still holds 1 SPY · no bot is managing it',
+  }),
+];
+
 async function installFleetBoundary(page: Page, requests: string[]): Promise<void> {
   await page.route('**/*', async (route: Route) => {
     const request = route.request();
@@ -121,6 +145,14 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
       }
       if (url.pathname === `${PAPER_SCOPE}/account`) {
         await route.fulfill({ json: paperAccount });
+        return;
+      }
+      if (url.pathname === `${PAPER_ACCOUNT_SCOPE}/money`) {
+        await route.fulfill({ json: paperMoney });
+        return;
+      }
+      if (url.pathname === `${PAPER_ACCOUNT_SCOPE}/bots/catalog`) {
+        await route.fulfill({ json: paperCatalog });
         return;
       }
       if (url.pathname === `${PAPER_ACCOUNT_SCOPE}/bots/deploy`) {
@@ -166,6 +198,31 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
 const withoutVerdictPolls = (requests: string[]): string[] =>
   requests.filter((entry) => !entry.includes('/live-verdict'));
 
+/** Deploy is open and rendering its four steps (PRD #2560): What, How, Money
+ * and Confirm, with the header's "Deploy a bot" marked as the current page.
+ * What is drawn from this account's own Deploy read. */
+async function expectDeployOpen(page: Page): Promise<void> {
+  for (const step of ['What', 'How', 'Money', 'Confirm']) {
+    await expect(page.getByRole('heading', { name: step, exact: true, level: 2 })).toBeVisible();
+  }
+  await expect(page.getByRole('region', { name: 'What', exact: true }))
+    .toContainText('Deployment Validation on SPY');
+  await expect(page.getByRole('link', { name: 'Deploy a bot', exact: true }))
+    .toHaveAttribute('aria-current', 'page');
+}
+
+/** The account's Home, showing that account's own bots; the tabs are Home,
+ * Activity and Settings, with no separate Bots tab (PRD #2560). */
+async function expectHomeRoster(page: Page): Promise<void> {
+  const home = page.getByRole('main', { name: 'Home' });
+  await expect(home.getByRole('heading', { name: 'Bots', exact: true })).toBeVisible();
+  await expect(home).toContainText('spy-ema-20260929-0931');
+  await expect(home).toContainText('spy-ema-20260925-1402');
+  await expect(
+    page.getByRole('navigation', { name: 'Account sections' }).getByRole('link'),
+  ).toHaveText(['Home', 'Activity', 'Settings']);
+}
+
 test.describe('Alpaca multi-clerk frontend cutover', () => {
   test('keeps a failed lane visible while the healthy lane stays explicitly routable', async ({ page }) => {
     const brokerRequests: string[] = [];
@@ -174,13 +231,23 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await page.goto('/brokers/alpaca');
 
     await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
-    const paperLane = page.locator('li').filter({ hasText: 'Paper lane' });
-    const liveLane = page.locator('li').filter({ hasText: 'Live lane' });
-    await expect(paperLane).toContainText('$10,000.00');
+    const accounts = page.getByRole('list', { name: 'Alpaca accounts' });
+    const paperLane = accounts.getByRole('listitem').filter({ hasText: 'Paper lane' });
+    const liveLane = accounts.getByRole('listitem').filter({ hasText: 'Live lane' });
+    // The healthy lane's card carries its money from its own account-money
+    // read (PRD #2560 D10/D12) and its bots, worded in its mode.
+    await expect(paperLane).toContainText('PAPER · practice money');
+    await expect(paperLane).toContainText('Account money $100,000.00');
+    await expect(paperLane).toContainText('Free to deploy $98,329.57');
+    await expect(paperLane.getByRole('list', { name: 'Where Paper lane’s money is' }))
+      .toContainText('free to deploy $98,329.57');
+    await expect(paperLane).toContainText('1 running');
+    await expect(paperLane).toContainText('1 stopped, still holding');
     // The failed lane keeps its card, states the lifecycle the directory
     // already carries rather than a read its clerk cannot answer, and keeps
     // its own way in — its own account's workspace, never another lane's URL.
     await expect(liveLane).toContainText('This lane is Unreachable.');
+    await expect(liveLane).not.toContainText('Account money');
     await expect(liveLane.getByRole('link')).toHaveAttribute(
       'href',
       `/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}`,
@@ -188,17 +255,16 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
 
     // The whole card is the way into the account (#2187).
     const deskLink = paperLane.getByRole('link');
-    await expect(deskLink).toHaveAttribute(
-      'href',
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
-    );
+    await expect(deskLink).toHaveAttribute('href', PAPER_WORKSPACE);
     await deskLink.click();
 
-    await expect(page).toHaveURL(
-      new RegExp(`/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}$`),
+    await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}$`));
+    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Deploy a bot', exact: true })).toHaveAttribute(
+      'href',
+      `${PAPER_WORKSPACE}/deploy`,
     );
-    await expect(page.getByRole('link', { name: 'Deploy strategy' })).toBeVisible();
-    await expect.poll(() => brokerRequests.some((entry) => entry === `GET ${PAPER_SCOPE}/account`))
+    await expect.poll(() => brokerRequests.some((entry) => entry === `GET ${PAPER_ACCOUNT_SCOPE}/money`))
       .toBe(true);
 
     expect(withoutVerdictPolls(brokerRequests).filter(
@@ -214,15 +280,20 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect(
       page.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
     ).toBeVisible();
+    // No lane is picked for the owner (FR-096): the intent waits on the list,
+    // and no account's Deploy read has been made.
+    await expect(page).toHaveURL(/\/brokers\/alpaca\?deploy=$/);
+    expect(brokerRequests.filter((entry) => entry.includes('/bots/deploy'))).toEqual([]);
+
     // The list has no Deploy link of its own (#2187): choosing the account is
     // the step the intent was waiting for, and it travels with that choice,
-    // landing on the account's own Deploy tab (ADR 0064 Decision 1 extended).
-    await page.locator('li').filter({ hasText: 'Paper lane' }).getByRole('link').click();
+    // landing on the account's own Deploy — the page its header's "Deploy a
+    // bot" opens (PRD #2560).
+    await page.getByRole('list', { name: 'Alpaca accounts' })
+      .getByRole('listitem').filter({ hasText: 'Paper lane' }).getByRole('link').click();
 
-    await expect(page).toHaveURL(new RegExp(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/deploy$`,
-    ));
-    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}/deploy$`));
+    await expectDeployOpen(page);
   });
 
   test('turns a global Bots intent into an explicit account choice', async ({ page }) => {
@@ -235,44 +306,44 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect(page).toHaveURL('/brokers/alpaca');
     await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
 
-    await page.locator('li').filter({ hasText: 'Paper lane' }).getByRole('link').click();
-    await expect(page).toHaveURL(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
-    );
-    await page.getByRole('link', { name: 'Bots', exact: true }).click();
+    await page.getByRole('list', { name: 'Alpaca accounts' })
+      .getByRole('listitem').filter({ hasText: 'Paper lane' }).getByRole('link').click();
+    await expect(page).toHaveURL(PAPER_WORKSPACE);
+    // Bots merged into Home (PRD #2560): the chosen account's own roster is
+    // on its Home, and the workspace offers no separate Bots tab.
+    await expectHomeRoster(page);
 
-    await expect(page).toHaveURL(new RegExp(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/bots$`,
-    ));
+    // The account's retired Bots bookmark lands on that same Home.
+    await page.goto(`${PAPER_WORKSPACE}/bots`);
+    await expect(page).toHaveURL(PAPER_WORKSPACE);
+    await expectHomeRoster(page);
+    expect(withoutVerdictPolls(brokerRequests).filter(
+      (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
+    )).toEqual([]);
   });
 
-  test('keeps the Deploy tab on its own routed URL, surviving a reload', async ({ page }) => {
+  test('keeps Deploy on its own routed URL, surviving a reload', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
-    await page.goto(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
-    );
+    await page.goto(PAPER_WORKSPACE);
 
-    await page.getByRole('link', { name: 'Deploy strategy' }).click();
+    await page.getByRole('link', { name: 'Deploy a bot', exact: true }).click();
 
-    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
-    await expect(page).toHaveURL(
-      new RegExp(
-        `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/deploy$`,
-      ),
-    );
+    await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}/deploy$`));
+    await expectDeployOpen(page);
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}/deploy$`));
+    await expectDeployOpen(page);
     expect(withoutVerdictPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
 
     // Leaving Deploy is switching tabs, like any other — not closing an
     // overlay (ADR 0064 Decision 1 extended).
-    await page.getByRole('link', { name: 'Bots', exact: true }).click();
-    await expect(page).toHaveURL(
-      new RegExp(`/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/bots$`),
-    );
+    await page.getByRole('navigation', { name: 'Account sections' })
+      .getByRole('link', { name: 'Home', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}$`));
+    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
   });
 
   test('opens the live gallery stream with the exact clerk and account identity', async ({ page }) => {
@@ -283,11 +354,13 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await installFleetBoundary(page, brokerRequests);
 
-    await page.goto(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/gallery`,
-    );
+    // The Gallery is Home's Wall view now (PRD #2560); its old bookmark
+    // opens that view on the same account.
+    await page.goto(`${PAPER_WORKSPACE}/gallery`);
 
-    await expect(page.getByRole('main', { name: 'Bot gallery' })).toBeVisible();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}?view=wall`);
+    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('radio', { name: 'Wall' })).toBeChecked();
     await expect.poll(() => ({
       snapshot: allRequests.some(
         (entry) => entry.startsWith(`GET ${PAPER_ACCOUNT_SCOPE}/gallery/snapshot`),
