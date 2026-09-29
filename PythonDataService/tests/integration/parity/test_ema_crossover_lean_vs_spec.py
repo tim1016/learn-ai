@@ -22,8 +22,8 @@ To run locally:
     .venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
       --host 0.0.0.0 --port 8090
 
-  MSYS_NO_PATHCONV=1 podman exec polygon-data-service \
-    python -m pytest /app/tests/integration/parity -v -m slow
+  (cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" \
+    .venv/bin/python -m pytest tests/integration/parity -v -m slow)
 """
 
 from __future__ import annotations

@@ -331,8 +331,8 @@ for the divergence breakdown.
 ### How to run
 
 ```bash
-podman exec polygon-data-service python -m pytest /app/tests/research/parity -v
-podman exec polygon-data-service python -m pytest /app/tests/research/ml -v
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/research/parity -v)
+(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/research/ml -v)
 ```
 
 Project-scope lint must pass:
