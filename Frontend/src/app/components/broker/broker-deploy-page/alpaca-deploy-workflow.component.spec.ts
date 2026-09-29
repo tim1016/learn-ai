@@ -8,7 +8,7 @@ import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router, type ParamMap } from '@angular/router';
 import axe from 'axe-core';
 import { BehaviorSubject, of } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   BrokerV2PanelService,
@@ -316,6 +316,22 @@ function stepRegion(name: string): HTMLElement {
   return screen.getByRole('region', { name });
 }
 
+/** A window wide enough for the steps to stand side by side. The test setup's
+ * stub answers every media query `false`: a phone, where the steps stack. */
+function roomyViewport(): void {
+  const spy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+    matches: true,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  }));
+  onTestFinished(() => spy.mockRestore());
+}
+
 describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
   it('lays out What → How → Money → Confirm and folds complete steps to one line with Edit', async () => {
     await renderWorkflow();
@@ -335,6 +351,30 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(screen.queryByText(/Live admission/i)).toBeNull();
     expect(screen.queryByLabelText('Bot name')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Open account recovery' })).toBeNull();
+  });
+
+  it('stands the steps side by side where the page has room: every step open, none folding, each headed by its state', async () => {
+    roomyViewport();
+    await renderWorkflow(mockService({ ...DEPLOY_VIEW, default_exit_terms: null }));
+
+    for (const name of ['What', 'How']) {
+      expect(within(stepRegion(name)).queryByRole('button', { name: /^(Edit|Done with) step/ })).toBeNull();
+    }
+    expect(within(stepRegion('What')).getByRole('combobox', { name: 'Deployment strategy' })).toBeTruthy();
+    expect(within(stepRegion('How')).getByRole('spinbutton', { name: 'Exit allowance (bps)' })).toBeTruthy();
+    expect(within(stepRegion('What')).getByText('Ready')).toBeTruthy();
+    expect(within(stepRegion('How')).getByText('Needs exit terms')).toBeTruthy();
+    expect(within(stepRegion('Money')).queryByText('Reviewed')).toBeNull();
+
+    fireEvent.input(within(stepRegion('How')).getByRole('spinbutton', { name: 'Exit allowance (bps)' }), { target: { value: '20' } });
+    fireEvent.input(within(stepRegion('How')).getByRole('spinbutton', { name: 'Band multiple' }), { target: { value: '2' } });
+    fireEvent.input(within(stepRegion('How')).getByRole('spinbutton', { name: 'Spread cap (bps)' }), { target: { value: '50' } });
+    await chooseMoney();
+
+    expect(within(stepRegion('How')).getByText('Ready')).toBeTruthy();
+    expect(within(stepRegion('Money')).getByText('Reviewed')).toBeTruthy();
+    // Complete, and still open beside the others: nothing folds on a wide page.
+    expect(within(stepRegion('How')).getByRole('spinbutton', { name: 'Band multiple' })).toBeTruthy();
   });
 
   it('opens a folded step into focus on Edit and returns focus to Edit on Done', async () => {
@@ -455,7 +495,9 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(what).getByRole('button', { name: 'Allow on Paper' })).toBeTruthy();
     const done = within(what).getByRole<HTMLButtonElement>('button', { name: 'Done with step 1, What' });
     expect(done.disabled).toBe(true);
-    expect(within(what).getByText('Allow it on Paper first, or choose Dry Run in How.')).toBeTruthy();
+    // The chip beside the heading says what What still needs, and Done is described by it.
+    const chip = within(what).getByText('Needs permission');
+    expect(done.getAttribute('aria-describedby')).toBe(chip.id);
     expect(screen.getByText('Allow this strategy on Paper in What, or choose Dry Run in How.')).toBeTruthy();
 
     // Dry Run needs no permission, so What may fold once it is chosen.
@@ -464,13 +506,15 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(done.disabled).toBe(false);
   });
 
-  it('shows no “Can’t deploy yet” while every check passes, and keeps every check behind Details', async () => {
+  it('shows no “Can’t deploy yet” while every check passes, and opens every check in a popover', async () => {
     await renderWorkflow();
 
     expect(screen.queryByText(/Can’t deploy yet/)).toBeNull();
-    const details = screen.getByText('Details: every check and the last Start check').closest('details');
-    expect(details).not.toBeNull();
-    expect(within(details as HTMLElement).getByText('Strategy validation')).toBeTruthy();
+    const open = screen.getByRole('button', { name: 'Every check and the last Start check' });
+    const checks = document.getElementById(open.getAttribute('popovertarget') ?? '');
+    expect(checks?.hasAttribute('popover')).toBe(true);
+    expect(within(checks as HTMLElement).getByRole('heading', { name: 'Every check and the last Start check' })).toBeTruthy();
+    expect(within(checks as HTMLElement).getByText('Strategy validation')).toBeTruthy();
   });
 
   it('lists each failing check with its fix', async () => {

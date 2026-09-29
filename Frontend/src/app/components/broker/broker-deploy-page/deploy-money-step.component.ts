@@ -14,6 +14,7 @@ import {
   untracked,
 } from '@angular/core';
 import { FormField, form, maxLength, pattern, readonly as readOnly, required } from '@angular/forms/signals';
+import { TooltipModule } from 'primeng/tooltip';
 
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { extractServerMessage } from '../operation-error';
@@ -74,7 +75,7 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
 @Component({
   selector: 'app-deploy-money-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent, TooltipModule],
   templateUrl: './deploy-money-step.component.html',
   styleUrl: './deploy-money-step.component.scss',
 })
@@ -83,6 +84,9 @@ export class DeployMoneyStepComponent {
   /** The settings this budget is for; `null` until What and How are complete. */
   readonly body = input<DeployBotBody | null>(null);
   readonly disabled = input(false);
+  /** Where the steps stand as columns, each shortcut's explanation moves
+   * into its tooltip (on hover and on focus); stacked, it stays in view. */
+  readonly compact = input(false);
   /** The owner's typed dollar choice. The host keeps it in the session draft. */
   readonly amount = model('');
   /** The accepted review for the amount on screen, or `null`. */
@@ -114,6 +118,11 @@ export class DeployMoneyStepComponent {
     loader: ({ params }) => this.service.previewBudget(params.target, params.body),
   });
   protected readonly factsView = computed(() => (this.facts.hasValue() ? this.facts.value() : null));
+  /** The facts once the account's money has been read for these settings. */
+  protected readonly readyFacts = computed(() => {
+    const view = this.factsView();
+    return view?.state === 'ready' ? view : null;
+  });
   protected readonly factsFailure = computed(() => {
     const error = this.facts.error();
     return error === undefined
@@ -127,9 +136,9 @@ export class DeployMoneyStepComponent {
   protected readonly amountPreview = resource({
     params: () => {
       const body = this.body();
-      const facts = this.factsView();
+      const facts = this.readyFacts();
       const amount = this.settledAmount();
-      if (body === null || facts?.state !== 'ready' || !AMOUNT_PATTERN.test(amount)) return undefined;
+      if (body === null || facts === null || !AMOUNT_PATTERN.test(amount)) return undefined;
       return {
         target: this.target(),
         body: { ...body, budget: { amount_usd: amount, risk_revision: facts.risk_revision ?? 0 } },
@@ -150,7 +159,7 @@ export class DeployMoneyStepComponent {
     this.settledAmount() === this.amount() && this.amountPreview.hasValue() ? this.amountPreview.value() : null,
   );
   protected readonly amountPending = computed(() =>
-    AMOUNT_PATTERN.test(this.amount()) && this.factsView()?.state === 'ready' && this.amountView() === null,
+    AMOUNT_PATTERN.test(this.amount()) && this.readyFacts() !== null && this.amountView() === null,
   );
 
   /** The bar the backend drew: with this amount's NEW slice once its preview

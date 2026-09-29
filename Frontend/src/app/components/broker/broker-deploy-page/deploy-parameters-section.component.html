@@ -3,24 +3,26 @@
   @if (qualifiedConfiguration(); as qualified) {
     <aside class="qualified-configuration" aria-label="Qualified configuration">
       <h3>Qualified configuration · <app-asset-identity [symbol]="qualified.symbol" size="xs" /></h3>
-      <p>{{ qualified.explanation }}</p>
+      <p class="qualified-configuration__explanation">{{ qualified.explanation }}</p>
       <dl>
         @for (parameter of qualifiedParameters(); track parameter[0]) {
           <div><dt>{{ paramsSchema().properties?.[parameter[0]]?.title ?? parameter[0] }}</dt><dd>{{ parameter[1] }}</dd></div>
         }
       </dl>
-      <button type="button" [disabled]="!qualifiedRow()" (click)="useQualifiedConfiguration()">Use qualified configuration</button>
-      <button type="button" (click)="requestDryRun()">Try other settings in Dry Run</button>
+      <div class="qualified-configuration__actions">
+        <button type="button" class="soft" [disabled]="!qualifiedRow()" (click)="useQualifiedConfiguration()">Use qualified configuration</button>
+        <button type="button" class="link" (click)="requestDryRun()">Try other settings in Dry Run</button>
+      </div>
       <details [open]="coverageDetailsOpen()">
         <summary>Qualified instrument coverage</summary>
-        <app-instrument-card #qualifiedPicker appearance="flat" label="Qualified instrument coverage"
+        <app-instrument-card #qualifiedPicker appearance="field" label="Qualified instrument coverage"
           [value]="qualifiedPickerValue" (valueChange)="qualifiedSymbolSelected($event.symbol)" />
       </details>
     </aside>
   }
 
   @if (entries().length === 0) {
-    <p class="m-0 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">This strategy has no configurable parameters.</p>
+    <p class="parameters-card__note">This strategy has no configurable parameters.</p>
   } @else if (!editable()) {
     <!-- A broker world trades only the qualified settings; other values are
          tried in Dry Run, where the editor opens. -->
@@ -30,14 +32,14 @@
       }
     </dl>
     @if (!qualifiedConfiguration()) {
-      <button type="button" (click)="requestDryRun()">Try other settings in Dry Run</button>
+      <button type="button" class="link" (click)="requestDryRun()">Try other settings in Dry Run</button>
     }
   } @else {
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3">
+    <div class="parameters-card__fields">
       @for (entry of entries(); track entry.field) {
-        <label class="grid min-w-0 content-start gap-2">
-          <span class="flex items-center gap-2">
-            <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">{{ entry.property.title ?? entry.field }}</span>
+        <label class="parameter">
+          <span class="parameter__label">
+            <span>{{ entry.property.title ?? entry.field }}</span>
             @if (entry.property.description; as description) {
               <button
                 type="button"
@@ -52,7 +54,6 @@
             }
           </span>
           <input
-            pInputText
             type="text"
             [inputMode]="entry.isNumeric ? 'decimal' : 'text'"
             [value]="entry.currentValue"
@@ -60,8 +61,6 @@
             [attr.max]="entry.property.maximum ?? null"
             [attr.aria-label]="entry.property.title ?? entry.field"
             [attr.aria-invalid]="entry.invalid ? 'true' : null"
-            [class.invalid]="entry.invalid"
-            class="w-full"
             (change)="changeParameter(entry, $event.target)"
           />
           @if (entry.invalid) {

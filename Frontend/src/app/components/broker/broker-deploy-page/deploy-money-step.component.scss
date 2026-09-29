@@ -1,47 +1,128 @@
-:host { display: block; min-width: 0; }
+@use '../../../styles/filled-controls' as *;
+@use '../../../styles/visually-hidden' as *;
+
+:host { display: block; flex: 1; min-width: 0; }
 
 .money-step {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 
   p, dl { margin: 0; }
 }
 
+// Three facts on one row, each on the sunken ground the money bar sits on.
 .money-step__facts {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: var(--space-2);
 
-  div { display: flex; justify-content: space-between; gap: var(--space-3); }
-  dt { color: var(--text-secondary); }
-  dd { margin: 0; font-variant-numeric: tabular-nums; }
-}
+  div {
+    display: grid;
+    align-content: start;
+    gap: 0.15rem;
+    min-width: 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+  }
 
-.money-step__observed,
-.money-step__note {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-.money-step__shortcuts {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: var(--space-2);
-
-  small { color: var(--text-secondary); }
+  dt { color: var(--text-subtle); font-size: var(--fs-xxs); line-height: 1.3; }
+  dd { font-family: var(--font-mono); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 }
 
 .money-step__amount {
   display: grid;
   gap: var(--space-1);
 
-  input { width: min(100%, 20rem); font-variant-numeric: tabular-nums; }
+  label { @include field-label; }
 }
 
-.money-step__refusal { color: var(--bear); }
+// The dollar sign sits inside the fill, before the typed amount.
+.money-step__dollars {
+  position: relative;
+  display: block;
 
-.money-step__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  > span {
+    position: absolute;
+    top: 50%;
+    left: 0.8rem;
+    color: var(--text-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
 
-@media (max-width: 600px) {
-  .money-step__shortcuts { grid-template-columns: 1fr; }
+  input {
+    @include filled-field;
+    min-height: 2.75rem;
+    padding-left: 1.75rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+  }
 }
+
+.money-step__outcome {
+  min-height: 2.6em;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+
+  strong { color: var(--text-primary); font-family: var(--font-mono); }
+}
+
+.money-step__shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+
+  // Stacked, each explanation sits under its own shortcut.
+  small {
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+  }
+
+  .money-step__shortcut {
+    display: grid;
+    align-content: start;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  button {
+    @include soft-button;
+    display: grid;
+    gap: 0.1rem;
+    justify-items: start;
+    min-width: 0;
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+  }
+
+  span { color: var(--text-secondary); font-size: var(--fs-xs); font-weight: var(--fw-regular); }
+  strong { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+}
+
+.money-step__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.money-step__refusal { color: var(--bear); font-size: var(--fs-sm); }
+
+.money-step__observed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+
+  button { @include link-button; }
+}
+
+.sr-only { @include visually-hidden; }

@@ -86,10 +86,11 @@ import {
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
-import { DeployStepComponent } from './deploy-step.component';
+import { DeployStepComponent, type DeployStepStatus } from './deploy-step.component';
 import { DEPLOY_WORLDS } from './deploy-world';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
+import { mediaQuerySignal } from '../../../shared/media-query';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 
@@ -100,6 +101,16 @@ const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
  * ignored: the backend would refuse every read and Deploy under it (422). */
 export const SUBMISSION_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
+
+/** Where the steps stand side by side, every one open. Narrower, they stack
+ * and finished steps fold. The stylesheet keys its columns off the class
+ * this query sets, so the breakpoint is stated only here. */
+const DEPLOY_COLUMNS_QUERY = '(min-width: 48rem)';
+
+/** A step's header state: what it still needs, or Ready. */
+function stepStatus(missing: string | null): DeployStepStatus {
+  return missing === null ? { label: 'Ready', tone: 'ready' } : { label: missing, tone: 'todo' };
+}
 
 /** The recovery hint a Deploy writes before it is sent, so a reload can read
  * what that submission recorded instead of starting a second bot. */
@@ -229,11 +240,12 @@ type DeploySubmission = DeploySubmissionBody & { budget: DeploymentBudgetInput }
 
 /**
  * Deploy (PRD #2560 D8/D9): four steps on one page — What → How → Money →
- * Confirm.
+ * Confirm — side by side as columns wherever the page has room, so the whole
+ * flow fits one screen, each column headed by its state.
  *
- * What and How fold to one line once complete, and stay open (with Done)
- * once the owner is working in them, so a step never folds away under the
- * keyboard. Money renders only the backend's previewed `money_after`, and
+ * Where the steps stack (a phone), What and How fold to one line once
+ * complete, and stay open (with Done) once the owner is working in them, so a
+ * step never folds away under the keyboard. Money renders only the backend's previewed `money_after`, and
  * consent binds to the preview's review token and Live phrase. The backend
  * names the bot (#2551): each Deploy carries an opaque submission key, kept
  * from the moment it is sent until its receipt or a backend answer that
@@ -611,33 +623,44 @@ export class AlpacaDeployWorkflowComponent {
     this.selectedStrategy()?.paper_access_state === 'available' && this.ticket().executionMode !== 'dry_run',
   );
 
-  /** What: a strategy, a valid symbol, parseable settings, and the
-   * permission its world needs. */
-  protected readonly whatComplete = computed(() =>
-    this.selectedStrategy() !== null
-      && !this.ticketForm.symbol().invalid()
-      && this.invalidParameterFields().size === 0
-      && !this.permissionPending(),
-  );
-
-  protected readonly whatFoldHint = computed(() => this.permissionPending()
-    ? `Allow it on ${this.brokerModeLabel()} first, or choose Dry Run in How.`
-    : 'Choose a strategy and a valid symbol first.');
-
-  /** How: an offered world this strategy admits, a size and exit terms. */
-  protected readonly howComplete = computed(() => {
-    const mode = this.ticket().executionMode;
-    const strategy = this.selectedStrategy();
-    return mode !== null
-      && strategy !== null
-      && strategy.admissible_modes.includes(mode)
-      && this.selectedExecutionMode()?.availability === 'available'
-      && !(this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid())
-      && this.exitTerms() !== null;
+  /** What still needs, in the owner's words, or `null` once it has a
+   * strategy, a valid symbol, parseable settings and the permission its
+   * world needs. */
+  private readonly whatMissing = computed<string | null>(() => {
+    if (this.selectedStrategy() === null) return 'Choose a strategy';
+    if (this.ticketForm.symbol().invalid()) return 'Needs a valid symbol';
+    if (this.invalidParameterFields().size > 0) return 'Check its settings';
+    if (this.permissionPending()) return 'Needs permission';
+    return null;
   });
+  protected readonly whatComplete = computed(() => this.whatMissing() === null);
 
+  /** What How still needs, or `null` once it has an offered world this
+   * strategy admits, a size and exit terms. */
+  private readonly howMissing = computed<string | null>(() => {
+    const ticket = this.ticket();
+    const mode = ticket.executionMode;
+    if (mode === null) return 'Choose where it trades';
+    const strategy = this.selectedStrategy();
+    if (strategy === null) return 'Choose a strategy first';
+    if (!strategy.admissible_modes.includes(mode) || this.selectedExecutionMode()?.availability !== 'available') {
+      return 'Can’t trade there';
+    }
+    if (ticket.sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) return 'Needs a valid size';
+    if (this.exitTerms() === null) return 'Needs exit terms';
+    return null;
+  });
+  protected readonly howComplete = computed(() => this.howMissing() === null);
+
+  protected readonly columnsLayout = mediaQuerySignal(DEPLOY_COLUMNS_QUERY);
   protected readonly whatOpen = computed(() => this.editing().what || !this.whatComplete());
   protected readonly howOpen = computed(() => this.editing().how || !this.howComplete());
+
+  protected readonly whatStatus = computed(() => stepStatus(this.whatMissing()));
+  protected readonly howStatus = computed(() => stepStatus(this.howMissing()));
+
+  protected readonly moneyStatus = computed<DeployStepStatus | null>(() =>
+    this.currentMoneyReview() === null ? null : { label: 'Reviewed', tone: 'ready' });
 
   protected readonly permissionSummary = computed(() => {
     const state = this.selectedStrategy()?.paper_access_state;

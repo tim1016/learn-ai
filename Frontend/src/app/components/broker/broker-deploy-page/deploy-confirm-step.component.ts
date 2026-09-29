@@ -43,7 +43,8 @@ export interface DeployBlocker {
  * author it, what it trades, the account and its world, the exits, the
  * budget and the account loss limit — then "Can't deploy yet" only when a
  * check fails, Live's typed consent, and a button naming the world and the
- * amount. Every check and the last Start decision sit behind Details.
+ * amount. Every check and the last Start decision open in a popover, so the
+ * step never grows past its column.
  */
 @Component({
   selector: 'app-deploy-confirm-step',
@@ -72,7 +73,7 @@ export class DeployConfirmStepComponent {
   readonly budgetUsd = input<string | null>(null);
   readonly lossLimit = input<string | null>(null);
   readonly blockers = input<readonly DeployBlocker[]>([]);
-  /** Every broker check, for the Details fold; `null` in Dry Run. */
+  /** Every broker check, for the checks popover; `null` in Dry Run. */
   readonly checks = input<readonly DeployReadinessCheck[] | null>(null);
   readonly checksObservedAtMs = input<number | null>(null);
   readonly admissionDecision = input<RunAdmissionDecision | null>(null);

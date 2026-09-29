@@ -1,31 +1,43 @@
+@use '../../../styles/filled-controls' as *;
+
 :host { display: block; min-width: 0; }
 
 .binding-strip {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-1);
 }
 
-/* The strategy picker stays a native <select> (see component docstring); PrimeNG's
-   Select widget requires ngModel/formControl for value binding, which this signal-only
-   family of components does not use elsewhere, and the component spec drives it as a
-   native element. It still needs its own visual chrome — pInputText only themes <input>. */
+.binding-strip__label { @include field-label; }
+.binding-strip__only { font-size: var(--fs-md); }
+
+/* The strategy picker stays a native <select> (see component docstring):
+   PrimeNG's Select needs ngModel/formControl for its value, which this
+   signal-only family of components does not use, and the spec drives it as
+   a native element. The fill and the arrow are drawn here. */
 select {
-  width: 100%;
-  min-height: 2.75rem;
-  padding: 0.65rem 0.75rem;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  @include filled-select;
+  font-weight: var(--fw-semi);
 }
 
-select:focus {
-  border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  outline-offset: 1px;
+.binding-strip__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 1.5rem;
+  font-size: var(--fs-xs);
+
+  a {
+    color: var(--accent-text);
+    font-weight: var(--fw-semi);
+    text-decoration: none;
+
+    &:hover { text-decoration: underline; }
+  }
 }
 
-.info-tip { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; padding: 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); cursor: help; background: transparent; border: 1px solid var(--border-strong); border-radius: 50%; }
-.info-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.binding-strip__evidence { color: var(--bull); font-weight: var(--fw-semi); }
+.binding-strip__evidence--bad { color: var(--bear); }
+.binding-strip__blocked { margin: 0; color: var(--bear); font-size: var(--fs-xs); }
 
+.info-tip { @include info-tip; }
