@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # How a policy learns its allowances. Injected as a callable -- the
-# ``roster_symbols`` / ``instance_seals`` pattern -- so a test can state the
+# ``instance_seals`` pattern -- so a test can state the
 # resolved document directly instead of building a Clerk volume, and so the one
 # production resolver below is named in exactly one place.
 type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]

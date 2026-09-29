@@ -9,7 +9,9 @@ in-line so a quant reviewer can audit without running the code.
 
 from __future__ import annotations
 
+import ast
 import json
+from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     realized_pnl_today,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.money import display_cents, normalize_money
 from app.broker.contract.models import OrderSide
 
 _ATOL = 1e-9
@@ -463,6 +466,85 @@ def test_multi_lot_partial_closes_match_exact_fraction_oracle() -> None:
     assert f(result.exact_realized_pnl) == expected
     assert [f(lot.exact_realized_pnl) for lot in result.closed_lots] == closures
     assert [(f(lot.exact_qty), f(lot.exact_cost)) for lot in result.open_lots] == [(f("0.3"), f("9.93"))]
+
+
+def test_open_pnl_is_exact_and_its_float_view_is_rounded_once() -> None:
+    """#2556: open valuation is an exact field; ``open_pnl`` only displays it.
+
+    Independent oracle over the recorded decimal values:
+      SPY: SELL 0.4 @ 10.07 closes lot1 (0.3) and 0.1 of lot2, leaving
+           0.6 long @ 10.03, marked 10.11 -> +0.6×0.08
+      QQQ: SELL 0.3 @ 9.93 opens a short, marked 9.90 -> +0.3×0.03
+    Flat is exactly zero; a missing mark leaves the exact field ``None``.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=0.3, price=10.01, ts_ms=1000),
+        _fill(side=OrderSide.BUY, qty=0.7, price=10.03, ts_ms=2000),
+        _fill(side=OrderSide.SELL, qty=0.4, price=10.07, ts_ms=3000),
+        _fill(side=OrderSide.SELL, qty=0.3, price=9.93, ts_ms=4000, symbol="QQQ"),
+    ]
+    f = Fraction
+    expected = f("0.6") * (f("10.11") - f("10.03")) + f("0.3") * (f("9.93") - f("9.90"))
+    assert expected == f("0.057")
+
+    result = compute_fifo_pnl(fills, mark_prices={"SPY": 10.11, "QQQ": Decimal("9.90")})
+
+    assert f(result.exact_open_pnl) == expected
+    assert result.open_pnl == float(expected)
+    assert compute_fifo_pnl(fills, mark_prices={"SPY": 10.11}).exact_open_pnl is None
+    flat = [fills[0], _fill(side=OrderSide.SELL, qty=0.3, price=10.07, ts_ms=5000)]
+    assert compute_fifo_pnl(flat).exact_open_pnl == 0
+
+
+def test_open_pnl_money_is_exact_at_a_whole_cent_boundary() -> None:
+    """#2556: 0.048360857 shares bought at $100 and marked at $100.3101682007
+    gain exactly $0.0149999999999999999, which shows as 1 cent. A binary float
+    cannot hold those 18 significant digits: the float view is 0.015, and
+    normalizing it into money rounds half-even to 2 cents -- why no money
+    reads a float view."""
+    fills = [_fill(side=OrderSide.BUY, qty=0.048360857, price=100.0, ts_ms=1000)]
+
+    result = compute_fifo_pnl(fills, mark_prices={"SPY": Decimal("100.3101682007")})
+
+    assert Fraction(result.exact_open_pnl) == Fraction("0.048360857") * (Fraction("100.3101682007") - 100)
+    assert display_cents(result.exact_open_pnl) == 1
+    assert display_cents(normalize_money(result.open_pnl)) == 2
+
+
+# Float display views of exact FIFO values, on FIFO's own results and on the
+# SQLite projections that carry them (``EconomicSnapshot``,
+# ``AccountPnlAttribution``); see ``fifo_pnl``'s module docstring.
+_FIFO_FLOAT_VIEWS = frozenset({
+    "realized_pnl", "open_pnl", "entry_price", "exit_price",
+    "realized_pnl_today", "realized_pnl_total", "start_open_pnl_total", "open_pnl_total",
+})
+
+
+def test_no_normalize_money_call_names_a_fifo_float_view_attribute() -> None:
+    """#2556: a direct-attribute grep guard -- a tripwire, not the guarantee.
+
+    It flags ``normalize_money(<x>.<float view>)`` written anywhere in the
+    service, which re-admits a rounded float as money. It cannot follow a
+    float view through a variable or a parameter (the bot page's open P&L and
+    Today's statement once did exactly that), so the guarantee is structural:
+    those renderers take FIFO's exact ``Decimal`` fields and
+    ``money.display_cents`` refuses a float -- pinned by the rendered-string
+    regressions in ``test_panel_projection.py``,
+    ``test_fee_attribution_view.py`` and ``test_simulated_account.py``.
+    """
+    app_root = Path(__file__).parents[4] / "app"
+    paths = sorted(app_root.rglob("*.py"))
+    assert len(paths) > 100, "the guard must scan the service, not an empty tree"
+    offenders = [
+        f"{path.relative_to(app_root.parent)}:{node.lineno}: {ast.unparse(node)}"
+        for path in paths
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "normalize_money"
+        and any(isinstance(arg, ast.Attribute) and arg.attr in _FIFO_FLOAT_VIEWS for arg in node.args)
+    ]
+    assert offenders == []
 
 
 # ── Golden fixture scenarios ──────────────────────────────────────────────────

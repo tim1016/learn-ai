@@ -357,7 +357,7 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         recorded_at_ms=payload["recorded_at_ms"],
     )
     _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
-    release_stopped_budget(conn, payload)
+    release_stopped_budget(conn, payload, facts)
 
 
 def _fold_strategy_instance_retired(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

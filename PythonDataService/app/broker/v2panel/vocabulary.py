@@ -122,7 +122,6 @@ ActionId = Literal[
     "deploy",
     "stop",
     "flatten_stop",
-    "retire",
     "archive",
     "cancel_order",
     "reconcile_now",
@@ -139,7 +138,6 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
     "stop",
     "flatten_stop",
-    "retire",
     "archive",
     "cancel_order",
     "reconcile_now",
@@ -153,10 +151,11 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "open_custody_timeline",
 )
 
-# Retired with Pause, Continue and Resume (#2540): no request, performer or
-# presented action can name them, but a bot's durable receipt ledger written
-# before then still does, so ledger reads widen to them and writes never do.
-RetiredActionId = Literal["resume", "pause", "continue"]
+# Retired with Pause, Continue and Resume (#2540), and Retire (#2578): no
+# request, performer or presented action can name them, but a bot's durable
+# receipt ledger written before then still does, so ledger reads widen to them
+# and writes never do.
+RetiredActionId = Literal["resume", "pause", "continue", "retire"]
 RecordedActionId = Literal[ActionId, RetiredActionId]
 
 # The presented actions that only stop a bot, reduce its exposure or
@@ -338,10 +337,6 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Flatten & stop",
         "Cancel working orders, submit closing orders to flatten exposure, then stop. "
         "Use this to exit positions before stopping.",
-    ),
-    "retire": OperatorCopy(
-        "Retire",
-        "Permanently decommission this bot. Its id is never reused. This is irreversible.",
     ),
     "archive": OperatorCopy(
         "Clear",

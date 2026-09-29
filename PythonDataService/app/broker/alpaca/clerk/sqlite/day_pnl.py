@@ -92,7 +92,9 @@ def day_pnl_at(
     return DayPnl(
         day_start_ms=day_start_ms,
         day_end_ms=now_ms,
-        current_equity_usd=observation.equity_usd,
+        # The day figure is float arithmetic (the loss hold compares it);
+        # simulated custody's exact equity is rounded once, here.
+        current_equity_usd=float(observation.equity_usd),
         prior_close_equity_usd=observation.last_equity_usd,
         net_cash_flow_usd=sum(usable_amounts),
         cash_flow_count=len(cash_flows),

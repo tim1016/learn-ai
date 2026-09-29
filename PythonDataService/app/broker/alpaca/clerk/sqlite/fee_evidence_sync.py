@@ -50,6 +50,9 @@ class FeeEvidenceSync:
         # Walk older history one bounded read per tick, resuming from the
         # cursor custody retained (so a restart continues), until it reaches
         # custody's history floor. Coverage stays refused until it passes a day.
+        # A head read that no longer meets the history retained below it
+        # (more rows arrived between polls than one read returns) is walked
+        # first, from its own cursor, until it does (#2557).
         cursor = await asyncio.to_thread(fee_evidence_cursor, self._repo)
         if cursor is None:
             return grew

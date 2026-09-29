@@ -117,3 +117,11 @@ def test_apportion_units_refuses_to_invent_or_lose_units(units: int, weights: di
 ])
 def test_display_cents_rounds_half_even_for_shown_figures(amount: str, cents: int) -> None:
     assert display_cents(Decimal(amount)) == cents
+
+
+@pytest.mark.parametrize("amount", [0.015, 1, None])
+def test_display_cents_refuses_anything_but_an_exact_decimal(amount: object) -> None:
+    """#2556: a float view of an exact value can sit across a half cent, so no
+    displayed cent is rounded from one; a recorded float is normalized first."""
+    with pytest.raises(TypeError, match="exact Decimal"):
+        display_cents(amount)  # type: ignore[arg-type]

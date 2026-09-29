@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,10 +18,8 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountRecoveryProof,
-    RestartIntensityPolicy,
     account_artifacts_root,
     clear_account_freeze,
-    evaluate_restart_intensity,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
@@ -32,13 +31,9 @@ from app.engine.live.account_artifacts import (
     require_active_account_clerk_generation,
     write_account_freeze,
 )
-from app.engine.live.account_registry import (
-    AccountInstanceBinding,
-)
 from app.engine.live.producer_operational_log import read_producer_operational_events
 from app.schemas.live_runs import GateResult
 from tests._helpers.legacy_ibkr_artifacts import (
-    write_historical_account_binding,
     write_historical_clerk_generation,
     write_historical_clerk_lease,
 )
@@ -870,245 +865,95 @@ def test_account_freeze_uses_actual_clear_time_when_override_now_omitted(
     assert events[-1]["cleared_at_ms"] == 1_700_000_015_000
 
 
-def _binding(
-    *,
-    sid: str = "spy-ema-paper-1",
-    run_id: str = "run-alpha",
-    namespace: str = "learn-ai/spy-ema-paper-1/v1",
-    recorded_at_ms: int = 1_700_000_000_000,
-) -> AccountInstanceBinding:
-    return AccountInstanceBinding(
+# --- Saved artifacts from the retired account-level restart-intensity gate (#2558) ---
+
+_SAVED_HISTORY = Path(__file__).resolve().parents[2] / "fixtures" / "account_artifacts" / "restart_intensity_history"
+_SAVED_BREACH_REASON = (
+    "restart_intensity.threshold_breached:observed=3:threshold=3:window_ms=60000:"
+    "window_start_ms=1699999960001:window_end_ms=1700000020001"
+)
+_SAVED_CLEARANCE_FILENAME = "account_restart_intensity_clearance.json"
+
+
+def _saved_account(tmp_path: Path, variant: str) -> Path:
+    shutil.copytree(_SAVED_HISTORY / variant, tmp_path, dirs_exist_ok=True)
+    return tmp_path
+
+
+def _clean_recovery_proof(recovery_id: str, recorded_at_ms: int) -> AccountRecoveryProof:
+    return AccountRecoveryProof(
         account_id="DU123456",
-        strategy_instance_id=sid,
-        run_id=run_id,
-        bot_order_namespace=namespace,
-        lifecycle_state="ACTIVE",
+        recovery_id=recovery_id,
+        requested_action="reconcile",
+        requested_by="operator",
+        broker_evidence={"positions": [], "open_orders": []},
+        reconciliation_result="clean",
+        final_gate_result=GateResult(
+            gate_id="account.classifier",
+            status="pass",
+            source="account_classifier",
+            operator_reason="ACCOUNT_STATE_MATCHES_REGISTRY",
+            operator_next_step="GATE_PASSING",
+            evidence_at_ms=recorded_at_ms,
+        ),
         recorded_at_ms=recorded_at_ms,
-        source="host_daemon.start",
     )
 
 
-def test_restart_intensity_passes_below_threshold_from_durable_account_events(tmp_path: Path) -> None:
-    # One bot restarted twice is below the threshold of three activations.
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    write_historical_account_binding(
-        tmp_path,
-        _binding(sid="spy-a", run_id="run-a", namespace="learn-ai/spy-a/v1", recorded_at_ms=1_700_000_000_000),
-    )
-    write_historical_account_binding(
-        tmp_path,
-        _binding(sid="spy-a", run_id="run-b", namespace="learn-ai/spy-a/v1", recorded_at_ms=1_700_000_010_000),
-    )
+def test_saved_restart_intensity_freeze_still_loads_and_still_blocks(tmp_path: Path) -> None:
+    root = _saved_account(tmp_path, "active_breach")
 
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_000,
-        policy=policy,
-    )
+    freeze = read_account_freeze(root, "DU123456")
 
-    assert gate.status == "pass"
-    assert "observed=2" in gate.operator_reason
-    assert "threshold=3" in gate.operator_reason
-    assert read_account_freeze(tmp_path, "DU123456") is None
-
-
-def test_restart_intensity_ignores_distinct_bot_first_starts(tmp_path: Path) -> None:
-    # Deploying five distinct bots (each a single first-start) is initial
-    # deployment, not restart-intensity churn; it must not freeze the account.
-    policy = RestartIntensityPolicy(threshold=3, window_ms=300_000)
-    for index, sid in enumerate(("aapl", "msft", "nvda", "qqq", "spy"), start=1):
-        write_historical_account_binding(
-            tmp_path,
-            _binding(
-                sid=f"cohort5-{sid}",
-                run_id=f"run-{sid}",
-                namespace=f"learn-ai/cohort5-{sid}/v1",
-                recorded_at_ms=1_700_000_000_000 + index * 10_000,
-            ),
-        )
-
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_060_000,
-        policy=policy,
-    )
-
-    assert gate.status == "pass"
-    assert "observed=1" in gate.operator_reason
-    assert read_account_freeze(tmp_path, "DU123456") is None
-
-
-def test_restart_intensity_breach_records_account_freeze_with_threshold_details(tmp_path: Path) -> None:
-    # One bot restarted three times in the window breaches restart intensity.
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
-        start=1,
-    ):
-        write_historical_account_binding(
-            tmp_path,
-            _binding(
-                sid="spy-1",
-                run_id=f"run-{index}",
-                namespace="learn-ai/spy-1/v1",
-                recorded_at_ms=recorded_at_ms,
-            ),
-        )
-
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_001,
-        policy=policy,
-    )
-
-    assert gate.status == "freeze"
-    assert "observed=3" in gate.operator_reason
-    assert "window_ms=60000" in gate.operator_reason
-    freeze = read_account_freeze(tmp_path, "DU123456")
     assert freeze is not None
     assert freeze.source == "account_restart_intensity"
-    events = read_account_events(tmp_path, "DU123456")
-    breach = next(event for event in events if event["event_type"] == "account_restart_intensity_breached")
-    assert breach["observed_count"] == 3
-    assert breach["threshold"] == 3
-    assert breach["window_start_ms"] == 1_699_999_960_001
-    assert breach["window_end_ms"] == 1_700_000_020_001
+    assert freeze.reason == _SAVED_BREACH_REASON
+    gate = freeze.to_gate_result()
+    assert (gate.gate_id, gate.status) == ("account.unresolved_exposure", "freeze")
+    assert gate.operator_next_step == "STOP_RESTARTING_AND_RECOVER_ACCOUNT"
+    events = {event["event_type"]: event for event in read_account_events(root, "DU123456")}
+    assert sorted(events) == ["account_freeze_recorded", "account_restart_intensity_breached"]
+    breach = events["account_restart_intensity_breached"]
+    assert (breach["observed_count"], breach["window_ms"]) == (3, 60_000)
+    assert (breach["window_start_ms"], breach["window_end_ms"]) == (1_699_999_960_001, 1_700_000_020_001)
     assert breach["affected_instance_ids"] == ["spy-1"]
 
 
-def test_restart_intensity_refolds_after_process_restart_without_reset(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
-        start=1,
-    ):
-        write_historical_account_binding(
-            tmp_path,
-            _binding(
-                sid="spy-1",
-                run_id=f"run-{index}",
-                namespace="learn-ai/spy-1/v1",
-                recorded_at_ms=recorded_at_ms,
-            ),
-        )
+def test_saved_restart_intensity_freeze_clears_with_a_recovery_proof(tmp_path: Path) -> None:
+    root = _saved_account(tmp_path, "active_breach")
 
-    first_gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_001,
-        policy=policy,
-    )
-    second_gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_002,
-        policy=policy,
-    )
+    clear_account_freeze(root, recovery_proof=_clean_recovery_proof("operator-recovery-1", 1_700_000_040_000))
 
-    assert first_gate.status == "freeze"
-    assert second_gate.status == "freeze"
-    events = read_account_events(tmp_path, "DU123456")
-    assert [event["event_type"] for event in events].count("account_restart_intensity_breached") == 1
+    assert read_account_freeze(root, "DU123456") is None
+    clearance = read_account_recovery_clearance(root, "DU123456")
+    assert clearance is not None
+    assert clearance.evidence_id == "operator-recovery-1"
+    # The retired gate wrote a clearance-cutoff file here; nothing does any more.
+    assert not (account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME).exists()
 
 
-def test_restart_intensity_recovery_clear_starts_a_new_window(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
-        start=1,
-    ):
-        write_historical_account_binding(
-            tmp_path,
-            _binding(
-                sid="spy-1",
-                run_id=f"run-{index}",
-                namespace="learn-ai/spy-1/v1",
-                recorded_at_ms=recorded_at_ms,
-            ),
-        )
-    evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_001,
-        policy=policy,
-    )
+def test_saved_cleared_restart_intensity_artifacts_still_load(tmp_path: Path) -> None:
+    root = _saved_account(tmp_path, "cleared")
+    assert (account_artifacts_root(root, "DU123456") / _SAVED_CLEARANCE_FILENAME).is_file()
 
-    clear_account_freeze(
-        tmp_path,
-        recovery_proof=AccountRecoveryProof(
-            account_id="DU123456",
-            recovery_id="restart-recovery-1",
-            requested_action="reconcile",
-            requested_by="operator",
-            broker_evidence={"positions": [], "open_orders": []},
-            reconciliation_result="clean",
-            final_gate_result=GateResult(
-                gate_id="account.restart_intensity",
-                status="pass",
-                source="account_restart_intensity",
-                operator_reason="restart intensity recovered",
-                operator_next_step="GATE_PASSING",
-                evidence_at_ms=1_700_000_030_000,
-            ),
-            recorded_at_ms=1_700_000_030_000,
-        ),
-    )
+    assert read_account_freeze(root, "DU123456") is None
+    evidence = account_artifacts.read_account_freeze_evidence(root, "DU123456")
+    assert evidence is not None
+    assert (evidence.cleared_at_ms, evidence.cleared_source) == (1_700_000_030_000, "account_recovery_proof")
+    clearance = read_account_recovery_clearance(root, "DU123456")
+    assert clearance is not None
+    assert clearance.evidence_id == "restart-recovery-1"
+    event_types = [event["event_type"] for event in read_account_events(root, "DU123456")]
+    assert sorted(event_types) == [
+        "account_freeze_cleared",
+        "account_freeze_recorded",
+        "account_recovery_proof_recorded",
+        "account_restart_intensity_breached",
+    ]
 
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_030_001,
-        policy=policy,
-    )
-
-    assert gate.status == "pass"
-    assert "observed=0" in gate.operator_reason
-    assert read_account_freeze(tmp_path, "DU123456") is None
-
-
-def test_restart_intensity_clear_cutoff_survives_a_later_unrelated_freeze(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
-        start=1,
-    ):
-        write_historical_account_binding(
-            tmp_path,
-            _binding(
-                sid="spy-1",
-                run_id=f"run-{index}",
-                namespace="learn-ai/spy-1/v1",
-                recorded_at_ms=recorded_at_ms,
-            ),
-        )
-    evaluate_restart_intensity(tmp_path, account_id="DU123456", now_ms=1_700_000_020_001, policy=policy)
-    clear_account_freeze(
-        tmp_path,
-        recovery_proof=AccountRecoveryProof(
-            account_id="DU123456",
-            recovery_id="restart-recovery-1",
-            requested_action="reconcile",
-            requested_by="operator",
-            broker_evidence={"positions": [], "open_orders": []},
-            reconciliation_result="clean",
-            final_gate_result=GateResult(
-                gate_id="account.restart_intensity",
-                status="pass",
-                source="account_restart_intensity",
-                operator_reason="restart intensity recovered",
-                operator_next_step="GATE_PASSING",
-                evidence_at_ms=1_700_000_030_000,
-            ),
-            recorded_at_ms=1_700_000_030_000,
-        ),
-    )
-
-    # A later, unrelated freeze overwrites the single active-freeze artifact.
+    # A later, unrelated freeze is written and read beside the old cutoff file, which stays as history.
     write_account_freeze(
-        tmp_path,
+        root,
         AccountFreezeEvidence(
             account_id="DU123456",
             reason="watchdog.flatten_failed",
@@ -1117,16 +962,6 @@ def test_restart_intensity_clear_cutoff_survives_a_later_unrelated_freeze(tmp_pa
             operator_next_step="CHECK_IBKR",
         ),
     )
-
-    # The restart-intensity cutoff must survive the overwrite so the pre-clear
-    # restarts do not re-enter the window and cause a false breach.
-    assert account_artifacts._latest_restart_intensity_clear_ms(tmp_path, "DU123456") == 1_700_000_030_000
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_031_001,
-        policy=policy,
-        record_freeze=False,
-    )
-    assert gate.status == "pass"
-    assert "observed=0" in gate.operator_reason
+    later = read_account_freeze(root, "DU123456")
+    assert later is not None
+    assert later.source == "watchdog_halt_executor"
