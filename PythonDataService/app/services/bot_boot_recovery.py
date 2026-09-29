@@ -32,20 +32,6 @@ from app.services.bot_lifecycle_projection import (
 logger = logging.getLogger(__name__)
 
 
-class UnrecoveredDryRun(BaseModel):
-    """A Dry Run whose own simulated account could not be restored at boot (#2582).
-
-    The bot's failure, never the lane's: boot leaves its evidence as the dead
-    process wrote it and Start refuses this one bot with ``detail``, while the
-    account authority and every other bot carry on.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    strategy_instance_id: str
-    detail: str
-
-
 class BootRecoveryReport(BaseModel):
     """What the boot sweep found and did (S5, #1263)."""
 
@@ -67,10 +53,6 @@ class BootRecoveryReport(BaseModel):
     # a foreign binding is refused one at a time, and the instances the
     # installed authority does custody stay startable.
     foreign_instances: tuple[str, ...] = ()
-    # Dry Runs whose simulated account boot could not restore, each with its
-    # cause. Never repaired and, like ``foreign_instances``, never closing the
-    # start gate for anyone else: Start refuses each of them alone.
-    unrecovered_dry_runs: tuple[UnrecoveredDryRun, ...] = ()
 
 
 class BootAuthorityPreparationError(RuntimeError):
@@ -172,14 +154,8 @@ class BotBootRecovery:
         reconcile: Callable[[], Awaitable[object]] | None = None,
         unresolved_intents_probe: Callable[[str | None], Awaitable[int]] | None = None,
         provenance: RecoverySweepProvenance = BOOT_SWEEP_PROVENANCE,
-        unrecovered_dry_runs: tuple[UnrecoveredDryRun, ...] = (),
     ) -> BootRecoveryReport:
-        """Recover SQLite authority first, then repair derived file projections.
-
-        ``unrecovered_dry_runs`` are the Dry Runs whose own authority the
-        caller could not restore; ``recovery_candidates`` already leaves them
-        out, and the report carries them for Start to refuse one by one.
-        """
+        """Recover SQLite authority first, then repair derived file projections."""
         for step_name, step in (("recover", recover), ("reconcile", reconcile)):
             if step is None:
                 continue
@@ -207,7 +183,6 @@ class BotBootRecovery:
             completed_at_ms=self._now_ms(),
             authority_unavailable_instances=tuple(authority_unavailable),
             foreign_instances=tuple(foreign),
-            unrecovered_dry_runs=unrecovered_dry_runs,
         )
         logger.info(
             "Boot recovery sweep complete",
@@ -217,12 +192,30 @@ class BotBootRecovery:
                 "unresolved_intents": report.unresolved_intents,
                 "authority_unavailable": list(report.authority_unavailable_instances),
                 "foreign": list(report.foreign_instances),
-                "unrecovered_dry_runs": [
-                    failure.strategy_instance_id for failure in report.unrecovered_dry_runs
-                ],
             },
         )
         return report
+
+    async def repair_restored_dry_run(
+        self, candidates: Iterable[BotRecoveryCandidate]
+    ) -> tuple[str, ...]:
+        """Repair one Dry Run's candidates once boot has restored its own authority (#2582).
+
+        A Dry Run is never in the account's sweep: its custody lives in its
+        own ``sim:`` account, which boot restores off the serving path, one
+        bot at a time. Each candidate gets the sweep's own repair; a Dry Run
+        is never foreign (``_foreign_binding``), so that check has nothing to
+        say here. Returns the bots that received interrupted evidence.
+        """
+        interrupted: list[str] = []
+        for candidate in sorted(
+            set(candidates), key=lambda candidate: (candidate.strategy_instance_id, candidate.run_id)
+        ):
+            if not self._manages_instance(candidate.strategy_instance_id):
+                continue
+            if await self._repair_candidate(candidate, BOOT_SWEEP_PROVENANCE):
+                interrupted.append(candidate.strategy_instance_id)
+        return tuple(interrupted)
 
     async def _repair_lifecycle_artifacts(
         self, provenance: RecoverySweepProvenance

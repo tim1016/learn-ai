@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -45,8 +45,8 @@ from app.broker.alpaca.clerk.active_runtime import (
     open_repository_after_lease_expiry,
     reconnecting_refusal,
     terminal_startup_recovery,
+    transient_startup_failure,
     unavailable_runtime,
-    unreachable_broker_error,
 )
 from app.broker.alpaca.clerk.live_authority import (
     InstanceSealsForAccount,
@@ -162,9 +162,9 @@ async def select_active_clerk_runtime(
             extra={"action": "active_clerk_account_resolution_failed", "error": str(exc)},
             exc_info=True,
         )
-        unreachable = unreachable_broker_error(exc)
-        if unreachable is not None:
-            return reconnecting_refusal(unreachable, account_id=None)
+        transient = transient_startup_failure(exc)
+        if transient is not None:
+            return reconnecting_refusal(transient, account_id=None)
         return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=None,
@@ -479,13 +479,17 @@ async def select_synthetic_clerk_runtime(
             envelope_sync.start()
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
-    except Exception as exc:
+    except BaseException as exc:
+        # A cancelled opening -- boot's Dry Run restoration interrupted by
+        # shutdown (#2582) -- releases its lease and heartbeat like a failed one.
         if envelope_sync is not None:
             await envelope_sync.stop()
         if sweep is not None:
             await sweep.stop()
         if repository is not None:
             repository.close()
+        if not isinstance(exc, Exception):
+            raise
         return unavailable_runtime(
             "SYNTHETIC_CLERK_STARTUP_FAILED",
             account_id=account_id,
@@ -608,18 +612,6 @@ def install_primary_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
         _authority_registry.register(runtime)
 
 
-def primary_authority_echo() -> Literal["reconnecting", "failed"] | None:
-    """Why this lane has no account authority, in the fleet echo's closed words.
-
-    ``None`` while an authority serves, or before one was ever selected: the
-    echo speaks only for a selection that ended without one.
-    """
-    runtime = _runtime
-    if runtime is None or runtime.clerk is not None or runtime.startup_failure is None:
-        return None
-    return "reconnecting" if runtime.reconnecting else "failed"
-
-
 def register_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
     """Add an authority without replacing the real-paper compatibility selection."""
     _authority_registry.register(runtime)
@@ -689,7 +681,6 @@ __all__ = [
     "get_alpaca_clerk",
     "get_clerk_runtime",
     "install_primary_clerk_runtime",
-    "primary_authority_echo",
     "primary_custody_world",
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",

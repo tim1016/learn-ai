@@ -503,9 +503,27 @@ def test_a_reconnect_installs_and_boots_through_the_boot_s_own_steps() -> None:
     assert "select=_select_alpaca_authority" in reconnect
     assert "acknowledge_runtime_binding(bound=reconnecting_binding" in reconnect
     assert "_install_alpaca_authority(reconnected)" in reconnect
+    assert "retire=_retire_alpaca_authority" in reconnect
     assert "boot=_boot_alpaca_authority" in reconnect
+    assert "reconnecting=reconnected.reconnecting" in reconnect, "the beat reports a retired attempt reconnecting"
     assert source.count("await select_active_clerk_runtime(") == 1
     assert source.count("start_background_taps()") == 1
     assert source.index("alpaca_reconnect_task.cancel()") < source.index(
         "installed_alpaca_runtime = get_active_clerk_runtime()"
     ), "shutdown ends the reconnect before it closes custody"
+
+
+def test_dry_run_restoration_never_holds_the_lane_off_the_network() -> None:
+    """#2582: the lifespan starts each Dry Run's restoration and serves; it never awaits one.
+
+    Structural because the regression is one ``await`` in the composition
+    root: every Dry Run's held lease would again keep the real-money lane's
+    reads down for as long as it lived.
+    """
+    source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
+
+    assert source.count("bot_task_registry.start_dry_run_restoration()") == 1
+    assert "await bot_task_registry.start_dry_run_restoration()" not in source
+    assert source.index("bot_task_registry.start_dry_run_restoration()") < source.index(
+        "await _boot_alpaca_authority(alpaca_clerk_runtime)"
+    )

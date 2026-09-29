@@ -25,8 +25,8 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     reconnecting_refusal,
     terminal_startup_recovery,
+    transient_startup_failure,
     unavailable_runtime,
-    unreachable_broker_error,
 )
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
@@ -103,9 +103,9 @@ async def select_shadow_clerk_runtime(
         )
         return unavailable_runtime(exc.reason_code, account_id=account.account_id, recovery=str(exc))
     except BrokerError as exc:
-        unreachable = unreachable_broker_error(exc)
-        if unreachable is not None:
-            return reconnecting_refusal(unreachable, account_id=account.account_id)
+        transient = transient_startup_failure(exc)
+        if transient is not None:
+            return reconnecting_refusal(transient, account_id=account.account_id)
         return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=account.account_id,
@@ -195,10 +195,10 @@ async def select_shadow_clerk_runtime(
             },
             exc_info=True,
         )
-        unreachable = unreachable_broker_error(exc)
-        if unreachable is not None:
+        transient = transient_startup_failure(exc)
+        if transient is not None:
             return reconnecting_refusal(
-                unreachable,
+                transient,
                 account_id=shadow.account_id,
                 activation_detected=True,
                 authority_generation=activation.authority_generation,

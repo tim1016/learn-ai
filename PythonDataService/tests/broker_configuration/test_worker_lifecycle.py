@@ -19,7 +19,7 @@ from app.broker.alpaca.clerk.active_runtime import (
 )
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
 from app.broker.alpaca.profile import resolve_runtime_context
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerUnreachable
 from app.broker_configuration.binding_decision import BindingCandidate, BindingIntent
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.worker_binding import BoundWorker
@@ -182,7 +182,7 @@ async def test_a_reconnecting_boot_neither_acknowledges_nor_refuses_its_apply(
     requested = service.request_apply(expected_selection_generation=staged.selection_generation)
     bound = _bound(profile.profile.profile_id, requested.selection_generation)
     runtime = reconnecting_refusal(
-        BrokerUnavailable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+        BrokerUnreachable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
         account_id="PA-TEST",
     )
 

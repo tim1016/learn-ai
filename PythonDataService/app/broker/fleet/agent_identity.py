@@ -26,7 +26,7 @@ from typing import Any
 
 from starlette.datastructures import Headers
 
-from app.broker.fleet.delivery import ACCOUNT_AUTHORITY_HEADER, lane_forward_is_authorized
+from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import BrokerAndClerkRequired, ClerkIdentityMismatch, FleetControlError
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 
@@ -102,12 +102,6 @@ def _served_header_values(identity: Mapping[str, Any]) -> list[tuple[bytes, byte
                 b"x-fleet-binding-generation",
                 str(identity["binding_generation"]).encode(),
             )
-        )
-    if identity.get("account_authority") is not None:
-        # Not an identity pin: why this lane serves no account authority, so a
-        # routed 5xx can be told truthfully (#2582).
-        headers.append(
-            (ACCOUNT_AUTHORITY_HEADER.encode(), str(identity["account_authority"]).encode())
         )
     return headers
 

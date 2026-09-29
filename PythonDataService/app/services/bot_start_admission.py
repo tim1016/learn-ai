@@ -148,6 +148,38 @@ class StartAdmissionUnavailable(Exception):
         self.detail = detail
 
 
+#: Where boot's restoration of one Dry Run's own simulated account stands
+#: when it is not yet done (#2582): still running, refused because another
+#: process still holds that account, or failed for any other reason.
+DryRunRestorationState = Literal["restoring", "account_held", "not_restored"]
+
+
+def refuse_unrestored_dry_run(state: DryRunRestorationState | None) -> None:
+    """Refuse Start for a Dry Run whose own simulated account boot has not restored (#2582).
+
+    Checked before the Dry Run's account is opened for Start, so a refusal
+    never meets the account itself -- and never waits on boot's restoration
+    of it. ``None`` is a restored Dry Run, or a bot boot never had to restore.
+    """
+    if state is None:
+        return
+    if state == "restoring":
+        raise StartAdmissionUnavailable(
+            "This Dry Run is still being restored after the Clerk restarted.",
+            detail="Wait up to a minute, then start it again.",
+        )
+    if state == "account_held":
+        raise StartAdmissionUnavailable(
+            "This Dry Run could not be restored after the Clerk restarted: its simulated "
+            "account is still open in another running copy of this Clerk.",
+            detail="Stop the other copy of this Clerk, then restart this one.",
+        )
+    raise StartAdmissionUnavailable(
+        "This Dry Run could not be restored after the Clerk restarted.",
+        detail="Restart the Clerk to try again. If it happens again, the Clerk's log names the cause.",
+    )
+
+
 class RunAdmissionInvariantError(RuntimeError):
     """An admitted run lost evidence its own admission decision required.
 
@@ -257,12 +289,16 @@ async def resolve_start_runtime_fact(
     boot_recovery_report: BootRecoveryReport | None,
     unresolved_intents_probe: UnresolvedIntentsProbe | None,
     recovery_evaluation: RecoveryEvaluationProbe | None = None,
+    account_reconnecting: bool = False,
 ) -> StartRuntimeAdmissionFact:
     """Project boot recovery and recovery intents without mutating runner state.
 
     ``boot_recovery_report`` is the boot sweep's report: absent while the
     sweep has not run; degraded when it names bots no lifecycle authority
     could project, which closes the gate until the authority is restored.
+    ``account_reconnecting`` says that restoration is already under way: the
+    account's Clerk could not reach Alpaca when it started and reruns the
+    sweep on its own once it answers (#2582).
     """
     if boot_recovery_required and boot_recovery_report is None:
         return StartRuntimeAdmissionFact(
@@ -271,27 +307,23 @@ async def resolve_start_runtime_fact(
             explanation="Bot runner recovery has not completed after process startup.",
             next_step="Wait for the boot recovery sweep before Start.",
         )
-    unrecovered = next(
-        (
-            failure
-            for failure in (boot_recovery_report.unrecovered_dry_runs if boot_recovery_report else ())
-            if failure.strategy_instance_id == strategy_instance_id
-        ),
-        None,
-    )
-    if boot_recovery_required and unrecovered is not None:
-        # This bot's own failure (#2582): its siblings and the account keep
-        # every admission they had.
+    if (
+        boot_recovery_required
+        and boot_recovery_report.authority_unavailable_instances
+        and account_reconnecting
+    ):
+        # Degraded only until Alpaca answers: the reconnect reruns the sweep
+        # against the authority it installs, so a restart would only repeat it.
         return StartRuntimeAdmissionFact(
             state="BOOT_RECOVERY_INCOMPLETE",
             observed_at_ms=observed_at_ms,
             explanation=(
-                "This Dry Run's simulated account could not be restored when the "
-                f"Clerk started: {unrecovered.detail}"
+                "This account's Clerk could not reach Alpaca when it started, so it has "
+                "not checked this bot's last run yet."
             ),
             next_step=(
-                "Fix the cause above, then restart the Clerk so its startup can "
-                "restore this Dry Run."
+                "Wait: the Clerk is reconnecting and checks this bot on its own once "
+                "Alpaca answers. No restart is needed."
             ),
         )
     if boot_recovery_required and boot_recovery_report.authority_unavailable_instances:

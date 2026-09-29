@@ -67,18 +67,24 @@ flat-and-order-free evidence and `recover()`'s reconciliation of open orders
 at every boot. The shadow namespace scan is not applied — after the first real
 order it would refuse every boot.
 
-A boot that could not reach Alpaca is not a failed boot (#2582). When the only
-failure behind a selection is an unreachable Alpaca — the account read, or
-`recover()`'s orders-and-positions read, raising `BrokerUnavailable` — the
-selection ends in `BROKER_UNREACHABLE_RECONNECTING`, whose copy says it is
-reconnecting and needs no restart. The lane serves with it installed while
-`authority_reconnect.py` re-runs the same selection on a bounded backoff (2 s
-doubling to 60 s), logging every attempt; the authority it ends in is
-acknowledged, installed and boot-recovered exactly as a booted one. Every
-other startup failure stays final, and its copy says so and names the fix.
-Routed reads tell the same truth: the lane echoes `reconnecting` or `failed`
-in `x-fleet-account-authority`, and the coordinator authors the 503's copy
-from it.
+A boot Alpaca did not answer is not a failed boot (#2582). When the only
+failure behind a selection is Alpaca not answering yet — a network failure,
+a timeout or a 5xx (`BrokerUnreachable`), a rate limit (`BrokerRateLimited`,
+whose Retry-After is waited out), or startup recovery outrunning its 60 s
+deadline (`StartupRecoveryTimedOut`) — the selection ends in
+`BROKER_UNREACHABLE_RECONNECTING`, whose copy says it is reconnecting and
+needs no restart. The `BrokerUnavailable` catch-all for an answer no mapping
+recognized (an unexpected 404 or 409) is not transient. The lane serves with
+the refusal installed while `authority_reconnect.py` retries on a capped
+backoff (2 s doubling to 60 s, forever: owner decision 2026-09-29), logging
+and counting every attempt (`RECONNECT_COUNTERS`). One attempt is the boot's
+own steps — select, acknowledge, install, boot recovery — and an installed
+authority whose boot recovery fails is retired: the lane goes back to
+reconnecting when Alpaca was the cause, and to a final refusal that says
+restart otherwise. Every other startup failure stays final, and its copy says
+so and names the fix. Routed reads tell the same truth from the lane's beat:
+its summary reports `authority_state=reconnecting`, and the coordinator
+authors the 503's copy from the session it routed through.
 
 ### After graduation: the rehearsal's bindings are foreign, not corrupt (R15)
 
@@ -108,8 +114,9 @@ startable. The live verdict's arming count reads the same rule: a
   (`DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true`, R14), `LIVE_MODE_DISAGREEMENT`,
   `LIVE_ENVELOPE_MISSING`, `ACTIVATION_RECORD_INVALID`, `SQLITE_CLERK_STARTUP_FAILED`,
   and — the one refusal that is not final — `BROKER_UNREACHABLE_RECONNECTING`.
-- `app/broker/alpaca/clerk/authority_reconnect.py::reconnect_authority` — the
-  bounded-backoff re-selection a reconnecting boot runs while the lane serves.
+- `app/broker/alpaca/clerk/authority_reconnect.py::run_authority_reconnect` —
+  the capped-backoff retry of the boot's own steps a reconnecting boot runs
+  while the lane serves.
 - `app/broker/alpaca/clerk/live_arming_gate.py` — `ArmingSnapshot` and
   `ArmingGate`, the per-instance cache one ledger read fills.
 - `app/broker/alpaca/clerk/sqlite/arming_admission.py::require_arming_admission`

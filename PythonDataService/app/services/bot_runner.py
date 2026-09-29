@@ -30,8 +30,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -42,9 +42,11 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    get_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseHeld
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
 from app.engine.live.bot_lifecycle_state import (
@@ -84,7 +86,10 @@ from app.schemas.run_replay import RunReplayReceipt
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
-from app.services.bot_binding_authority import BindingAuthority, BindingAuthoritySelector
+from app.services.bot_binding_authority import (
+    BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+    BindingAuthoritySelector,
+)
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -95,7 +100,6 @@ from app.services.bot_boot_recovery import (
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
-    UnrecoveredDryRun,
 )
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
@@ -148,6 +152,7 @@ from app.services.bot_start_admission import (
     AdmissionCustodyCut,
     AdmittedBotStart,
     BotStartAdmission,
+    DryRunRestorationState,
     MarketLivenessFactResolver,
     RecoveryEvaluationProbe,
     StartAdmissionDenied,
@@ -156,6 +161,7 @@ from app.services.bot_start_admission import (
     UnresolvedIntentsProbe,
     log_run_launch,
     make_start_request,
+    refuse_unrestored_dry_run,
     resolve_start_runtime_fact,
 )
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
@@ -465,11 +471,11 @@ class BotTaskRegistry:
         # ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_report: BootRecoveryReport | None = None
-        # The Dry Runs whose own authority this process's boot could not
-        # restore (#2582). Candidate enumeration leaves them out -- asking an
-        # authority that never composed for its runs would fail the whole
-        # sweep -- and the boot report carries them for Start to refuse.
-        self._unrecovered_dry_runs: tuple[UnrecoveredDryRun, ...] = ()
+        # Each Dry Run boot restores off the serving path (#2582), by bot,
+        # until its own restoration settles: absent once restored, and for
+        # every bot boot never had to restore. Start refuses the rest.
+        self._dry_run_restorations: dict[str, DryRunRestorationState] = {}
+        self._dry_run_restoration_task: asyncio.Task[None] | None = None
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
         self._recovery_evaluation: RecoveryEvaluationProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
@@ -874,6 +880,7 @@ class BotTaskRegistry:
         strategy_instance_id: str,
         observed_at_ms: int,
     ) -> StartRuntimeAdmissionFact:
+        primary = get_active_clerk_runtime()
         return await resolve_start_runtime_fact(
             strategy_instance_id=strategy_instance_id,
             observed_at_ms=observed_at_ms,
@@ -881,6 +888,7 @@ class BotTaskRegistry:
             boot_recovery_report=self._boot_recovery_report,
             unresolved_intents_probe=self._unresolved_intents_probe,
             recovery_evaluation=self._recovery_evaluation,
+            account_reconnecting=primary is not None and primary.reconnecting,
         )
 
     async def retire(
@@ -1316,6 +1324,12 @@ class BotTaskRegistry:
 
     async def stop_all(self) -> None:
         """Service shutdown: stop every task without overwriting operator intent."""
+        restoring = self._dry_run_restoration_task
+        if restoring is not None and not restoring.done():
+            # An opening it interrupts releases its account's lease (#2582).
+            restoring.cancel()
+            with suppress(asyncio.CancelledError):
+                await restoring
         stopping: list[ManagedBot] = []
         for managed in self._bots.values():
             if managed.task.done():
@@ -1375,17 +1389,18 @@ class BotTaskRegistry:
         and so does a sweep that finished without a lifecycle authority to
         project against: the service still boots and serves its read
         surface, but Start stays refused with the sweep's reason.
+
+        Dry Runs are not in this sweep: each is restored by its own authority
+        (``start_dry_run_restoration``), off the serving path (#2582).
         """
         # A sweep in progress -- or one that raised -- is pending, never the
         # answer an earlier sweep gave: a reconnected account authority runs
         # this again (#2582), and Start must not read the Clerk-less report.
         self._boot_recovery_report = None
-        self._unrecovered_dry_runs = await self._recover_synthetic_authorities_for_boot()
         report = await self._boot_recovery.run(
             recover=recover,
             reconcile=reconcile,
             unresolved_intents_probe=unresolved_intents_probe,
-            unrecovered_dry_runs=self._unrecovered_dry_runs,
         )
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
@@ -1406,8 +1421,8 @@ class BotTaskRegistry:
         A narrow in-process re-run of the boot scan's repair pass: one
         reconcile pass, then the lifecycle repair that commits the SQLite
         STOPs for runs whose tasks died on the dead handle. Deliberately
-        skips the boot-only steps (synthetic-authority recovery, replay
-        receipts) — those belong to a fresh process, not a revived lease.
+        skips the boot-only steps (Dry Run restoration, replay receipts) —
+        those belong to a fresh process, not a revived lease.
         Its report is diagnostic only: the start gate keeps the report from
         ``run_boot_recovery`` (a revived lease implies the authority is
         installed, so this pass cannot leave a bot unprojected).
@@ -1743,6 +1758,9 @@ class BotTaskRegistry:
         self,
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
+        # Before the Dry Run's own account is opened for Start: a Start never
+        # meets an account boot is still restoring or could not restore.
+        refuse_unrestored_dry_run(self._dry_run_restorations.get(binding.strategy_instance_id))
         return self._authority_for(binding).start_custody_guard()
 
     def _start_custody_projection(
@@ -1800,42 +1818,74 @@ class BotTaskRegistry:
         async with authority.runtime_for_projection() as runtime:
             yield runtime
 
-    async def _recover_synthetic_authorities_for_boot(self) -> tuple[UnrecoveredDryRun, ...]:
-        """Compose each already-activated Dry Run authority before boot repair.
+    def start_dry_run_restoration(self) -> asyncio.Task[None]:
+        """Restore every Dry Run's own simulated account after boot, off the serving path (#2582).
 
-        A simulated account never takes the lane down with it (#2582): a quick
-        restart once crash-looped the real-money process because one Dry Run's
-        account was still leased by the dead process. Whatever stops one
-        authority from composing -- this is the isolation boundary, so it is
-        every exception -- is logged with its cause and returned as that bot's
-        own failure, and boot goes on.
+        A quick restart meets its dead predecessor's execution lease on each
+        Dry Run's account, and waiting those out inside the lifespan held the
+        real-money lane off the network. So each Dry Run is marked restoring
+        now -- Start refuses it until its own restoration settles -- and a
+        background task restores them one at a time: open its account,
+        waiting out a held lease, then give its runs the sweep's own repair.
         """
-        unrecovered: list[UnrecoveredDryRun] = []
-        for strategy_instance_id, authority in self._boot_recoverable_authorities():
+        dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
+        self._dry_run_restorations = dict.fromkeys(
+            (binding.strategy_instance_id for binding in dry_runs), "restoring"
+        )
+        self._dry_run_restoration_task = asyncio.create_task(
+            self._restore_dry_runs(dry_runs), name="dry-run-boot-restoration"
+        )
+        return self._dry_run_restoration_task
+
+    async def _restore_dry_runs(self, dry_runs: list[BrokerBotBinding]) -> None:
+        """Restore each Dry Run under one lease deadline; one bot's failure is only its own.
+
+        The dead process's leases all lapse within one lease lifetime of its
+        death, so one deadline covers every Dry Run: a lease still held when
+        it passes is another live process's. Whatever stops one Dry Run --
+        this is the isolation boundary, so it is every exception -- is logged
+        with its cause and refuses that bot's Start alone.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
+        for binding in dry_runs:
+            sid = binding.strategy_instance_id
+            authority = self._authority_for(binding)
             try:
-                await authority.ensure_recoverable()
+                await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
+                interrupted = await self._boot_recovery.repair_restored_dry_run(
+                    self._binding_recovery_candidates(binding).values()
+                )
             except Exception as exc:
-                detail = exc.detail if isinstance(exc, StartAdmissionUnavailable) else str(exc)
+                self._dry_run_restorations[sid] = (
+                    "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"
+                )
+                detail = exc.detail if isinstance(exc, StartAdmissionUnavailable) else None
                 logger.error(
-                    "A Dry Run's simulated account could not be restored at boot: %s",
-                    detail,
+                    "A Dry Run's simulated account could not be restored at boot: %s%s",
+                    exc,
+                    "" if detail is None else f" ({detail})",
                     extra={
-                        "action": "boot_dry_run_authority_unrecovered",
-                        "strategy_instance_id": strategy_instance_id,
+                        "action": "boot_dry_run_restoration_failed",
+                        "strategy_instance_id": sid,
                         "account_id": authority.account_id,
-                        "error": detail,
+                        "error": str(exc),
+                        "error_detail": detail,
+                        "restoration": self._dry_run_restorations[sid],
                     },
                     exc_info=True,
                 )
-                unrecovered.append(
-                    UnrecoveredDryRun(strategy_instance_id=strategy_instance_id, detail=detail)
-                )
-        return tuple(unrecovered)
-
-    def _boot_recoverable_authorities(self) -> Iterator[tuple[str, BindingAuthority]]:
-        """Every custody authority boot must compose before repair, by its bot."""
-        for binding in self._bindings.list_for_broker("alpaca"):
-            yield binding.strategy_instance_id, self._authority_for(binding)
+                continue
+            del self._dry_run_restorations[sid]
+            logger.info(
+                "A Dry Run's simulated account was restored at boot",
+                extra={
+                    "action": "boot_dry_run_restored",
+                    "strategy_instance_id": sid,
+                    "account_id": authority.account_id,
+                    "interrupted": list(interrupted),
+                },
+            )
 
     async def _stop_interrupted_authority_run(
         self,
@@ -1906,28 +1956,36 @@ class BotTaskRegistry:
             return False
         return binding is None or binding.broker in self._supported_broker_ids
 
-    def _recovery_candidates(self) -> tuple[BotRecoveryCandidate, ...]:
-        unrecovered = {failure.strategy_instance_id for failure in self._unrecovered_dry_runs}
-        bindings = [
-            binding
-            for binding in self._bindings.list_for_broker("alpaca")
-            if binding.strategy_instance_id not in unrecovered
-        ]
+    def _binding_recovery_candidates(
+        self, binding: BrokerBotBinding
+    ) -> dict[str, BotRecoveryCandidate]:
+        """One binding's run, superseded by any run its own authority still holds active."""
         candidates = {
             binding.strategy_instance_id: BotRecoveryCandidate(
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
                 sqlite_active=False,
             )
-            for binding in bindings
         }
-        for binding in bindings:
-            for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
-                candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
-                    strategy_instance_id=strategy_instance_id,
-                    run_id=run_id,
-                    sqlite_active=True,
-                )
+        for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
+            candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                sqlite_active=True,
+            )
+        return candidates
+
+    def _recovery_candidates(self) -> tuple[BotRecoveryCandidate, ...]:
+        """The account's own sweep: its bindings and runs, never a Dry Run's (#2582).
+
+        A Dry Run's custody is its own ``sim:`` account, restored and repaired
+        by ``start_dry_run_restoration``; the account's sweep -- at boot, after
+        a reconnect, after a lease revival -- never waits on or repairs one.
+        """
+        candidates: dict[str, BotRecoveryCandidate] = {}
+        for binding in self._bindings.list_for_broker("alpaca"):
+            if binding.mode != "dry_run":
+                candidates.update(self._binding_recovery_candidates(binding))
         clerk = get_alpaca_clerk()
         has_sqlite_candidate_capability = callable(
             getattr(clerk, "lifecycle_recovery_candidates", None)

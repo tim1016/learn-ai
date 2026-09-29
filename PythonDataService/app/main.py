@@ -280,30 +280,24 @@ def serve_lane_presence(
     """
     from app.broker.alpaca.clerk.fleet_boot import start_heartbeat
 
-    _install_fleet_served_identity(app, lambda: fleet_served_identity(boot))
+    def _fleet_served_identity() -> dict[str, object] | None:
+        """What this runtime actually serves, read at response time.
+
+        The identity echo (FR-076) derives from live state — the epoch
+        follows re-registrations, the generation follows the selection
+        transaction — never from what a caller pinned.
+        """
+        if boot.session is None:
+            return None
+        return {
+            "broker": "alpaca",
+            "clerk_id": boot.clerk_id,
+            "routing_epoch": boot.session.routing_epoch,
+            "binding_generation": _effective_binding_generation_now(),
+        }
+
+    _install_fleet_served_identity(app, _fleet_served_identity)
     start_heartbeat(boot, interval_s=interval_s)
-
-
-def fleet_served_identity(boot: FleetLaneBoot) -> dict[str, object] | None:
-    """What this runtime actually serves, read at response time.
-
-    The identity echo (FR-076) derives from live state — the epoch follows
-    re-registrations, the generation follows the selection transaction —
-    never from what a caller pinned. Beside it rides why the lane serves no
-    account authority, when it serves none (#2582), so a routed 5xx can be
-    told truthfully: reconnecting, or failed for good.
-    """
-    from app.broker.alpaca.clerk.active_authority import primary_authority_echo
-
-    if boot.session is None:
-        return None
-    return {
-        "broker": "alpaca",
-        "clerk_id": boot.clerk_id,
-        "routing_epoch": boot.session.routing_epoch,
-        "binding_generation": _effective_binding_generation_now(),
-        "account_authority": primary_authority_echo(),
-    }
 
 
 @asynccontextmanager
@@ -704,6 +698,24 @@ async def _service_lifespan(
                         },
                     )
 
+            async def _retire_alpaca_authority(alpaca_clerk_runtime: ActiveClerkRuntime) -> None:
+                """Undo ``_install_alpaca_authority`` for an authority whose boot recovery failed.
+
+                A reconnect (#2582) never leaves a half-booted authority serving:
+                the trade-updates consumer that folds into it stops first, as at
+                shutdown, then the authority closes and releases its lease.
+                """
+                from app.broker.alpaca.trade_updates import (
+                    get_trade_updates_consumer,
+                    set_trade_updates_consumer,
+                )
+
+                retiring_consumer = get_trade_updates_consumer()
+                if retiring_consumer is not None:
+                    await retiring_consumer.stop()
+                    set_trade_updates_consumer(None)
+                await alpaca_clerk_runtime.close()
+
             # Do not publish a writer or start any stream until its exact binding
             # is durably acknowledged. A refused receipt closes all custody handles.
             alpaca_clerk_runtime = await acknowledge_runtime_binding(
@@ -973,6 +985,13 @@ async def _service_lifespan(
                 alpaca_clerk_runtime.authority_kind,
             )
 
+    # #2582: every Dry Run's own simulated account is restored off the serving
+    # path. A restart meets its dead predecessor's execution lease on each of
+    # them, and waiting those out before serving held the real-money lane off
+    # the network; Start refuses each Dry Run until its own restoration settles.
+    if bot_task_registry is not None:
+        bot_task_registry.start_dry_run_restoration()
+
     await _boot_alpaca_authority(alpaca_clerk_runtime)
 
     # PRD #2560: every beat carries the lane's own bot and attention counts
@@ -1005,17 +1024,21 @@ async def _service_lifespan(
 
         fleet_lane.stop_bots = _stop_bots_on_retired_lane
 
-    # #2582: a selection whose only failure was an unreachable Alpaca does not
-    # wait for a restart. The lane serves with its reconnecting refusal while
-    # this re-runs the same selection on a bounded backoff; whatever it ends
-    # in is acknowledged, reported and installed exactly as the boot's own.
-    alpaca_reconnect_task: asyncio.Task[None] | None = None
+    # #2582: a startup Alpaca did not answer does not wait for a restart. The
+    # lane serves with its reconnecting refusal while this retries the boot's
+    # own steps on a capped backoff; each attempt is selected, acknowledged,
+    # reported, installed and boot-recovered exactly as the boot's own, and
+    # one whose boot recovery fails is retired rather than left half-booted.
+    alpaca_reconnect_task: asyncio.Task[ActiveClerkRuntime] | None = None
     if (
         alpaca_binding is not None
         and alpaca_clerk_runtime is not None
         and alpaca_clerk_runtime.reconnecting
     ):
-        from app.broker.alpaca.clerk.authority_reconnect import run_authority_reconnect
+        from app.broker.alpaca.clerk.authority_reconnect import (
+            AuthoritySteps,
+            run_authority_reconnect,
+        )
         from app.broker.alpaca.clerk.fleet_boot import report_authority_state
 
         reconnecting_binding = alpaca_binding
@@ -1025,16 +1048,23 @@ async def _service_lifespan(
 
         def _install_reconnected(reconnected: ActiveClerkRuntime) -> None:
             if fleet_lane is not None:
-                report_authority_state(fleet_lane, authority_kind=reconnected.authority_kind)
+                report_authority_state(
+                    fleet_lane,
+                    authority_kind=reconnected.authority_kind,
+                    reconnecting=reconnected.reconnecting,
+                )
             _install_alpaca_authority(reconnected)
 
         alpaca_reconnect_task = asyncio.create_task(
             run_authority_reconnect(
                 alpaca_clerk_runtime,
-                select=_select_alpaca_authority,
-                acknowledge=_acknowledge_reconnected,
-                install=_install_reconnected,
-                boot=_boot_alpaca_authority,
+                steps=AuthoritySteps(
+                    select=_select_alpaca_authority,
+                    acknowledge=_acknowledge_reconnected,
+                    install=_install_reconnected,
+                    retire=_retire_alpaca_authority,
+                    boot=_boot_alpaca_authority,
+                ),
             ),
             name="alpaca-authority-reconnect",
         )

@@ -63,7 +63,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
-from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
+from app.broker.contract.errors import BrokerError, BrokerRateLimited, BrokerUnreachable
 from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -107,11 +107,27 @@ DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
 BROKER_UNREACHABLE_RECONNECTING: Final = "BROKER_UNREACHABLE_RECONNECTING"
 """The one startup failure that is not terminal (#2582).
 
-Alpaca could not be read while the authority was selected -- its account read or
-startup recovery's orders-and-positions read. Nothing about the account is
-wrong; the composition root re-selects on a bounded backoff until Alpaca
-answers (``authority_reconnect``). Every other startup failure stays terminal.
+Alpaca did not answer while the authority was selected or booted -- a network
+failure, a timeout, its own server error or a rate limit
+(:func:`transient_startup_failure`). Nothing about the account is wrong; the
+composition root re-selects on a bounded backoff until Alpaca answers
+(``authority_reconnect``). Every other startup failure stays terminal.
 """
+
+
+class StartupRecoveryTimedOut(TimeoutError):
+    """Startup recovery did not finish inside its deadline (#2582).
+
+    Recovery is paced by Alpaca's answers to the account's orders and
+    positions, so running out of time is Alpaca answering too slowly -- the
+    same transient failure as a single read timing out, and retried the same
+    way.
+    """
+
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__(
+            f"Startup recovery did not finish within {timeout_s:g} seconds while reading Alpaca."
+        )
 
 
 class BackgroundSweep(Protocol):
@@ -152,10 +168,13 @@ class ClerkStartupFailure:
     activation_detected: bool = False
     authority_generation: int | None = None
     db_identity_token: str | None = None
+    # How long Alpaca asked this Clerk to wait, when it rate-limited the
+    # selection (HTTP 429 Retry-After); the reconnect waits at least this.
+    retry_after_ms: int | None = None
 
     @property
     def reconnecting(self) -> bool:
-        """Whether this failure is only an unreachable Alpaca, which startup retries."""
+        """Whether this failure is only Alpaca not answering yet, which startup retries."""
         return self.reason_code == BROKER_UNREACHABLE_RECONNECTING
 
 
@@ -454,10 +473,13 @@ async def compose_repository_runtime(
         if envelope_sync is not None:
             await asyncio.to_thread(envelope_sync.refresh_arming)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
-        await asyncio.wait_for(
-            facade.recover(),
-            timeout=startup_recovery_timeout_s,
-        )
+        try:
+            await asyncio.wait_for(
+                facade.recover(),
+                timeout=startup_recovery_timeout_s,
+            )
+        except TimeoutError as exc:
+            raise StartupRecoveryTimedOut(startup_recovery_timeout_s) from exc
         return _ComposedAuthority(
             repository=repository,
             facade=facade,
@@ -489,6 +511,7 @@ def unavailable_runtime(
     activation_detected: bool = False,
     authority_generation: int | None = None,
     db_identity_token: str | None = None,
+    retry_after_ms: int | None = None,
 ) -> ActiveClerkRuntime:
     return ActiveClerkRuntime(
         authority_kind="unavailable",
@@ -502,6 +525,7 @@ def unavailable_runtime(
             activation_detected=activation_detected,
             authority_generation=authority_generation,
             db_identity_token=db_identity_token,
+            retry_after_ms=retry_after_ms,
         ),
     )
 
@@ -544,41 +568,59 @@ def developer_reset_refusal(
     )
 
 
-def unreachable_broker_error(exc: BaseException) -> BrokerUnavailable | None:
-    """The broker error behind a failed selection, when an unreachable Alpaca is all it was.
+TransientStartupCause = BrokerUnreachable | BrokerRateLimited | StartupRecoveryTimedOut
 
-    Alpaca not answering -- a network failure, a timeout, a server error --
-    is transient (``BrokerUnavailable``). An answer that cannot support a
-    verdict (``BrokerEvidenceUnavailable``) is not, and neither is anything
-    that is not a broker error at all: a refused account, a broken repository,
-    a startup read that answered but could not be proven complete.
+
+def transient_startup_failure(exc: BaseException) -> TransientStartupCause | None:
+    """The cause behind a failed startup, when Alpaca not answering yet is all it was.
+
+    Transient -- retried by the reconnect: Alpaca unreachable, timing out or
+    failing on its own side (``BrokerUnreachable``, which the Alpaca client
+    raises for a network failure, a timeout and a 5xx), rate-limiting us
+    (``BrokerRateLimited``), or startup recovery running out of time
+    (``StartupRecoveryTimedOut``). Everything else is terminal: a refused
+    credential, an answer no mapping recognized (the ``BrokerUnavailable``
+    catch-all for an unexpected 404 or 409), evidence that cannot support a
+    verdict, a broken repository.
+
+    The failure may arrive wrapped -- startup recovery's own error, or boot
+    recovery's preparation error raised from it -- so the explicit cause chain
+    is followed to the first broker error, and that one decides.
     """
-    cause = exc.broker_error if isinstance(exc, StartupBrokerTruthUnavailable) else exc
-    if isinstance(cause, BrokerUnavailable) and not isinstance(cause, BrokerEvidenceUnavailable):
-        return cause
+    link: BaseException | None = exc
+    while link is not None:
+        if isinstance(link, StartupRecoveryTimedOut):
+            return link
+        if isinstance(link, StartupBrokerTruthUnavailable):
+            link = link.broker_error
+            continue
+        if isinstance(link, BrokerError):
+            return link if isinstance(link, BrokerUnreachable | BrokerRateLimited) else None
+        link = link.__cause__
     return None
 
 
 def reconnecting_refusal(
-    error: BrokerUnavailable,
+    cause: TransientStartupCause,
     *,
     account_id: str | None,
     activation_detected: bool = False,
     authority_generation: int | None = None,
     db_identity_token: str | None = None,
 ) -> ActiveClerkRuntime:
-    """The refusal a selection that could not reach Alpaca installs while it reconnects."""
+    """The refusal a startup Alpaca did not answer installs while it reconnects."""
     return unavailable_runtime(
         BROKER_UNREACHABLE_RECONNECTING,
         account_id=account_id,
         recovery=(
             f"This Clerk could not read its account from Alpaca when it started: "
-            f"{_sentence(error)} It is reconnecting and will take over this account on its own "
+            f"{_sentence(cause)} It is reconnecting and will take over this account on its own "
             "once Alpaca answers; no restart is needed."
         ),
         activation_detected=activation_detected,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,
+        retry_after_ms=cause.retry_after_ms if isinstance(cause, BrokerRateLimited) else None,
     )
 
 
@@ -591,16 +633,16 @@ def compose_failure_refusal(
 ) -> ActiveClerkRuntime:
     """The one refusal for a composition that raised, on either side of the live fork.
 
-    An unreachable Alpaca reconnects (``reconnecting_refusal``). An
+    Alpaca not answering yet reconnects (``reconnecting_refusal``). An
     ``ActivationRecordInvalid`` is the cutover record's fault and names
     itself; every other failure is the startup's, and its copy says it is
     final and what ends it. Both sides carried the same six-keyword call with
     the same ternary, which is how the two sentences would have drifted.
     """
-    unreachable = unreachable_broker_error(exc)
-    if unreachable is not None:
+    transient = transient_startup_failure(exc)
+    if transient is not None:
         return reconnecting_refusal(
-            unreachable,
+            transient,
             account_id=account_id,
             activation_detected=True,
             authority_generation=authority_generation,
@@ -704,6 +746,8 @@ __all__ = [
     "AuthorityKind",
     "BackgroundSweep",
     "ClerkStartupFailure",
+    "StartupRecoveryTimedOut",
+    "TransientStartupCause",
     "activate_isolated_authority",
     "compose_failure_refusal",
     "compose_repository_runtime",
@@ -712,6 +756,6 @@ __all__ = [
     "open_repository_after_lease_expiry",
     "reconnecting_refusal",
     "terminal_startup_recovery",
+    "transient_startup_failure",
     "unavailable_runtime",
-    "unreachable_broker_error",
 ]

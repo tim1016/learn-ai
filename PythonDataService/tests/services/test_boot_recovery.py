@@ -153,6 +153,50 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert denied.value.admission_decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
 
 
+async def test_a_boot_still_reconnecting_to_alpaca_tells_start_to_wait_not_restart(
+    tmp_path: Path,
+) -> None:
+    """#2582: the Clerk-less sweep of a boot Alpaca did not answer is degraded only until it does.
+
+    The reconnect reruns boot recovery against the authority it installs, so
+    Start says wait -- never "restart the service", which could only repeat it.
+    """
+    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+    from app.broker.alpaca.clerk.active_runtime import reconnecting_refusal
+    from app.broker.contract.errors import BrokerUnreachable
+
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.stop("alpaca", _SID)
+
+    set_active_clerk_runtime(
+        reconnecting_refusal(
+            BrokerUnreachable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+            account_id=None,
+        )
+    )
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+    report = await rebooted.run_boot_recovery()
+    assert report.authority_unavailable_instances == (_SID,)
+
+    with pytest.raises(BootRecoveryIncompleteError) as denied:
+        await rebooted.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    decision = denied.value.admission_decision
+    assert decision is not None
+    assert decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
+    assert "could not reach Alpaca when it started" in decision.explanation
+    assert decision.next_step is not None
+    assert "No restart is needed." in decision.next_step
+
+
 async def test_boot_sweep_records_why_a_binding_was_left_unprojected(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

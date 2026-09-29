@@ -594,10 +594,10 @@ async def test_a_failed_custody_authority_is_a_line_not_a_quiet_home() -> None:
 async def test_an_authority_reconnecting_to_alpaca_is_a_line_that_says_so_not_a_failure() -> None:
     """#2582: a startup that could not reach Alpaca has not failed, and its line says so."""
     from app.broker.alpaca.clerk.active_runtime import reconnecting_refusal
-    from app.broker.contract.errors import BrokerUnavailable
+    from app.broker.contract.errors import BrokerUnreachable
 
     set_active_clerk_runtime(reconnecting_refusal(
-        BrokerUnavailable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+        BrokerUnreachable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
         account_id=ACCOUNT, activation_detected=True,
     ))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
