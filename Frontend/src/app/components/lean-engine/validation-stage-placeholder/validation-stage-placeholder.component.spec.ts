@@ -18,7 +18,7 @@ describe('ValidationStagePlaceholderComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'SPY validation run' })).toBeTruthy();
     expect(container.querySelector('app-asset-identity')?.textContent).toContain('SPY');
-    expect(screen.getByText('signal close')).toBeTruthy();
+    expect(screen.getByText('Signal bar close')).toBeTruthy();
     expect(screen.getByText('both')).toBeTruthy();
     expect(
       screen.getByText(/Run a validation to populate the equity curve/),
@@ -39,6 +39,21 @@ describe('ValidationStagePlaceholderComponent', () => {
     // Honesty guard: no invented BUY/EXIT markers before a run exists.
     expect(screen.queryByText('BUY')).toBeNull();
     expect(screen.queryByText('EXIT')).toBeNull();
-    expect(screen.getByText('next open')).toBeTruthy();
+    expect(screen.getByText('Next bar open')).toBeTruthy();
+  });
+
+  it('names the decision-minute open rather than calling every other mode the next open (#2599)', async () => {
+    await render(ValidationStagePlaceholderComponent, {
+      inputs: {
+        symbol: 'SPY',
+        resolution: 'minute',
+        fillMode: 'decision_minute_open',
+        engine: 'python',
+      },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.getByText('Decision minute open')).toBeTruthy();
+    expect(screen.queryByText('Next bar open')).toBeNull();
   });
 });

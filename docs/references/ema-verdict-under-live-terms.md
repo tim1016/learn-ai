@@ -489,3 +489,49 @@ deletes the seam replacement for its term, expresses the term through a
 request parameter, and must reproduce the matching rows here. The pinned run
 18 and 33 targets and the seam guards make such a rerun fail loudly if it
 stops measuring what it claims.
+
+## Addendum, 2026-09-30: the fill is a request parameter, and the verdict after #2607
+
+**Fill timing.** The decision-minute open is now the engine's
+`decision_minute_open` fill mode
+([#2599](https://github.com/tim1016/learn-ai/issues/2599)). Strategy Lab,
+Grid Search and the Walk-Forward study all accept it. The script no longer
+replaces the fill for it: `Terms.fill` goes into the request, and only the
+fixed quantity and the Alpaca fees still come in through seams.
+
+The rerun at `4755f2ee` (the same staged manifest, `b4c297522cea…`)
+reproduced `research`, `fill_decision_minute_open`, `fill_next_bar_open` and
+`live_1c` byte-for-byte against the same four variants run through the old
+seam on the same commit. That covers every grade, every fold and every W3mo
+fill. The run-18 and run-33 checks still pass.
+
+**Fees.** Research's default flat fee is now $0 per order, labelled "fees not
+charged" ([#2601](https://github.com/tim1016/learn-ai/issues/2601)). The
+`research` variant still passes $1 per order explicitly so that it keeps
+reproducing run 18.
+
+**The walk-forward verdict no longer holds.** The #2607 closing-bar rule sets
+aside a decision taken on the session's closing bar. On master it turns the
+walk-forward verdict to **got worse** in every column measured. The tables
+above predate that rule.
+
+- The 27 months now charge $152 in fees instead of $162: five fewer round
+  trips, the five closing-bar entries counted in "Session-close signals".
+- Out-of-sample trades fall from 51 to 48.
+- Fold 0's retention falls from 0.67 to 0.39, and the median from 0.589 to
+  0.395.
+- The W3mo and W6mo grades are unchanged.
+
+| Variant | Verdict | Median retention | Median test Sharpe | Fold retentions (0..4) | OOS trades |
+|---|---|---:|---:|---|---:|
+| `research` | got worse (5 of 5) | 0.395 | 0.947 | 0.39, 0.57, 1.86, 0.20, -2.45 | 48 |
+| `fill_decision_minute_open` | got worse (5 of 5) | 0.394 | 0.951 | 0.39, 0.57, 1.85, 0.21, -2.44 | 48 |
+| `fill_next_bar_open` | got worse (5 of 5) | 0.325 | 0.699 | 0.33, 0.65, 1.86, -0.10, -2.99 | 48 |
+| `live_1c` | got worse (5 of 5) | 0.393 | 0.948 | 0.39, 0.56, 1.87, 0.22, -2.52 | 48 |
+
+| Variant | W3mo | W6mo | 27 months |
+|---|---|---|---|
+| `research` | **B**/59 · $136.38 · fees $22.00 | **A**/81 · $2,706.52 · fees $40.00 | **A**/79 · $9,508.67 · fees $152.00 |
+| `fill_decision_minute_open` | **B**/59 · $131.21 · fees $22.00 | **A**/81 · $2,705.85 · fees $40.00 | **A**/79 · $9,547.05 · fees $152.00 |
+| `fill_next_bar_open` | **C**/44 · $-311.40 · fees $22.00 | **A**/79 · $2,063.71 · fees $40.00 | **A**/77 · $7,969.17 · fees $152.00 |
+| `live_1c` | **B**/58 · $0.73 · fees $0.24 | **A**/80 · $17.67 · fees $0.40 | **A**/77 · $47.43 · fees $2.41 |

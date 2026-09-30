@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { fillModeLabel } from '../../../models/fill-mode';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 /**
@@ -18,6 +19,7 @@ export class ValidationStagePlaceholderComponent {
   readonly symbol = input.required<string>();
   readonly resolution = input.required<string>();
   readonly fillMode = input.required<string>();
+  protected readonly fillModeLabel = computed(() => fillModeLabel(this.fillMode()));
   readonly engine = input.required<string>();
   /** Data-policy / bar-consolidation summary for the current configuration. */
   readonly dataPolicyNote = input('');

@@ -1,6 +1,6 @@
 """Fill models for market orders.
 
-Three modes are supported:
+Four modes are supported:
 
 * ``SIGNAL_BAR_CLOSE`` — the order fills at ``bar.close`` of the consolidated
   bar that triggered it. This reproduces the bookkeeping inside LEAN's
@@ -23,6 +23,13 @@ Three modes are supported:
   bar whose NY-local trading date is not strictly after the signal bar's
   trading date. The first eligible candidate bar's ``open`` is used as the
   fill price.
+
+* ``DECISION_MINUTE_OPEN`` — the order fills at the open of the first bar
+  that starts once the decision bar has closed and the order exists: the
+  earliest price a live order sent at that instant could get (#2599). For a
+  consolidated bucket it is the minute the backtest emits the bucket on, the
+  minute a live bot's order goes out in; ``NEXT_BAR_OPEN`` fills a minute
+  later. The two bound the live fill time from either side.
 """
 
 from __future__ import annotations
@@ -47,18 +54,22 @@ from app.utils.timestamps import ny_datetime
 # both the pending-fills retry loop (Step 3) and the order-drain branch
 # (Step 5). Single source of truth — keep in lockstep with the FillMode
 # enum (see test_deferred_fill_modes_membership_invariant).
-DEFERRED_FILL_MODES: frozenset[FillMode] = frozenset({FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN})
+DEFERRED_FILL_MODES: frozenset[FillMode] = frozenset(
+    {FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN, FillMode.DECISION_MINUTE_OPEN}
+)
 
 
 @dataclass
 class FillModel:
-    """Simple fill model configurable between the three supported modes.
+    """Simple fill model configurable between the four supported modes.
 
     Args:
         mode: One of the ``FillMode`` values.
-        commission_per_order: Legacy flat fee. Used when ``fee_model`` is
-            None — pre-matrix SPY parity fixtures still rely on it. New
-            fixtures pin a fee_model and ignore this field.
+        commission_per_order: The flat fee charged per fill when
+            ``fee_model`` is None. Research requests pass their own, $0 by
+            default (fees not charged, #2601); this $1 default is what the
+            pre-matrix SPY parity fixtures charge. Matrix fixtures pin a
+            fee_model and ignore this field.
         slippage_per_share: Applied against the trade direction.
         fee_model: Optional per-fill fee model
             (:class:`IbkrEquityCommissionModel`). When set,
@@ -112,10 +123,13 @@ class FillModel:
 
         Args:
             order: The pending market order.
-            signal_bar: The bar at whose timestamp the order was placed.
-            next_bar: The bar immediately following ``signal_bar``, required
-                for ``NEXT_BAR_OPEN`` mode. If None in that mode, the fill is
-                deferred (returns None).
+            signal_bar: The bar at whose timestamp the order was placed. For
+                ``DECISION_MINUTE_OPEN`` it is the bar the decision was taken on.
+            next_bar: The candidate bar a deferred mode fills against. For
+                ``NEXT_BAR_OPEN`` it is the bar immediately following
+                ``signal_bar``; ``DECISION_MINUTE_OPEN`` is first offered the
+                minute the decision was taken in. If None, or not yet
+                eligible, the fill is deferred (returns None).
             current_bar: The engine's current minute bar. Used only by the
                 opt-in LEAN stale-signal path for ``SIGNAL_BAR_CLOSE``.
 
@@ -153,6 +167,13 @@ class FillModel:
             # signal bar's trading date." Dates are transiently materialized
             # in NY for this decision; engine state stays numeric ms UTC.
             if ny_datetime(next_bar.start_ms).date() <= ny_datetime(signal_bar.end_ms).date():
+                return None
+            fill_price = next_bar.open
+            fill_time_ms = next_bar.start_ms
+        elif self.mode == FillMode.DECISION_MINUTE_OPEN:
+            # A bar that opened before the decision bar closed, or before the
+            # order existed, holds prices this order could never have had.
+            if next_bar is None or next_bar.start_ms < max(signal_bar.end_ms, order.submitted_at_ms):
                 return None
             fill_price = next_bar.open
             fill_time_ms = next_bar.start_ms

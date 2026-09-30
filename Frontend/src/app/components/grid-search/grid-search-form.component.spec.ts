@@ -118,4 +118,19 @@ describe('GridSearchFormComponent', () => {
     expect(spec?.min_trades).toBe(5);
     expect(spec?.end_ms ?? 0).toBeGreaterThan(spec?.start_ms ?? 0);
   });
+
+  it('launches a decision-minute-open search that charges no fee unless asked (#2599, #2601)', async () => {
+    const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-7');
+    await renderForm([strategy()], { launch });
+
+    expect(screen.getByText('Fees not charged')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Fill mode'), { target: { value: 'decision_minute_open' } });
+    await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /launch search/i }));
+    await waitFor(() => expect(launch).toHaveBeenCalled());
+
+    const spec = launch.mock.lastCall?.[0];
+    expect(spec?.fill_mode).toBe('decision_minute_open');
+    expect(spec?.commission_per_order).toBe(0);
+  });
 });

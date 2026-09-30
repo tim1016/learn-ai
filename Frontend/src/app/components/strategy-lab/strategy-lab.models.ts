@@ -1,6 +1,7 @@
 import type { EngineValidationAnalytics } from "../lean-engine/engine-results/engine-validation-analytics.types";
 import type { RunVerdict } from "../../api/run-verdict.types";
 import type { DataPolicy } from "../../models/data-policy";
+import { isFillModeName, type FillModeName } from "../../models/fill-mode";
 import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { runWindowDate } from "../../services/backtest-runs.types";
 import type { TickerRange } from "../../shared/ticker-range-picker";
@@ -134,7 +135,7 @@ export interface StrategyLabRunInputs {
   engine: EngineChoice;
   range: TickerRange;
   parameters: Record<string, unknown>;
-  fillMode: "signal_bar_close" | "next_bar_open";
+  fillMode: FillModeName;
   initialCash: number;
   commissionPerOrder: number;
   dataPolicy: DataPolicy | null;
@@ -173,11 +174,20 @@ function runInputsFrom(facts: RunFacts, currentRange: TickerRange): StrategyLabR
       autoFetch: facts.autoFetch,
     },
     parameters: { ...facts.parameters, symbol },
-    fillMode: facts.fillMode === "next_bar_open" ? "next_bar_open" : "signal_bar_close",
+    fillMode: isFillModeName(facts.fillMode) ? facts.fillMode : "signal_bar_close",
     initialCash: facts.initialCash,
     commissionPerOrder: facts.commissionPerOrder ?? 0,
     dataPolicy: facts.policy,
   };
+}
+
+/**
+ * Whether a saved run charged no fees at all (#2601). A Python run at a $0 flat
+ * fee charged nothing. A LEAN run also records $0, but it charges fees per fill;
+ * a paired run records no flat fee, because it charges the pinned IBKR model.
+ */
+export function feesNotCharged(run: Pick<BacktestRunDetail, "source" | "commissionPerOrder">): boolean {
+  return run.source === "engine" && run.commissionPerOrder === 0;
 }
 
 /** The inputs a saved run was produced with. Throws when its persisted parameters are malformed. */

@@ -2,6 +2,7 @@ import { NgTemplateOutlet } from "@angular/common";
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
+import { FILL_MODE_OPTIONS, isFillModeName, type FillModeName } from "../../../models/fill-mode";
 import { ExperimentalNoticeComponent } from "../../../shared/experimental-notice/experimental-notice.component";
 import { DEFAULT_ADJUSTMENT_MODE } from '../../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
@@ -31,6 +32,7 @@ interface StrategyLabPrimaryAction {
 })
 export class StrategyLabConfigRailComponent {
   readonly engineChoices: readonly EngineChoice[] = ["python", "lean", "both"];
+  protected readonly fillModes = FILL_MODE_OPTIONS;
 
   readonly collapsed = input(false);
   readonly engine = input.required<EngineChoice>();
@@ -39,9 +41,9 @@ export class StrategyLabConfigRailComponent {
   readonly strategies = input<readonly StrategyInfo[]>([]);
   readonly selectedStrategyName = input<string | null>(null);
   readonly paramValues = input<Record<string, unknown>>({});
-  readonly fillMode = input<"signal_bar_close" | "next_bar_open">("signal_bar_close");
+  readonly fillMode = input<FillModeName>("signal_bar_close");
   readonly initialCash = input(100000);
-  readonly commissionPerOrder = input(1);
+  readonly commissionPerOrder = input(0);
   readonly running = input(false);
   /** A Strategy Lab backtest is in flight in some tab. Blocks submitting
    *  another one; launcher recovery is not a submission and stays available. */
@@ -60,7 +62,7 @@ export class StrategyLabConfigRailComponent {
   readonly engineChanged = output<EngineChoice>();
   readonly strategySelected = output<string>();
   readonly parameterChanged = output<StrategyParameterChange>();
-  readonly fillModeChanged = output<"signal_bar_close" | "next_bar_open">();
+  readonly fillModeChanged = output<FillModeName>();
   readonly initialCashChanged = output<number>();
   readonly commissionChanged = output<number>();
   readonly launcherCheckRequested = output();
@@ -152,7 +154,7 @@ export class StrategyLabConfigRailComponent {
 
   onFillModeEvent(event: Event): void {
     const target = event.target;
-    if (target instanceof HTMLSelectElement && (target.value === "signal_bar_close" || target.value === "next_bar_open")) {
+    if (target instanceof HTMLSelectElement && isFillModeName(target.value)) {
       this.fillModeChanged.emit(target.value);
     }
   }

@@ -37,4 +37,23 @@ describe("StrategyLabRunStatsComponent", () => {
     expect(container.textContent).not.toContain("Back to workbench");
     expect(container.querySelector("app-strategy-lab-chart")).toBeNull();
   });
+
+  it("says a $0-fee Python run's fees were not charged (#2601)", async () => {
+    await render(StrategyLabRunStatsComponent, {
+      inputs: { run: makeRun({ commissionPerOrder: 0 }), result: { ...makeResult(), total_fees: 0 }, verdict: null, parity: null, tradesTruncated: false },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.getByText("Not charged")).toBeTruthy();
+  });
+
+  it("prices a LEAN run's own per-fill fees although it records no flat fee", async () => {
+    await render(StrategyLabRunStatsComponent, {
+      inputs: { run: makeRun({ source: "lean-sidecar", engine: "LEAN", commissionPerOrder: 0 }), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.queryByText("Not charged")).toBeNull();
+    expect(screen.getByText("$2.00")).toBeTruthy();
+  });
 });

@@ -194,9 +194,11 @@ def _parse_fill_mode(raw: str) -> FillMode:
         return FillMode.SIGNAL_BAR_CLOSE
     if key in ("next_bar_open", "nextbaropen", "open"):
         return FillMode.NEXT_BAR_OPEN
+    if key == FillMode.DECISION_MINUTE_OPEN.value:
+        return FillMode.DECISION_MINUTE_OPEN
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unknown fill_mode '{raw}'. Expected signal_bar_close or next_bar_open.",
+        detail=f"Unknown fill_mode '{raw}'. Expected signal_bar_close, next_bar_open or decision_minute_open.",
     )
 
 

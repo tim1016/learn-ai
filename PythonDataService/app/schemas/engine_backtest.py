@@ -50,9 +50,19 @@ class EngineBacktestRequest(BaseModel):
     )
     fill_mode: str = Field(
         "signal_bar_close",
-        description="Fill mode: signal_bar_close or next_bar_open",
+        description=(
+            "Fill mode: signal_bar_close, next_bar_open, or decision_minute_open "
+            "(the open of the first minute at or after the decision bar's close)"
+        ),
     )
-    commission_per_order: float = Field(1.0, ge=0)
+    commission_per_order: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Flat fee per order. 0, the default, charges no fees: Alpaca charges no "
+            "commission, and its regulatory fees are not modelled (#2601)."
+        ),
+    )
     slippage_per_share: float = Field(
         0.0,
         ge=0,

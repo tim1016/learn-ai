@@ -16153,7 +16153,8 @@
             "type": "boolean"
           },
           "commission_per_order": {
-            "default": 1.0,
+            "default": 0.0,
+            "description": "Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).",
             "minimum": 0.0,
             "title": "Commission Per Order",
             "type": "number"
@@ -16183,7 +16184,7 @@
           },
           "fill_mode": {
             "default": "signal_bar_close",
-            "description": "Fill mode: signal_bar_close or next_bar_open",
+            "description": "Fill mode: signal_bar_close, next_bar_open, or decision_minute_open (the open of the first minute at or after the decision bar's close)",
             "title": "Fill Mode",
             "type": "string"
           },
@@ -21212,7 +21213,8 @@
         "description": "Body of POST /api/jobs-internal/grid-search \u2014 the spec plus the minted job id.\n\n``resume_search_id`` names an incomplete search to Finish instead: the\nspec fields are ignored and the stored request governs.",
         "properties": {
           "commissionPerOrder": {
-            "default": 1.0,
+            "default": 0.0,
+            "description": "Flat fee per order; 0, the default, charges no fees",
             "minimum": 0.0,
             "title": "Commissionperorder",
             "type": "number"
@@ -21228,7 +21230,8 @@
             "default": "signal_bar_close",
             "enum": [
               "signal_bar_close",
-              "next_bar_open"
+              "next_bar_open",
+              "decision_minute_open"
             ],
             "title": "Fillmode",
             "type": "string"
@@ -21387,7 +21390,8 @@
         "description": "What the researcher asks for \u2014 the same body for preflight and launch.",
         "properties": {
           "commissionPerOrder": {
-            "default": 1.0,
+            "default": 0.0,
+            "description": "Flat fee per order; 0, the default, charges no fees",
             "minimum": 0.0,
             "title": "Commissionperorder",
             "type": "number"
@@ -21403,7 +21407,8 @@
             "default": "signal_bar_close",
             "enum": [
               "signal_bar_close",
-              "next_bar_open"
+              "next_bar_open",
+              "decision_minute_open"
             ],
             "title": "Fillmode",
             "type": "string"
@@ -46837,7 +46842,8 @@
         "description": "Body of POST /api/jobs-internal/walk-forward-study \u2014 the spec plus the minted job id.\n\n``resume_study_id`` names an incomplete study to Finish instead: the spec\nfields are ignored and the stored request governs.",
         "properties": {
           "commissionPerOrder": {
-            "default": 1.0,
+            "default": 0.0,
+            "description": "Flat fee per order; 0, the default, charges no fees",
             "minimum": 0.0,
             "title": "Commissionperorder",
             "type": "number"
@@ -46853,7 +46859,8 @@
             "default": "signal_bar_close",
             "enum": [
               "signal_bar_close",
-              "next_bar_open"
+              "next_bar_open",
+              "decision_minute_open"
             ],
             "title": "Fillmode",
             "type": "string"
@@ -47039,7 +47046,8 @@
         "additionalProperties": false,
         "properties": {
           "commissionPerOrder": {
-            "default": 1.0,
+            "default": 0.0,
+            "description": "Flat fee per order; 0, the default, charges no fees",
             "minimum": 0.0,
             "title": "Commissionperorder",
             "type": "number"
@@ -47055,7 +47063,8 @@
             "default": "signal_bar_close",
             "enum": [
               "signal_bar_close",
-              "next_bar_open"
+              "next_bar_open",
+              "decision_minute_open"
             ],
             "title": "Fillmode",
             "type": "string"

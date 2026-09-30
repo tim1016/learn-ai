@@ -95,8 +95,9 @@
           <label>
             <span>Fill mode</span>
             <select [value]="fillMode()" (change)="onFillModeEvent($event)">
-              <option value="signal_bar_close">Signal bar close</option>
-              <option value="next_bar_open">Next bar open</option>
+              @for (option of fillModes; track option.value) {
+                <option [value]="option.value" [selected]="option.value === fillMode()">{{ option.label }}</option>
+              }
             </select>
           </label>
         }
@@ -108,6 +109,7 @@
           <label>
             <span>Commission / order</span>
             <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
+            @if (commissionPerOrder() === 0) { <small>Fees not charged</small> }
           </label>
         } @else if (engine() === "both") {
           <!-- Both engines charge the pinned IBKR equity fee model; a flat

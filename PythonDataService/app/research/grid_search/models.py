@@ -123,7 +123,7 @@ class GridSearchSpec:
     end_ms: int
     resolution: Resolution = "minute"
     fill_mode: str = "signal_bar_close"
-    commission_per_order: float = 1.0
+    commission_per_order: float = 0.0
     slippage_per_share: float = 0.0
     initial_cash: float = 100_000.0
     measure: RankingMeasure = "sharpe_ratio"
@@ -155,6 +155,8 @@ class GridSearchSpec:
             end_ms=int(payload["end_ms"]),
             resolution=payload.get("resolution", "minute"),
             fill_mode=payload.get("fill_mode", "signal_bar_close"),
+            # A stored request always names its commission; a row from before it
+            # did was run at the $1 default of the time.
             commission_per_order=float(payload.get("commission_per_order", 1.0)),
             slippage_per_share=float(payload.get("slippage_per_share", 0.0)),
             initial_cash=float(payload.get("initial_cash", 100_000.0)),

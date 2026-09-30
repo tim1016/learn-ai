@@ -14996,7 +14996,8 @@ export interface components {
             auto_fetch?: boolean;
             /**
              * Commission Per Order
-             * @default 1
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
+             * @default 0
              */
             commission_per_order?: number;
             /**
@@ -15008,7 +15009,7 @@ export interface components {
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;
             /**
              * Fill Mode
-             * @description Fill mode: signal_bar_close or next_bar_open
+             * @description Fill mode: signal_bar_close, next_bar_open, or decision_minute_open (the open of the first minute at or after the decision bar's close)
              * @default signal_bar_close
              */
             fill_mode?: string;
@@ -17003,7 +17004,8 @@ export interface components {
         GridSearchJobRequest: {
             /**
              * Commissionperorder
-             * @default 1
+             * @description Flat fee per order; 0, the default, charges no fees
+             * @default 0
              */
             commissionPerOrder?: number;
             /**
@@ -17016,7 +17018,7 @@ export interface components {
              * @default signal_bar_close
              * @enum {string}
              */
-            fillMode?: "signal_bar_close" | "next_bar_open";
+            fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
             /**
              * Initialcash
              * @default 100000
@@ -17087,7 +17089,8 @@ export interface components {
         GridSearchSpecRequest: {
             /**
              * Commissionperorder
-             * @default 1
+             * @description Flat fee per order; 0, the default, charges no fees
+             * @default 0
              */
             commissionPerOrder?: number;
             /**
@@ -17100,7 +17103,7 @@ export interface components {
              * @default signal_bar_close
              * @enum {string}
              */
-            fillMode?: "signal_bar_close" | "next_bar_open";
+            fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
             /**
              * Initialcash
              * @default 100000
@@ -28249,7 +28252,8 @@ export interface components {
         WalkForwardStudyJobRequest: {
             /**
              * Commissionperorder
-             * @default 1
+             * @description Flat fee per order; 0, the default, charges no fees
+             * @default 0
              */
             commissionPerOrder?: number;
             /**
@@ -28262,7 +28266,7 @@ export interface components {
              * @default signal_bar_close
              * @enum {string}
              */
-            fillMode?: "signal_bar_close" | "next_bar_open";
+            fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
             /**
              * Initialcash
              * @default 100000
@@ -28339,7 +28343,8 @@ export interface components {
         WalkForwardStudySpecRequest: {
             /**
              * Commissionperorder
-             * @default 1
+             * @description Flat fee per order; 0, the default, charges no fees
+             * @default 0
              */
             commissionPerOrder?: number;
             /**
@@ -28352,7 +28357,7 @@ export interface components {
              * @default signal_bar_close
              * @enum {string}
              */
-            fillMode?: "signal_bar_close" | "next_bar_open";
+            fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
             /**
              * Initialcash
              * @default 100000

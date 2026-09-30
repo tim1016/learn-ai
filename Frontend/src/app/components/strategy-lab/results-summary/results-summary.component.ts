@@ -19,6 +19,8 @@ export class ResultsSummaryComponent {
   readonly verdict = input<RunVerdict | null>(null);
   readonly metricDocumentation = input<MetricDocumentationContext[]>([]);
   readonly runId = input<number | null>(null);
+  /** The run charged no fees, so its total is not a $0 fee bill (#2601). */
+  readonly feesNotCharged = input(false);
   private readonly documentationByMetric = computed(() =>
     new Map(this.metricDocumentation().map((context) => [context.metric_id, context])),
   );

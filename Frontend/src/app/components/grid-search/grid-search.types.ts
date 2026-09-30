@@ -4,6 +4,7 @@
  * int64 ms UTC; date-anchored boundaries are ET midnight instants.
  */
 
+import type { FillModeName } from '../../models/fill-mode';
 import type { ParamRange } from '../../shared/param-range/param-range';
 
 export type RankingMeasure = 'sharpe_ratio' | 'total_return_pct' | 'net_profit';
@@ -18,7 +19,7 @@ export interface GridSearchSpecRequest {
   start_ms: number;
   end_ms: number;
   resolution: 'minute' | 'daily';
-  fill_mode: string;
+  fill_mode: FillModeName;
   commission_per_order: number;
   slippage_per_share: number;
   initial_cash: number;
