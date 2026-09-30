@@ -16,6 +16,9 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
+    resolve_manual_replacement,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_enter_unfilled_if_proven,
@@ -158,6 +161,11 @@ class SqliteTradeUpdateEvidenceSink:
         async with self._intake:
             local_order = self._repo.order(client_order_id) if client_order_id else None
             if local_order is None and order is not None:
+                # An order Alpaca booked to replace a manual one carries no
+                # client id of ours, yet it is the same manual leg continued
+                # (#2656). Resolve the chain before judging the order foreign.
+                local_order = resolve_manual_replacement(self._repo, order=order)
+            if local_order is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
                 # observation fold raises its own atomic account hold; an
@@ -203,7 +211,10 @@ class SqliteTradeUpdateEvidenceSink:
             # id, status, symbol or side folds as a lost one, never as its
             # evidence -- and never raises out of the sink (#2643).
             if withhold_unnamed_order(
-                self._repo, effect_operation_id=owner.effect_operation_id, order=order
+                self._repo,
+                effect_operation_id=owner.effect_operation_id,
+                order=order,
+                order_ref=local_order.order_ref,
             ):
                 return "withheld_order"
 
@@ -219,6 +230,7 @@ class SqliteTradeUpdateEvidenceSink:
                     self._repo,
                     effect_operation_id=owner.effect_operation_id,
                     order=order,
+                    order_ref=local_order.order_ref,
                 )
                 return "order_event"
 
@@ -248,6 +260,7 @@ class SqliteTradeUpdateEvidenceSink:
                 effect_operation_id=owner.effect_operation_id,
                 order=order,
                 append_stale_ack=False,
+                order_ref=local_order.order_ref,
             )
             # The same proven-unfilled fold the REST route reaches through
             # ``fold_order_evidence``: the websocket usually sees a vendor
@@ -259,6 +272,7 @@ class SqliteTradeUpdateEvidenceSink:
                 self._repo,
                 effect_operation_id=owner.effect_operation_id,
                 order=order,
+                order_ref=local_order.order_ref,
             )
             # The frame's embedded order is a cumulative total too (#2460
             # review): once its exact slice advanced the recorded fills, the

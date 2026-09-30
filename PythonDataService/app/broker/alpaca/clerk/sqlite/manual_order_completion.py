@@ -28,16 +28,23 @@ def manual_order_has_exact_terminal_coverage(
     effect_operation_id: str,
     order_ref: str,
     broker_state: str,
+    observed_quantity: float | None = None,
 ) -> bool:
     """Whether exact evidence proves one manual tracer leg has fully filled.
 
-    Formula: ``abs(exact_effective_qty - requested_qty) <= FILL_QTY_EPSILON``.
+    Formula: ``abs(exact_effective_qty - expected_qty) <= FILL_QTY_EPSILON``.
     Reference: docs/references/clerk-invariants.md §2 — an absolute
     ``1e-9`` tolerance admits float64 aggregation residue without treating a
     material fractional-share remainder as complete.
     Canonical implementation: this predicate, reused by order evidence.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_manual_orders.py::test_manual_order_exact_coverage_tolerance.
+
+    ``expected_qty`` is the accepted leg's requested quantity. When the leg
+    follows an Alpaca replacement whose quantity the owner edited (#2656),
+    the observation's own requested quantity governs instead: a broker state
+    of ``filled`` means that order filled *its* requested quantity, so the
+    exact executions covering either figure prove the leg complete.
     """
     if broker_state.lower() != "filled":
         return False
@@ -46,7 +53,14 @@ def manual_order_has_exact_terminal_coverage(
         return False
     expected_quantity = _accepted_leg(repo, order_ref=order_ref).quantity
     effective_quantity, _ = repo.effective_exact_fill_totals_for_order(order_ref)
-    return abs(effective_quantity - expected_quantity) <= FILL_QTY_EPSILON
+    covered = abs(effective_quantity - expected_quantity) <= FILL_QTY_EPSILON
+    if (
+        not covered
+        and observed_quantity is not None
+        and abs(effective_quantity - observed_quantity) <= FILL_QTY_EPSILON
+    ):
+        covered = True
+    return covered
 
 
 def _require_copy_for_every_unfilled_state(

@@ -1068,6 +1068,29 @@ class ManualOrderCancelResultFacts:
         return cls(**json.loads(facts_json))
 
 
+@dataclass(frozen=True)
+class ManualOrderReplacedFacts:
+    """One link of a manual order's Alpaca replacement chain (#2656).
+
+    ``replaces`` is the broker order id the leg followed until this link —
+    the fold applies the advance only when that is still the chain head, so
+    replays and out-of-order links can never move the head backwards.
+    ``replaced_by`` is the new head. The owner's ``why`` is backend copy the
+    manual ticket shows while the leg follows the chain.
+    """
+
+    replaces: str
+    replaced_by: str
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderReplacedFacts:
+        return cls(**json.loads(facts_json))
+
+
 def _require_finite_positive(value: float, *, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be a number")
@@ -1326,6 +1349,17 @@ def validate_manual_order_cancel_accepted_facts(facts: ManualOrderCancelAccepted
 def validate_manual_order_cancel_result_facts(facts: ManualOrderCancelResultFacts) -> None:
     if facts.outcome not in {"CANCELED", "TARGET_TERMINAL"} or not facts.why:
         raise ValueError("manual cancellation result has an unsupported outcome")
+
+
+def validate_manual_order_replaced_facts(facts: ManualOrderReplacedFacts) -> None:
+    """Reject a malformed replacement link before transition admission (#2656)."""
+    for name, value in (("replaces", facts.replaces), ("replaced_by", facts.replaced_by)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"manual order replacement {name} must be a non-empty broker order id")
+    if facts.replaces == facts.replaced_by:
+        raise ValueError("a replacement link cannot point at the order it replaces")
+    if not isinstance(facts.why, str) or not facts.why:
+        raise ValueError("manual order replacement why must be non-empty")
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

@@ -33,6 +33,9 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     resolve_manual_order_cancellation,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
+    resolve_manual_replacement,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     ExternalOrderResource,
@@ -237,6 +240,27 @@ def _mismatched_symbols(
     )
 
 
+def _is_captured_broker_order(
+    order: BrokerOrder,
+    *,
+    known_order_refs: frozenset[str] | None,
+    known_broker_order_ids: frozenset[str] | None,
+    namespaces: frozenset[str],
+) -> bool:
+    """Whether the Clerk's durable identities own one broker snapshot order.
+
+    By its client order id when the captured order-ref set is supplied, and
+    for a manual replacement chain's head (#2656) by its broker order id —
+    Alpaca books the replacement with no client id of ours. Without the
+    captured set, the historical bot-only namespace heuristic answers.
+    """
+    if known_order_refs is None:
+        return order_ref_namespace_matches(order.client_order_id, namespaces)
+    return order.client_order_id in known_order_refs or order.order_id in (
+        known_broker_order_ids or frozenset()
+    )
+
+
 def plan_account_reconciliation(
     *,
     namespaces: frozenset[str],
@@ -244,18 +268,24 @@ def plan_account_reconciliation(
     broker_positions: list[BrokerPosition],
     attributed_positions: dict[str, float],
     known_order_refs: frozenset[str] | None = None,
+    known_broker_order_ids: frozenset[str] | None = None,
 ) -> ReconcilePlan:
-    """Derive residual account safety only after local evidence was folded."""
-    # Once the active SQLite authority supplies its full captured order-ref
-    # set, that durable identity is stronger than the historical bot-only
-    # namespace heuristic and correctly recognizes manual custody too.
+    """Derive residual account safety only after local evidence was folded.
+
+    Once the active SQLite authority supplies its full captured order-ref
+    set, that durable identity is stronger than the historical bot-only
+    namespace heuristic and correctly recognizes manual custody too; a
+    manual replacement chain's head is recognized the same way
+    (:func:`_is_captured_broker_order`, #2656).
+    """
     foreign = tuple(
         order
         for order in broker_orders
-        if (
-            order.client_order_id not in known_order_refs
-            if known_order_refs is not None
-            else not order_ref_namespace_matches(order.client_order_id, namespaces)
+        if not _is_captured_broker_order(
+            order,
+            known_order_refs=known_order_refs,
+            known_broker_order_ids=known_broker_order_ids,
+            namespaces=namespaces,
         )
     )
     in_flight_symbols = _in_flight_symbols(broker_orders)
@@ -1056,8 +1086,14 @@ def _fold_snapshot_evidence(
 ) -> None:
     for broker_order in broker_orders:
         if broker_order.client_order_id is None:
-            continue
-        local_order = repo.order(broker_order.client_order_id)
+            # An order Alpaca booked to replace a manual one has no client id
+            # of ours; it is the same manual leg continued, resolved through
+            # the chain (#2656) rather than skipped.
+            local_order = resolve_manual_replacement(repo, order=broker_order)
+            if local_order is None:
+                continue
+        else:
+            local_order = repo.order(broker_order.client_order_id)
         if local_order is None:
             continue
         owner = repo.active_exit_for_order(local_order.order_ref) or repo.effect_operation(
@@ -1072,6 +1108,7 @@ def _fold_snapshot_evidence(
             effect_operation_id=owner.effect_operation_id,
             order=broker_order,
             simulated_authority=simulated_authority,
+            order_ref=local_order.order_ref,
         )
 
 
@@ -1291,6 +1328,7 @@ def _finalize_reconciliation_verdict(
         broker_positions=broker_positions,
         attributed_positions=repo.attributed_positions_by_symbol(),
         known_order_refs=frozenset(repo.all_order_refs()),
+        known_broker_order_ids=repo.nonterminal_manual_broker_order_ids(),
     )
     plan = _contain_unfoldable_orders(repo, plan)
     _sync_unexplained_order_hold(repo, plan.unexplained_orders)

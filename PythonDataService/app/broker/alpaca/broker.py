@@ -572,6 +572,20 @@ class AlpacaBroker:
             return None
         return adapter.from_alpaca_order(payload)
 
+    async def get_order(self, order_id: str) -> BrokerOrder | None:
+        """Look one order up by its broker-assigned id (#2656).
+
+        Follows a manual order's Alpaca replacement chain: the replacement
+        Alpaca books carries no client order id of ours, so only its broker
+        order id can answer for it. Same evidence discipline as the
+        client-id lookup: ``None`` only on a definitive 404, transport
+        failures stay ``BrokerUnavailable`` and propagate.
+        """
+        payload = await self._client.get_order(order_id)
+        if payload is None:
+            return None
+        return adapter.from_alpaca_order(payload)
+
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:
     """Register the phase-1 brokers (Alpaca only) into the registry."""

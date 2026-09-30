@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.order_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
+from app.broker.contract.models import BrokerOrder
 from app.broker.contract.ports import BrokerTradePort
 
 ACTION_CANCEL_MANUAL_ORDER = "CANCEL_MANUAL_ORDER"
@@ -255,17 +256,22 @@ def _append_source_terminal(
     source_effect: EffectOperationResource,
     why: str,
 ) -> None:
-    """Close a source leg when exact broker evidence proves a filled or replaced terminal state.
+    """Close a source leg only when exact broker evidence proves it filled.
 
     An unfilled ending (``canceled``, ``expired``, ``rejected``) is
     ``fold_manual_order_ended_if_proven``'s alone (#2647): it ran while the
     exact evidence was folded, and where it declined -- a fill the Clerk has
     not recorded yet -- ending the leg here would drop that fill.
+    ``replaced`` is no ending either (#2656): the order lives on under a new
+    broker id, and where its link could not be read the leg stays honestly
+    outstanding rather than closing on a dead member.
     """
     if source_effect.state in {"succeeded", "failed", "rejected"}:
         return
     target = repo.order(order_ref)
-    if target is not None and (target.broker_state or "").lower() in UNFILLED_TERMINAL_STATES:
+    if target is not None and (target.broker_state or "").lower() in (
+        UNFILLED_TERMINAL_STATES | {"replaced"}
+    ):
         return
     facts = ManualOrderCancelResultFacts(outcome="TARGET_TERMINAL", why=why)
     repo.append_transition(
@@ -398,12 +404,16 @@ async def _resolve_claimed_manual_order_cancellation(
 
         Folding the evidence ends an unfilled source order itself
         (``fold_manual_order_ended_if_proven``); this records what the
-        cancellation proved.
+        cancellation proved. For an order Alpaca replaced the fold advances
+        the leg's chain head first (#2656), so the id returned — and the
+        DELETE that follows — is the live replacement, not the dead member
+        the client-id lookup answered for.
         """
         fold_order_evidence(
             repo,
             effect_operation_id=source_effect.effect_operation_id,
             order=observed,
+            order_ref=target.order_ref,
             simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
         )
         refreshed_target = repo.order(target.order_ref)
@@ -469,7 +479,19 @@ async def _resolve_claimed_manual_order_cancellation(
         # The exact lookup below, rather than a cancel transport error, is the
         # authority for whether the request reached Alpaca.
         cancel_error = exc
-    observed_after = await broker.observe_exact(target.client_order_id)
+    # A DELETE the Clerk sent to a chain head (#2656) can only be confirmed by
+    # that head's own answer: the client-id lookup still reports the replaced
+    # member, whose terminal ``replaced`` state proves nothing about the head.
+    if cancel_broker_order_id == (observed.order_id or ""):
+        observed_after = await broker.observe_exact(target.client_order_id)
+    else:
+        observed_after = await broker.lookup_replacement(cancel_broker_order_id)
+        if isinstance(observed_after, BrokerOrder):
+            observed_after = (
+                observed_after
+                if observed_after.order_id == cancel_broker_order_id
+                else None
+            )
     if isinstance(observed_after, BrokerError) or observed_after is None:
         await run(
             lambda: fold_uncertain(
@@ -495,6 +517,7 @@ async def _resolve_claimed_manual_order_cancellation(
             repo,
             effect_operation_id=source_effect.effect_operation_id,
             order=observed_after,
+            order_ref=target.order_ref,
             simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
         )
         target_after = repo.order(target.order_ref)

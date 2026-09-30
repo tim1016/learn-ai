@@ -89,6 +89,18 @@ def opt_str(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _opt_broker_order_id(value: Any) -> str | None:
+    """An optional Alpaca replacement-link id: stripped, blank read as absent.
+
+    ``replaced_by``/``replaces`` name broker order ids (#2656). A blank value
+    is no linkage, never an order identity to follow.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def opt_bool(value: Any, *, field: str) -> bool | None:
     """Parse an optional vendor boolean; reject truthy non-boolean values."""
     if value is None or isinstance(value, bool):
@@ -400,6 +412,8 @@ def from_alpaca_order(
         filled_at_ms=filled_at_ms,
         canceled_at_ms=opt_rfc3339_to_ms(payload.get("canceled_at")),
         expired_at_ms=opt_rfc3339_to_ms(payload.get("expired_at")),
+        replaced_by=_opt_broker_order_id(payload.get("replaced_by")),
+        replaces=_opt_broker_order_id(payload.get("replaces")),
         events=_order_events(payload),
         observed_at_ms=_observed(observed_at_ms),
         fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),

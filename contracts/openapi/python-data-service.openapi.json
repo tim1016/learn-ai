@@ -6968,6 +6968,28 @@
             ],
             "title": "Quantity"
           },
+          "replaced_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced By"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
+          },
           "side": {
             "title": "Side",
             "type": "string"
@@ -26770,6 +26792,17 @@
               }
             ]
           },
+          "replacement_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Note"
+          },
           "sequence_index": {
             "title": "Sequence Index",
             "type": "integer"
@@ -26789,7 +26822,8 @@
           "effect",
           "order",
           "cancellation",
-          "ending"
+          "ending",
+          "replacement_note"
         ],
         "title": "ManualOrderLegResponse",
         "type": "object"
@@ -44703,6 +44737,7 @@
           "MANUAL_ORDER_CANCEL_CONFIRMED",
           "MANUAL_ORDER_CANCEL_TERMINAL",
           "MANUAL_ORDER_FILLED",
+          "MANUAL_ORDER_REPLACED",
           "MANUAL_ORDER_TERMINAL",
           "MANUAL_TICKET_CANCELED",
           "MANUAL_TICKET_COMPLETED",

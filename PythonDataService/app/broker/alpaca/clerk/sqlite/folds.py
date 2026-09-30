@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitRecoveryEvaluatedFacts,
     ManualOrderCancelResultFacts,
+    ManualOrderReplacedFacts,
     OrderCancelRequestedFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
@@ -62,6 +63,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
     validate_manual_order_cancel_result_facts,
+    validate_manual_order_replaced_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
@@ -636,8 +638,27 @@ def order_observation_advances(
 
 def _ack_advances_order(conn: sqlite3.Connection, payload: dict[str, Any]) -> bool:
     """Whether this observation may advance the materialized order snapshot."""
-    row = conn.execute("SELECT broker_state FROM orders WHERE order_ref = ?", (payload["order_ref"],)).fetchone()
-    current_state = row["broker_state"]
+    row = conn.execute(
+        "SELECT o.broker_state, o.broker_order_id, e.kind AS effect_kind "
+        "FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.order_ref = ?",
+        (payload["order_ref"],),
+    ).fetchone()
+    current_state = row["broker_state"] if row is not None else None
+    # An observation of an order Alpaca already replaced never advances the
+    # manual leg it continues (#2656): the row's broker identity is the
+    # chain's current head, and a stale frame for a superseded member would
+    # otherwise write that dead member's terminal state over the head's
+    # lifecycle. Manual orders only — a bot order's first broker identity is
+    # never superseded by this machinery.
+    if (
+        row is not None
+        and row["effect_kind"] == "MANUAL_ORDER"
+        and payload.get("broker_order_id")
+        and row["broker_order_id"]
+        and payload["broker_order_id"] != row["broker_order_id"]
+    ):
+        return False
 
     current_sequence = _this_transition_sequence(conn)
     prior_source_time = conn.execute(
@@ -770,6 +791,26 @@ def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any])
         effect_state="succeeded",
         leg_state="SUCCEEDED",
         ticket_state="COMPLETED",
+    )
+
+
+def _fold_manual_order_replaced(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Advance a manual leg's broker identity to the order Alpaca booked instead.
+
+    The projection's broker id is the chain's current head (#2656); its
+    lifecycle state restarts empty because nothing about the new order is
+    known yet — the first observation of the head repopulates it under the
+    same monotonic acknowledgement rule as any order. The fold applies only
+    while ``replaces`` is still the head, so replays and out-of-order links
+    can never move the chain backwards, and a leg whose broker identity was
+    never established stays untouched.
+    """
+    facts = ManualOrderReplacedFacts.from_facts_json(payload["facts_json"])
+    validate_manual_order_replaced_facts(facts)
+    conn.execute(
+        "UPDATE orders SET broker_order_id = ?, broker_state = NULL, updated_at_ms = ? "
+        "WHERE order_ref = ? AND broker_order_id = ?",
+        (facts.replaced_by, payload["recorded_at_ms"], payload["order_ref"], facts.replaces),
     )
 
 
@@ -1579,6 +1620,7 @@ DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ENTER_UNFILLED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_REPLACED", _fold_manual_order_replaced)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ENTER_SUBMISSION_REFUSED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)

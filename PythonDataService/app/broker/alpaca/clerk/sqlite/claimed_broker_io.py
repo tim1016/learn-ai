@@ -118,6 +118,28 @@ class ClaimedBrokerIO:
         self._renew()
         return observed
 
+    async def lookup_replacement(self, broker_order_id: str) -> BrokerOrder | None:
+        """Exact lookup of one broker order by its broker id, when the port can.
+
+        Only real-broker ports offer the capability (Alpaca's
+        ``GET /v2/orders/{order_id}``); a port without it answers ``None``
+        and the caller treats the outcome as unobserved. Used to follow a
+        manual order's Alpaca replacement chain (#2656), whose members carry
+        no client order id of ours to look up.
+        """
+        self._renew()
+        get_order = getattr(self.trade, "get_order", None)
+        if not callable(get_order):
+            self._renew()
+            return None
+        try:
+            observed = await get_order(broker_order_id)
+        except BrokerError:
+            self._renew()
+            raise
+        self._renew()
+        return observed
+
     async def observe_exact(
         self, client_order_id: str
     ) -> BrokerOrder | BrokerError | None:

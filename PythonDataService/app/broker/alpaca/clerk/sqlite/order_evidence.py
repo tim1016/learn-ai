@@ -37,6 +37,9 @@ from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
     manual_order_ending_copy,
     manual_order_has_exact_terminal_coverage,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
+    record_manual_order_replacement,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     OrderResource,
@@ -245,6 +248,7 @@ def fold_order_evidence(
     order: BrokerOrder,
     append_stale_ack: bool = True,
     simulated_authority: bool = False,
+    order_ref: str | None = None,
 ) -> None:
     """Fold a REST/reconciliation aggregate order observation.
 
@@ -256,6 +260,11 @@ def fold_order_evidence(
     used for a ``trade_updates`` websocket frame.  The latter routes the
     immutable execution slice through ``EXECUTION_SLICE_FILLED`` and calls
     :func:`fold_order_acknowledgement` separately.
+
+    ``order_ref`` resolves the captured leg the observation belongs to. It
+    defaults to the observation's own ``client_order_id``; the one caller
+    that may not have one is a manual order's Alpaca replacement, resolved
+    through the chain (#2656) and folded as the same leg's continuation.
 
     ``simulated_authority`` is the caller's trusted statement that this
     aggregate came from a deterministic no-submit adapter's own port
@@ -289,9 +298,11 @@ def fold_order_evidence(
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order.client_order_id
+    order_ref = order_ref if order_ref is not None else order.client_order_id
     assert order_ref is not None
-    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+    if withhold_unnamed_order(
+        repo, effect_operation_id=effect_operation_id, order=order, order_ref=order_ref
+    ):
         return
     if simulated_authority:
         _fold_simulated_execution_evidence(
@@ -349,9 +360,10 @@ def fold_order_evidence(
         effect_operation_id=effect_operation_id,
         order=order,
         append_stale_ack=append_stale_ack,
+        order_ref=order_ref,
     )
     fold_enter_unfilled_if_proven(
-        repo, effect_operation_id=effect_operation_id, order=order
+        repo, effect_operation_id=effect_operation_id, order=order, order_ref=order_ref
     )
     # A fresh broker total may now account for exact slices a coverage
     # episode quarantined; without this a slice Alpaca never re-sends would
@@ -645,6 +657,7 @@ def fold_order_acknowledgement(
     effect_operation_id: str,
     order: BrokerOrder,
     append_stale_ack: bool = True,
+    order_ref: str | None = None,
 ) -> None:
     """Fold only monotonic aggregate order acknowledgement evidence.
 
@@ -655,15 +668,26 @@ def fold_order_acknowledgement(
     ``fold_order_evidence`` above remains the explicitly labelled recovery
     path for sources that have no execution identity.
 
+    ``order_ref`` resolves the captured leg the observation belongs to,
+    defaulting to the observation's own ``client_order_id``. A manual
+    order's Alpaca replacement carries no client id of ours, so the routes
+    that resolve it through the chain (#2656) pass the leg's own ref; every
+    observation of the chain then folds under the one leg it continues.
+
     Every route that observes an order reaches this fold, so a manual order's
     broker outcome is settled here too: a proven complete fill ends it
     ``MANUAL_ORDER_FILLED``, and a proven unfilled remainder ends it through
-    :func:`fold_manual_order_ended_if_proven`.
+    :func:`fold_manual_order_ended_if_proven`. Before either, one broker
+    observation can prove the leg's order was replaced at Alpaca — the
+    chain's head advances first (:func:`record_manual_order_replacement`),
+    so the acknowledgement that follows describes the head the leg now
+    follows, never the dead member it left (#2656).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order.client_order_id
+    order_ref = order_ref if order_ref is not None else order.client_order_id
     assert order_ref is not None
+    record_manual_order_replacement(repo, order=order, order_ref=order_ref)
     latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
     reported_filled_quantity = (
         order.filled_quantity if normalize_money(order.filled_quantity) > 0 else None
@@ -727,6 +751,7 @@ def fold_order_acknowledgement(
             effect_operation_id=effect_operation_id,
             order_ref=order_ref,
             broker_state=order.status,
+            observed_quantity=order.quantity,
         )
         and not repo.has_order_transition(
             order_ref=order_ref,
@@ -850,6 +875,7 @@ def fold_enter_unfilled_if_proven(
     *,
     effect_operation_id: str,
     order: BrokerOrder,
+    order_ref: str | None = None,
 ) -> None:
     """Mirror R12 for ENTER: a proven-zero-fill terminal ENTER reaches ``failed``.
 
@@ -931,7 +957,7 @@ def fold_enter_unfilled_if_proven(
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order.client_order_id
+    order_ref = order_ref if order_ref is not None else order.client_order_id
     assert order_ref is not None
     owning = repo.order(order_ref)
     if owning is None:
@@ -1083,6 +1109,7 @@ def withhold_unnamed_order(
     *,
     effect_operation_id: str,
     order: BrokerOrder,
+    order_ref: str | None = None,
 ) -> bool:
     """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
 
@@ -1111,7 +1138,7 @@ def withhold_unnamed_order(
     ]
     if not missing:
         return False
-    order_ref = order.client_order_id
+    order_ref = order_ref if order_ref is not None else order.client_order_id
     assert order_ref is not None
     why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
     logger.warning(
@@ -1459,6 +1486,25 @@ async def resolve_order_submission(
                     simulated_authority=trade_port_folds_simulated_evidence(trade),
                 )
             )
+            # A manual order's exact lookup answers for the client id the
+            # Clerk minted, which Alpaca may already have replaced: the fold
+            # above advanced the leg's chain head, and only the head's own
+            # answer can settle the leg (#2656). Ports without the broker-id
+            # lookup answer ``None`` and the stream ends the leg instead.
+            head_broker_order_id = await run(
+                lambda: _manual_replacement_head_beyond(repo, order_ref=order_ref, beyond=order.order_id)
+            )
+            if head_broker_order_id is not None:
+                replacement = await broker.lookup_replacement(head_broker_order_id)
+                if replacement is not None:
+                    await guarded(
+                        lambda: fold_order_evidence(
+                            repo,
+                            effect_operation_id=effect.effect_operation_id,
+                            order=replacement,
+                            order_ref=order_ref,
+                        )
+                    )
     finally:
         # Off the loop (it takes the write lock) and drained on cancellation
         # so it never interleaves with an abandoned worker's writes (#1993
@@ -1469,6 +1515,24 @@ async def resolve_order_submission(
                 effect_operation_id=effect.effect_operation_id, token=claim_token
             ),
         )
+
+
+def _manual_replacement_head_beyond(
+    repo: ClerkSqliteRepository, *, order_ref: str, beyond: str
+) -> str | None:
+    """The manual leg's chain head when it is no longer the order just observed.
+
+    ``None`` for every unreplaced order and every bot order: only a manual
+    leg that Alpaca replaced (#2656) follows a broker identity its client-id
+    lookup cannot answer for.
+    """
+    row = repo.order(order_ref)
+    if row is None or row.broker_order_id is None or row.broker_order_id == beyond:
+        return None
+    effect = repo.effect_operation(row.effect_operation_id)
+    if effect is None or effect.kind != "MANUAL_ORDER":
+        return None
+    return row.broker_order_id
 
 
 def _fold_absence_if_past_grace(
