@@ -501,7 +501,7 @@ def test_a_reconnect_installs_and_boots_through_the_boot_s_own_steps() -> None:
     ]
 
     assert "select=_select_alpaca_authority" in reconnect
-    assert "acknowledge_runtime_binding(bound=reconnecting_binding" in reconnect
+    assert "acknowledge_reconnected_binding(bound=reconnecting_binding" in reconnect
     assert "_install_alpaca_authority(reconnected)" in reconnect
     assert "retire=_retire_alpaca_authority" in reconnect
     assert "boot=_boot_alpaca_authority" in reconnect
@@ -513,47 +513,42 @@ def test_a_reconnect_installs_and_boots_through_the_boot_s_own_steps() -> None:
     ), "shutdown ends the reconnect before it closes custody"
 
 
-def test_a_reconnect_that_refuses_the_binding_stops_the_boot_started_account_work() -> None:
-    """#2669: market liveness and the equity snapshot scheduler stop on a refused binding.
+def test_the_account_background_work_runs_only_through_its_one_unit() -> None:
+    """#2669: the composition root starts and stops the account's work only through one unit.
 
-    A boot whose Alpaca did not answer starts both -- the binding was not
-    refused -- and a reconnect whose acknowledgement then refuses the binding
-    (``ACCOUNT_PIN_MISMATCH``) left them running: the snapshot scheduler kept
-    writing equity snapshots for an account the configuration did not
-    approve. A boot that met the mismatch directly never started either.
-
-    Structural because the failure is composition-root wiring: the boot's two
-    starts and the reconnect's stop must read the SAME one decision --
-    ``account_background_work_refused`` -- or the two drift apart again. A
-    reconnect that ends serving leaves both running: the stop is reached only
-    under the refused decision.
+    Market liveness and the equity snapshot scheduler start unless the
+    binding is refused, and stop when a reconnect's acknowledgement refuses
+    it; that behaviour is pinned in
+    ``tests/broker_configuration/test_worker_lifecycle.py``. What only this
+    source can show is that nothing here bypasses the unit -- a start of
+    either worker, a gate or a stop of the composition root's own would
+    drift from the one decision again.
     """
     source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
-    # The boot starts the account's background work only under the one decision.
-    assert source.count("if not account_background_work_refused():") == 2, (
-        "both boot starts read the one decision, so a refused binding starts neither"
+    assert source.count("start_account_background_work(") == 1
+    start = source[
+        source.index("start_account_background_work(") : source.index(
+            "_install_alpaca_authority(alpaca_clerk_runtime)"
+        )
+    ]
+    assert "market_liveness=alpaca_market_liveness" in start
+    assert "expected_account_id=alpaca_binding.context.account_pin" in start, (
+        "the snapshot writer records only the binding's pinned account"
     )
-    assert "active_alpaca_binding_refusal() is None:\n                alpaca_market_liveness" not in source
-    # The reconnect's acknowledgement reads the same decision and stops the work.
-    acknowledge = source[
-        source.index("async def _acknowledge_reconnected") : source.index(
-            "def _install_reconnected"
-        )
-    ]
-    assert "if account_background_work_refused():" in acknowledge
-    assert "await _stop_account_background_work()" in acknowledge
-    # The stop clears both workers, and nothing else starts either one.
-    stop = source[
-        source.index("async def _stop_account_background_work") : source.index(
-            "alpaca_reconnect_task = asyncio.create_task"
-        )
-    ]
-    assert "set_market_liveness_consumer(None)" in stop
-    assert "sovereign_equity_snapshot_scheduler.stop()" in stop
-    assert "sovereign_equity_snapshot_scheduler = None" in stop
-    assert source.count("alpaca_market_liveness.start()") == 1
-    assert source.count("sovereign_equity_snapshot_scheduler.start()") == 1
+    # Built inline and handed over, so nothing else holds a scheduler to start.
+    assert source.count("DailySovereignEquitySnapshotScheduler(") == 1
+    assert "DailySovereignEquitySnapshotScheduler(" in start
+    assert "alpaca_market_liveness.start()" not in source
+    assert "set_market_liveness_consumer(" not in source
+    assert "account_background_work_refused" not in source, "the unit alone reads the decision"
+    # Shutdown stops it once, after the reconnect ends and before custody closes.
+    assert source.count("await stop_account_background_work()") == 1
+    assert (
+        source.index("alpaca_reconnect_task.cancel()")
+        < source.index("await stop_account_background_work()")
+        < source.index("installed_alpaca_runtime = get_active_clerk_runtime()")
+    )
 
 
 def test_dry_run_restoration_never_holds_the_lane_off_the_network() -> None:
