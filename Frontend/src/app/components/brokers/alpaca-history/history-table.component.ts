@@ -4,17 +4,16 @@ import { RouterLink } from '@angular/router';
 import { accountWorkspaceBotRoute } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
-import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
-import { historyAccountName, type FleetBotHistoryRow } from './bot-history.service';
+import { historyAccountName, historyWorldChip, type FleetBotHistoryRow } from './bot-history.service';
 
 /**
  * History's list (#2574): one line per bot, newest first. Each line names its
- * account with the lane colour and the mode worded, and the whole line opens
+ * account and wears the world its run was in (`historyWorldChip`), and the whole line opens
  * the bot's own page — its one real link, the bot's name, stretched over the
  * row. Every figure is the backend's: counts as counted, dollars as authored
  * strings (an unknown one says so, never $0), outcomes in the backend's
@@ -42,7 +41,6 @@ export class HistoryTableComponent {
   readonly bots = input.required<readonly FleetBotHistoryRow[]>();
 
   private readonly fleetDirectory = inject(FleetDirectoryService);
-  private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
 
   private readonly opened = signal<ReadonlySet<string>>(new Set());
 
@@ -60,7 +58,7 @@ export class HistoryTableComponent {
           accountId: (lane === undefined ? null : laneConfirmedAccount(lane)) ?? bot.account_id,
         }, bot.strategy_instance_id).commands,
         accountName: historyAccountName(this.fleetDirectory, bot.broker, bot.clerk_id, bot.account_id),
-        mode: verdictModeChip(this.liveVerdicts.stateFor(bot.clerk_id)),
+        world: historyWorldChip(bot),
         expandable,
         open: expandable && this.opened().has(key),
         toggleLabel: bot.runs.length > 1 ? `${bot.runs.length} runs` : 'Why unknown',

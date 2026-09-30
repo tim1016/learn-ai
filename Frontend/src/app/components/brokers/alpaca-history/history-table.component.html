@@ -22,7 +22,7 @@
         <td>
           <a class="history-table__sid" [routerLink]="row.page">{{ bot.strategy_instance_id }}</a>
           <span class="history-table__meta">
-            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" /> · {{ bot.world_label }}
+            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" />
           </span>
           @if (row.expandable) {
             <button type="button" class="history-table__toggle" [attr.aria-expanded]="row.open"
@@ -31,7 +31,7 @@
         </td>
         <td>
           <span class="history-table__account">{{ row.accountName }}</span>
-          <app-alpaca-lane-mode-chip [chip]="row.mode" />
+          <app-alpaca-lane-mode-chip [chip]="row.world" />
         </td>
         <td><app-timestamp-display [value]="bot.started_at_ms" mode="local" fallback="never ran" /></td>
         <td>

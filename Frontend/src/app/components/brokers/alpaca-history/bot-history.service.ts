@@ -6,6 +6,7 @@ import type { components } from '../../../api/broker.types';
 import type { BotHistoryUrl } from '../../../fleet/account-workspace';
 import type { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneDisplayNameText } from '../../../fleet/fleet-directory.types';
+import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service';
 
 /** One page of every bot across every account (#2574), as the coordinator
  * merges it. Every dollar is a Python-authored string; every instant is
@@ -75,6 +76,20 @@ export function botHistoryQuery(
     bot: bot.length > 0 && bot.length <= MAX_BOT_ID_LENGTH ? bot : null,
     page: Number.isInteger(page) && page >= 1 ? page : 1,
   };
+}
+
+const WORLD_TONES: Readonly<Record<BotHistoryWorld, LaneModeChip['tone']>> = {
+  live: 'live',
+  paper: 'paper',
+  shadow: 'shadow',
+  dry_run: 'dry-run',
+};
+
+/** The chip a History row wears: the world that bot's run was in, worded by
+ * the backend (`world_label`) — never the lane's mode today, so a red chip
+ * only ever means real money (owner decision 2026-09-30, #2615). */
+export function historyWorldChip(row: FleetBotHistoryRow): LaneModeChip {
+  return { tone: WORLD_TONES[row.world], mode: row.world_label };
 }
 
 /** The one name History shows an account by: its lane's name, else its

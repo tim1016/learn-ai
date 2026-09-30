@@ -52,16 +52,17 @@ const ACCOUNT_LIST_URL = '/brokers/alpaca';
 })
 class WorkspaceHostComponent {}
 
-// Each real tab roots itself in a labelled `<main>`; the stubs do the same so
-// the accessibility assertion below grades the workspace's own chrome against
-// the landmark structure the tabs actually bring.
+// Each real tab roots itself in a labelled landmark -- History a `<section>`
+// (#2614), the others a `<main>` -- and the stubs do the same, so the
+// accessibility assertion below grades the workspace's own chrome against the
+// landmark structure the tabs actually bring.
 @Component({ selector: 'app-home-stub', template: '<main aria-label="Home">Home tab</main>' })
 class HomeStubComponent {}
 
 @Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
 class ActivityStubComponent {}
 
-@Component({ selector: 'app-history-stub', template: '<main aria-label="History">History tab</main>' })
+@Component({ selector: 'app-history-stub', template: '<section aria-label="History">History tab</section>' })
 class HistoryStubComponent {}
 
 @Component({

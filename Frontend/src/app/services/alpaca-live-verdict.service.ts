@@ -54,7 +54,9 @@ interface RosterResult {
  * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
  * everywhere it is named. */
 export interface LaneModeChip {
-  readonly tone: 'paper' | 'live' | 'shadow' | 'reading' | 'undetermined';
+  /** `dry-run` is a Dry Run's own simulated world, never a lane's mode: only
+   * History's rows wear it (`historyWorldChip`). */
+  readonly tone: 'paper' | 'live' | 'shadow' | 'dry-run' | 'reading' | 'undetermined';
   readonly mode: string;
 }
 

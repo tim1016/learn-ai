@@ -213,7 +213,7 @@ async function expectDeployOpen(page: Page): Promise<void> {
 }
 
 /** The account's Home, showing that account's own bots; the tabs are Home,
- * Activity and Settings, with no separate Bots tab (PRD #2560). */
+ * Activity, History (#2574) and Settings, with no separate Bots tab (PRD #2560). */
 async function expectHomeRoster(page: Page): Promise<void> {
   const home = page.getByRole('main', { name: 'Home' });
   await expect(home.getByRole('heading', { name: 'Bots', exact: true })).toBeVisible();
@@ -221,7 +221,7 @@ async function expectHomeRoster(page: Page): Promise<void> {
   await expect(home).toContainText('spy-ema-20260925-1402');
   await expect(
     page.getByRole('navigation', { name: 'Account sections' }).getByRole('link'),
-  ).toHaveText(['Home', 'Activity', 'Settings']);
+  ).toHaveText(['Home', 'Activity', 'History', 'Settings']);
 }
 
 test.describe('Alpaca multi-clerk frontend cutover', () => {
