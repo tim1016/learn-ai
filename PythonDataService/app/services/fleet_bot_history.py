@@ -8,9 +8,10 @@ it came from -- and never combines a value across accounts (ADR 0062
 Decision 1): no row's money is added to another's.
 
 What could not be read is named, never dropped: a lane with no confirmed
-account, a lane whose read failed or answered something unreadable, a lane
-that answered with its own refusal (named in the Clerk's own words), and each
-Dry Run, world or bot a lane itself could not read.
+account, an account filter naming no lane this fleet has, a lane whose read
+failed or answered something unreadable, a lane that answered with its own
+refusal (named in the Clerk's own words), and each Dry Run, world or bot a
+lane itself could not read.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from app.schemas.bot_history import (
 
 #: A lane that serves no account yet has nothing to read (FR-096).
 NO_ACCOUNT_REASON_CODE = "no_confirmed_account"
+#: The account filter names a lane this fleet does not have (#2615).
+UNKNOWN_LANE_REASON_CODE = "unknown_account"
 #: A lane answered, but not with a bot history this build can read.
 UNREADABLE_ANSWER_REASON_CODE = "unreadable_answer"
 #: A lane answered the read with its own refusal (a 4xx or 5xx): it is
@@ -39,6 +42,7 @@ UNREADABLE_ANSWER_REASON_CODE = "unreadable_answer"
 LANE_REFUSED_REASON_CODE = "lane_refused_read"
 
 _NO_ACCOUNT_COPY = "This account is not set up yet, so its bots cannot be listed."
+_UNKNOWN_LANE_COPY = "No account by this id is known here, so its bots cannot be listed."
 _LANE_FAILED_COPY = "This account's bots could not be read right now. Refresh to try again."
 
 
@@ -90,6 +94,14 @@ def account_less_gap(broker: str, clerk_id: str) -> FleetBotHistoryGap:
     return FleetBotHistoryGap(
         broker=broker, clerk_id=clerk_id, account_id=None, strategy_instance_id=None,
         reason=_NO_ACCOUNT_COPY, reason_code=NO_ACCOUNT_REASON_CODE,
+    )
+
+
+def unknown_lane_gap(broker: str, clerk_id: str) -> FleetBotHistoryGap:
+    """An account filter naming no lane: named, so an empty page never reads as "no bots"."""
+    return FleetBotHistoryGap(
+        broker=broker, clerk_id=clerk_id, account_id=None, strategy_instance_id=None,
+        reason=_UNKNOWN_LANE_COPY, reason_code=UNKNOWN_LANE_REASON_CODE,
     )
 
 

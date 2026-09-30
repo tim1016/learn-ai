@@ -54,7 +54,10 @@ interface RosterResult {
  * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
  * everywhere it is named. */
 export interface LaneModeChip {
-  readonly tone: 'paper' | 'live' | 'shadow' | 'reading' | 'undetermined';
+  /** `dry_run` is a Dry Run's own simulated world, never a lane's mode: a
+   * Dry Run's page and History's rows wear it. The world tones share the
+   * backend's world ids, so a History row's world is its tone. */
+  readonly tone: 'paper' | 'live' | 'shadow' | 'dry_run' | 'reading' | 'undetermined';
   readonly mode: string;
 }
 
@@ -64,6 +67,8 @@ export const LANE_MODE_WORDING = {
   paper: 'PAPER · practice money',
   live: 'LIVE · real money',
   shadow: 'SHADOW · simulated fills on your live account',
+  /** A Dry Run's own world: simulated cash, in no lane's colour (H23). */
+  dry_run: 'DRY RUN · simulated cash',
 } as const;
 
 /** Project one lane's verdict state into its compact chip form.

@@ -58,7 +58,7 @@ def _bot(sid: str, *, account: str, started_at_ms: int, status: str = "finished"
         status_label=status.title(), started_at_ms=started_at_ms, stopped_at_ms=started_at_ms + 60_000,
         outcome=None, transaction_count=2, orders=BotHistoryOrders(sent=1, filled=1, cancelled=0, rejected=0),
         budget_usd="150.00", result_usd="9.99", fees_usd="0.01", money_unavailable_reason=None,
-        money_scope_note=None, runs=(),
+        money_scope_note=None, runs=(), page_unavailable_reason=None,
     )
 
 
@@ -223,6 +223,35 @@ async def test_a_lane_server_error_keeps_its_body_in_the_log_and_is_named_unreac
     (gap,) = (gap for gap in page["gaps"] if gap["clerk_id"] == live.clerk_id)
     assert gap["reason_code"] == "clerk_unreachable"
     assert "/srv/secret/path" not in gap["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_lane_answering_something_that_is_not_a_bot_history_is_named_unreadable(fleet, secret) -> None:
+    service, deliveries, _paper, live, _unbound = fleet
+    deliveries[live.clerk_id] = _ScriptedDelivery(answer={"bots": "not a list"})
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        page = (await client.get(_ROUTE, headers=secret)).json()
+
+    (gap,) = (gap for gap in page["gaps"] if gap["clerk_id"] == live.clerk_id)
+    assert (gap["reason_code"], gap["account_id"]) == ("unreadable_answer", "acct-live")
+    assert gap["reason"] == "This account's bots could not be read right now. Refresh to try again."
+
+
+@pytest.mark.asyncio
+async def test_an_account_filter_naming_no_lane_is_a_named_gap_never_an_empty_list(fleet, secret) -> None:
+    """#2615: an unknown account answered an empty page with no gap, which
+    reads as an account with no bots."""
+    service, deliveries, paper, live, _unbound = fleet
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        page = (await client.get(_ROUTE, params={"clerk_id": "clrk_nobody"}, headers=secret)).json()
+
+    assert page["rows"] == [] and page["total"] == 0
+    assert [(gap["clerk_id"], gap["account_id"], gap["reason_code"]) for gap in page["gaps"]] == [
+        ("clrk_nobody", None, "unknown_account"),
+    ]
+    assert deliveries[paper.clerk_id].requests == [] and deliveries[live.clerk_id].requests == []
 
 
 def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it() -> None:

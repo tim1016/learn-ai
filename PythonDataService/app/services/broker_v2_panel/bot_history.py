@@ -18,12 +18,18 @@ account's own words reach the fleet coordinator in the answer, where a
 refused read's would not (the lane router keeps a lane's 5xx body in its own
 log). Only an account with no Clerk to read refuses the whole read.
 
+The databases are read side by side, and a database no running Clerk owns
+(the other world, each Dry Run) is read again only once its custody revision
+moves (``RevisionMemo``), so an account's accumulated Dry Runs cost one read
+each, once (#2615).
+
 The read can be narrowed to one bot (``strategy_instance_id``): the bot's
 own page opens History on all of its runs.
 
 Every dollar is authored here from the custody projection
-(``clerk.sqlite.bot_history``); every outcome is worded here from its
-durable receipt, so the browser adds nothing up and invents no copy.
+(``clerk.sqlite.bot_history``); every outcome is worded from its durable
+receipt in the one outcome vocabulary (``outcome_copy``), so the browser adds
+nothing up and invents no copy.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
+from typing import NamedTuple
 
 from app.broker.alpaca.clerk.account_authority import (
     authority_kind_for_account,
@@ -48,16 +55,17 @@ from app.broker.alpaca.clerk.money import display_dollars, dollars
 from app.broker.alpaca.clerk.sqlite.bot_history import (
     BotFacts,
     CustodyHistory,
+    CustodySchemaUnreadable,
     OrderCounts,
     RunFacts,
     read_custody_history,
 )
+from app.broker.alpaca.clerk.sqlite.budget_projection import RevisionMemo
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
 from app.broker.ibkr.config import live_artifacts_root
-from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.bot_history import (
     AccountBotHistory,
@@ -70,8 +78,6 @@ from app.schemas.bot_history import (
     BotHistoryWorld,
 )
 from app.schemas.broker_bots import BotDutyOutcomeView
-from app.services.bot_end import SCHEDULED_END_REASON_CODE
-from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_v2_panel.catalog_projection_service import (
     WORLD_LABELS,
@@ -80,6 +86,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     bot_world,
     run_ended_at_ms,
 )
+from app.services.broker_v2_panel.outcome_copy import outcome_headline
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.broker_v2_panel.sqlite_roster_status import (
@@ -102,7 +109,16 @@ _UNREADABLE = (sqlite3.Error, OSError, EconomicProjectionError)
 _BOT_UNREADABLE = (SqliteCatalogProjectionUnavailable, OSError)
 
 _BOT_GAP_COPY = "This bot's records could not be read, so it is not listed."
-_DRY_RUN_GAP_COPY = "This Dry Run's own records could not be read, so it is not listed."
+#: Why a whole database is missing: it could not be read, or it keeps a
+#: schema this build cannot bring forward (``CustodySchemaUnreadable``).
+_UNREADABLE_WHY = "could not be read"
+_SCHEMA_WHY = "are kept in a record format this version cannot read"
+
+#: One memo per database no running Clerk owns, for this process's life:
+#: an account's Dry Runs and its other world, each kept to its last answer.
+_SOURCE_MEMOS: dict[Path, RevisionMemo[CustodyHistory]] = {}
+#: How many of an account's databases one History read reads at once.
+_SOURCES_READ_AT_ONCE = 4
 
 _WORLDS: dict[AuthorityKind, BotHistoryWorld] = {
     "real_live": "live",
@@ -111,51 +127,15 @@ _WORLDS: dict[AuthorityKind, BotHistoryWorld] = {
     "synthetic": "dry_run",
 }
 
+#: A Live account's other world, named in a sentence.
+_OTHER_WORLD_NAMES: dict[AuthorityKind, str] = {"shadow": "Shadow", "real_live": "Live"}
+
 _STATUS_LABELS: dict[BotHistoryStatus, str] = {
     "running": "Running",
     "holding": "Stopped · still holding",
     "finished": "Finished",
     "cleared": "Cleared",
 }
-
-#: How a run ended, in the owner's words (#2574) -- one entry for every
-#: ``BotDutyOutcomeKind`` (a test holds it to that list). A reason code
-#: worded on its own wins over its kind's words.
-_OUTCOME_HEADLINES: dict[str, str] = {
-    "STOPPED": "Stopped by you",
-    "HALTED": "Halted",
-    "CRASHED": "Crashed",
-    "FAILED_LAUNCH": "Failed to launch",
-    "EXITED_UNVERIFIED": "Ended without a clean exit",
-    "RETIRED": "Retired before its end was recorded",
-}
-_REASON_HEADLINES: dict[str, str] = {
-    "FEED_DEATH": "Crashed because market data stopped",
-    "SERVICE_SHUTDOWN": "Stopped when the service shut down",
-    SCHEDULED_END_REASON_CODE: "Ended at its scheduled time",
-    # Recorded as a stop, since the compensation runs through the normal
-    # Stop, but nobody stopped it: its launch failed (#2559).
-    ACTIVATION_FAILED_STOP_REASON_CODE: "Failed to launch",
-    **{code: "Stopped because its market data could not be used" for code in FEED_REFUSAL_REASON_CODES},
-}
-_FLATTENED_HEADLINE = "Stopped and flattened"
-#: An outcome kind this build has no words for still ends its run -- never
-#: the whole read.
-_UNWORDED_HEADLINE = "Ended"
-
-
-def outcome_headline(kind: str, reason_code: str, *, flattened: bool) -> str:
-    """One run's end in plain words: its reason's own words, else its kind's."""
-    if kind == "STOPPED" and flattened:
-        return _FLATTENED_HEADLINE
-    headline = _REASON_HEADLINES.get(reason_code) or _OUTCOME_HEADLINES.get(kind)
-    if headline is None:
-        logger.warning(
-            "A run outcome has no History words; it reads as ended",
-            extra={"action": "bot_history_outcome_unworded", "kind": kind, "reason_code": reason_code},
-        )
-        return _UNWORDED_HEADLINE
-    return headline
 
 
 @dataclass(frozen=True)
@@ -171,6 +151,9 @@ class _Source:
     world: AuthorityKind
     #: The one Dry Run a ``sim:`` database holds; ``None`` for a whole world.
     strategy_instance_id: str | None = None
+    #: Why its bots' pages cannot open: the account's workspace reads its own
+    #: world and its Dry Runs, never its other world (``_sibling_sources``).
+    page_unavailable_reason: str | None = None
 
 
 async def account_bot_history(
@@ -191,40 +174,63 @@ async def account_bot_history(
     only = None if strategy_instance_id is None else (strategy_instance_id,)
     world = authority_kind_for_account(facade.account_id, account_mode=facade.account_mode)
     now_ms = now_ms_utc()
-    bots: list[BotHistoryBot] = []
-    gaps: list[BotHistoryGap] = []
-    # Each database this history reads: the world it holds, the one Dry Run
-    # it holds (``None`` for a whole world), and its read.
-    reads: list[tuple[AuthorityKind, str | None, Callable[[], CustodyHistory]]] = [
+    reads = [
         # The account's own, with this Clerk's own fee-evidence freshness.
-        (world, None, partial(facade.repository.bot_history, only)),
+        _Read(world, None, partial(facade.repository.bot_history, only)),
         *(
-            (source.world, source.strategy_instance_id, partial(
+            _Read(source.world, source.strategy_instance_id, partial(
                 read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
                 strategy_instance_ids=only if source.strategy_instance_id is None else (source.strategy_instance_id,),
-            ))
+                memo=_SOURCE_MEMOS.setdefault(source.path, RevisionMemo()),
+            ), page_unavailable_reason=source.page_unavailable_reason)
             for source in (*_sibling_sources(facade), *_dry_run_sources(broker, only=strategy_instance_id))
         ),
     ]
-    for source_world, dry_run_sid, read in reads:
+    # At most a few at once: the worker threads are shared with the
+    # Clerk's own lease heartbeat, which a history read must never hold up.
+    limit = asyncio.Semaphore(_SOURCES_READ_AT_ONCE)
+    answers = await asyncio.gather(*(_read_source(read, account_id=resolved, limit=limit) for read in reads))
+    bots = sorted(
+        (bot for read_bots, _ in answers for bot in read_bots),
+        key=lambda bot: (-(bot.started_at_ms or 0), bot.strategy_instance_id),
+    )
+    gaps = tuple(gap for _, read_gaps in answers for gap in read_gaps)
+    return AccountBotHistory(account_id=resolved, observed_at_ms=now_ms, bots=tuple(bots), gaps=gaps)
+
+
+class _Read(NamedTuple):
+    """One database this history reads."""
+
+    world: AuthorityKind
+    #: The one Dry Run it holds; ``None`` for a whole world.
+    dry_run_sid: str | None
+    read: Callable[[], CustodyHistory]
+    #: Set for a world the account's workspace does not read (``_Source``).
+    page_unavailable_reason: str | None = None
+
+
+async def _read_source(
+    source: _Read, *, account_id: str, limit: asyncio.Semaphore,
+) -> tuple[tuple[BotHistoryBot, ...], tuple[BotHistoryGap, ...]]:
+    """One database's bots and gaps; a database that cannot be read is its own gap."""
+    log = {"action": "bot_history_source_unreadable", "account_id": account_id, "world": source.world,
+           "strategy_instance_id": source.dry_run_sid}
+    async with limit:
         try:
-            history = await asyncio.to_thread(read)
-        except _UNREADABLE:
+            history = await asyncio.to_thread(source.read)
+        except CustodySchemaUnreadable as exc:
             logger.warning(
-                "A bot-history source could not be read; it is named as a gap",
-                exc_info=True,
-                extra={"action": "bot_history_source_unreadable", "account_id": resolved, "world": source_world,
-                       "strategy_instance_id": dry_run_sid},
+                "A bot-history source keeps a schema this build cannot read; it is named as a gap",
+                extra={**log, "schema_version": exc.schema_version},
             )
-            gaps.append(_gap_for(source_world, dry_run_sid))
-            continue
-        read_bots, read_gaps = await asyncio.to_thread(
-            compose_bots, history, authority_world=source_world, account_id=resolved,
+            return (), (_gap_for(source.world, source.dry_run_sid, why=_SCHEMA_WHY),)
+        except _UNREADABLE:
+            logger.warning("A bot-history source could not be read; it is named as a gap", exc_info=True, extra=log)
+            return (), (_gap_for(source.world, source.dry_run_sid, why=_UNREADABLE_WHY),)
+        return await asyncio.to_thread(
+            compose_bots, history, authority_world=source.world, account_id=account_id,
+            page_unavailable_reason=source.page_unavailable_reason,
         )
-        bots += read_bots
-        gaps += read_gaps
-    bots.sort(key=lambda bot: (-(bot.started_at_ms or 0), bot.strategy_instance_id))
-    return AccountBotHistory(account_id=resolved, observed_at_ms=now_ms, bots=tuple(bots), gaps=tuple(gaps))
 
 
 def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
@@ -241,7 +247,14 @@ def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
     path = facade.repository.neighbour_custody_file(sibling)
     if not path.is_file():
         return ()
-    return (_Source(path=path, world=authority_kind_for_account(sibling, account_mode="live")),)
+    world = authority_kind_for_account(sibling, account_mode="live")
+    return (_Source(
+        path=path, world=world,
+        page_unavailable_reason=(
+            f"This bot ran in the account's {_OTHER_WORLD_NAMES[world]} world, which the account's pages "
+            "don't open, so it has no page of its own. History keeps its record."
+        ),
+    ),)
 
 
 def _dry_run_sources(broker: str, *, only: str | None) -> tuple[_Source, ...]:
@@ -262,17 +275,18 @@ def _dry_run_sources(broker: str, *, only: str | None) -> tuple[_Source, ...]:
     )
 
 
-def _gap_for(world: AuthorityKind, dry_run_sid: str | None) -> BotHistoryGap:
+def _gap_for(world: AuthorityKind, dry_run_sid: str | None, *, why: str) -> BotHistoryGap:
     if dry_run_sid is not None:
-        return BotHistoryGap(strategy_instance_id=dry_run_sid, reason=_DRY_RUN_GAP_COPY)
+        return BotHistoryGap(strategy_instance_id=dry_run_sid, reason=f"This Dry Run's own records {why}, so it is not listed.")
     return BotHistoryGap(
         strategy_instance_id=None,
-        reason=f"This account's {WORLD_LABELS[world]} bots could not be read, so they are not listed.",
+        reason=f"This account's {WORLD_LABELS[world]} bots {why}, so they are not listed.",
     )
 
 
 def compose_bots(
     history: CustodyHistory, *, authority_world: AuthorityKind, account_id: str,
+    page_unavailable_reason: str | None = None,
 ) -> tuple[tuple[BotHistoryBot, ...], tuple[BotHistoryGap, ...]]:
     """Word one custody database's bots, each on its own: one it cannot read is a gap.
 
@@ -284,7 +298,7 @@ def compose_bots(
         try:
             bots.append(_bot(
                 facts, authority_world=authority_world, account_id=account_id,
-                money_unavailable=history.money_unavailable,
+                money_unavailable=history.money_unavailable, page_unavailable_reason=page_unavailable_reason,
             ))
         except _BOT_UNREADABLE:
             logger.warning(
@@ -299,6 +313,7 @@ def compose_bots(
 
 def _bot(
     facts: BotFacts, *, authority_world: AuthorityKind, account_id: str, money_unavailable: str | None,
+    page_unavailable_reason: str | None,
 ) -> BotHistoryBot:
     sid = facts.strategy_instance_id
     if facts.config is None:
@@ -339,6 +354,7 @@ def _bot(
             if len(runs) > 1 else None
         ),
         runs=runs,
+        page_unavailable_reason=page_unavailable_reason,
     )
 
 
@@ -397,4 +413,4 @@ def _usd(amount: Decimal | None) -> str | None:
     return None if amount is None else display_dollars(amount)
 
 
-__all__ = ["account_bot_history", "compose_bots", "outcome_headline"]
+__all__ = ["account_bot_history", "compose_bots"]

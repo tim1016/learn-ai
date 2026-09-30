@@ -440,7 +440,7 @@ test.describe('Account-first Alpaca navigation', () => {
     // across — so the ledger is measured from the moment the choice was made.
     const sinceTheChoice = requests.length;
 
-    const home = page.getByRole('main', { name: 'Home' });
+    const home = page.getByRole('region', { name: 'Home' });
     const listView = page.getByRole('radio', { name: 'List' });
     const wallView = page.getByRole('radio', { name: 'Wall' });
     // The bot's own page names the bot it is for.
@@ -531,7 +531,7 @@ test.describe('Account-first Alpaca navigation', () => {
 
     await expect(page).toHaveURL(LIVE_WORKSPACE);
     await expect(workspaceTab(page, 'Home')).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Home' })).toBeVisible();
   });
 
   test('offers Alpaca as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {

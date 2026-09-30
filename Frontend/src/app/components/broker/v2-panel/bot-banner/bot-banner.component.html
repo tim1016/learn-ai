@@ -10,11 +10,7 @@
         [title]="panel().mission_verdict.explanation"
         [bare]="true"
       />
-      @if (worldChip(); as chip) {
-        <app-alpaca-lane-mode-chip [chip]="chip" />
-      } @else {
-        <span class="bot-banner__dry-run">DRY RUN · simulated cash</span>
-      }
+      <app-alpaca-lane-mode-chip [chip]="worldChip()" />
     </div>
 
     <span class="bot-banner__updated">

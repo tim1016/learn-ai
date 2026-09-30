@@ -8,7 +8,9 @@
     "BROKER_ACK",
     "CRASHED",
     "EXITED_UNVERIFIED",
+    "FAILED_LAUNCH",
     "FILL",
+    "HALTED",
     "INTENT",
     "LIVE_ENVELOPE_LOSS_HOLD",
     "NO_HOLD",
@@ -16,6 +18,7 @@
     "ON_DUTY",
     "RECONCILED",
     "RETIRED",
+    "RETIRED_OUTCOME",
     "RUNNING",
     "SIGNAL",
     "STOPPED",
@@ -57,12 +60,20 @@
       "explanation": "The bot exited on an unhandled runtime error. This terminal outcome is not a market-data health verdict."
     },
     "EXITED_UNVERIFIED": {
-      "label": "Exited unverified",
+      "label": "Ended without a clean exit",
       "explanation": "The bot's task ended without a clean stop. Its final state is not confirmed."
+    },
+    "FAILED_LAUNCH": {
+      "label": "Failed to launch",
+      "explanation": "The launch failed partway through, so the service ended the run. Nobody stopped it, and nothing is running."
     },
     "FILL": {
       "label": "Fill",
       "explanation": "The order executed, in full or in part, at the broker."
+    },
+    "HALTED": {
+      "label": "Halted",
+      "explanation": "The bot was halted, which ended its run."
     },
     "INTENT": {
       "label": "Intent",
@@ -92,6 +103,10 @@
       "label": "Retired",
       "explanation": "The bot is permanently decommissioned. Its id is never reused."
     },
+    "RETIRED_OUTCOME": {
+      "label": "Retired before its end was recorded",
+      "explanation": "The bot was cleared before how its last run ended was recorded."
+    },
     "RUNNING": {
       "label": "Running",
       "explanation": "The operator wants this bot evaluating bars."
@@ -105,8 +120,8 @@
       "explanation": "The operator wants this bot idle. Exposure is left untouched."
     },
     "STOPPED_OUTCOME": {
-      "label": "Stopped cleanly",
-      "explanation": "The bot exited on an operator stop or a service shutdown."
+      "label": "Stopped by you",
+      "explanation": "You stopped the bot. It evaluates no bars and places no orders."
     },
     "STREAM_HEALTH_HOLD": {
       "label": "Stream-health hold",

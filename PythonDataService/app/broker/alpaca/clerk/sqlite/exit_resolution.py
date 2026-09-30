@@ -175,6 +175,27 @@ _RECOVERY_DECISION_PREFIXES = (
 # the two namespaces an owner's own flatten is recorded under (#2574).
 PANEL_FLATTEN_DECISION_PREFIX = "panel-flatten:"
 OWNER_FLATTEN_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, PANEL_FLATTEN_DECISION_PREFIX)
+
+
+def redrive_episode_token(uncertainty_id: str) -> str:
+    """The token a stuck-EXIT episode's re-drives are decided under (``redrive_decision_prefix``).
+
+    It names which episode -- and so which stuck EXIT -- a re-drive carries on.
+    """
+    return hashlib.sha256(uncertainty_id.encode("utf-8")).hexdigest()[:12]
+
+
+def redrive_decision_prefix(episode_token: str) -> str:
+    """Every re-drive of one episode is decided as this prefix and its attempt number, from 1."""
+    return f"{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-"
+
+
+def redriven_episode_token(decision_id: str) -> str | None:
+    """The episode token a re-drive's decision names (``redrive_decision_prefix``), or ``None`` for any other."""
+    if not decision_id.startswith(EXIT_REDRIVE_DECISION_PREFIX):
+        return None
+    token, _, _attempt = decision_id.removeprefix(EXIT_REDRIVE_DECISION_PREFIX).rpartition("-")
+    return token or None
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
 DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"

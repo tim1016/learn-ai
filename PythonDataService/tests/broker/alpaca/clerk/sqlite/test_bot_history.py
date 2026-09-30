@@ -8,6 +8,7 @@ authority reports -- per bot, never split across runs.
 
 from __future__ import annotations
 
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,16 +16,19 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.bot_history import (
+    CustodyHistory,
     OrderCounts,
     RunFacts,
     is_owner_flatten_decision,
     read_custody_history,
 )
-from app.broker.alpaca.clerk.sqlite.budget_projection import project_bot_results
+from app.broker.alpaca.clerk.sqlite.budget_projection import RevisionMemo, project_bot_results
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import BrokerSymbolView
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -40,6 +44,11 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, _walk_cl
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+from tests.broker.alpaca.clerk.sqlite.test_exit_send_session import (
+    _acked,
+    _live_touch,
+    redrive_or_escalate_stale_exits,
+)
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     crashed_with_exposure,  # noqa: F401 — the held-and-stopped repository the flatten test reuses
 )
@@ -175,21 +184,32 @@ async def _owner_flattens(repo: ClerkSqliteRepository, trade: safe_flatten._Fake
 async def _broker_reports(repo: ClerkSqliteRepository, flatten: SafeFlattenResult, *, sold: int, state: str) -> None:
     """The broker reports the flatten's order ``state``, having sold ``sold`` of its 10 SPY."""
     (order,) = flatten.orders
+    await _broker_reports_order(
+        repo, order.order_ref, order.effect_operation_id, quantity=10, sold=sold, state=state,
+        execution_id="flatten-exec-1",
+    )
+
+
+async def _broker_reports_order(
+    repo: ClerkSqliteRepository, order_ref: str, effect_operation_id: str,
+    *, quantity: int, sold: int, state: str, execution_id: str,
+) -> None:
+    """The broker reports a sell of ``quantity`` SPY in ``state``, ``sold`` of it filled."""
     reported = safe_flatten._broker_order(
-        order.order_ref, order_id=f"bo-{order.order_ref}", status=state, side="sell",
-        quantity=10.0, filled_quantity=sold, filled_avg_price=100.0,
+        order_ref, order_id=f"bo-{order_ref}", status=state, side="sell",
+        quantity=float(quantity), filled_quantity=sold, filled_avg_price=100.0,
     )
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=safe_flatten._NoReconciler())
     await sink.record_lifecycle_event(
-        client_order_id=order.order_ref,
+        client_order_id=order_ref,
         event=BrokerOrderEvent(
-            event_type="fill" if sold == 10 else "partial_fill", occurred_at_ms=repo.clock(),
-            price=100, quantity=sold, execution_id="flatten-exec-1",
+            event_type="fill" if sold == quantity else "partial_fill", occurred_at_ms=repo.clock(),
+            price=100, quantity=sold, execution_id=execution_id,
         ),
-        event_key="execution:flatten-exec-1", order=reported,
+        event_key=f"execution:{execution_id}", order=reported,
         recovery_source=None, recovery_window_limit=None,
     )
-    fold_order_evidence(repo, effect_operation_id=order.effect_operation_id, order=reported)
+    fold_order_evidence(repo, effect_operation_id=effect_operation_id, order=reported)
 
 
 def _only_run(repo: ClerkSqliteRepository) -> RunFacts:
@@ -233,6 +253,113 @@ async def test_a_flatten_that_sold_only_part_of_the_position_is_not_a_flatten(
     (bot,) = repo.bot_history().bots
     assert bot.holds_money
     assert not bot.runs[0].flattened
+
+
+async def test_a_flatten_the_watchdogs_redrive_finished_reads_as_flattened(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """#2615: the owner's flatten sold 4 of 10 SPY and expired; the stuck-EXIT
+    watchdog re-drove the other 6, and they sold. The owner's flatten did
+    finish, so the run reads as flattened -- it used to read "Stopped by you"."""
+    repo, _clock = crashed_with_exposure
+    await _stopped_holding_ten(repo)
+    flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
+    await _broker_reports(repo, flatten, sold=4, state="expired")
+    (order,) = flatten.orders
+    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    _walk_clock_to(repo, repo.clock() + 10 * 60_000)
+    await redrive_or_escalate_stale_exits(
+        repo, trade=_acked(), intake=ReentrantAsyncLock(), pricing=_live_touch(),
+        broker_symbol=lambda _symbol: BrokerSymbolView(6, 6, False, True),
+    )
+    (redrive,) = (
+        row for row in repo.orders_for_strategy(safe_flatten.SID)
+        if row.effect_operation_id.startswith(f"effect:{safe_flatten.SID}:{EXIT_REDRIVE_DECISION_PREFIX}")
+    )
+    re_driven = _only_run(repo)
+
+    await _broker_reports_order(
+        repo, redrive.order_ref, redrive.effect_operation_id, quantity=6, sold=6, state="filled",
+        execution_id="redrive-exec-1",
+    )
+
+    assert not re_driven.flattened
+    assert _only_run(repo).flattened
+    assert not repo.bot_history().bots[0].holds_money
+
+
+def _redrives(repo: ClerkSqliteRepository) -> list:
+    """The watchdog's re-drive orders for the flattened bot, oldest first."""
+    return sorted(
+        (row for row in repo.orders_for_strategy(safe_flatten.SID)
+         if row.effect_operation_id.startswith(f"effect:{safe_flatten.SID}:{EXIT_REDRIVE_DECISION_PREFIX}")),
+        key=lambda row: row.effect_operation_id,
+    )
+
+
+async def _watchdog_redrives(repo: ClerkSqliteRepository, *, remaining: int) -> None:
+    """The stuck-EXIT watchdog's next pass, once the episode has settled."""
+    _walk_clock_to(repo, repo.clock() + 10 * 60_000)
+    await redrive_or_escalate_stale_exits(
+        repo, trade=_acked(), intake=ReentrantAsyncLock(), pricing=_live_touch(),
+        broker_symbol=lambda _symbol: BrokerSymbolView(remaining, remaining, False, True),
+    )
+
+
+async def test_a_flatten_a_later_redrive_finished_reads_as_flattened(
+    crashed_with_exposure,  # noqa: F811 — the imported fixture
+) -> None:
+    """#2615 review: a failed re-drive refreshes the episode with its own
+    order, so the episode's row stops naming the owner's flatten. The flatten
+    sold 4 of 10, the first re-drive 2 of 6, the second the last 4: the
+    owner's flatten did finish."""
+    repo, _clock = crashed_with_exposure
+    await _stopped_holding_ten(repo)
+    flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
+    await _broker_reports(repo, flatten, sold=4, state="expired")
+    (order,) = flatten.orders
+    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    await _watchdog_redrives(repo, remaining=6)
+    (first,) = _redrives(repo)
+    await _broker_reports_order(
+        repo, first.order_ref, first.effect_operation_id, quantity=6, sold=2, state="expired",
+        execution_id="redrive-exec-1",
+    )
+    await resolve_exit(repo, effect_operation_id=first.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    await _watchdog_redrives(repo, remaining=4)
+    (_, second) = _redrives(repo)
+
+    await _broker_reports_order(
+        repo, second.order_ref, second.effect_operation_id, quantity=4, sold=4, state="filled",
+        execution_id="redrive-exec-2",
+    )
+
+    assert not repo.bot_history().bots[0].holds_money
+    assert _only_run(repo).flattened
+
+
+def test_a_file_replaced_at_the_same_path_is_never_answered_from_the_old_ones_memo(
+    old_bot: ClerkSqliteRepository, tmp_path: Path,
+) -> None:
+    """#2615 review: a file no running Clerk owns can be replaced where it
+    lies (a cutover, a reset). At the same revision the memo answers again
+    for the same file, but never for a new one."""
+    path = tmp_path / "copy.db"
+    source = sqlite3.connect(old_bot.db_path)
+    target = sqlite3.connect(path)
+    source.backup(target)
+    source.close()
+    memo: RevisionMemo[CustodyHistory] = RevisionMemo()
+    first = read_custody_history(path, now_ms=NOON, fee_evidence_checked_at_ms=None, memo=memo)
+    again = read_custody_history(path, now_ms=NOON, fee_evidence_checked_at_ms=None, memo=memo)
+    target.execute("UPDATE control_meta SET db_identity_token = 'another-file' WHERE id = 1")
+    target.commit()
+    target.close()
+
+    replaced = read_custody_history(path, now_ms=NOON, fee_evidence_checked_at_ms=None, memo=memo)
+
+    assert again is first
+    assert replaced is not first and replaced == first
 
 
 async def test_a_flatten_the_broker_rejected_is_not_a_flatten(

@@ -910,12 +910,12 @@ class ClerkSqliteRepositoryReadApi:
         """Whole-life results, read on a query-only snapshot: never under the writer's lock.
 
         Blocking: an async caller runs it in a worker thread. Answers at an
-        unchanged custody revision are reused (``BotResultsMemo``).
+        unchanged custody revision are reused (``RevisionMemo``).
         """
-        from app.broker.alpaca.clerk.sqlite.budget_projection import BotResultsMemo, read_bot_results
+        from app.broker.alpaca.clerk.sqlite.budget_projection import RevisionMemo, read_bot_results
 
         if self._bot_results_memo is None:
-            self._bot_results_memo = BotResultsMemo()
+            self._bot_results_memo = RevisionMemo()
         return read_bot_results(
             self.db_path, now_ms=self.clock(), fee_evidence_checked_at_ms=self._fee_evidence_checked_at_ms,
             strategy_instance_ids=strategy_instance_ids, memo=self._bot_results_memo,
@@ -929,7 +929,7 @@ class ClerkSqliteRepositoryReadApi:
         """
         from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
 
-        return writes.confined_account_file(self._account_dir.parents[2], account_id, DB_FILENAME)
+        return writes.neighbour_account_file(self._account_dir, account_id, DB_FILENAME)
 
     def bot_history(
         self: ClerkSqliteRepository, strategy_instance_ids: Sequence[str] | None = None,

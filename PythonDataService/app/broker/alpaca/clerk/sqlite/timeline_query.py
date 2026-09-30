@@ -167,7 +167,7 @@ def _append_uncertainty_filter(
         "OR ct.proof_reference = ?)"
     )
     parameters.extend(
-        (_uncertainty_sequence(uncertainty_id), uncertainty_id, uncertainty_id, uncertainty_id)
+        (uncertainty_sequence(uncertainty_id), uncertainty_id, uncertainty_id, uncertainty_id)
     )
 
 
@@ -188,7 +188,11 @@ def _append_execution_filter(
     parameters.extend((execution_id,) * 6)
 
 
-def _uncertainty_sequence(uncertainty_id: str) -> int:
+def uncertainty_sequence(uncertainty_id: str) -> int:
+    """The sequence of the transition that raised episode ``uncertainty_id``; -1 for no such id.
+
+    An episode is minted ``uncertainty:<sequence>`` by the fold of its raise.
+    """
     prefix, separator, raw_sequence = uncertainty_id.partition(":")
     if prefix != "uncertainty" or separator == "" or not raw_sequence.isdecimal():
         return -1

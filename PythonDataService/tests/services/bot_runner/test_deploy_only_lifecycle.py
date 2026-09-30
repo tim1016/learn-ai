@@ -18,9 +18,11 @@ from app.services.bot_clerk_lifecycle import ActiveClerkUnavailableError
 from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import BotTaskRegistry, RunAdmissionRefusedError
 from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
-from app.services.broker_v2_panel.bot_history import outcome_headline
+from app.services.broker_v2_panel.outcome_copy import outcome_card_copy, outcome_headline
 from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
@@ -112,12 +114,63 @@ async def test_unrecorded_launch_stops_and_reaps_the_task_it_started(
         # the compensation runs through the normal Stop, but nobody stopped it.
         lifecycle = registry._lifecycle_repo(_SID).read()
         assert lifecycle is not None and lifecycle.duty_outcome is not None
+        assert lifecycle.duty_outcome.kind == "FAILED_LAUNCH"
         assert lifecycle.duty_outcome.reason_code == ACTIVATION_FAILED_STOP_REASON_CODE
-        assert lifecycle.duty_outcome.reason_code != "OPERATOR_STOP"
         # ...and History words that recorded outcome as a failed launch, not
         # "Stopped by you" (#2661 review).
         outcome = lifecycle.duty_outcome
         assert outcome_headline(outcome.kind, outcome.reason_code, flattened=False) == "Failed to launch"
+    finally:
+        await registry.stop_all()
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.parametrize(
+    ("launch_recorded", "kind", "headline"),
+    [(False, "FAILED_LAUNCH", "Failed to launch"), (True, "STOPPED", "Stopped by you")],
+    ids=["failed_launch", "operator_stop"],
+)
+async def test_a_trade_run_records_who_ended_it_beside_its_custody_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch_recorded: bool, kind: str, headline: str,
+) -> None:
+    """#2667: in trade mode the reason is the Clerk's custody proof -- the
+    panel's next step and the canary verdict read it -- so a failed launch
+    used to read as an operator's stop. The kind now says who ended the run;
+    an operator's Stop reads as before."""
+    patch_fresh_live_market_liveness(monkeypatch)
+    admit_canary_pairing(monkeypatch, 'deployment_validation', 'paper-account')
+    monkeypatch.setattr(bot_runner, 'canary_gate_applies', lambda **_: True)
+    registry = _registry(tmp_path, _FakeFeed([], mode='hold'))
+    clerk = _CustodyClerk(_custody_proof(exposure={'SPY': 1.0}))
+    set_alpaca_clerk(clerk)
+
+    async def launch_not_recorded(_binding) -> None:
+        raise ActiveClerkUnavailableError('The budget-backed deployment authority is unavailable.')
+
+    if not launch_recorded:
+        monkeypatch.setattr(bot_runner, 'commit_deploy_launch', launch_not_recorded)
+    try:
+        deploy = registry.deploy(
+            exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY', mode='trade',
+        )
+        if launch_recorded:
+            await deploy
+            await registry.stop('alpaca', _SID)
+        else:
+            with pytest.raises(ActivationFailedCleanupProvenError):
+                await deploy
+
+        lifecycle = registry._lifecycle_repo(_SID).read()
+        assert lifecycle is not None and lifecycle.duty_outcome is not None
+        outcome = lifecycle.duty_outcome
+        assert (outcome.kind, outcome.reason_code) == (kind, 'STOP_REQUIRES_FLATTEN')
+        assert outcome_headline(outcome.kind, outcome.reason_code, flattened=False) == headline
+        label, explanation = outcome_card_copy(outcome.kind, outcome.reason_code)
+        assert label == ('Failed to launch' if not launch_recorded else 'Stopped; flatten required')
+        assert explanation.endswith('Use Flatten to resolve that exposure.')
+        # The canary verdict is keyed off the proof, as before.
+        assert outcome.canary_rollback is not None
+        assert (outcome.canary_rollback.stop_outcome, outcome.canary_rollback.allowed) == ('STOP_REQUIRES_FLATTEN', False)
     finally:
         await registry.stop_all()
         set_alpaca_clerk(None)

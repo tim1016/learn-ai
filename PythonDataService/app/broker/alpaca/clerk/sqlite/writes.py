@@ -72,6 +72,16 @@ def confined_account_file(artifacts_root: Path, account_id: str, filename: str) 
     return resolve_contained_path(artifacts_root, "accounts", "alpaca", safe_account_id, filename)
 
 
+def neighbour_account_file(account_dir: Path, account_id: str, filename: str) -> Path:
+    """Another account's file in the same accounts tree as ``account_dir`` (``account_paths``).
+
+    ``account_dir`` is an account's own directory, so its parent is the
+    accounts root every sibling account shares; the file is confined there as
+    ``confined_account_file`` confines its own.
+    """
+    return resolve_contained_path(account_dir.parent, safe_path_component(account_id, "account_id"), filename)
+
+
 def row_to_payload(row: sqlite3.Row) -> dict:
     return {column: row[column] for column in TRANSITION_COLUMNS}
 

@@ -10242,6 +10242,8 @@ export interface components {
             money_unavailable_reason: string | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Page Unavailable Reason */
+            page_unavailable_reason: string | null;
             /** Result Usd */
             result_usd: string | null;
             /** Runs */
@@ -14838,7 +14840,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "ON_DUTY" | "STOPPED" | "CRASHED" | "EXITED_UNVERIFIED";
+            kind: "ON_DUTY" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
             /** Label */
             label: string;
             /** Reason Code */
@@ -16315,6 +16317,8 @@ export interface components {
             money_unavailable_reason: string | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Page Unavailable Reason */
+            page_unavailable_reason: string | null;
             /** Result Usd */
             result_usd: string | null;
             /** Runs */

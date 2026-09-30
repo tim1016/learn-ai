@@ -36,6 +36,13 @@
   background: var(--lane-shadow-soft);
 }
 
+/* A Dry Run trades no account's money: no lane colour, a dashed edge. */
+.lane-mode-chip--dry_run {
+  color: var(--text-primary);
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
 .lane-mode-chip--reading {
   color: var(--text-secondary);
   border-style: dashed;

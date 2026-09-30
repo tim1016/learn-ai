@@ -20,10 +20,17 @@
       @let bot = row.bot;
       <tr class="history-table__row" [class.history-table__row--dry-run]="bot.world === 'dry_run'">
         <td>
-          <a class="history-table__sid" [routerLink]="row.page">{{ bot.strategy_instance_id }}</a>
+          @if (row.page; as page) {
+            <a class="history-table__sid" [routerLink]="page">{{ bot.strategy_instance_id }}</a>
+          } @else {
+            <span class="history-table__sid-text">{{ bot.strategy_instance_id }}</span>
+          }
           <span class="history-table__meta">
-            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" /> · {{ bot.world_label }}
+            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" />
           </span>
+          @if (bot.page_unavailable_reason; as why) {
+            <span class="history-table__meta">{{ why }}</span>
+          }
           @if (row.expandable) {
             <button type="button" class="history-table__toggle" [attr.aria-expanded]="row.open"
                     (click)="toggle(row.key)">{{ row.toggleLabel }}</button>
@@ -31,7 +38,7 @@
         </td>
         <td>
           <span class="history-table__account">{{ row.accountName }}</span>
-          <app-alpaca-lane-mode-chip [chip]="row.mode" />
+          <app-alpaca-lane-mode-chip [chip]="row.world" />
         </td>
         <td><app-timestamp-display [value]="bot.started_at_ms" mode="local" fallback="never ran" /></td>
         <td>

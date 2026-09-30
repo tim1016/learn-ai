@@ -7,7 +7,8 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -288,7 +289,20 @@ class BotResult:
 def project_bot_results(
     conn: sqlite3.Connection, *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
 ) -> dict[str, BotResult]:
+    """Each bot's whole-life result over this snapshot's effective fills (``bot_results_from_fills``)."""
+    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
+    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
+    return bot_results_from_fills(records, fees=fees, strategy_instance_ids=strategy_instance_ids)
+
+
+def bot_results_from_fills(
+    records: Sequence[FillRecord], *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
+) -> dict[str, BotResult]:
     """Each bot's whole-life result: what its balance gained over its budget.
+
+    ``records`` are the effective fills the caller read on its own snapshot
+    (``effective_fill_records``), so a caller that already holds them never
+    reads them twice.
 
     Formula: result = canonical FIFO gross realized P&L - the bot's attributed
       fees (``budgets.deployment_budget``'s balance - commitment); trade_count
@@ -301,8 +315,6 @@ def project_bot_results(
     """
     if not fees.known:
         raise BudgetUnavailable("Fee evidence is unresolved: " + "; ".join(fees.unresolved))
-    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
-    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
     results: dict[str, BotResult] = {}
     with money_context():
         for sid in strategy_instance_ids:
@@ -313,30 +325,38 @@ def project_bot_results(
     return results
 
 
-class BotResultsMemo:
-    """The last whole-life results read, keyed by the custody revision it read.
+type RevisionKey = tuple[str, int, int, tuple[str, ...] | None]
+"""Which custody file a read saw -- its identity and generation, so a file
+replaced at the same path never answers for the old one -- at which
+``control_revision``, and the bots it asked for (``None``: all)."""
 
-    A Finished bot's result moves only with a custody transition -- a fill, a
-    correction, or new fee evidence, which the Clerk records as a transition
-    too -- and every transition advances ``control_revision``. So a roster
-    poll at an unchanged revision reuses the last answer instead of running
-    the lifetime fee projection again. An unresolved read is never kept.
+
+class RevisionMemo[T]:
+    """The last answer read from one custody file, keyed by the custody revision it read.
+
+    A bot's history and its whole-life result move only with a custody
+    transition -- a fill, a correction, or new fee evidence, which the Clerk
+    records as a transition too -- and every transition advances
+    ``control_revision``. So a read at an unchanged revision reuses the last
+    answer instead of running the lifetime fee projection again. An
+    unresolved read is never kept. The answer is kept as given: a caller
+    that may change it keeps a copy.
     """
 
     def __init__(self) -> None:
-        self._last: tuple[tuple[int, tuple[str, ...]], dict[str, BotResult]] | None = None
+        self._last: tuple[RevisionKey, T] | None = None
 
-    def get(self, key: tuple[int, tuple[str, ...]]) -> dict[str, BotResult] | None:
+    def get(self, key: RevisionKey) -> T | None:
         last = self._last
-        return dict(last[1]) if last is not None and last[0] == key else None
+        return last[1] if last is not None and last[0] == key else None
 
-    def put(self, key: tuple[int, tuple[str, ...]], results: dict[str, BotResult]) -> None:
-        self._last = (key, dict(results))
+    def put(self, key: RevisionKey, answer: T) -> None:
+        self._last = (key, answer)
 
 
 def read_bot_results(
     db_path: Path, *, now_ms: int, fee_evidence_checked_at_ms: int | None, strategy_instance_ids: Sequence[str],
-    memo: BotResultsMemo | None = None,
+    memo: RevisionMemo[dict[str, BotResult]] | None = None,
 ) -> dict[str, BotResult]:
     """``project_bot_results`` on its own query-only snapshot of the custody file.
 
@@ -347,21 +367,57 @@ def read_bot_results(
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
+    def project(conn: sqlite3.Connection) -> dict[str, BotResult]:
+        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
+        return project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
+
+    # A copy: the memo keeps its own answer.
+    return dict(read_at_revision(db_path, strategy_instance_ids=strategy_instance_ids, memo=memo, project=project))
+
+
+def read_at_revision[T](
+    db_path: Path,
+    *,
+    strategy_instance_ids: Sequence[str] | None,
+    memo: RevisionMemo[T] | None,
+    project: Callable[[sqlite3.Connection], T],
+    keep: Callable[[T], bool] = lambda _answer: True,
+) -> T:
+    """``project`` on its own query-only snapshot, or ``memo``'s answer for the same file and revision.
+
+    ``keep`` says whether an answer may be reused (``RevisionMemo``: never
+    one that depended on something beside the custody file). Blocking.
+    """
+    with query_only_snapshot(db_path) as conn:
+        identity, generation, revision = conn.execute(
+            "SELECT db_identity_token, authority_generation, control_revision FROM control_meta WHERE id = 1"
+        ).fetchone()
+        key: RevisionKey = (
+            str(identity), int(generation), int(revision),
+            None if strategy_instance_ids is None else tuple(strategy_instance_ids),
+        )
+        cached = None if memo is None else memo.get(key)
+        if cached is not None:
+            return cached
+        answer = project(conn)
+    if memo is not None and keep(answer):
+        memo.put(key, answer)
+    return answer
+
+
+@contextmanager
+def query_only_snapshot(db_path: Path) -> Iterator[sqlite3.Connection]:
+    """One query-only snapshot of a custody file, never under the Clerk's writer.
+
+    Read-only by URI and by pragma, inside one read transaction, so every
+    query the caller runs sees the same revision. Blocking.
+    """
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
         conn.execute("BEGIN")
-        revision = int(conn.execute("SELECT control_revision FROM control_meta WHERE id = 1").fetchone()[0])
-        key = (revision, tuple(strategy_instance_ids))
-        cached = None if memo is None else memo.get(key)
-        if cached is not None:
-            return cached
-        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
-        results = project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
-        if memo is not None:
-            memo.put(key, results)
-        return results
+        yield conn
     finally:
         conn.close()
 

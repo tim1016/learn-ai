@@ -100,18 +100,6 @@
 
 .bot-banner__experimental { justify-self: start; }
 
-// Dry Run is simulated cash: a dashed chip, never a lane's colour (H23).
-.bot-banner__dry-run {
-  padding: 0.125rem var(--space-2);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
 .bot-banner__status-row {
   display: flex;
   flex-wrap: wrap;

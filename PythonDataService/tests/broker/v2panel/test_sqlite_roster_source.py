@@ -219,7 +219,7 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
     assert crashed.duty_outcome.kind == "EXITED_UNVERIFIED"
     assert crashed.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
     # The roster label and attention flag must reflect the unclean exit (S3b).
-    assert status_label_for(crashed) == "Exited unverified"
+    assert status_label_for(crashed) == "Ended without a clean exit"
     # A bot with no lifecycle record (legacy) still projects None, no error.
     assert statuses[1].duty_outcome is None
 
@@ -365,7 +365,7 @@ def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
     assert statuses is not None
     assert statuses[0].duty_outcome is not None
     assert statuses[0].duty_outcome.kind == "EXITED_UNVERIFIED"
-    assert status_label_for(statuses[0]) == "Exited unverified"
+    assert status_label_for(statuses[0]) == "Ended without a clean exit"
 
 
 def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
