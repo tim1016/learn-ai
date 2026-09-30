@@ -105,7 +105,12 @@ async def test_context_read_failure_releases_the_same_key_for_retry(
 async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A retry reaches durable STOP replay after post-commit quiescence fails."""
+    """A failed post-commit quiescence releases the action's key, so the same key can drive it again.
+
+    The fake catalog keeps offering ``execution_ref`` after the STOP; the real
+    one offers none once no run is ACTIVE, so a panel retry is refused
+    ``NO_ACTIVE_BOT_RUN`` rather than replayed. This pins only the release.
+    """
 
     class _Reader:
         def recovery_context(self, *, strategy_instance_id: str) -> SimpleNamespace:
