@@ -1042,10 +1042,15 @@ async def execute_sqlite_panel_action(
         raise outcome_unknown_after_broker_io(exc) from exc
     except Exception as exc:
         if request.action_id == "stop_bot_decisions" or isinstance(exc, ExecutionLeaseLost):
-            # STOP is durably idempotent beneath this panel ledger. It can
-            # commit before local task quiescence fails; releasing the panel
-            # reservation lets the same-key retry reach the recovery layer's
-            # existing-command branch and re-drive that quiescence.
+            # STOP is durably idempotent beneath this panel ledger, so a Stop
+            # that failed before its STOP committed is retried whole under
+            # the same key. One that failed after -- its local task
+            # quiescence, say -- is not redone from here: with no run left
+            # ACTIVE the presented Stop is stale and a fresh one unavailable
+            # (NO_ACTIVE_BOT_RUN, no execution_ref), so the retry never
+            # reaches the recovery layer's existing-command branch. A raw
+            # ``runs/stop``, or the Clerk's recovery-actions route naming the
+            # run, replays that STOP and re-drives the quiescence (#2664).
             #
             # A lost execution lease releases for every action, not only
             # stop_bot_decisions: every repository mutation renews the lease

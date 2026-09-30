@@ -28,6 +28,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id, is_shadow_account_id
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import scheduled_end
@@ -159,13 +160,18 @@ class _Market(_FakeTradePort):
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    """A bot holding 10 SPY, bought that morning, its run still active."""
+def repo(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
+    """A bot holding 10 SPY, bought that morning, its run still active.
+
+    Indirect param: the account the authority custodies, ``ACCOUNT_ID`` unless given --
+    ``shadow:<ACCOUNT_ID>`` for a Shadow authority over it.
+    """
+    account_id = getattr(request, "param", ACCOUNT_ID)
     r = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(_at(_WEDNESDAY, 10)), lease_ttl_ms=300_000,
+        account_id=account_id, artifacts_root=tmp_path, clock=_clock_at(_at(_WEDNESDAY, 10)), lease_ttl_ms=300_000,
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_start_run(r, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -183,7 +189,7 @@ def _end(action: str = "SELL", end_at_ms: int = _END_MS) -> ScheduledEnd:
 
 
 async def _hold_ten(repo: ClerkSqliteRepository) -> str:
-    return await _make_held_position(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, run_id=RUN_ID)
+    return await _make_held_position(repo, account_id=repo.account_id, strategy_instance_id=SID, run_id=RUN_ID)
 
 
 async def _pass(
@@ -736,13 +742,18 @@ async def _the_raw_route(repo: ClerkSqliteRepository, runner: BotTaskRegistry) -
     """A client of the raw route over ``repo``'s authority, with ``runner`` as the process's bot runner.
 
     That authority is then the process's one Clerk, the runner's included, and the runner's
-    end schedule is the one its passes read, as at startup. On the way out the runner shuts
-    down while it is still installed, as a service shutdown would.
+    end schedule is the one its passes read, as at startup. A ``shadow:`` account is a Shadow
+    authority's, which reads a live account. On the way out the runner shuts down while it is
+    still installed, as a service shutdown would.
     """
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_Market(), account_mode="paper")
+    authority_kind = "shadow" if is_shadow_account_id(repo.account_id) else "sqlite"
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=_FakeReadPort(), trade=_Market(), authority_kind=authority_kind,
+        account_mode="live" if authority_kind == "shadow" else "paper",
+    )
     app = FastAPI()
     app.include_router(alpaca_clerk_sqlite.router)
-    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind=authority_kind, clerk=facade))
     set_bot_task_registry(runner)
     install_bot_end_schedule(runner)
     try:
@@ -867,6 +878,47 @@ async def test_the_raw_stop_route_naming_a_crashed_run_cancels_the_end_it_kept(
     assert record is not None and (record.desired_state, record.end) == (DesiredState.STOPPED, None)
 
 
+# The fleet's public URL names the account canonically, in lowercase, and a Shadow authority's by
+# the live account it reads; the authority stores Alpaca's spelling, ``shadow:`` under Shadow.
+_PUBLIC_ACCOUNT = canonical_alpaca_account_id(ACCOUNT_ID)
+
+
+@pytest.mark.parametrize("repo", [ACCOUNT_ID, f"shadow:{ACCOUNT_ID}"], ids=["real", "shadow"], indirect=True)
+async def test_the_raw_stop_route_naming_the_account_as_the_fleet_does_replays_the_sweeps_stop(
+    repo: ClerkSqliteRepository, tmp_path: Path,
+) -> None:
+    """#2664 review: every other STOP of a run -- the sweep's, a restart's, the Clerk's at the end,
+    the panel's -- is keyed with the account the authority stores. The raw Stop keyed its STOP
+    with the URL's spelling, which the route admits in lowercase and, under a Shadow authority,
+    as the plain live account. Naming a crashed run the sweep stopped, it missed the sweep's STOP,
+    found no ACTIVE run and answered 404 -- after cancelling the end, and before stopping the
+    process. It now commits through the authority: the sweep's STOP replayed, the Stop finished."""
+    await _hold_ten(repo)
+    runner = _runner_keeping_the_end(tmp_path / "runner", repo, crashed=True)
+    swept = submit_stop_run(
+        repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID,
+        operator_reason=RUNNER_GONE_REASON,
+    )
+    port = _Market()
+
+    async with _the_raw_route(repo, runner) as client:
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{_PUBLIC_ACCOUNT}/bots/{SID}/runs/stop", json=_OPERATORS_STOP,
+        )
+        _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+        await _pass(repo, port)
+
+    assert stop.status_code == 202, stop.text
+    assert stop.json()["command_id"] == swept.command.command_id
+    assert _stop_reason(repo) == RUNNER_GONE_REASON
+    assert port.submitted_legs == []
+    assert _end_sales(repo) == []
+    assert repo.position(SID, "SPY") == 10
+    assert runner.pending_ends([SID]) == []
+    record = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", SID)).read()
+    assert record is not None and (record.desired_state, record.end) == (DesiredState.STOPPED, None)
+
+
 async def test_the_raw_stop_route_after_the_clerks_stop_at_the_end_still_cancels_the_end(
     repo: ClerkSqliteRepository, tmp_path: Path,
 ) -> None:
@@ -952,16 +1004,8 @@ async def test_the_raw_stop_route_replaying_an_earlier_runs_stop_leaves_the_late
     assert pending == [_end("SELL")]
 
 
-@pytest.mark.usefixtures("runner_duty_clerk")
-async def test_a_retry_of_the_raw_stop_whose_process_stop_failed_stops_the_process(
-    repo: ClerkSqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#2664 review: the raw Stop's STOP is durable before it stops the bot's process. When that
-    process stop fails -- its desired-state write, say -- the caller gets a 500 and the fleet op
-    retries. The retry used to find the run already stopped and answer 202 with the process
-    still consuming bars; it now redoes the Stop, and the process is stopped."""
-    runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+def _the_disk_fails_the_first_stopped_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bot's first STOPPED intent fails to write, as a full disk fails it; every later write lands."""
     write = DesiredStateRepo.set
     failed: list[DesiredState] = []
 
@@ -972,6 +1016,19 @@ async def test_a_retry_of_the_raw_stop_whose_process_stop_failed_stops_the_proce
         return write(self, state, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(DesiredStateRepo, "set", the_disk_fails_once)
+
+
+@pytest.mark.usefixtures("runner_duty_clerk")
+async def test_a_retry_of_the_raw_stop_whose_process_stop_failed_stops_the_process(
+    repo: ClerkSqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2664 review: the raw Stop's STOP is durable before it stops the bot's process. When that
+    process stop fails -- its desired-state write, say -- the caller gets a 500 and the fleet op
+    retries. The retry used to find the run already stopped and answer 202 with the process
+    still consuming bars; it now redoes the Stop, and the process is stopped."""
+    runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    _the_disk_fails_the_first_stopped_write(monkeypatch)
     body = {"lifecycle_run_id": run_id, "operator_reason": "operator stop"}
 
     async with _the_raw_route(repo, runner) as client:
@@ -990,6 +1047,54 @@ async def test_a_retry_of_the_raw_stop_whose_process_stop_failed_stops_the_proce
     record = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", _LIVE_SID)).read()
     assert record is not None
     assert (record.desired_state, record.reason, record.end) == (DesiredState.STOPPED, "operator stop", None)
+
+
+@pytest.mark.usefixtures("runner_duty_clerk")
+async def test_a_raw_stop_naming_the_account_as_the_fleet_does_finishes_a_panel_stop_whose_process_stop_failed(
+    repo: ClerkSqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2664 review: the panel's Stop commits its STOP, keyed with the account the authority
+    stores, before it stops the bot's process. When that process stop fails, a raw Stop of the
+    run finishes it. Named with the fleet's lowercase account, that raw Stop used to miss the
+    panel's STOP and answer 404, the process still consuming bars; it now replays the panel's
+    STOP and stops the process."""
+    runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    _the_disk_fails_the_first_stopped_write(monkeypatch)
+
+    async with _the_raw_route(repo, runner) as client:
+        snapshot = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{_LIVE_SID}/snapshot")
+        [presented] = [
+            action for action in snapshot.json()["recovery_actions"] if action["action_id"] == "stop_bot_decisions"
+        ]
+        with pytest.raises(OSError, match="No space left"):
+            await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{_LIVE_SID}/recovery-actions/execute",
+                json={
+                    "action_id": "stop_bot_decisions",
+                    "concurrency_token": presented["concurrency_token"],
+                    "execution_ref": presented["execution_ref"],
+                    "reason": "panel stop",
+                },
+            )
+        panels_stop = repo.last_strategy_transition(strategy_instance_id=_LIVE_SID, transition_kind="RUN_STOPPED")
+        running_after_the_failure = runner.status("alpaca", _LIVE_SID).running
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{_PUBLIC_ACCOUNT}/bots/{_LIVE_SID}/runs/stop",
+            json={"lifecycle_run_id": run_id, "operator_reason": "operator stop"},
+        )
+        status = runner.status("alpaca", _LIVE_SID)
+
+    assert presented["execution_ref"] == run_id
+    assert panels_stop is not None and running_after_the_failure is True
+    assert stop.status_code == 202, stop.text
+    assert stop.json()["command_id"] == panels_stop["command_id"]
+    assert status.running is False
+    assert status.duty_outcome is not None
+    assert (status.duty_outcome.kind, status.duty_outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
+    record = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", _LIVE_SID)).read()
+    assert record is not None
+    assert (record.desired_state, record.updated_by, record.end) == (DesiredState.STOPPED, "operator_runs_stop", None)
 
 
 @pytest.mark.usefixtures("runner_duty_clerk")

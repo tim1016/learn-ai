@@ -216,10 +216,19 @@ one -- its ACTIVE run, else its latest -- the Stop cancels the end before it
 commits its STOP and then stops the process, so nothing that runs in between
 (the runner's end watch, a Clerk pass) reads the end as still to be carried
 out. It does so whether that run is live, died in a crash the sweep or a
-restart then stopped, or was stopped by the Clerk at its end. A run is stopped
-once, under its first STOP's reason, so a retry of either Stop -- after a lost
-response, or after its process stop failed -- replays that STOP and does the
-cancel and the process stop again. A Stop naming an earlier run (a retry
+restart then stopped, or was stopped by the Clerk at its end. Both commit the
+STOP through the account authority, keyed with the account it stores, as the
+sweep, a restart and the Clerk at the end key theirs -- never with the URL's
+spelling, which a route admits in lowercase and, under Shadow, as the plain
+live account. A run is stopped once, under its first STOP's reason, so a
+retry that names the run -- the raw route's, or `stop_bot_decisions` on the
+Clerk's recovery-actions route with its `execution_ref` -- after a lost
+response, or after its process stop failed, replays that STOP and does the
+cancel and the process stop again. The panel's own retry cannot: it re-reads
+the bot's actions, and once the STOP committed no run is active to Stop, so
+the Stop it presented is stale and a fresh one unavailable
+(`NO_ACTIVE_BOT_RUN`); a raw Stop naming the run finishes that Stop. A Stop
+naming an earlier run (a retry
 landing after a redeploy) changes nothing: its STOP is replayed, and the later
 run's end and process are left as they are -- the runner, too, acts on a Stop
 only for the run its live process runs. The runner stops a process "at its

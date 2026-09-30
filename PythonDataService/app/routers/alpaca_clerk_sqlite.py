@@ -18,7 +18,6 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from enum import StrEnum
-from functools import partial
 from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
@@ -35,7 +34,6 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     NoActiveRunError,
     UnknownStrategyInstanceError,
     submit_start_run,
-    submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -369,29 +367,23 @@ async def stop_run(
         )
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
     try:
         # An operator's Stop of the named run, as the panel's Stop makes it
         # (#2664): when the run is the bot's current one -- live, crashed, or
         # stopped at its end -- the bot's end is cancelled before the STOP
         # commits and its process stopped once the STOP is durable, and a
         # retry redoes both. A Stop naming another run, or a Dry Run's bot (it
-        # has no run here), is replayed or refused by its STOP alone.
+        # has no run here), is replayed or refused by its STOP alone. The STOP
+        # commits through the authority, keyed with the account it stores:
+        # the URL's spelling only selected the authority.
         submission = await operator_stop_run(
-            repo,
+            facade,
             strategy_instance_id=strategy_instance_id,
             lifecycle_run_id=body.lifecycle_run_id,
+            operator_reason=body.operator_reason,
             updated_by=_RUNS_STOP,
             reason=body.operator_reason or _RUNS_STOP,
-            commit_stop=partial(
-                asyncio.to_thread,
-                submit_stop_run,
-                repo,
-                account_id=account_id,
-                strategy_instance_id=strategy_instance_id,
-                lifecycle_run_id=body.lifecycle_run_id,
-                operator_reason=body.operator_reason,
-            ),
         )
     except NoActiveRunError as exc:
         raise HTTPException(

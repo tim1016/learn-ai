@@ -11,7 +11,6 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from functools import partial
 from typing import Protocol
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal
@@ -293,19 +292,14 @@ async def _stop_bot_decisions(
     strategy_instance_id: str,
     lifecycle_run_id: str,
 ) -> RecoveryExecutionResult:
-    """The panel's Stop: an operator's Stop of the run, its STOP committed through the facade."""
+    """The panel's Stop: an operator's Stop of the run."""
     submission = await operator_stop_run(
-        facade.repository,
+        facade,
         strategy_instance_id=strategy_instance_id,
         lifecycle_run_id=lifecycle_run_id,
+        operator_reason=request.reason,
         updated_by="operator_recovery",
         reason=request.reason or _RECOVERY_STOP_REASON,
-        commit_stop=partial(
-            facade.stop_strategy_run,
-            strategy_instance_id=strategy_instance_id,
-            run_id=lifecycle_run_id,
-            reason=request.reason,
-        ),
     )
     return RecoveryExecutionResult(
         action_id=request.action_id,
@@ -317,46 +311,52 @@ async def _stop_bot_decisions(
 
 
 async def operator_stop_run(
-    repo: ClerkSqliteRepository,
+    facade: ActiveSqliteRecoveryFacade,
     *,
     strategy_instance_id: str,
     lifecycle_run_id: str,
+    operator_reason: str | None,
     updated_by: str,
     reason: str,
-    commit_stop: Callable[[], Awaitable[CommandSubmission]],
 ) -> CommandSubmission:
     """An operator's Stop of run ``lifecycle_run_id``: cancel the bot's end, commit the STOP, stop the process.
 
     The one sequence the panel's Stop (``stop_bot_decisions``) and the raw
-    ``runs/stop`` route (#2664) run. ``commit_stop`` is the caller's own
-    submission of the run's STOP, durable once it returns; ``reason`` is the
-    one the process stop records. The owner's Stop sells nothing at the end
-    time (#2607): the end is cancelled before the STOP commits, so nothing
-    that runs between the STOP and the process stop -- the runner's end watch,
-    a Clerk pass -- reads it as still to be carried out, and the process stop
-    records the rest of the Stop, its STOPPED intent. Should the STOP fail,
-    the bot runs on with no end: the end is the owner's, and they asked to
-    Stop -- they are told the Stop failed, and the bot runs until they Stop it
-    again. Nothing restores the end: a restored SELL end would sell what the
-    owner meant to keep.
+    ``runs/stop`` route (#2664) run. Its STOP, recording ``operator_reason``,
+    commits through the account authority's facade (``stop_strategy_run``):
+    under its intake, and keyed with the account the authority stores, as
+    every other STOP of the run is -- the sweep's, a restart's, the Clerk's at
+    the end. Never with a route's spelling of the account, which a route admits
+    in lowercase and, under Shadow, as the plain live account: such a key
+    misses the run's STOP. ``reason`` is the one the process stop records. The
+    owner's Stop sells nothing at the end time (#2607): the end is cancelled
+    before the STOP commits, so nothing that runs between the STOP and the
+    process stop -- the runner's end watch, a Clerk pass -- reads it as still
+    to be carried out, and the process stop records the rest of the Stop, its
+    STOPPED intent. Should the STOP fail, the bot runs on with no end: the end
+    is the owner's, and they asked to Stop -- they are told the Stop failed,
+    and the bot runs until they Stop it again. Nothing restores the end: a
+    restored SELL end would sell what the owner meant to keep.
 
     Only a Stop of the bot's current run -- its ACTIVE run, else its latest --
     is an operator's Stop of the bot: whether that run is live, died in a
     crash the sweep or a restart then stopped, or was stopped by the Clerk at
     its end, the end is cancelled and the process stopped. A run is stopped
-    once, under its first STOP's reason, so ``commit_stop`` answers a retry --
-    after a lost response, or after the process stop failed -- with the STOP
-    already committed, and the Stop is redone whole; each step is idempotent.
-    A Stop naming an earlier run (a retry landing after a redeploy) or a run
-    the bot never had touches neither end nor process: ``commit_stop`` alone
-    replays or refuses it. A sale the Clerk already accepted for the end is
-    that sale's EXIT's, and no Stop calls it off (#2666).
+    once, under its first STOP's reason, so a retry -- after a lost response,
+    or after the process stop failed -- finds the STOP already committed, and
+    the Stop is redone whole; each step is idempotent. A Stop naming an
+    earlier run (a retry landing after a redeploy) or a run the bot never had
+    touches neither end nor process: its STOP alone is replayed or refused. A
+    sale the Clerk already accepted for the end is that sale's EXIT's, and no
+    Stop calls it off (#2666).
     """
-    current = await asyncio.to_thread(_current_run, repo, strategy_instance_id)
+    current = await asyncio.to_thread(_current_run, facade.repository, strategy_instance_id)
     stops_the_bot = current is not None and current.lifecycle_run_id == lifecycle_run_id
     if stops_the_bot:
         await _cancel_bot_end(strategy_instance_id, lifecycle_run_id, updated_by=updated_by)
-    submission = await commit_stop()
+    submission = await facade.stop_strategy_run(
+        strategy_instance_id=strategy_instance_id, run_id=lifecycle_run_id, reason=operator_reason,
+    )
     if stops_the_bot:
         await _quiesce_bot_process(strategy_instance_id, lifecycle_run_id, updated_by=updated_by, reason=reason)
     return submission
