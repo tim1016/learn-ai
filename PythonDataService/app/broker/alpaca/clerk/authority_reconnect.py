@@ -10,7 +10,7 @@ serving with it installed while this loop retries on a capped backoff, for as
 long as it takes (owner decision 2026-09-29: no give-up). One attempt is the
 boot's own steps in the boot's own order -- select, acknowledge, install, boot
 recovery -- so an attempt either leaves a booted authority serving or leaves
-nothing of itself behind: an installed authority whose boot recovery fails is
+nothing of itself behind: an authority whose install or boot recovery fails is
 retired, and the lane goes back to reconnecting (Alpaca again) or to a final
 refusal that says restart (anything else). Every attempt is logged and
 counted, never silently.
@@ -207,9 +207,10 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
 
     Alpaca not answering the selection installs nothing: the reconnecting
     refusal already installed keeps serving. Anything else is acknowledged,
-    installed and boot-recovered. An installed authority whose boot recovery
-    fails is retired before its refusal replaces it, so no half-booted
-    authority -- sweepless, Start refused for good -- is ever left serving.
+    installed and boot-recovered. An authority whose install, identity read
+    or boot recovery fails is retired before its refusal replaces it, so no
+    half-booted authority -- sweepless, Start refused for good -- is ever
+    left serving.
     That refusal is the one a failed boot composition installs
     (``compose_failure_refusal``): reconnecting when Alpaca was the cause,
     else final, and naming the activation the retired authority served, read
@@ -219,20 +220,21 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     if selected.reconnecting:
         return selected
     acknowledged = await steps.acknowledge(selected)
-    steps.install(acknowledged)
-    # A refusal holds no repository, so no lease to release: it is booted as
-    # it stands.
+    # A refusal holds no repository, so no lease to release: it is installed
+    # and booted as it stands.
     repository = acknowledged.sqlite_repository
     if repository is None:
+        steps.install(acknowledged)
         await steps.boot(acknowledged)
         return acknowledged
-    # The activation identity is read inside the guard too (#2620): a
-    # control-meta read that raises is a failed composition of this attempt,
-    # not an escapee to the catch-all — which would install the final
-    # refusal without retiring the authority it just installed, leaving its
-    # lease and consumer open.
+    # The install and the activation identity read are inside the guard too
+    # (#2620): either raising is a failed composition of this attempt, not an
+    # escapee to the catch-all -- which would install the final refusal
+    # without retiring the authority, leaving its lease and consumer open.
+    # Retirement copes with an install that stopped partway.
     activation = None
     try:
+        steps.install(acknowledged)
         activation = repository.control_meta_snapshot()
         await steps.boot(acknowledged)
     except Exception as exc:
@@ -243,8 +245,7 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
             db_identity_token=None if activation is None else activation.db_identity_token,
         )
         logger.error(
-            "This Clerk's account authority installed, but its boot recovery failed; it is "
-            "retired: %s",
+            "This Clerk's account authority did not finish starting; it is retired: %s",
             exc,
             extra={
                 "action": "clerk_authority_reconnect_boot_failed",

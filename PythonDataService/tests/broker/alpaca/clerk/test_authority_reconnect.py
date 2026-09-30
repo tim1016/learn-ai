@@ -164,16 +164,19 @@ class _CompositionRoot:
 
     Install makes a runtime the lane's primary, exactly as main.py does;
     retire closes it; boot recovery raises what the test queues for each
-    authority it boots, and records every call.
+    authority it boots; acknowledgement raises ``acknowledgement_error``
+    when one is set. Every call is recorded.
     """
 
     select: Callable[[], Awaitable[ActiveClerkRuntime]]
     boot_errors: list[Exception | None] = field(default_factory=list)
     events: list[tuple[str, ActiveClerkRuntime]] = field(default_factory=list)
-    refuse_acknowledgement: bool = False
+    acknowledgement_error: Exception | None = None
 
     async def acknowledge(self, runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
         self.events.append(("acknowledge", runtime))
+        if self.acknowledgement_error is not None:
+            raise self.acknowledgement_error
         return runtime
 
     def install(self, runtime: ActiveClerkRuntime) -> None:
@@ -681,6 +684,37 @@ async def test_a_control_meta_read_that_raises_retires_the_authority_it_just_ins
     assert root.events[-1] == ("boot", final)
 
 
+async def test_an_install_that_raises_retires_the_authority_it_half_installed(tmp_path: Path) -> None:
+    """#2620 review: the install sat outside the composition guard too.
+
+    An install that raised after making the authority primary -- its
+    trade-updates consumer or a tap failing to start -- escaped to the
+    catch-all, which installed the final refusal without retiring it: its
+    execution lease stayed held against the next owner.
+    """
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    root = _CompositionRoot(select)
+    install = root.install
+
+    def install_breaks_once_primary(runtime: ActiveClerkRuntime) -> None:
+        install(runtime)
+        if runtime.clerk is not None:
+            raise RuntimeError("the trade-updates consumer would not start")
+
+    root.install = install_breaks_once_primary  # type: ignore[method-assign]
+
+    final = await _reconnect(at_boot, root)
+
+    assert root.names() == ["acknowledge", "install", "install", "retire", "boot"]
+    assert root.events[3] == ("retire", root.events[1][1])  # the half-installed authority is closed
+    _next_process_can_take_the_lease(tmp_path)
+    assert get_active_clerk_runtime() is final
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
+    assert "the trade-updates consumer would not start" in final.startup_failure.recovery
+
+
 async def test_a_retired_authority_reconnecting_keeps_its_line_on_home_and_its_panels(tmp_path: Path) -> None:
     """Between its retirement and the next attempt the account is reconnecting, never gone from Home.
 
@@ -911,6 +945,38 @@ async def test_a_reconnect_that_breaks_while_retiring_boots_its_final_refusal_an
     assert "restart the Clerk once that is fixed" in final.startup_failure.recovery
     line = await _what_the_owner_sees(final, activation=at_boot.startup_failure)
     assert (line.condition_id, line.severity) == ("account:authority-failed:CLERK_RECONNECT_FAILED", "blocking")
+
+
+async def test_a_final_refusal_whose_acknowledgement_fails_is_still_installed_and_booted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A second failure acknowledging the final refusal never leaves the lane serving nothing.
+
+    It is logged with its cause, then the refusal is installed
+    unacknowledged and boot-recovered like any other (#2620).
+    """
+
+    async def _select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    root = _CompositionRoot(
+        _select_breaks, acknowledgement_error=RuntimeError("the binding receipt could not be written")
+    )
+    caplog.set_level(logging.ERROR, logger="app.broker.alpaca.clerk.authority_reconnect")
+
+    final = await _reconnect(reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT), root)
+
+    assert root.names() == ["acknowledge", "install", "boot"]
+    assert root.events[1:] == [("install", final), ("boot", final)]
+    assert get_active_clerk_runtime() is final
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == RECONNECT_FAILED
+    (logged,) = [
+        record for record in caplog.records
+        if getattr(record, "action", None) == "clerk_authority_reconnect_final_ack_failed"
+    ]
+    assert logged.exc_info is not None
+    assert str(logged.exc_info[1]) == "the binding receipt could not be written"
 
 
 async def test_a_final_refusal_whose_boot_recovery_also_fails_ends_the_reconnect_logged_not_raised(
