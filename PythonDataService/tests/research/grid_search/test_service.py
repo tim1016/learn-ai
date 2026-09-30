@@ -22,7 +22,7 @@ from app.research.grid_search import repository as repo
 from app.research.grid_search.models import CellResult
 from app.research.persistence import lifecycle
 from app.research.sweep.grid import RunSpec, ValueListRange
-from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity
+from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity, EnvironmentIdentityError
 from tests._helpers.lean_store import seed_store_day
 
 START, END = date(2025, 1, 6), date(2025, 1, 24)
@@ -146,6 +146,26 @@ def test_preflight_refuses_an_unreadable_zip_by_path_without_prescribing_a_backf
 
 
 # ── Launch + execute ─────────────────────────────────────────────────────
+
+
+def test_a_launch_whose_environment_cannot_be_identified_is_a_coded_refusal(
+    lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable environment must refuse launch in plain words, not 500 (#2604)."""
+
+    def unreadable() -> CodeIdentity:
+        raise EnvironmentIdentityError("the installed distribution 'x' has no name in its metadata")
+
+    monkeypatch.setattr(service, "resolve_code_identity", unreadable)
+
+    with pytest.raises(service.GridSearchRefusal) as refused:
+        service.prepare_launch(_spec(), job_id="job-1", roots=[lake])
+
+    assert refused.value.code == "ENVIRONMENT_UNIDENTIFIABLE"
+    assert str(refused.value) == (
+        "This service cannot identify its installed Python libraries right now, so it cannot record "
+        "the environment a new search runs in. Repair the environment, then launch again."
+    )
 
 
 async def test_launch_is_durable_and_execute_ranks_the_field(conn, lake: Path) -> None:

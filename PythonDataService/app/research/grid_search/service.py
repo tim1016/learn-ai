@@ -58,7 +58,7 @@ from app.research.sweep.grid import (
     ValueListRange,
     expand_grid,
 )
-from app.research.sweep.identity import CodeIdentity, resolve_code_identity
+from app.research.sweep.identity import CodeIdentity, EnvironmentIdentityError, resolve_code_identity
 from app.research.sweep.ranking import leader
 from app.research.sweep.snapshot import (
     DataSnapshot,
@@ -97,6 +97,24 @@ class GridSearchRefusal(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def current_code_identity() -> CodeIdentity:
+    """The loaded code's identity, or a launch refusal naming why it is unreadable.
+
+    Every launch resolves this once for its receipt. An environment whose
+    installed distributions cannot be read used to escape as a bare
+    ``EnvironmentIdentityError`` — a generic 500 with no reason the researcher
+    can see; it is a coded refusal in plain words instead (#2604).
+    """
+    try:
+        return resolve_code_identity()
+    except EnvironmentIdentityError as exc:
+        raise GridSearchRefusal(
+            "This service cannot identify its installed Python libraries right now, so it cannot record "
+            "the environment a new search runs in. Repair the environment, then launch again.",
+            code="ENVIRONMENT_UNIDENTIFIABLE",
+        ) from exc
 
 
 def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
@@ -340,7 +358,7 @@ def prepare_launch(
     else:
         _assert_snapshot_covers(snapshot, pre)
     if identity is None:
-        identity = resolve_code_identity()
+        identity = current_code_identity()
     return NewSearch(
         id=search_id or uuid.uuid4().hex,
         strategy_key=spec.strategy_key,

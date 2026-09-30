@@ -6,8 +6,12 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Upgrade pip and ensure setuptools is present (polygon-api-client needs pkg_resources)
-RUN pip install --upgrade pip "setuptools>=70,<81"
+# Upgrade pip and ensure setuptools is present (polygon-api-client needs pkg_resources).
+# Pinned exactly: an unpinned upgrade moves the installed pip on every
+# cache-skipping rebuild, which moves the sweep environment digest and
+# refuses Finish on every interrupted study (#2604). The versions match the
+# image already in service, so pinning itself moves nothing.
+RUN pip install --upgrade "pip==26.2.1" "setuptools==80.10.2"
 
 # Layer 1: Heavy/stable libs (scipy, numpy, pandas, statsmodels)
 # Pre-built binary wheels only — no source compilation needed.

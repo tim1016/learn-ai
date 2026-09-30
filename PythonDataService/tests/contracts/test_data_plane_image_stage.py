@@ -182,12 +182,27 @@ def test_the_runtime_stage_ships_no_developer_tooling() -> None:
 
 
 def _included_requirement_files(requirements: str) -> set[str]:
-    """The files a requirements file pulls in with `-r` / `--requirement`."""
+    """The files a requirements file pulls in, in every spelling pip accepts.
+
+    pip reads ``-r X``, ``-rX``, ``--requirement X`` and ``--requirement=X``
+    (#2604); an include the parser misses would make the qualification stage's
+    COPY list silently drop a file its install reads.
+    """
     included: set[str] = set()
     for line in requirements.splitlines():
         tokens = line.split("#", 1)[0].split()
-        if len(tokens) == 2 and tokens[0] in ("-r", "--requirement"):
-            included.add(posixpath.normpath(tokens[1]))
+        if not tokens:
+            continue
+        first, *rest = tokens
+        path: str | None = None
+        if first in ("-r", "--requirement") and rest:
+            path = rest[0]
+        elif first.startswith("-r") and len(first) > 2:
+            path = first[2:]
+        elif first.startswith("--requirement="):
+            path = first.split("=", 1)[1]
+        if path:
+            included.add(posixpath.normpath(path))
     return included
 
 
@@ -204,3 +219,32 @@ def test_the_qualification_stage_copies_every_file_its_dev_install_reads() -> No
     assert "WORKDIR /app" in stages["runtime"]
     assert included, "requirements-dev.txt no longer includes the runtime pins; revisit this contract"
     assert {"requirements-dev.txt", *included} <= present
+
+
+def test_every_pip_spelling_of_a_requirements_include_is_recognised() -> None:
+    """`-r X`, `-rX`, `--requirement X` and `--requirement=X` all install the
+    named file (#2604); an unrecognized spelling would drop it from the COPY
+    list the contract above pins."""
+    text = "\n".join(
+        [
+            "-r requirements-heavy.txt",
+            "--requirement requirements-light.txt",
+            "-rrequirements-light.txt",
+            "--requirement=requirements-heavy.txt",
+            "# -r commented-out.txt",
+            "pytest>=8",
+        ]
+    )
+
+    assert _included_requirement_files(text) == {"requirements-heavy.txt", "requirements-light.txt"}
+
+
+def test_the_builder_pins_its_installer_exactly() -> None:
+    """An unpinned `pip install --upgrade pip` moves the installed pip on every
+    cache-skipping rebuild, which moves the sweep environment digest and
+    refuses Finish on every interrupted study (#2604)."""
+    stages = _dockerfile_stages()
+    upgrade = next(line for line in stages["builder"] if "pip install" in line and ("--upgrade" in line or "==" in line))
+
+    assert "pip==" in upgrade, f"pip is not pinned to an exact version: {upgrade!r}"
+    assert "setuptools==" in upgrade, f"setuptools is not pinned to an exact version: {upgrade!r}"
