@@ -6,6 +6,7 @@ import type { CommandContext } from '../../src/app/fleet/resource-target';
 import {
   BOT_NAME_NOTE,
   CLEAR_REFUSAL,
+  DV_EXPERIMENTAL_NOTICE,
   EARLIER_BOT,
   HOLDING_ATTENTION,
   HOLDING_EXPLANATION,
@@ -15,6 +16,7 @@ import {
   LIVE_BUDGET,
   LIVE_PHRASE,
   LIVE_WORKSPACE,
+  NO_END_STOPPED,
   OwnerWalkWorld,
   PAPER_ACCOUNT,
   PAPER_API,
@@ -28,6 +30,7 @@ import {
   SELL_MESSAGE,
   STOP_MESSAGE,
   WALKED_BOT,
+  WALK_DEFAULT_END,
 } from './support/owner-walk-world';
 
 /**
@@ -142,6 +145,10 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(step(page, 'How').getByText('Ready', { exact: true })).toBeVisible();
     await expect(step(page, 'How').getByRole('radio', { name: /Paper/ })).toBeChecked();
     await expect(step(page, 'How').getByRole('spinbutton', { name: 'Exit allowance (bps)' })).toHaveValue('20');
+    // Deployment Validation says it is no trading strategy; its end is the
+    // account's default, in the backend's words (#2607).
+    await expect(step(page, 'What').getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
+    await expect(page.getByRole('region', { name: 'End · changeable later' })).toContainText(WALK_DEFAULT_END.headline);
 
     // Money: the account's bar as it stands, then a NEW slice carved from
     // free to deploy once the server has previewed the typed amount.
@@ -185,6 +192,8 @@ test.describe('The owner walks one account (PRD #2560)', () => {
       review_token: `review-real_paper-${PAPER_BUDGET}`,
       live_confirmation: null,
     });
+    // The end on screen always rides the Deploy, its action included.
+    expect(submission.end).toEqual({ end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'SELL' });
 
     // ── Home after: the bot's own slice, carved from free to deploy. ───────
     await homeTab(page).click();
@@ -228,6 +237,10 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // ── Flatten…: the bot page's warning and its one confirmed sequence. ──────
     await holdingRow.getByRole('link', { name: `Flatten ${WALKED_BOT}…` }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
+    // The Stop cancelled the planned end sale: nothing is left to end, or to change.
+    const stoppedEnd = page.getByRole('region', { name: 'End', exact: true });
+    await expect(stoppedEnd).toContainText(NO_END_STOPPED.headline);
+    await expect(stoppedEnd.getByRole('button', { name: 'Change end' })).toHaveCount(0);
     const warning = page.getByRole('region', { name: 'No bot is managing 1 SPY' });
     await expect(warning).toContainText('Deploy again starts a new bot with its own budget. It never takes over these shares.');
     await warning.getByRole('button', { name: 'Flatten…' }).click();
@@ -323,6 +336,9 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(deploy).toBeEnabled();
 
     await expect(deploy).toBeInViewport({ ratio: 1 });
+    // The end and Deployment Validation's note are on the one screen too (#2607).
+    await expect(page.getByRole('region', { name: 'End · changeable later' })).toBeInViewport({ ratio: 1 });
+    await expect(step(page, 'What').getByRole('note')).toBeInViewport({ ratio: 1 });
     const fit = await page.evaluate(() => ({
       height: document.documentElement.scrollHeight,
       viewport: window.innerHeight,
@@ -400,6 +416,32 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // Nothing the Live walk did reached the Paper account (FR-096).
     expect(world.sent.filter((command) => !command.path.startsWith(LIVE_API))).toEqual([]);
+    expect(world.unexpected()).toEqual([]);
+  });
+
+  test('Bot page: a running bot’s end is the owner’s to change, and the next read shows it (#2607)', async ({ page }) => {
+    const world = new OwnerWalkWorld();
+    world.phase = 'running';
+    await world.install(page);
+
+    await page.goto(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
+    await expect(page.locator('app-bot-banner').getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
+    const end = page.getByRole('region', { name: 'End', exact: true });
+    await expect(end).toContainText(WALK_DEFAULT_END.headline);
+    await expect(end).toContainText(WALK_DEFAULT_END.explanation);
+
+    await end.getByRole('button', { name: 'Change end' }).click();
+    const editor = page.getByRole('dialog', { name: 'Change this bot’s end' });
+    await expect(editor.getByLabel('End date')).toBeFocused();
+    await editor.getByRole('radio', { name: 'Keep its shares' }).check();
+    await editor.getByRole('button', { name: 'Save end' }).click();
+
+    await expect(editor).toBeHidden();
+    await expect(end).toContainText('keeps its shares');
+    const [put] = world.commandsTo(`/bots/${WALKED_BOT}/end`);
+    expect(put.method).toBe('PUT');
+    expect(put.body).toMatchObject({ end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'KEEP' });
+    expect(envelopeOf(put.body).target).toEqual({ account_id: PAPER_ACCOUNT, entity_id: WALKED_BOT });
     expect(world.unexpected()).toEqual([]);
   });
 });
