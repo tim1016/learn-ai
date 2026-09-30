@@ -15943,19 +15943,6 @@
             "title": "Fill Mode",
             "type": "string"
           },
-          "force_flat_at": {
-            "anyOf": [
-              {
-                "format": "time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "At the first minute bar whose wall-clock time reaches this value, the engine cancels all queued / deferred orders, clears active TP/SL brackets, closes every open position at that minute's close, and calls strategy.on_force_flat(). Once per calendar day. Example: '15:58:00' for ET data.",
-            "title": "Force Flat At"
-          },
           "from_date": {
             "anyOf": [
               {
@@ -16017,19 +16004,6 @@
             "description": "Persist this run as a Strategy Lab study and dispatch its parity companion. False keeps the engine result only \u2014 for callers such as Grid Search that record their own summary rows.",
             "title": "Save Study",
             "type": "boolean"
-          },
-          "session_entry_cutoff": {
-            "anyOf": [
-              {
-                "format": "time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.",
-            "title": "Session Entry Cutoff"
           },
           "slippage_per_share": {
             "default": 0.0,

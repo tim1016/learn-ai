@@ -353,10 +353,6 @@ class BacktestEngine:
         # Keep a "previous minute bar" so that a NEXT_BAR_OPEN fill can use
         # the bar immediately after the signal bar.
         pending_fills: list[tuple[Order, TradeBar]] = []  # (order, signal_bar)
-        # Track which calendar date has already been force-flatted so the
-        # barrier fires at most once per session.
-        last_force_flat_date: date | None = None
-
 
         previous_minute_bar: TradeBar | None = None
         evaluation_pending = evaluation_start_ms is not None
@@ -381,35 +377,6 @@ class BacktestEngine:
             # Preserve the minute valuation mark even when a consolidator
             # replaces the decision reference with its earlier signal close.
             portfolio.update_market_price(symbol, minute_bar.close)
-
-            # ----- Session-close force-flat barrier.
-            # Fires once per calendar day on the first minute bar whose
-            # wall-clock time has crossed ``force_flat_at``. Cancels
-            # everything in flight (queued orders, NEXT_BAR_OPEN
-            # deferred fills, active TP/SL brackets), closes every open
-            # position at this minute's close, and calls the strategy's
-            # ``on_force_flat`` hook so strategies can sync their own
-            # internal state. Without all three cancellations, an
-            # orphaned entry could execute on tomorrow's open and
-            # defeat the whole cutoff.
-            if (
-                self.execution_config.force_flat_at is not None
-                and ny_datetime(minute_bar.start_ms).time() >= self.execution_config.force_flat_at
-                and ny_datetime(minute_bar.start_ms).date() != last_force_flat_date
-            ):
-                portfolio.clear_pending()
-                pending_fills.clear()
-                active_brackets.clear()
-                resting_limit_orders.clear()
-                for sym, pos in list(portfolio.positions.items()):
-                    if pos.quantity == 0:
-                        continue
-                    event = self._force_flat_close(portfolio, pos.quantity, sym, minute_bar)
-                    portfolio.apply_fill(event)
-                    order_events.append(event)
-                    strategy.on_order_event(event)
-                strategy.on_force_flat()
-                last_force_flat_date = ny_datetime(minute_bar.start_ms).date()
 
             # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
             # with this bar as next_bar. DEFERRED_FILL_MODES is the single
@@ -453,25 +420,6 @@ class BacktestEngine:
             # program's explicit advance/settle boundary available to other
             # runtimes.
             self._settle_staged_signal_program(strategy, closing_bar_skips)
-
-            # ----- Session entry cutoff: drop any order submitted after
-            # the cutoff that would GROW |position|. Exits (reductions
-            # and flips) always pass through — the wrapper protects
-            # against opening new exposure late, not against closing.
-            if self.execution_config.session_entry_cutoff is not None and portfolio.pending_orders:
-                cutoff = self.execution_config.session_entry_cutoff
-                if ny_datetime(minute_bar.start_ms).time() >= cutoff:
-                    kept: list[Order] = []
-                    for order in portfolio.pending_orders:
-                        if self._is_entry_order(portfolio, order):
-                            ctx.log(
-                                f"[SESSION CUTOFF] Dropped entry order "
-                                f"{order.order_id} for {order.symbol} qty={order.quantity} "
-                                f"at {ny_datetime(minute_bar.start_ms).time()} >= {cutoff}"
-                            )
-                            continue
-                        kept.append(order)
-                    portfolio.pending_orders = kept
 
             # ----- Drain any pending orders the strategy just submitted.
             #       LIMIT orders move to the resting book; MARKET orders
@@ -656,7 +604,7 @@ class BacktestEngine:
            (a warmup position is not a trade the scored window entered),
            every order queue is emptied, the book returns to its starting
            cash, and the strategy's own lifecycle bookkeeping is cleared
-           through the same ``on_force_flat`` hook the session barrier uses.
+           through its ``on_force_flat`` hook.
            The trade ledger, curve, retained bars, log, and insights restart
            empty. Indicator memory is the one thing that deliberately crosses.
         """
@@ -798,7 +746,7 @@ class BacktestEngine:
             if position.quantity == 0:
                 continue
             prior_trade_count = len(getattr(strategy, "trade_log", []))
-            event = self._force_flat_close(
+            event = self._close_at_bar(
                 portfolio,
                 position.quantity,
                 exit_symbol,
@@ -853,27 +801,20 @@ class BacktestEngine:
             holdings_value=total - portfolio.cash,
         )
 
-    @staticmethod
-    def _is_entry_order(portfolio: Portfolio, order: Order) -> bool:
-        """True when ``order`` would grow |position| (vs reduce/flip)."""
-        pos = portfolio.get_position(order.symbol)
-        return abs(pos.quantity + order.quantity) > abs(pos.quantity)
-
-    def _force_flat_close(
+    def _close_at_bar(
         self,
         portfolio: Portfolio,
         pos_qty: int,
         symbol: str,
         bar: TradeBar,
         *,
-        tag: str = "ForceFlat",
+        tag: str,
     ) -> OrderEvent:
-        """Synthesize a market-close fill at the current minute's close.
+        """Synthesize a market-close fill at ``bar``'s close.
 
-        Bypasses ``fill_model.fill_market_order`` so force-flat works
+        Bypasses ``fill_model.fill_market_order`` so the synthetic close works
         identically under any configured fill mode (NEXT_BAR_OPEN's deferred
-        semantics don't apply — a session close is immediate, not
-        signal-driven).
+        semantics don't apply -- there is no later bar to defer to).
         """
         close_qty = -pos_qty  # opposite sign closes the position
         direction = Direction.SHORT if pos_qty > 0 else Direction.LONG

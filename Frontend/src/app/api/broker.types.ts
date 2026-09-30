@@ -14880,11 +14880,6 @@ export interface components {
              */
             fill_mode?: string;
             /**
-             * Force Flat At
-             * @description At the first minute bar whose wall-clock time reaches this value, the engine cancels all queued / deferred orders, clears active TP/SL brackets, closes every open position at that minute's close, and calls strategy.on_force_flat(). Once per calendar day. Example: '15:58:00' for ET data.
-             */
-            force_flat_at?: string | null;
-            /**
              * From Date
              * @description YYYY-MM-DD override (legacy: start_date)
              */
@@ -14919,11 +14914,6 @@ export interface components {
              * @default true
              */
             save_study?: boolean;
-            /**
-             * Session Entry Cutoff
-             * @description After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.
-             */
-            session_entry_cutoff?: string | null;
             /**
              * Slippage Per Share
              * @description Per-share slippage applied against the trade direction at fill. Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a non-zero value (e.g. 0.02 = 2 ticks for US equities) to model a more realistic execution cost.

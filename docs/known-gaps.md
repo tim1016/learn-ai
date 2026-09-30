@@ -115,9 +115,9 @@ not yet provide:
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
   TypeScript temporal field declarations using strings or native date types
   across golden fixtures, Data Lab, portfolio, market-data, validation, and
-  research surfaces. The fourth Pydantic field is the active
-  `EngineBacktestRequest.force_flat_at: datetime.time` boundary whose OpenAPI
-  and generated TypeScript representation is a time string. Group migrations
+  research surfaces. The fourth Pydantic field,
+  `EngineBacktestRequest.force_flat_at: datetime.time`, was deleted with
+  `session_entry_cutoff` under #2607, so three remain. Group migrations
   by one source contract at a time; do not create another cross-stack duplicate.
   The live Alpaca V2 wire/storage path is not in this cluster.
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
