@@ -425,10 +425,10 @@ async def with_finished_results(
         )
         return rows
     return [
-        row if row.group != "finished" else row.model_copy(update={
-            "trade_count": results[row.strategy_instance_id].trade_count,
-            "final_result_usd": display_dollars(results[row.strategy_instance_id].result),
-        })
+        row if row.group != "finished" else row.with_facts(
+            trade_count=results[row.strategy_instance_id].trade_count,
+            final_result_usd=display_dollars(results[row.strategy_instance_id].result),
+        )
         for row in rows
     ]
 
