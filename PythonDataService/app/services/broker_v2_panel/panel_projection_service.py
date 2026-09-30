@@ -1,10 +1,11 @@
 """Panel projection — the full 5s-poll bot control panel view (spec §7).
 
 ``build_panel`` composes the bot-health card, the account/clerk card, the six-
-station transaction rail, the journal-tail reference, and the presented actions
-(with the panel-state ``revision`` those actions bind to). It is a pure
-function over its inputs so the router seam test drives it with journal
-fixtures — no live clerk/registry required.
+station transaction rail, the journal-tail reference, and the panel-state
+``revision``. It is a pure function over its inputs so the router seam test
+drives it with journal fixtures — no live clerk/registry required. Its
+presented actions are ``sqlite_panel_adapter.adapt_sqlite_panel``'s, which
+every served panel passes through (#2635).
 
 The ``revision`` is a deterministic function of the durable panel state
 (journal length + lifecycle transition + desired state + hold state). A POST
@@ -43,7 +44,6 @@ from app.schemas.broker_v2_panel import (
     MarketPulseView,
     MissionVerdictView,
     PanelAction,
-    ReadinessCheckView,
     RecentDecisionView,
     RecentFillView,
     TransactionRail,
@@ -73,7 +73,6 @@ from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
 )
-from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
     derive_stations,
@@ -302,34 +301,6 @@ def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingO
         for entry in latest_by_ref.values()
         if entry.order is not None
     ]
-
-
-def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
-    """Count current Clerk-owned working orders across every namespace."""
-
-    terminal_refs = {
-        entry.order_ref
-        for entry in entries
-        if entry.order_ref
-        and entry.kind is ClerkEntryKind.ORDER_EVENT
-        and entry.event is not None
-        and entry.event.event_type in _TERMINAL_ORDER_EVENTS
-    }
-    latest_by_ref: dict[str, OrderJournalEntry] = {}
-    for entry in entries:
-        if (
-            entry.order_ref
-            and entry.order_ref not in terminal_refs
-            and entry.order is not None
-        ):
-            latest_by_ref[entry.order_ref] = entry
-    return sum(
-        1
-        for entry in latest_by_ref.values()
-        if entry.order is not None
-        and entry.order.status.lower()
-        not in {"filled", "canceled", "expired", "rejected", "replaced"}
-    )
 
 
 def _recent_decision_views(
@@ -610,35 +581,6 @@ def _decision_last_bar_at_ms(decision: DecisionReceipt | None) -> int | None:
     return None
 
 
-def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
-    """Project present-tense enforcement checks from the canonical action guards."""
-    checks: list[ReadinessCheckView] = []
-    for action in actions:
-        blocker = action.blockers[0] if action.blockers else None
-        checks.append(
-            ReadinessCheckView(
-                operation=action.action_id,
-                label=action.label,
-                ready=action.enabled,
-                scope=(blocker.condition.scope if blocker else "bot"),
-                authority="Panel action policy",
-                explanation=(
-                    action.explanation
-                    if action.enabled
-                    else (
-                        blocker.headline
-                        if blocker is not None
-                        else "This operation is unavailable in the current state."
-                    )
-                ),
-                evidence=(blocker.condition.evidence if blocker else {}),
-                evaluated_at_ms=now_ms,
-                cure=(blocker.detail if blocker is not None else None),
-            )
-        )
-    return checks
-
-
 def _mission_verdict(
     status: BotStatusView,
     clerk: ClerkCard,
@@ -860,18 +802,6 @@ def build_panel(
 
     working_orders = _working_orders(status.strategy_instance_id, entries)
     channel_health = evaluate_channel_health(clerk_status.channel_healths, now_ms)
-    actions = build_actions(
-        status,
-        clerk,
-        revision=revision,
-        channel_fresh=channel_health.ready,
-        exposure=exposure,
-        account_id=account_id,
-        working_order_count=len(working_orders),
-        account_working_order_count=_account_working_order_count(entries),
-        account_expected_exposure={},
-    )
-
     resolved_authority_account_id = authority_account_id or default_authority_account_id(
         status, account_id
     )
@@ -883,8 +813,6 @@ def build_panel(
         authority_account_id=resolved_authority_account_id,
         authority_kind=authority_kind_for_account(resolved_authority_account_id),
     )
-    readiness_checks = _readiness_checks(actions, now_ms)
-    readiness_ready_count = sum(check.ready for check in readiness_checks)
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
@@ -927,11 +855,14 @@ def build_panel(
         rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
-        actions=actions,
-        primary_action=select_primary_action(actions, health),
-        readiness_checks=readiness_checks,
-        readiness_ready_count=readiness_ready_count,
-        readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
+        # Commands are the SQLite adapter's (``adapt_sqlite_panel``), which
+        # every served panel passes through: Clear's archive and the Clerk's
+        # recovery catalog, with their readiness checks and primary command.
+        actions=[],
+        primary_action=None,
+        readiness_checks=[],
+        readiness_ready_count=0,
+        readiness_blocked_count=0,
         status=bot_status,
         end=end,
         exposure=exposure,

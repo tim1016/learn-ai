@@ -5624,9 +5624,7 @@
             "anyOf": [
               {
                 "enum": [
-                  "deploy",
                   "archive",
-                  "cancel_order",
                   "reconcile_now",
                   "recover_exact_execution_evidence",
                   "resolve_execution_coverage",
@@ -30461,9 +30459,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30540,9 +30536,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30625,9 +30619,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30685,9 +30677,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30744,7 +30734,7 @@
         "type": "object"
       },
       "PanelProfile": {
-        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``; an unsupported action never renders at all. Snapshot-\ncontract-tested per broker.",
+        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``. A bot's commands are not listed here: its panel\npresents exactly the actions it may run (``BotPanelView.actions``).\nSnapshot-contract-tested per broker.",
         "properties": {
           "broker": {
             "title": "Broker",
@@ -30769,35 +30759,13 @@
             },
             "title": "Stations",
             "type": "array"
-          },
-          "supported_action_ids": {
-            "items": {
-              "enum": [
-                "deploy",
-                "archive",
-                "cancel_order",
-                "reconcile_now",
-                "recover_exact_execution_evidence",
-                "resolve_execution_coverage",
-                "cancel_verified_working_orders",
-                "prepare_safe_flatten",
-                "execute_safe_flatten",
-                "discharge_attributed_residue",
-                "stop_bot_decisions",
-                "open_custody_timeline"
-              ],
-              "type": "string"
-            },
-            "title": "Supported Action Ids",
-            "type": "array"
           }
         },
         "required": [
           "broker",
           "fee_fidelity",
           "live_bars_supported",
-          "stations",
-          "supported_action_ids"
+          "stations"
         ],
         "title": "PanelProfile",
         "type": "object"
@@ -33093,9 +33061,7 @@
           },
           "operation": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",

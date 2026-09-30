@@ -25,7 +25,6 @@ const PROFILE: PanelProfile = {
   fee_fidelity: 'none',
   live_bars_supported: true,
   stations: [],
-  supported_action_ids: [],
 };
 
 function channel(overrides: Partial<ChannelHealthView>): ChannelHealthView {

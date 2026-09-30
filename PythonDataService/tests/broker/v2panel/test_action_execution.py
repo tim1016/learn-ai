@@ -544,14 +544,15 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.recorded_at_ms == legacy_observed_at_ms
 
 
-@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue", "retire", "flatten_stop", "stop"])
+@pytest.mark.parametrize("retired_action_id", get_args(RetiredActionId))
 async def test_retired_action_receipts_stay_history_and_never_block_the_next_command(
     tmp_path: Path, retired_action_id: str,
 ) -> None:
     """#2550 review: a bot's ledger written before Resume/Pause/Continue (and,
     since #2578, Retire; since #2595, Flatten & stop; since #2605, the generic
-    Stop) were retired must still load. Those receipts remain readable history,
-    and the bot's next command runs instead of failing the load."""
+    Stop; since #2635, Deploy and Cancel order) were retired must still load.
+    Those receipts remain readable history, and the bot's next command runs
+    instead of failing the load."""
     path = tmp_path / "panel_action_receipts.json"
     compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
     history = {
@@ -646,11 +647,11 @@ def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
 async def test_unwired_action_is_typed_not_available() -> None:
     with pytest.raises(ActionNotAvailableError) as exc:
         await execute_action(
-            _request(action_id="cancel_order"),
+            _request(action_id="open_custody_timeline"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # cancel_order not wired
+            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
             operator_identity="op",
             store=IdempotencyStore(),
         )
@@ -924,16 +925,16 @@ async def test_not_available_action_releases_key() -> None:
 
     with pytest.raises(ActionNotAvailableError):
         await execute_action(
-            _request(action_id="cancel_order", key="na"),
+            _request(action_id="open_custody_timeline", key="na"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # cancel_order not wired
+            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
             operator_identity="op",
             store=store,
         )
 
-    assert (_SID, "cancel_order", "na") not in store._records
+    assert (_SID, "open_custody_timeline", "na") not in store._records
 
 
 async def test_duplicate_concurrent_posts_run_mutation_once() -> None:

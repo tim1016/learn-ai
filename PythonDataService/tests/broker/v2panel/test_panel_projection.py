@@ -1,8 +1,8 @@
 """Tests for the panel projection (S1, spec §7).
 
-Composes the health/clerk cards + six-station rail + presented actions from
-journal fixtures, and pins the revision determinism and the narrowed
-desired_state (never PAUSED).
+Composes the health/clerk cards + six-station rail from journal fixtures and
+the presented actions through the SQLite adapter, and pins the revision
+determinism and the narrowed desired_state (never PAUSED).
 """
 
 from __future__ import annotations
@@ -1598,7 +1598,7 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
     assert _station_states(filled)["FILL"] == "satisfied"
 
 
-def test_panel_composes_cards_rail_and_actions() -> None:
+def test_panel_composes_cards_and_rail() -> None:
     entries = [
         intent_entry(sid=SID, intent="i1", ts_ms=_NOW - 1000),
         submit_acked_entry(sid=SID, intent="i1", ts_ms=_NOW - 900),
@@ -1617,25 +1617,15 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert panel.clerk.hold_active is False
     assert panel.rail.transaction_ref is not None
     assert len(panel.rail.stations) == 6
-    action_ids = {a.action_id for a in panel.actions}
-    # A bot's stop and reconcile are the SQLite Clerk's recovery catalog,
-    # presented by ``sqlite_panel_adapter``; the generic set keeps only archive.
-    assert action_ids == {"archive"}
+    # Commands are the SQLite adapter's (#2635): Clear's archive and the
+    # Clerk's recovery catalog, with their readiness checks and primary.
+    assert panel.actions == []
+    assert panel.primary_action is None
+    assert panel.readiness_checks == []
     assert panel.mission_verdict.state == "working"
     assert panel.strategy_key == _UNSEALED_STRATEGY_KEY
     assert panel.exposure == {"SPY": 100.0}
     assert panel.recent_decisions[0].reason_code == "CROSS_UP"
-    assert {check.operation for check in panel.readiness_checks} == action_ids
-    assert panel.readiness_ready_count == sum(
-        check.ready for check in panel.readiness_checks
-    )
-    assert panel.readiness_blocked_count == sum(
-        not check.ready for check in panel.readiness_checks
-    )
-    assert (
-        panel.readiness_ready_count + panel.readiness_blocked_count
-        == len(panel.readiness_checks)
-    )
 
 
 def test_build_panel_carries_the_strategys_registry_warning() -> None:
@@ -1935,75 +1925,219 @@ def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() 
     assert row.effect_operation_id is None
 
 
-def test_unperformed_actions_are_not_advertised() -> None:
-    panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
-
-    # Retire is gone (#2578): Clear's archive is the one lifecycle exit. Flatten
-    # & stop is gone (#2595): a held position is flattened by the recovery
-    # ladder's safe flatten.
-    assert {"retire", "flatten_stop", "cancel_order"}.isdisjoint(action.action_id for action in panel.actions)
-
-
-def test_missing_intent_does_not_present_retired_inventory_baseline_recovery() -> None:
-    panel = _panel(
-        _status(running=False),
-        _clerk_status(
-            reconciliation_verdict="missing_intent",
-            freeze=AccountFreezeState(
-                active=True,
-                category="ACCOUNT_STATE_UNATTRIBUTABLE",
-                explanation="Broker inventory does not match the journal.",
-                next_step="Recover the verified inventory baseline.",
-                observed_at_ms=_NOW - 200,
-            ),
-        ),
-        [],
-        exposure={},
-    )
-
-    assert "record_inventory_baseline" not in {
-        action.action_id for action in panel.actions
-    }
-
-
-def test_stale_bot_attribution_does_not_restore_retired_baseline_recovery() -> None:
-    panel = _panel(
-        _status(running=False),
-        _clerk_status(reconciliation_verdict="clean"),
-        [],
-        exposure={"SPY": 1.0},
-    )
-
-    assert "record_inventory_baseline" not in {
-        action.action_id for action in panel.actions
-    }
-
-
-def test_active_hold_does_not_present_retired_direct_clear() -> None:
-    panel = _panel(
-        _status(),
-        _clerk_status(hold=True, hold_code="UNEXPLAINED_ORDER_HOLD", healthy=True),
-        [],
-    )
-
-    assert "clear_hold" not in {action.action_id for action in panel.actions}
-
-
 def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
-    panel = _panel(
-        _status(running=False),
-        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
-        [],
-        exposure={"SPY": 1.0},
+    panel = adapt_sqlite_panel(
+        _panel(
+            _status(running=False),
+            _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
+            [],
+            exposure={"SPY": 1.0},
+        ),
+        _rail_projection(orders=()),
     )
 
     archive = _action(panel, "archive")
     assert archive.enabled is False
     assert archive.blockers[0].condition.id == "ARCHIVE_WOULD_STRAND_CUSTODY"
     assert "Flatten" in archive.blockers[0].detail
-    readiness = next(check for check in panel.readiness_checks if check.operation == "archive")
-    assert readiness.ready is False
-    assert readiness.cure is not None
+
+
+# ── Clear's archive, presented directly by the SQLite adapter (#2635) ────────
+
+_ARCHIVE_EXPLANATION = (
+    "Take a finished bot off Home. It must be stopped and flat, with nothing claimed. "
+    "Its fills, fees and result stay in Activity. There is no undo."
+)
+_ARCHIVE_CONFIRMATION = {
+    "title": "Archive this bot?",
+    "body": (
+        f"This takes {SID} on account {ACCT} off the roster. It is stopped, with no "
+        "attributed exposure and 0 working orders."
+    ),
+    "consequence": (
+        "The registration can start no further runs and its id is never reused. Its history "
+        "and receipts are kept. This cannot be undone."
+    ),
+    "confirm_label": "Archive bot",
+    "required_token": "ARCHIVE",
+}
+_ARCHIVE_BLOCKER_TEXT = {
+    "BOT_DUTY_NOT_SETTLED": (
+        "bot",
+        "This bot's last run has not finished settling.",
+        "Its process is gone but its run is still open. Wait for recovery to record how that "
+        "run ended, then clear it.",
+    ),
+    "ARCHIVE_CUSTODY_UNPROVABLE": (
+        "account",
+        "This account cannot prove the bot is flat.",
+        "A bot is cleared only on proof that it holds nothing. Choose Reconcile now once Alpaca "
+        "can be read, then clear it.",
+    ),
+    "ARCHIVE_WOULD_STRAND_CUSTODY": (
+        "bot",
+        "This bot still holds shares or has a working order.",
+        "Flatten it and let its working orders finish, then clear it.",
+    ),
+    "BOT_ALREADY_RETIRED": (
+        "bot",
+        "This bot is already cleared.",
+        "A cleared bot is off Home already; its history is kept.",
+    ),
+}
+_FROZEN = AccountFreezeState(
+    active=True,
+    category="ACCOUNT_STATE_UNATTRIBUTABLE",
+    explanation="Broker inventory does not match the journal.",
+    next_step="Recover the verified inventory baseline.",
+    observed_at_ms=_NOW - 200,
+)
+
+
+def _served_archive(*, token: str, blocker: str | None = None) -> dict[str, object]:
+    """The archive action a served panel carried before #2635, as JSON."""
+    blockers: list[dict[str, object]] = []
+    if blocker is not None:
+        scope, headline, detail = _ARCHIVE_BLOCKER_TEXT[blocker]
+        blockers.append(
+            {
+                "condition": {
+                    "id": blocker,
+                    "severity": "blocking",
+                    "scope": scope,
+                    "evidence": {"strategy_instance_id": SID},
+                },
+                "host": "bot_cockpit",
+                "anchor": {"kind": "surface", "subject_key": None},
+                "disposition": "wait",
+                "headline": headline,
+                "detail": detail,
+                "primary_move": None,
+                "secondary_moves": [],
+                "applies_to": "run",
+            }
+        )
+    return {
+        "action_id": "archive",
+        "label": "Clear",
+        "explanation": _ARCHIVE_EXPLANATION,
+        "enabled": blocker is None,
+        "blockers": blockers,
+        "confirmation": _ARCHIVE_CONFIRMATION if blocker is None else None,
+        "revision": 17,
+        "concurrency_token": token,
+        "evidence_refs": [],
+    }
+
+
+def _stopped(**update: object) -> BotStatusView:
+    return _status(running=False).model_copy(update=update)
+
+
+_OPEN_ORDER_ENTRIES = (
+    intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
+    submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
+)
+
+
+@pytest.mark.parametrize(
+    ("status", "clerk", "entries", "exposure", "expected"),
+    [
+        pytest.param(
+            _stopped(), _clerk_status(), (), {},
+            [_served_archive(token="9a8f9b9530fb687e13bc07cfd1c5b9aa")],
+            id="stopped-flat",
+        ),
+        pytest.param(
+            _stopped(), _clerk_status(), (), {"SPY": 0.0},
+            [_served_archive(token="7e0bd848bccbd3ccfb31951e917f8597")],
+            id="stopped-zero-quantity-row",
+        ),
+        pytest.param(
+            _stopped(), _clerk_status(), (), {"SPY": 1.0},
+            [_served_archive(token="1c6c89679f92347a0ebb4935bb97cc16", blocker="ARCHIVE_WOULD_STRAND_CUSTODY")],
+            id="stopped-holding",
+        ),
+        pytest.param(
+            _stopped(), _clerk_status(), _OPEN_ORDER_ENTRIES, {},
+            [_served_archive(token="bd25a4709233167f73c67da20e4f76e4", blocker="ARCHIVE_WOULD_STRAND_CUSTODY")],
+            id="working-order",
+        ),
+        pytest.param(
+            _stopped(), _clerk_status(freeze=_FROZEN), (), {},
+            [_served_archive(token="7d367b05dd6e9560f849a628118d30f6", blocker="ARCHIVE_CUSTODY_UNPROVABLE")],
+            id="frozen",
+        ),
+        pytest.param(
+            _stopped(phase="ON_DUTY"), _clerk_status(), (), {},
+            [_served_archive(token="924f563c3ce8e81861b29355293d8a3f", blocker="BOT_DUTY_NOT_SETTLED")],
+            id="duty-not-settled",
+        ),
+        pytest.param(
+            _stopped(phase="RETIRED"), _clerk_status(), (), {},
+            [_served_archive(token="bfa4bc1764c7ef5bb236c26be8cf0b6f", blocker="BOT_ALREADY_RETIRED")],
+            id="retired",
+        ),
+        pytest.param(_status(running=True), _clerk_status(), (), {}, [], id="running"),
+    ],
+)
+def test_the_served_archive_is_the_one_the_registry_presented(
+    status: BotStatusView,
+    clerk: ClerkStatus,
+    entries: tuple,
+    exposure: dict[str, float],
+    expected: list[dict[str, object]],
+) -> None:
+    """#2635 moved archive out of the generic action registry and into the
+    adapter; the owner sees the same action. Each expectation -- copy,
+    blockers, confirmation and token -- was captured from the registry build
+    before the move, and the stopped-flat token is the one every lane served
+    on 2026-09-30."""
+    served = adapt_sqlite_panel(
+        _panel(status, clerk, list(entries), exposure=exposure),
+        _rail_projection(orders=()),
+    )
+
+    assert [
+        action.model_dump(mode="json") for action in served.actions if action.action_id == "archive"
+    ] == expected
+
+
+def test_a_stopped_bots_archive_leads_its_recovery_commands() -> None:
+    served = adapt_sqlite_panel(
+        _panel(_status(running=False), _clerk_status(), [], exposure={}),
+        replace(
+            _rail_projection(orders=()),
+            recovery_actions=(_recovery_capability("reconcile_now", primary=False),),
+        ),
+    )
+
+    assert [action.action_id for action in served.actions] == ["archive", "reconcile_now"]
+    assert served.actions[0].revision == served.revision
+
+
+def test_served_readiness_counts_partition_the_recovery_checks() -> None:
+    """The one readiness aggregate (``docs/references/broker-v2-readiness-summary.md``):
+    the adapter counts its recovery checks once, exactly (``atol=0, rtol=0``),
+    and Angular renders the two numbers verbatim."""
+    served = adapt_sqlite_panel(
+        _panel(_status(running=False), _clerk_status(), [], exposure={}),
+        replace(
+            _rail_projection(orders=()),
+            recovery_actions=(
+                _recovery_capability("reconcile_now", primary=False),
+                _recovery_capability("execute_safe_flatten", primary=False, available=False),
+                _recovery_capability("open_custody_timeline", primary=False),
+            ),
+        ),
+    )
+
+    assert [(check.operation, check.ready) for check in served.readiness_checks] == [
+        ("reconcile_now", True),
+        ("execute_safe_flatten", False),
+        ("open_custody_timeline", True),
+    ]
+    assert (served.readiness_ready_count, served.readiness_blocked_count) == (2, 1)
 
 
 def test_working_orders_and_fills_are_bounded_clerk_attributed_projections() -> None:
@@ -2396,19 +2530,6 @@ def test_build_panel_rejects_dry_run_activity_from_a_different_synthetic_authori
         )
 
 
-def test_clear_hold_remains_absent_regardless_of_channel_health() -> None:
-    healthy = _panel(_status(), _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"), [])
-    assert healthy.clerk.hold_active is True
-    assert "clear_hold" not in {action.action_id for action in healthy.actions}
-
-    unhealthy = _panel(
-        _status(),
-        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD", healthy=False),
-        [],
-    )
-    assert "clear_hold" not in {action.action_id for action in unhealthy.actions}
-
-
 def test_account_freeze_surfaces_its_authored_copy() -> None:
     frozen = _panel(
         _status(running=False),
@@ -2575,24 +2696,6 @@ def test_select_primary_action_dangling_recovery_primary_falls_back() -> None:
     assert selection == "stop_bot_decisions"
 
 
-def test_build_panel_populates_no_primary_action_for_stopped_bot() -> None:
-    panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
-
-    assert panel.primary_action is None
-
-
-def test_build_panel_populates_no_primary_action_for_blocked_stopped_bot() -> None:
-    panel = _panel(
-        _status(running=False),
-        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
-        [],
-        exposure={},
-    )
-
-    assert panel.mission_verdict.state == "blocked"
-    assert panel.primary_action is None
-
-
 def test_sqlite_adapter_recovery_cure_is_the_primary_action() -> None:
     """#1665 through the real SQLite adapter path: the custody policy's
     primary capability is the page's primary command, and the retained
@@ -2692,24 +2795,6 @@ def test_primary_action_rejects_a_dangling_reference() -> None:
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
-
-
-def test_archive_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
-    """Archive must not be stripped on the way to Angular (#1778, S5).
-
-    The adapter replaces the generic policy's actions with SQLite-owned
-    recovery actions, preserving only the bot-lifecycle actions it names.
-    Archive -- Clear on Home -- is a bot-lifecycle action: SQLite owns broker
-    recovery, not the roster, so omitting it from that set would silently
-    delete the one way off Home after its guard and performer were wired.
-    """
-    base = _panel(_status(running=False), _clerk_status(), [])
-    projection = _rail_projection(orders=())
-
-    adapted = adapt_sqlite_panel(base, projection)
-
-    assert [action.action_id for action in base.actions if action.action_id == "archive"] == ["archive"]
-    assert "archive" in [action.action_id for action in adapted.actions]
 
 
 @pytest.mark.parametrize(

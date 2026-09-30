@@ -1,7 +1,7 @@
 """Contract tests for the panel capability profile (S1, spec §4).
 
 Snapshot-pins the Alpaca profile per broker: which stations apply, fee
-fidelity, live-bar availability, supported action ids.
+fidelity, live-bar availability.
 """
 
 from __future__ import annotations
@@ -32,21 +32,6 @@ def test_alpaca_profile_covers_all_six_stations() -> None:
     assert all(s.label and s.explanation for s in profile.stations)
 
 
-def test_alpaca_profile_advertises_only_actions_with_production_performers() -> None:
-    profile = alpaca_panel_profile()
-    assert profile.supported_action_ids == [
-        "deploy",
-        "archive",
-    ]
-    # archive joined the advertised set when it gained a production performer
-    # (ADR 0052), and retire left it with its performer (#2578) -- the
-    # invariant this test guards is unchanged. So did flatten_stop, whose
-    # performer no SQLite panel could reach (#2595), and the generic stop and
-    # reconcile_now, whose performers went with it: a bot's stop and reconcile
-    # are the SQLite Clerk's recovery actions (#2605).
-    assert "cancel_order" not in profile.supported_action_ids
-
-
 def test_unknown_broker_has_no_profile() -> None:
     assert panel_profile_for("ibkr") is None
     assert panel_profile_for("nope") is None
@@ -57,12 +42,13 @@ def test_alpaca_profile_shape_is_frozen() -> None:
     profile = alpaca_panel_profile()
     dumped = profile.model_dump()
 
+    # No action list (#2635): a bot's panel presents exactly the actions it
+    # may run, so a profile-level list was advertisement nothing read.
     assert set(dumped) == {
         "broker",
         "fee_fidelity",
         "live_bars_supported",
         "stations",
-        "supported_action_ids",
     }
     assert len(dumped["stations"]) == 6
     assert set(dumped["stations"][0]) == {

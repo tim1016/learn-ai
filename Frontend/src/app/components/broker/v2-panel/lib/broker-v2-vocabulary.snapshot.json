@@ -26,10 +26,8 @@
     "UNKNOWN_HOLD",
     "archive",
     "blocked",
-    "cancel_order",
     "cancel_verified_working_orders",
     "clean",
-    "deploy",
     "discharge_attributed_residue",
     "execute_safe_flatten",
     "healthy",
@@ -134,10 +132,6 @@
       "label": "Blocked",
       "explanation": "An identified condition is preventing this station from progressing."
     },
-    "cancel_order": {
-      "label": "Cancel order",
-      "explanation": "Cancel one working order at the broker. The broker may reject the request if the order has already filled."
-    },
     "cancel_verified_working_orders": {
       "label": "Cancel verified working orders",
       "explanation": "Cancel only working orders whose exact Clerk and broker identities are proven."
@@ -145,10 +139,6 @@
     "clean": {
       "label": "Clean",
       "explanation": "The last sweep found this account's records and the broker in agreement."
-    },
-    "deploy": {
-      "label": "Deploy",
-      "explanation": "Create and start a new bot bound to this account. The bot begins evaluating bars immediately after creation."
     },
     "discharge_attributed_residue": {
       "label": "Discharge stranded residue",

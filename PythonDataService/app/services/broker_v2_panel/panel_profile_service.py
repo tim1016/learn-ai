@@ -1,8 +1,8 @@
 """Panel capability profile — the closed per-broker descriptor (spec §4).
 
 Angular renders strictly from this profile: an inapplicable station renders as
-``not_applicable``; an unsupported action never renders at all. The profile is
-snapshot-contract-tested per broker (``test_panel_profile_snapshot``).
+``not_applicable``. The profile is snapshot-contract-tested per broker
+(``test_panel_profile``).
 
 Phase 1 registers only Alpaca. The profile is deliberately a static, closed
 descriptor (not probed) — it declares honest vendor differences as data, the
@@ -11,7 +11,6 @@ same discipline as ``BrokerCapabilities`` (ADR 0032 principle #2).
 
 from __future__ import annotations
 
-from app.broker.v2panel.action_policy import supported_action_ids_for
 from app.broker.v2panel.vocabulary import STATION_IDS, copy_for
 from app.schemas.broker_v2_panel import PanelProfile, StationApplicability
 
@@ -45,16 +44,12 @@ def alpaca_panel_profile() -> PanelProfile:
       phase 1; the LIVE pane uses the IBKR bridge + Polygon fallback
       (ADR 0032 amendment, §8).
     - All six stations apply; log-only bots simply idle at SIGNAL.
-    - ``deploy`` is excluded from the per-bot panel's supported actions here
-      because deploy is a global (list-page) action, not a per-bot one — the
-      panel-action service pins that split.
     """
     return PanelProfile(
         broker="alpaca",
         fee_fidelity="none",
         live_bars_supported=False,
         stations=_stations_for(_ALPACA_INAPPLICABLE_STATIONS),
-        supported_action_ids=supported_action_ids_for("alpaca"),
     )
 
 

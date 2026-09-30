@@ -119,9 +119,7 @@ STATION_STATES: Final[frozenset[str]] = frozenset(
 
 # ── Action ids (§11, the closed presented-actions enum) ──────────────────────
 ActionId = Literal[
-    "deploy",
     "archive",
-    "cancel_order",
     "reconcile_now",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
@@ -133,9 +131,7 @@ ActionId = Literal[
     "open_custody_timeline",
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
-    "deploy",
     "archive",
-    "cancel_order",
     "reconcile_now",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
@@ -151,8 +147,11 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
 # stop (#2595) and the runner's generic Stop (#2605; a bot's stop is the
 # Clerk's ``stop_bot_decisions``): no request, performer or presented action
 # can name them, but a bot's durable receipt ledger written before then still
-# does, so ledger reads widen to them and writes never do.
-RetiredActionId = Literal["resume", "pause", "continue", "retire", "flatten_stop", "stop"]
+# does, so ledger reads widen to them and writes never do. ``deploy`` and
+# ``cancel_order`` left with the generic action registry (#2635); neither ever
+# had a performer, so no receipt should name one, but a ledger that did would
+# still load.
+RetiredActionId = Literal["resume", "pause", "continue", "retire", "flatten_stop", "stop", "deploy", "cancel_order"]
 RecordedActionId = Literal[ActionId, RetiredActionId]
 
 # The presented actions that only stop a bot, reduce its exposure or
@@ -316,22 +315,10 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Not applicable", "This broker or mode has no such station."
     ),
     # Action ids
-    "deploy": OperatorCopy(
-        "Deploy",
-        "Create and start a new bot bound to this account. "
-        "The bot begins evaluating bars immediately after creation.",
-    ),
-
-
     "archive": OperatorCopy(
         "Clear",
         "Take a finished bot off Home. It must be stopped and flat, with nothing "
         "claimed. Its fills, fees and result stay in Activity. There is no undo.",
-    ),
-    "cancel_order": OperatorCopy(
-        "Cancel order",
-        "Cancel one working order at the broker. "
-        "The broker may reject the request if the order has already filled.",
     ),
     "reconcile_now": OperatorCopy(
         "Reconcile now",
