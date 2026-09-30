@@ -441,8 +441,10 @@ class _MalformedAlpacaClient:
     async def list_positions(self) -> list[dict[str, str]]:
         return [{"symbol": "SPY"}]
 
-    async def list_orders(self, **_query: object) -> list[dict[str, str]]:
-        return [{"symbol": "SPY"}]
+    async def list_orders(self, **_query: object) -> list[dict[str, object]]:
+        # A boolean fill count cannot be a quantity; missing text alone is
+        # contained per order instead (#2643).
+        return [{"symbol": "SPY", "filled_qty": True}]
 
     async def list_activities(self, **_query: object) -> list[dict[str, str]]:
         return [{"id": "act-1"}]

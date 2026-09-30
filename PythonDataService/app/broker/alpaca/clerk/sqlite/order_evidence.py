@@ -121,6 +121,7 @@ __all__ = [
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
+    "withhold_unnamed_order",
 ]
 
 
@@ -240,6 +241,8 @@ def fold_order_evidence(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if simulated_authority:
         _fold_simulated_execution_evidence(
             repo,
@@ -871,8 +874,11 @@ def fold_order_submission_response(
     observation, so withholding it would create a filled order with no
     durable position attribution. That port capability — never the
     aggregate's own spelling — is what routes the fold to the simulated
-    exact path (#2178).
+    exact path (#2178). A response that names no broker order id or status
+    folds as a lost one (:func:`withhold_unnamed_order`).
     """
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if trade_port_folds_simulated_evidence(trade):
         fold_order_evidence(
             repo,
@@ -923,6 +929,46 @@ def fold_uncertain(
             facts_json=facts.to_facts_json(),
         )
     )
+
+
+def withhold_unnamed_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+) -> bool:
+    """Withhold a broker answer about our own order that names no id or status (#2643).
+
+    Nothing of it can be folded: the acknowledgement keeps the first broker
+    order id it sees, so a blank one would be this order's broker identity
+    for ever, and a blank status is no lifecycle state. It is treated exactly
+    like a lost response -- nothing recorded, the effect folded ``unknown`` --
+    so the sweep's exact lookup by ``client_order_id`` recovers the order
+    once the broker names it. Every entrance of evidence about our own order
+    asks this first; a foreign order is contained by the external-order fold.
+    Returns whether the answer was withheld.
+    """
+    missing = [
+        name
+        for name, value in (("broker order id", order.order_id), ("status", order.status))
+        if not value.strip()
+    ]
+    if not missing:
+        return False
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
+    logger.warning(
+        "A broker answer about the Clerk's own order did not name it",
+        extra={
+            "action": "unnamed_order_evidence_withheld",
+            "order_ref": order_ref,
+            "effect_operation_id": effect_operation_id,
+            "missing": missing,
+        },
+    )
+    fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
+    return True
 
 
 @dataclass(frozen=True)

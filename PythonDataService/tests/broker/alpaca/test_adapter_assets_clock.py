@@ -92,6 +92,21 @@ def test_from_alpaca_asset_accepts_the_sdk_alias_key() -> None:
     assert asset.asset_class == "us_equity"
 
 
+def test_from_alpaca_asset_names_the_class_key_it_read() -> None:
+    # The SDK alias is ``asset_class``; the refusal names the key actually read.
+    with pytest.raises(ValueError, match="'asset_class' must be a non-blank string"):
+        from_alpaca_asset(
+            {
+                "id": "a",
+                "symbol": "AAPL",
+                "asset_class": None,
+                "status": "active",
+                "tradable": True,
+                "fractionable": True,
+            }
+        )
+
+
 def test_from_alpaca_asset_missing_class_fails_loud() -> None:
     # No sentinel default — a missing class raises, so a schema change surfaces.
     with pytest.raises(KeyError):

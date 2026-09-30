@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_execution_price_conflict,
     fold_order_acknowledgement,
     fold_order_evidence,
+    withhold_unnamed_order,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -192,6 +193,13 @@ class SqliteTradeUpdateEvidenceSink:
                 owner = self._repo.effect_operation(local_order.effect_operation_id)
             if owner is None:
                 raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
+
+            # Before the exact slice and the ack: a frame that does not name
+            # our order folds as a lost one, never as its identity (#2643).
+            if withhold_unnamed_order(
+                self._repo, effect_operation_id=owner.effect_operation_id, order=order
+            ):
+                return "order_event"
 
             if (
                 recovery_source == "closed_orders_window"

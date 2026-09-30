@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import (
+    UNIDENTIFIED_BROKER_ORDER_ID,
     InvalidExternalOrderCursor,
     SqliteExternalOrderReader,
     acknowledge_external_order,
@@ -94,6 +95,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _hold_transition,
     _walk_clock_to,
 )
+from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -1509,8 +1511,10 @@ class _MalformedSnapshotClient:
     def __init__(self, malformed: Literal["orders", "positions"]) -> None:
         self._malformed = malformed
 
-    async def list_orders(self, **_query: object) -> list[dict[str, str]]:
-        return [{"symbol": "SPY"}] if self._malformed == "orders" else []
+    async def list_orders(self, **_query: object) -> list[dict[str, object]]:
+        # A boolean fill count cannot be a quantity; missing text alone is
+        # contained per order instead (#2643).
+        return [{"symbol": "SPY", "filled_qty": True}] if self._malformed == "orders" else []
 
     async def list_positions(self) -> list[dict[str, str]]:
         return [{"symbol": "SPY"}] if self._malformed == "positions" else []
@@ -1539,6 +1543,139 @@ async def test_reconcile_holds_the_account_stale_on_a_malformed_broker_snapshot(
         reason_code="BROKER_SNAPSHOT_STALE",
         strategy_instance_id=None,
     )
+
+
+_ABSENT = object()
+
+
+class _RawOrdersClient:
+    """An Alpaca client seam answering the orders snapshot with raw rows."""
+
+    def __init__(self, orders: list[dict[str, object]]) -> None:
+        self._orders = orders
+
+    async def list_orders(self, **_query: object) -> list[dict[str, object]]:
+        return self._orders
+
+    async def list_positions(self) -> list[dict[str, object]]:
+        return []
+
+
+@pytest.mark.parametrize(
+    ("unnamed", "contained_as"),
+    [
+        pytest.param({"id": None}, UNIDENTIFIED_BROKER_ORDER_ID, id="id-less"),
+        pytest.param(
+            {"id": "mleg-open-1", "order_class": "mleg", "symbol": _ABSENT, "side": _ABSENT},
+            "mleg-open-1",
+            id="multi-leg-parent",
+        ),
+    ],
+)
+async def test_reconcile_contains_one_unnamed_order_and_keeps_reading_the_rest(
+    repo: ClerkSqliteRepository,
+    unnamed: dict[str, object],
+    contained_as: str,
+) -> None:
+    """One order with no id or symbol once refused the whole snapshot (#2643).
+
+    That was ``BROKER_SNAPSHOT_STALE``, which admits no reduction: one bad
+    broker record froze exits account-wide, the failure #2363 contains per
+    order. The unnamed order is now contained alone, with reductions admitted,
+    and the rest of the snapshot is judged as usual.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    base = load_alpaca_fixture_file("orders", "orders.json")[1]
+    readable = {**base, "id": "external-order-1", "client_order_id": "alpaca-console:operator-order-1"}
+    poisoned = {
+        key: value
+        for key, value in {**base, "client_order_id": "alpaca-console:unnamed-1", **unnamed}.items()
+        if value is not _ABSENT
+    }
+    read = AlpacaBroker(client=_RawOrdersClient([poisoned, readable]))  # type: ignore[arg-type]
+
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+
+    assert result.verdict == "unexplained_order"
+    assert (
+        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="BROKER_SNAPSHOT_STALE", strategy_instance_id=None)
+        is None
+    )
+    episode = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+    )
+    assert episode is not None and bool(episode["allows_reduction"])
+    assert json.loads(episode["evidence_refs_json"]) == [contained_as]
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
+    assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
+    assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
+
+
+class _RawOwnOrderClient:
+    """An Alpaca client seam answering this app's own order: its submit and its exact lookup."""
+
+    def __init__(self, answer: dict[str, object]) -> None:
+        self._answer = answer
+
+    async def submit_order(self, body: dict[str, object]) -> dict[str, object]:
+        return {**self._answer, "client_order_id": body["client_order_id"]}
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> dict[str, object]:
+        return {**self._answer, "client_order_id": client_order_id}
+
+
+@pytest.mark.parametrize("field", ["id", "status"])
+async def test_an_answer_about_our_own_order_without_its_id_or_status_stays_unknown_and_recoverable(
+    repo: ClerkSqliteRepository,
+    field: str,
+) -> None:
+    """A null id once made our ENTER's broker order "None" (#2643).
+
+    Read blank, it would be worse: the acknowledgement fold keeps the first
+    broker id it sees, so ``""`` would be our order's id for ever. The answer
+    is withheld like a lost response instead: the ENTER folds ``unknown``,
+    and the sweep's exact lookup by ``client_order_id`` recovers the order
+    once the broker names it.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    answer = dict(load_alpaca_fixture_file("orders", "orders.json")[1])
+    unnamed = AlpacaBroker(client=_RawOwnOrderClient({**answer, field: None}))  # type: ignore[arg-type]
+
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="d-unnamed",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=unnamed,
+    )
+
+    order_ref = submission.order_ref
+    assert order_ref is not None
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id is None
+    kinds = [row["transition_kind"] for row in repo.transitions_for_order(order_ref)]
+    assert "ORDER_SUBMIT_UNCERTAIN" in kinds and "ORDER_SUBMIT_ACKED" not in kinds
+
+    # The sweep's exact lookup is withheld the same way while the answer stays unnamed...
+    await reconcile_account(repo, read=_FakeRead(), trade=unnamed, pricing=UNPRICEABLE_RECOVERY)
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id is None
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+
+    # ...and recovers the order once the broker names it.
+    named = AlpacaBroker(client=_RawOwnOrderClient(answer))  # type: ignore[arg-type]
+    await reconcile_account(repo, read=_FakeRead(), trade=named, pricing=UNPRICEABLE_RECOVERY)
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id == answer["id"]
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state != "unknown"
 
 
 async def test_reconcile_fails_closed_when_open_order_snapshot_hits_limit(

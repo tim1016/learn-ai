@@ -16,6 +16,10 @@ from app.broker.alpaca.adapter import (
     to_alpaca_order_request,
 )
 from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    ExternalOrderObservationError,
+    _observation_from_broker_order,
+)
 from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
@@ -221,7 +225,6 @@ class _OrdersClient:
 @pytest.mark.parametrize(
     ("shape", "cause_type"),
     [
-        pytest.param("missing-id", KeyError, id="missing-id"),
         pytest.param("boolean-fill-count", TypeError, id="boolean-fill-count"),
         pytest.param("unparseable-submitted-at", ValueError, id="unparseable-submitted-at"),
         pytest.param("non-object-row", AttributeError, id="non-object-row"),
@@ -235,7 +238,6 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     """A malformed row once escaped as a raw KeyError/TypeError/ValueError (#2627)."""
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
     rows: dict[str, list[object]] = {
-        "missing-id": [{key: value for key, value in open_order.items() if key != "id"}],
         "boolean-fill-count": [{**open_order, "filled_qty": True}],
         "unparseable-submitted-at": [{**open_order, "submitted_at": "yesterday"}],
         "non-object-row": [open_order, None],
@@ -249,24 +251,6 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     assert info.value.detail is not None
     assert cause_type.__name__ not in info.value.detail
     assert isinstance(info.value.__cause__, cause_type)
-
-
-@pytest.mark.parametrize("field", ["id", "status", "time_in_force"])
-@pytest.mark.parametrize("value", [None, "", "   "], ids=["null", "blank", "whitespace"])
-async def test_broker_refuses_an_order_whose_required_text_is_blank(
-    load_alpaca_fixture: AlpacaFixtureLoader,
-    field: str,
-    value: object,
-) -> None:
-    """A null id once became order "None", a real-looking broker order (#2643)."""
-    open_order = load_alpaca_fixture("orders", "orders.json")[1]
-    broker = AlpacaBroker(client=_OrdersClient([{**open_order, field: value}]))  # type: ignore[arg-type]
-
-    with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
-        await broker.list_orders(status="open", limit=500)
-
-    assert isinstance(info.value.__cause__, ValueError)
-    assert f"'{field}'" in str(info.value.__cause__)
 
 
 @pytest.mark.parametrize("flag", ["false", "true", 0, 1], ids=repr)
@@ -284,20 +268,46 @@ async def test_broker_refuses_an_extended_hours_flag_that_is_not_a_boolean(
     assert isinstance(info.value.__cause__, TypeError)
 
 
-@pytest.mark.parametrize("blank", [None, ""], ids=["null", "blank"])
-async def test_a_multi_leg_parent_order_still_maps_so_the_clerk_can_contain_it(
+_ABSENT = object()
+
+# One order's missing text -> the reason the Clerk's per-order containment
+# gives. alpaca-py's ``Order`` omits a multi-leg parent's symbol and side and
+# a leg's type; the rest are required there, but one bad order still must not
+# refuse the whole orders answer (#2363).
+_PER_ORDER_TEXT_PROBLEMS: dict[str, tuple[dict[str, object], str]] = {
+    "multi-leg-parent-omitted": (
+        {"order_class": "mleg", "symbol": _ABSENT, "side": _ABSENT},
+        "symbol must be non-empty",
+    ),
+    "multi-leg-parent-null": ({"order_class": "mleg", "symbol": None, "side": None}, "symbol must be non-empty"),
+    "typeless-leg": ({"order_type": _ABSENT, "type": _ABSENT}, "type must be non-empty"),
+    "null-symbol-valid-side": ({"symbol": None, "side": "buy"}, "symbol must be non-empty"),
+    "null-id": ({"id": None}, "broker order id must be non-empty"),
+    "omitted-id": ({"id": _ABSENT}, "broker order id must be non-empty"),
+    "null-status": ({"status": None}, "status must be non-empty"),
+    "null-time-in-force": ({"time_in_force": None}, "time in force must be non-empty"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_PER_ORDER_TEXT_PROBLEMS))
+async def test_one_orders_missing_text_maps_blank_and_the_clerk_contains_that_order(
     load_alpaca_fixture: AlpacaFixtureLoader,
-    blank: object,
+    shape: str,
 ) -> None:
-    """Alpaca leaves a multi-leg parent's symbol and side blank (alpaca-py ``Order``).
-
-    Refusing them would refuse the whole orders answer and freeze exits
-    account-wide; the Clerk contains that one order instead (#2363).
-    """
+    """Missing text once became "None" -- a ticker, side or type -- or refused every order (#2643)."""
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
-    parent = {**open_order, "id": "mleg-parent", "order_class": "mleg", "symbol": blank, "side": blank}
-    broker = AlpacaBroker(client=_OrdersClient([parent, open_order]))  # type: ignore[arg-type]
+    update, reason = _PER_ORDER_TEXT_PROBLEMS[shape]
+    bad = {
+        key: value
+        for key, value in {**open_order, "id": "bad-order", **update}.items()
+        if value is not _ABSENT
+    }
+    broker = AlpacaBroker(client=_OrdersClient([bad, open_order]))  # type: ignore[arg-type]
 
-    orders = await broker.list_orders(status="open", limit=500)
+    mapped, readable = await broker.list_orders(status="all", limit=500)
 
-    assert [order.order_id for order in orders] == ["mleg-parent", open_order["id"]]
+    assert readable.order_id == open_order["id"]
+    text = (mapped.order_id, mapped.symbol, mapped.side, mapped.order_type, mapped.time_in_force, mapped.status)
+    assert "None" not in text
+    with pytest.raises(ExternalOrderObservationError, match=reason):
+        _observation_from_broker_order(mapped)
