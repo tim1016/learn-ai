@@ -31,7 +31,14 @@ function reportElapsed(exceededBudget) {
     `${TEST_BUDGET_MS / 1000}s budget${exceededBudget ? " (exceeded)" : ""}`;
   process.stderr.write(`${message}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${message}\n`);
+    // The time is a diagnostic; it must never change the run's exit code.
+    try {
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${message}\n`);
+    } catch (error) {
+      process.stderr.write(
+        `Unable to append the test time to GITHUB_STEP_SUMMARY: ${error.message}\n`,
+      );
+    }
   }
 }
 

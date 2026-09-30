@@ -7,7 +7,8 @@ hash-only partition put shard 5/12 at 103-109 s of the 120 s budget while
 other shards idled). Tests missing from the file — new, renamed, or
 sub-5 ms — keep the stable sha256 hash assignment: their times are noise
 at shard scale, and the fallback keeps a stale durations file harmless
-rather than load-bearing.
+rather than load-bearing. A file that matches none of the collected tests
+is a key mismatch, not staleness, and fails the run.
 """
 
 from __future__ import annotations
@@ -16,10 +17,16 @@ import hashlib
 import json
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from xdist.workermanage import WorkerController
+
 DURATIONS_PATH = Path(__file__).with_name("pr_shard_durations.json")
+_MATCH_REPORT_KEY = "pr_shard_durations_match"
+_MATCH_REPORT = pytest.StashKey[str]()
 
 
 def hash_shard(nodeid: str, *, shard_count: int) -> int:
@@ -28,13 +35,6 @@ def hash_shard(nodeid: str, *, shard_count: int) -> int:
         raise ValueError("shard_count must be at least 1")
     digest = hashlib.sha256(nodeid.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big") % shard_count + 1
-
-
-def belongs_to_shard(nodeid: str, *, shard_index: int, shard_count: int) -> bool:
-    """Return whether a pytest node belongs to a one-based stable shard."""
-    if not 1 <= shard_index <= shard_count:
-        raise ValueError("shard_index must be between 1 and shard_count")
-    return hash_shard(nodeid, shard_count=shard_count) == shard_index
 
 
 def load_pr_shard_durations() -> dict[str, float]:
@@ -105,21 +105,57 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--pr-shard-count", type=int)
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: list[pytest.Item],
-) -> None:
+def pytest_configure(config: pytest.Config) -> None:
+    # Validated here, not at collection: under xdist collection runs in the
+    # workers, where a usage error loses its message.
     shard_index = config.getoption("pr_shard_index")
     shard_count = config.getoption("pr_shard_count")
     if shard_index is None and shard_count is None:
         return
     if shard_index is None or shard_count is None:
         raise pytest.UsageError("both PR shard options are required")
+    if not 1 <= shard_index <= shard_count:
+        raise pytest.UsageError(
+            f"--pr-shard-index {shard_index} must be between 1 and "
+            f"--pr-shard-count {shard_count}"
+        )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    shard_index = config.getoption("pr_shard_index")
+    shard_count = config.getoption("pr_shard_count")
+    if shard_index is None or shard_count is None:
+        return
+
+    durations = load_pr_shard_durations()
+    matched = sum(1 for item in items if item.nodeid in durations)
+    if durations and items and matched == 0:
+        # A key mismatch (another rootdir, a renamed tree) would otherwise
+        # quietly hash-deal every test and bring the imbalance back.
+        raise ValueError(
+            f"none of the {len(durations)} tests in {DURATIONS_PATH.name} match "
+            f"the {len(items)} collected tests; regenerate it with "
+            "'python -m scripts.update_pr_shard_durations'"
+        )
+    report = (
+        f"PR shard {shard_index}/{shard_count}: {matched} of {len(items)} "
+        f"collected tests matched {DURATIONS_PATH.name}; "
+        f"the other {len(items) - matched} use the hash shard"
+    )
+    worker_output = getattr(config, "workeroutput", None)
+    if worker_output is not None:
+        # An xdist worker has no terminal; its controller prints the line.
+        worker_output[_MATCH_REPORT_KEY] = report
+    else:
+        config.stash[_MATCH_REPORT] = report
 
     assignments = assign_shards(
         (item.nodeid for item in items),
         shard_count=shard_count,
-        durations=load_pr_shard_durations(),
+        durations=durations,
     )
     selected: list[pytest.Item] = []
     deselected: list[pytest.Item] = []
@@ -131,3 +167,19 @@ def pytest_collection_modifyitems(
 
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node: WorkerController, error: object | None) -> None:
+    report = getattr(node, "workeroutput", {}).get(_MATCH_REPORT_KEY)
+    if report is not None:
+        node.config.stash[_MATCH_REPORT] = report
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter,
+    config: pytest.Config,
+) -> None:
+    report = config.stash.get(_MATCH_REPORT, None)
+    if report is not None:
+        terminalreporter.write_line(report)

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = REPOSITORY_ROOT / "PythonDataService"
@@ -71,30 +76,6 @@ def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_python_pr_shards_are_stable_complete_and_disjoint() -> None:
-    from scripts.pytest_shard import belongs_to_shard
-
-    nodeids = [f"tests/test_example.py::test_case[{index}]" for index in range(100)]
-    allocations = {
-        nodeid: [
-            shard_index
-            for shard_index in range(1, 5)
-            if belongs_to_shard(nodeid, shard_index=shard_index, shard_count=4)
-        ]
-        for nodeid in nodeids
-    }
-
-    assert all(shards and len(shards) == 1 for shards in allocations.values())
-    assert allocations == {
-        nodeid: [
-            shard_index
-            for shard_index in range(1, 5)
-            if belongs_to_shard(nodeid, shard_index=shard_index, shard_count=4)
-        ]
-        for nodeid in reversed(nodeids)
-    }
-
-
 def test_python_pr_shards_balance_by_measured_duration() -> None:
     from scripts.pytest_shard import assign_shards, hash_shard
 
@@ -132,46 +113,271 @@ def test_committed_pr_shard_durations_drive_the_balance() -> None:
     assert all(duration > 0 for duration in durations.values())
 
 
-def test_run_fast_tests_reports_elapsed_time_to_the_ci_step_summary(
+# A tiny project the shard plugin deals: six measured tests whose
+# longest-first deal over three shards is 8+3 / 7+4 / 6+5 seconds, and three
+# unmeasured tests that must keep their hash shard.
+_SHARD_PLUGIN_MEASURED = {"8s": 1, "7s": 2, "6s": 3, "5s": 3, "4s": 2, "3s": 1}
+_SHARD_PLUGIN_UNMEASURED = ("new-a", "new-b", "new-c")
+
+
+def _shard_plugin_nodeid(case: str) -> str:
+    return f"test_generated.py::test_case[{case}]"
+
+
+_SHARD_PLUGIN_DURATIONS = {
+    _shard_plugin_nodeid(case): float(case.removesuffix("s"))
+    for case in _SHARD_PLUGIN_MEASURED
+}
+
+
+def _write_shard_plugin_project(root: Path, durations: dict[str, float]) -> None:
+    cases = [*_SHARD_PLUGIN_MEASURED, *_SHARD_PLUGIN_UNMEASURED]
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (root / "durations.json").write_text(json.dumps(durations), encoding="utf-8")
+    (root / "conftest.py").write_text(
+        "from pathlib import Path\n\n"
+        "import scripts.pytest_shard\n\n"
+        "scripts.pytest_shard.DURATIONS_PATH = "
+        'Path(__file__).with_name("durations.json")\n',
+        encoding="utf-8",
+    )
+    (root / "test_generated.py").write_text(
+        "import pytest\n\n\n"
+        f"@pytest.mark.parametrize('case', {cases!r})\n"
+        "def test_case(case):\n"
+        "    assert case\n",
+        encoding="utf-8",
+    )
+
+
+def _run_shard_plugin(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(SERVICE_ROOT), env.get("PYTHONPATH")) if path
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "scripts.pytest_shard",
+            "-p",
+            "no:cacheprovider",
+            *args,
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+def _expected_shard_plugin_deal() -> dict[str, int]:
+    from scripts.pytest_shard import hash_shard
+
+    return {
+        **{
+            _shard_plugin_nodeid(case): shard
+            for case, shard in _SHARD_PLUGIN_MEASURED.items()
+        },
+        **{
+            _shard_plugin_nodeid(case): hash_shard(
+                _shard_plugin_nodeid(case), shard_count=3
+            )
+            for case in _SHARD_PLUGIN_UNMEASURED
+        },
+    }
+
+
+def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash(
     tmp_path: Path,
-    monkeypatch,
-    caplog,
+) -> None:
+    from scripts.pytest_shard import hash_shard
+
+    _write_shard_plugin_project(tmp_path, _SHARD_PLUGIN_DURATIONS)
+    expected = _expected_shard_plugin_deal()
+    # The fixture must tell the two deals apart, or it proves nothing.
+    assert any(
+        hash_shard(_shard_plugin_nodeid(case), shard_count=3) != shard
+        for case, shard in _SHARD_PLUGIN_MEASURED.items()
+    )
+
+    selected: dict[int, set[str]] = {}
+    for shard in (1, 2, 3):
+        result = _run_shard_plugin(
+            tmp_path,
+            "--collect-only",
+            "-q",
+            "--pr-shard-index",
+            str(shard),
+            "--pr-shard-count",
+            "3",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            f"PR shard {shard}/3: 6 of 9 collected tests matched durations.json; "
+            "the other 3 use the hash shard"
+        ) in result.stdout
+        selected[shard] = {
+            line for line in result.stdout.splitlines()
+            if line.startswith("test_generated.py::")
+        }
+
+    assert set().union(*selected.values()) == set(expected)
+    assert sum(len(nodeids) for nodeids in selected.values()) == len(expected)
+    assert selected == {
+        shard: {nodeid for nodeid, owner in expected.items() if owner == shard}
+        for shard in (1, 2, 3)
+    }
+
+
+def test_pr_shard_plugin_deals_and_reports_the_same_under_xdist(tmp_path: Path) -> None:
+    _write_shard_plugin_project(tmp_path, _SHARD_PLUGIN_DURATIONS)
+    expected = _expected_shard_plugin_deal()
+
+    result = _run_shard_plugin(
+        tmp_path, "-n", "2", "-q", "-rA", "--pr-shard-index", "1", "--pr-shard-count", "3"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert set(re.findall(r"^PASSED (\S+)$", result.stdout, flags=re.MULTILINE)) == {
+        nodeid for nodeid, owner in expected.items() if owner == 1
+    }
+    assert "PR shard 1/3: 6 of 9 collected tests matched durations.json" in result.stdout
+
+
+def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_test(
+    tmp_path: Path,
+) -> None:
+    _write_shard_plugin_project(tmp_path, {"test_elsewhere.py::test_gone": 1.0})
+
+    result = _run_shard_plugin(
+        tmp_path, "--collect-only", "-q", "--pr-shard-index", "1", "--pr-shard-count", "3"
+    )
+
+    assert result.returncode != 0
+    assert (
+        "none of the 1 tests in durations.json match the 9 collected tests"
+        in result.stdout + result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    ("shard_args", "message"),
+    [
+        (
+            ("--pr-shard-index", "17", "--pr-shard-count", "16"),
+            "--pr-shard-index 17 must be between 1 and --pr-shard-count 16",
+        ),
+        (("--pr-shard-index", "1"), "both PR shard options are required"),
+    ],
+)
+def test_pr_shard_plugin_rejects_an_unusable_shard(
+    tmp_path: Path,
+    shard_args: tuple[str, ...],
+    message: str,
+) -> None:
+    _write_shard_plugin_project(tmp_path, _SHARD_PLUGIN_DURATIONS)
+
+    result = _run_shard_plugin(tmp_path, "--collect-only", "-q", *shard_args)
+
+    assert result.returncode == pytest.ExitCode.USAGE_ERROR
+    assert message in result.stderr
+
+
+def _child_command(source: str) -> list[str]:
+    return [sys.executable, "-c", source]
+
+
+def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     import logging
 
-    from scripts.run_fast_tests import report_elapsed_seconds
+    from scripts import run_fast_tests as runner
 
     summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    with caplog.at_level(logging.INFO, logger="scripts.run_fast_tests"):
-        message = report_elapsed_seconds(
-            12.34, shard_index=5, shard_count=16, exceeded_budget=False
-        )
-
-    assert "shard 5/16" in message
-    assert "12.3s of the 120-second budget" in message
-    assert "(exceeded)" not in message
-    assert summary.read_text(encoding="utf-8") == f"{message}\n"
-    assert message in caplog.text
-
-
-def test_run_fast_tests_elapsed_report_covers_unsharded_and_exceeded_runs(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from scripts.run_fast_tests import report_elapsed_seconds
-
-    summary = tmp_path / "step-summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-
-    message = report_elapsed_seconds(
-        121.4, shard_index=None, shard_count=None, exceeded_budget=True
+    monkeypatch.setattr(
+        runner, "pytest_command", lambda *_a, **_k: _child_command("raise SystemExit(3)")
     )
 
-    assert "unsharded" in message
-    assert "121.4s" in message
-    assert "(exceeded)" in message
-    assert summary.read_text(encoding="utf-8") == f"{message}\n"
+    with caplog.at_level(logging.INFO, logger="scripts.run_fast_tests"):
+        returncode = runner.run_fast_tests((), shard_index=5, shard_count=16)
+
+    assert returncode == 3
+    line = summary.read_text(encoding="utf-8")
+    assert re.fullmatch(
+        r"Python PR tests \(shard 5/16\) took \d+\.\ds of the 120-second budget\n", line
+    )
+    assert line.strip() in caplog.text
+
+
+def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_fast_tests as runner
+
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(runner, "TEST_BUDGET_SECONDS", 1)
+    monkeypatch.setattr(
+        runner,
+        "pytest_command",
+        lambda *_a, **_k: _child_command("import time; time.sleep(60)"),
+    )
+
+    assert runner.run_fast_tests(()) == 124
+    assert re.fullmatch(
+        r"Python PR tests \(unsharded\) took \d+\.\ds of the 1-second budget "
+        r"\(exceeded\)\n",
+        summary.read_text(encoding="utf-8"),
+    )
+
+
+def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from scripts import run_fast_tests as runner
+
+    # A directory: appending to it raises IsADirectoryError, an OSError.
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path))
+    monkeypatch.setattr(
+        runner, "pytest_command", lambda *_a, **_k: _child_command("raise SystemExit(3)")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
+        assert runner.run_fast_tests(()) == 3
+    assert "Could not append the test time to GITHUB_STEP_SUMMARY" in caplog.text
+
+
+def test_parse_durations_sums_phases_and_keeps_node_ids_with_spaces() -> None:
+    from scripts.update_pr_shard_durations import parse_durations
+
+    output = "\n".join(
+        (
+            "=========================== slowest durations ===========================",
+            "1.50s call     tests/test_a.py::test_x[with a space]",
+            "0.20s setup    tests/test_a.py::test_x[with a space]",
+            "0.01s teardown tests/test_a.py::test_y",
+            "(3 durations < 0.005s hidden.  Use -vv to show these durations.)",
+        )
+    )
+
+    assert parse_durations(output) == {
+        "tests/test_a.py::test_x[with a space]": 1.7,
+        "tests/test_a.py::test_y": 0.01,
+    }
 
 
 def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:

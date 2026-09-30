@@ -23,15 +23,15 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from scripts.pytest_shard import DURATIONS_PATH
 from scripts.run_fast_tests import pytest_command
 
 logger = logging.getLogger(__name__)
 
-DURATIONS_PATH = Path(__file__).with_name("pr_shard_durations.json")
-
+# The node id runs to the end of the line: parametrize ids may hold spaces.
 _DURATION_LINE = re.compile(
     r"^(?P<seconds>[0-9]+(?:\.[0-9]+)?)s "
-    r"(?P<phase>call|setup|teardown)\s+(?P<nodeid>\S+)$"
+    r"(?P<phase>call|setup|teardown)\s+(?P<nodeid>.+)$"
 )
 
 
@@ -78,7 +78,7 @@ def main() -> int:
         sum(durations.values()),
         DURATIONS_PATH.name,
     )
-    return 0
+    return completed.returncode
 
 
 if __name__ == "__main__":

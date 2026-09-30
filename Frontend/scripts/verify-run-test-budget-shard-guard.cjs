@@ -201,4 +201,19 @@ function runWrapper({ args = [], env = {} } = {}) {
   );
 }
 
+// A step summary that cannot be written (here: the path is a directory)
+// warns on stderr and leaves the child's exit code untouched.
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
+  try {
+    const { result } = runWrapper({
+      env: { GITHUB_STEP_SUMMARY: scratch, FAKE_NPM_EXIT_CODE: '3' },
+    });
+    assert.equal(result.status, 3, 'a failed summary write must not change the exit code');
+    assert.match(result.stderr, /Unable to append the test time to GITHUB_STEP_SUMMARY/);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 console.log('run-test-budget shard guard ok');

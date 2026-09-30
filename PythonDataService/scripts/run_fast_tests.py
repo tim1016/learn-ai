@@ -131,8 +131,16 @@ def report_elapsed_seconds(
     logger.info("%s", message)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
-        with open(summary_path, "a", encoding="utf-8") as summary:
-            summary.write(f"{message}\n")
+        try:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(f"{message}\n")
+        except OSError as exc:
+            # The time is a diagnostic; it must never change the gate's verdict.
+            logger.warning(
+                "Could not append the test time to GITHUB_STEP_SUMMARY %s: %s",
+                summary_path,
+                exc,
+            )
     return message
 
 
@@ -152,28 +160,24 @@ def run_fast_tests(
         ),
         start_new_session=os.name == "posix",
     )
+    exceeded = False
     try:
         returncode = process.wait(timeout=TEST_BUDGET_SECONDS)
     except subprocess.TimeoutExpired:
         _stop_process_group(process)
         process.wait()
-        report_elapsed_seconds(
-            time.monotonic() - started,
-            shard_index=shard_index,
-            shard_count=shard_count,
-            exceeded_budget=True,
-        )
+        returncode = 124
+        exceeded = True
         logger.error(
             "Python PR tests exceeded the hard %d-second budget. "
             "Move expensive coverage to the daily suite or make it faster.",
             TEST_BUDGET_SECONDS,
         )
-        return 124
     report_elapsed_seconds(
         time.monotonic() - started,
         shard_index=shard_index,
         shard_count=shard_count,
-        exceeded_budget=False,
+        exceeded_budget=exceeded,
     )
     return returncode
 
