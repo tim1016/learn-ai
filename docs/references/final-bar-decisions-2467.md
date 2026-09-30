@@ -2,6 +2,8 @@
 
 **Status:** research note, 2026-09-29, revised the same day after an independent review. Code examined at `8e138f73` (master, after #2440 merged as `d4c521b2`). Parent #2439; owner decision #2431; live change #2440; live bug #2596.
 
+**Superseded by #2607 (2026-09-29).** The owner chose a different model from this note's recommendation: neither live nor the backtest acts on a decision taken on the closing bar. An ENTER is skipped, and an EXIT stays due for the program to decide again from the next session; nothing is priced after the close. The rule is one predicate, `app/lean_sidecar/closing_bar.py`. The measurements below describe the code as it stood at `8e138f73`, and the committed JSON is that run's output. The script now measures the engine's own rule against the LEAN profile (see "The models" below), so rerunning it reproduces neither the after-hours legs nor the `close`, `live` and `skip_all` models.
+
 ## The answer
 
 **First, a live-money bug this research found: live does not reliably refuse an entry decided on the last bar.** Nothing on the ENTER path compares the decision instant with the session close. The gate trusts the broker clock's OPEN flag, which is polled once a second and trusted for 5 s, and it drops the `next_close_ms` the clock reported. A 16:00 decision lands about 0.6 s after the close. Whenever the freshest clock reading was answered before 16:00:00, the ENTER passes, goes out as a market DAY order, and Alpaca fills it at the next open. That is filed as **#2596 (P1)**, and a fix is in progress. The code path is under [Other findings](#the-final-bar-enter-race-2596).
@@ -233,8 +235,8 @@ Filed as #2596 (P1) after the first draft of this note; a fix is in progress. Th
 |---|---|---|
 | `app/services/daily_session_schedule.py` and `tests/services/test_daily_session_schedule.py` | No production caller since `69bbeabe` (2026-08-07, "retire legacy execution paths") removed the last `start_boundary_verdict` call. It states a daily stop the live runner does not apply. | Delete both (#2609) |
 | `LiveConfig` and its session helpers in `app/engine/live/config.py:19-99`: `force_flat_at = time(15, 55)`, `normalize_allowed_sessions`, `DEFAULT_ALLOWED_SESSIONS`, `_SESSION_ORDER` | Read only by the dead module above and by one defaults test (`tests/engine/live/test_durable_submit_activation.py::test_default_config_cannot_activate`). The 15:55 force-flat contradicts the 16:00 decisions live records. | Delete them, and rewrite that test against `require_durable_submit_activation`'s real inputs. Keep `stock_symbol_from_action_plan`. This settles #2602's `LiveConfig.sizing` criterion by removal: no code outside the dead module constructs a `LiveConfig`, so no run id hashes one today. (#2609) |
-| `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Decide inside #2607: derive them from the calendar, or remove them with the contract regenerated |
-| `FinalBarPolicyEngine` in this note's script | It overrides the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). The script checks the hook exists and ran, so a rename fails loudly. | Delete it inside #2607, once the engine models final bars itself |
+| `ExecutionConfig.session_entry_cutoff` / `force_flat_at` and their `EngineBacktestRequest` fields | Wall-clock literals; blind to the final bucket (measured above); miss half-days; no UI or backend caller. Their persisted `*_ms` receipt fields make removal a contract change. | Removed by #2607, with the contract regenerated and the persisted receipt's session-time fields |
+| `FinalBarPolicyEngine` in this note's script | It overrode the engine's private `_commit_staged_signal_program` (`app/engine/engine.py:833`). | Removed by #2607: the script runs the engine's own closing-bar rule |
 | The known-gaps line on the "uninvestigated engine-parity sequence-exhaustion failure" | Cause found (section 5) | Replaced with the cause and fix by #2608 (2026-09-29) |
 
 ## Follow-ups
@@ -264,7 +266,9 @@ POLYGON_API_KEY="" DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.meas
   --out final-bar-decisions-2467.json
 ```
 
-**The models.** Each model runs the production `BacktestEngine`, with one change: a subclass settles a final-bar stage DISCARD instead of COMMIT. That is the settlement live applies to a refused ENTER. The script refuses to load if the engine hook it overrides is renamed, and refuses a run in which the engine never called it. The revised run reproduced the first run's share, model, closing-print, receipt-replay and grouping numbers exactly; only the after-hours prices changed. A later fix stopped the receipt replay counting a crash-candidate receipt as a decision match; `receipt_replay` was regenerated from the fixed function over the same clerk copy, and no other section changed.
+**The models.** At `8e138f73` each model ran the production `BacktestEngine` with one change: a subclass settled a final-bar stage DISCARD instead of COMMIT, the settlement live applies to a refused ENTER. The revised run reproduced the first run's share, model, closing-print, receipt-replay and grouping numbers exactly; only the after-hours prices changed. A later fix stopped the receipt replay counting a crash-candidate receipt as a decision match; `receipt_replay` was regenerated from the fixed function over the same clerk copy, and no other section changed.
+
+Since #2607 the engine settles closing-bar decisions itself, so the subclass is gone. The script runs two models on the unmodified engine: `engine` (the closing-bar rule every non-LEAN backtest now applies, with the set-aside decisions read from `BacktestResult.closing_bar_skips`) and `lean_next_open` (the LEAN-compatibility profile). The receipt replay runs `BacktestEngine.for_decision_identity` with the run's start as the evaluation boundary. The after-hours legs were deleted with the model they priced.
 
 **Scratch checks, not committed:**
 

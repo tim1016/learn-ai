@@ -28,9 +28,9 @@ class LiveConfig:
     # Wall-clock cutoff (interpreted in the same timezone as the bar's
     # ``time`` field) at which the live engine cancels open orders and
     # market-flats every position. Set to ``None`` to disable; the
-    # default 15:55 ET targets the standard NYSE close at 16:00. Mirrors
-    # ``ExecutionConfig.force_flat_at`` from the backtest engine so the
-    # two driver paths can be aligned by passing ``None`` on both sides.
+    # default 15:55 ET targets the standard NYSE close at 16:00. The
+    # backtest's ``ExecutionConfig.force_flat_at`` it once mirrored was
+    # deleted by #2607; #2609 removes this one.
     force_flat_at: time | None = time(15, 55)
     consolidator_period_min: int = 15
     run_dir: Path = Path("live_runs")

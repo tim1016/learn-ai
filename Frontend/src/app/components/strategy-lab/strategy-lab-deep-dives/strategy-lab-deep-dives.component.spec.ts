@@ -73,4 +73,26 @@ describe("StrategyLabDeepDivesComponent", () => {
 
     expect(document.body.textContent).toContain("Counts differ");
   });
+
+  it("counts the closing-bar decisions the run set aside in the trade ledger's summary", async () => {
+    await TestBed.configureTestingModule({
+      imports: [StrategyLabDeepDivesComponent],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(StrategyLabDeepDivesComponent);
+    fixture.componentRef.setInput("result", {
+      lean_statistics: null,
+      trades: [],
+      total_trades: 3,
+      closing_bar_skips: [
+        { bar_close_ms: Date.UTC(2026, 6, 1, 20, 0, 0), intent: "ENTER", close_price: 612.34 },
+        { bar_close_ms: Date.UTC(2026, 6, 2, 20, 0, 0), intent: "EXIT", close_price: 613.5 },
+      ],
+    } as unknown as EngineResultData);
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      "3 completed trades · 2 decided on the closing bar",
+    );
+  });
 });

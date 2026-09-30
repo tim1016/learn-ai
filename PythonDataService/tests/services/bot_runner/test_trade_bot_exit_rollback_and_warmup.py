@@ -18,7 +18,10 @@ from app.broker.alpaca.clerk.models import (
     EffectPurpose,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
+from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
+from app.utils.session_anchors import et_date_at_ms
 from tests._helpers.bot_runner.custody import _SID, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeEffectResult, _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -225,21 +228,38 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
         set_alpaca_clerk(None)
 
 
+def _closing_bar_refusals(repo: ClerkSqliteRepository) -> list[int]:
+    """The decision-bar close of every receipt refusing a closing-bar decision."""
+    rows = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=1_000)
+    facts = [json.loads(row.facts_json) for row in rows if row.outcome == "blocked"]
+    return [fact["decision_bar_close_ms"] for fact in facts if fact["reason_code"] == CLOSING_BAR_REASON_CODE]
+
+
+def _sent(clerk: _FakeClerk) -> list[tuple[str, int]]:
+    """Every decision the runner sent the Clerk, as ``(purpose, decision_bar_close_ms)``."""
+    return [(call["purpose"], call["decision_evidence"].decision_bar_close_ms) for call in clerk.calls]
+
+
 @pytest.mark.asyncio
-async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
+async def test_final_rth_bucket_decides_at_once_but_its_enter_is_not_sent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1708 review finding 2 regression: the consolidator only fires a
-    working bucket lazily, when a *later* bar arrives -- but an RTH-only
-    stream never delivers one after the session closes. Before the fix,
-    the final 15:45-16:00 bucket's decision would strand until the next
-    session's bars started arriving. The runner fires every complete bucket
-    on the bar that closes it (#2303), so it decides immediately, from the
-    same bar that closes the session.
+    """#1708 review finding 2 regression, narrowed by #2607.
+
+    The consolidator only fires a working bucket lazily, when a *later* bar
+    arrives -- but an RTH-only stream never delivers one after the session
+    closes. The runner fires every complete bucket on the bar that closes it
+    (#2303), so the final 15:45-16:00 bucket is decided immediately, from the
+    same bar that closes the session, rather than stranding until the next
+    session. That bucket is the closing bar: live decides it only after the
+    close, so its ENTER is refused -- discarded and receipted -- and never
+    reaches the Clerk.
     """
     admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
-    clerk = _FakeClerk()
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
     set_alpaca_clerk(clerk)
     try:
         warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 15 * 60_000, consolidated_bars=20)
@@ -263,9 +283,61 @@ async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
             quantity=1,
         )
         await _wait_for(lambda: feed.bars_consumed == len(live_bars))
-        await _wait_for(lambda: len(clerk.calls) == 1)
+        await _wait_for(lambda: bool(_closing_bar_refusals(repo)))
         await registry.stop("alpaca", _SID)
 
-        assert clerk.calls[0]["purpose"] == "ENTER"
+        assert clerk.calls == []
+        assert _closing_bar_refusals(repo) == [_SESSION_CLOSE_MS]
     finally:
         set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_closing_bar_exit_is_not_sent_and_fires_on_the_next_sessions_first_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2607: an EXIT due on the closing bar is refused like any other refusal
+    -- DISCARD, so the program still holds and the EXIT stays due -- and the
+    program decides it again on the next session's first bucket, which does
+    reach the Clerk. No decision is sent after the close.
+    """
+    admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    set_alpaca_clerk(clerk)
+    bucket_ms = 15 * 60_000
+    next_open_ms = session_open_ms_utc(next_trading_day(et_date_at_ms(_SESSION_CLOSE_MS)))
+    try:
+        warmup_bars = _rsi_warmup_bars(_SESSION_CLOSE_MS - 2 * bucket_ms, consolidated_bars=20)
+        # 15:30-15:45 plunges RSI below oversold (ENTER); the closing bucket
+        # spikes it above overbought (EXIT due on the closing bar); the next
+        # session's first bucket holds the spike, so the EXIT is still due.
+        live_bars = _plunge_bucket_bars(
+            _SESSION_CLOSE_MS - bucket_ms,
+            flat_price=str(warmup_bars[-1].close),
+            plunge_close="380.00",
+        )
+        live_bars += _plunge_bucket_bars(_SESSION_CLOSE_MS, flat_price="380.00", plunge_close="430.00")
+        live_bars += _plunge_bucket_bars(next_open_ms + bucket_ms, flat_price="430.00", plunge_close="430.00")
+        feed = _WarmableFeed(live_bars, warmup_bars, mode="hold")
+        registry = _registry(tmp_path, feed)
+
+        await registry.deploy(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="rsi_mean_reversion",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 2)
+        await registry.stop("alpaca", _SID)
+
+        assert _sent(clerk) == [("ENTER", _SESSION_CLOSE_MS - bucket_ms), ("EXIT", next_open_ms + bucket_ms)]
+        assert _closing_bar_refusals(repo) == [_SESSION_CLOSE_MS]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()

@@ -28,10 +28,15 @@ settings identity needed to detect a semantic signal-program change.
   proof the original replay used this same hardcoded window, not the full
   cell range. The generator itself neither sets nor overrides a window: its
   `_entry_for_cell` hands the cell's minute bars to
-  `BacktestEngine(InMemoryDataReader(...))`, whose
+  `BacktestEngine.for_decision_identity(InMemoryDataReader(...))`, whose
   `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
   window the strategy configured for itself, so roughly the final month of
   each cell is never replayed here either.
+- Decision identity: the replay commits every staged decision
+  (`BacktestEngine.for_decision_identity`, the LEAN-compatibility
+  profile's convention). The closing-bar rule (#2607) is an execution
+  disposition applied after decision identity, in live and in every other
+  backtest, so it never changes this corpus.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   indicator and trade equivalence retain their separately pinned
   `atol=1e-9, rtol=0` LEAN tests.
