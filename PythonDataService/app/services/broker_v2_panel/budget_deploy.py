@@ -43,9 +43,11 @@ from app.broker.alpaca.clerk.money import (
     cents_spendable,
     consent_cents,
     display_cents,
+    display_dollars,
     dollars,
     money_context,
     normalize_money,
+    recorded_dollars,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
@@ -78,11 +80,6 @@ from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book
 
 logger = logging.getLogger(__name__)
-
-
-def display_dollars(amount: Decimal) -> str:
-    """Display only; this rounded value never feeds custody admission."""
-    return dollars(display_cents(amount))
 
 
 #: What an account that has not switched to budgets says in place of its
@@ -170,7 +167,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                 risk_revision = policy.revision
                 with money_context():
                     percent = normalize_money(policy.loss_fraction) * 100
-                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${display_dollars(normalize_money(policy.loss_usd))}. Existing exit terms stay fixed."
+                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${recorded_dollars(policy.loss_usd)}. Existing exit terms stay fixed."
         with money_context():
             shortcuts = [DeploymentBudgetShortcut(
                 key="position_headroom", label="1.2 × one position",
@@ -208,7 +205,7 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             world=world, custody_account_id=custody_id, bot_name_note=name_note,
             budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
             minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
-            estimated_price_usd=display_dollars(normalize_money(quote.ask)), risk_revision=risk_revision,
+            estimated_price_usd=recorded_dollars(quote.ask), risk_revision=risk_revision,
             risk_limits_summary=risk_summary,
             shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
             money_after=money_after,
@@ -702,8 +699,8 @@ def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation
         return {}
     return {
         "observed_at_ms": observation.observed_at_ms,
-        "equity_usd": None if equity is None else dollars(display_cents(equity)),
-        "today_pnl_usd": None if today is None else dollars(display_cents(today)),
+        "equity_usd": None if equity is None else display_dollars(equity),
+        "today_pnl_usd": None if today is None else display_dollars(today),
     }
 
 
@@ -727,7 +724,7 @@ def _open_pnl(money: AccountMoney, observation: AccountObservation) -> tuple[str
     if not money.holds_positions:
         return "0.00", None
     if observation.simulation_session_start_ms is not None:
-        return dollars(display_cents(observation.unrealized_pl_usd)), None
+        return display_dollars(observation.unrealized_pl_usd), None
     return None, _OPEN_PNL_UNPRICED
 
 

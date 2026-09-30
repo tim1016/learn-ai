@@ -14,7 +14,7 @@ from decimal import Decimal
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
-from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.money import display_dollars
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_at, observed_day_pnl
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
@@ -221,7 +221,7 @@ def test_a_sealed_float_baseline_beside_exact_equity_still_shows_the_exact_cent(
 
     assert fresh.known and retained.known
     assert retained.display_total_usd == fresh.display_total_usd == Decimal("0.0149999999999999999")
-    assert dollars(display_cents(retained.display_total_usd)) == "0.01"
+    assert display_dollars(retained.display_total_usd) == "0.01"
     assert retained.total_usd == fresh.total_usd == float(equity) - 1999.99 == 0.015000000000100044
 
 
@@ -242,6 +242,6 @@ def test_each_transfer_is_normalized_on_its_own_never_their_float_sum() -> None:
 
     assert pnl.known and pnl.cash_flow_count == 2
     assert pnl.display_total_usd == Decimal("0.015")
-    assert dollars(display_cents(pnl.display_total_usd)) == "0.02"
+    assert display_dollars(pnl.display_total_usd) == "0.02"
     assert pnl.net_cash_flow_usd == 1.1 + 2.2 == 3.3000000000000003
     assert pnl.total_usd == 10_004.015 - 10_000.7 - (1.1 + 2.2) == 0.014999999998690061

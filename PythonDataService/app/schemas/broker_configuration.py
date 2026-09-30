@@ -630,7 +630,10 @@ class AccountRiskStateResponse(_Response):
     # No limit is set at all, so setting one is the fix and re-reading cannot
     # settle an `unknown` state; otherwise it waits on account evidence.
     limit_missing: bool
-    hold_loss_limit_usd: float | None = None
+    # The standing hold's limit as a Python-authored dollar string (the sealed
+    # float each normalized on its own, #2612); the browser renders it verbatim
+    # and does no money arithmetic.
+    hold_loss_limit_usd: str | None = None
     hold_session_start_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     hold_policy_revision: int | None = None
 

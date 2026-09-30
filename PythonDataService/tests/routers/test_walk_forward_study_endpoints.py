@@ -17,6 +17,7 @@ from app.main import app
 from app.research.grid_search import service as sweeps
 from app.research.grid_search.models import CellResult
 from app.research.persistence import lifecycle
+from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity, EnvironmentIdentityError
 from app.research.walk_forward_study import service
 from app.routers import walk_forward_study as study_router
 from app.utils.session_anchors import et_midnight_ms
@@ -162,3 +163,48 @@ async def test_launch_lists_by_job_id_and_the_detail_carries_folds_and_the_verdi
         assert (await c.get(f"/api/research/grid-search/{payload['folds'][0]['train_search_id']}")).status_code == 404
 
     assert captured["job_id"] == job_id
+
+
+async def test_an_unidentifiable_environment_refuses_without_hiding_the_detail(
+    client, lake, monkeypatch
+) -> None:
+    """#2604: an unreadable environment used to 500 the study detail GET, hiding
+    the recorded folds behind "This search could not be loaded". The page must
+    still load, with the refusal in its place; a launch under the same
+    condition is a coded refusal, not a generic 500."""
+    _requires_ephemeral_db()
+    job_id = f"job-wf-env-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setattr(study_router, "run_in_thread", lambda jid, work, **kwargs: None)
+    # Launch from a clean tree, exactly as a CI checkout would: the dirty
+    # developer worktree this test runs in must not color the receipt.
+    launched_clean = CodeIdentity(
+        git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64,
+        digest_scheme=DIGEST_SCHEME,
+    )
+    monkeypatch.setattr(sweeps, "resolve_code_identity", lambda: launched_clean)
+
+    def unreadable() -> CodeIdentity:
+        raise EnvironmentIdentityError("the installed distribution 'x' has no name in its metadata")
+
+    async with client as c:
+        launched = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job_id})
+        assert launched.status_code == 202, launched.text
+        study_id = launched.json()["study_id"]
+
+        # The worker never started, so the queued study reads back interrupted;
+        # and the environment has become unreadable since launch.
+        monkeypatch.setattr(lifecycle, "job_is_live", lambda jid: False)
+        monkeypatch.setattr(lifecycle, "resolve_code_identity", unreadable)
+        monkeypatch.setattr(sweeps, "resolve_code_identity", unreadable)
+
+        detail = await c.get(f"/api/research/walk-forward-studies/{study_id}")
+        assert detail.status_code == 200, detail.text
+        payload = detail.json()
+        assert payload["resumable"] is False
+        assert "cannot identify its installed Python libraries" in payload["resume_refusal"]
+        assert payload["fold_count"] == 2  # the recorded folds are not hidden by the refusal
+
+        refused = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": "job-wf-env-2"})
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["detail"]["code"] == "ENVIRONMENT_UNIDENTIFIABLE"
+        assert "cannot identify its installed Python libraries" in refused.json()["detail"]["message"]

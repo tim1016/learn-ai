@@ -108,6 +108,37 @@ def test_the_operator_explanation_names_the_prior_close_cash_flow_basis() -> Non
     assert "every EXIT still runs" in envelope.explanation
 
 
+def test_the_explanation_dollars_the_sealed_floats_each_normalized_on_their_own() -> None:
+    """The hold's copy renders the recorded floats through the money boundary (#2612).
+
+    A sealed ``-2.675`` is exactly half a cent once normalized: half-even
+    reads ``-2.68``, while a float ``:.2f`` of the same recorded value reads
+    ``-2.67`` (its binary value sits just under the tie). The cause's own
+    bytes — the floats the seal recorded — must not move: they still round-trip
+    and old rows still decode, only the explanation's rendering changed.
+    """
+    sealed = LossHoldCause(
+        day_start_ms=1_788_000_000_000,
+        day_pnl_usd=-2.675,
+        loss_limit_usd=5_000.0,
+        last_equity_usd=100_000.0,
+        observed_at_ms=1_788_040_000_000,
+    )
+    facts = sealed.to_mapping()
+
+    envelope = account_hold_envelope(
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        evidence_refs=[f"day-pnl:{sealed.day_start_ms}"],
+        cause_facts=facts,
+    )
+
+    assert "reached -2.68 USD against a loss limit of 5000.00 USD" in envelope.explanation
+    assert f"{sealed.day_pnl_usd:.2f}" == "-2.67"  # what master's message said
+    # The sealed cause is untouched and still decodable, byte for byte.
+    assert envelope.cause_facts == facts
+    assert LossHoldCause.from_mapping(envelope.cause_facts) == sealed
+
+
 async def test_a_raised_loss_hold_blocks_new_exposure_and_admits_every_reduction(
     repo: ClerkSqliteRepository, registered_long: tuple[str, ReductionIntent]
 ) -> None:

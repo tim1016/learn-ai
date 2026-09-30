@@ -35,7 +35,7 @@ from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError
 from app.research.sweep.grid import RunSpec
-from app.research.sweep.identity import CodeIdentity, resolve_code_identity
+from app.research.sweep.identity import CodeIdentity
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, plan_folds
@@ -100,7 +100,7 @@ def prepare_launch(spec: StudySpec, *, job_id: str | None, roots: Sequence[Path]
         raise sweeps.data_missing_refusal(exc) from exc
     folds = _fold_records(pre.folds)
     receipt = {
-        **sweeps.build_receipt(sweep, snapshot, resolve_code_identity()),
+        **sweeps.build_receipt(sweep, snapshot, sweeps.current_code_identity()),
         "walk_forward": {
             "training_months": spec.training_months,
             "test_months": spec.test_months,
