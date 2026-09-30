@@ -18,8 +18,9 @@ a foreign lease owner.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pytest
@@ -31,8 +32,14 @@ from app.broker.alpaca.clerk.active_authority import (
     get_clerk_runtime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.sealed_ledger import append_canonical_jsonl_line
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.synthetic_activation import (
+    SyntheticActivationInvalid,
+    SyntheticActivationRecord,
+    SyntheticActivationStore,
+)
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import bot_runner
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -265,3 +272,158 @@ async def test_the_unrestored_dry_runs_panel_says_its_account_did_not_open(
 
     assert refused.value.http_status == 503
     assert "This Dry Run's own simulated Clerk could not be opened." in str(refused.value.detail)
+
+
+# ── Unbound Dry Run orphans at boot (#2559) ─────────────────────────────────
+# A Deploy that crashed between its budget commit and its binding record
+# leaves a ``sim:`` authority only its own activation indexes. Boot finds
+# those from the activation ledger synchronously, inside the lifespan, so no
+# ledger or orphan may raise out of that enumeration (#2661 review, M2).
+
+
+async def _crash_before_binding(artifacts_root: Path, sid: str) -> None:
+    """A Deploy that activated its ``sim:`` account, then died before recording a binding."""
+    binding = _dry_run_binding().model_copy(update={"strategy_instance_id": sid, "sealed_account_id": f"sim:{sid}"})
+    deploying = BotTaskRegistry(artifacts_root, feed_resolver=lambda: None, boot_recovery_required=False)
+    authority = deploying._authority_for(binding)
+    await authority.ensure_recoverable()
+    await authority.release_if_unused()
+    assert get_clerk_runtime(f"sim:{sid}") is None
+
+
+def _logged(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if getattr(record, "action", None) == action]
+
+
+async def test_an_unbound_dry_run_can_only_be_read_or_restored(tmp_path: Path) -> None:
+    """#2661 review (M3): the orphan's read-only status is its type, not a flag
+    chosen by ``isinstance``. It has no binding and no consent, so it offers a
+    read that never recovers and boot's restoration -- nothing that admits,
+    launches, projects a lifecycle or reconciles at run end."""
+    await _crash_before_binding(tmp_path, "orphan-1")
+    registry = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    try:
+        orphan = registry.unbound_dry_run("orphan-1")
+
+        assert orphan is not None
+        assert {name for name in dir(orphan) if not name.startswith("_")} == {
+            "account_id", "strategy_instance_id", "runtime_for_projection", "ensure_recoverable",
+        }
+        assert (orphan.account_id, orphan.strategy_instance_id) == ("sim:orphan-1", "orphan-1")
+        assert registry.unbound_dry_run("never-deployed") is None
+    finally:
+        await registry.stop_all()
+
+
+@pytest.fixture
+async def booting(tmp_path: Path) -> AsyncIterator[BotTaskRegistry]:
+    """The restarted process's runner, before its Dry Run restoration starts."""
+    registry = BotTaskRegistry(tmp_path, feed_resolver=lambda: None)
+    try:
+        yield registry
+    finally:
+        await registry.stop_all()
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_an_out_of_order_activation_ledger_never_fails_the_lanes_boot(
+    tmp_path: Path, booting: BotTaskRegistry, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The review's reproduction: one ``sim:`` account at generations 2 then 1.
+
+    The ledger lists, but every read of that account's latest activation
+    rejects it. Boot once re-read it synchronously and the rejection aborted
+    the lifespan, taking the real-money lane down with it. Now that orphan's
+    own restoration fails, logged, and boot carries on.
+    """
+    store = SyntheticActivationStore(tmp_path)
+    for generation in (2, 1):
+        record = SyntheticActivationRecord.create(
+            account_id="sim:orphan-1", authority_generation=generation, db_identity_token="db-token", activated_at_ms=0,
+        )
+        append_canonical_jsonl_line(
+            store.path, asdict(record), invalid=SyntheticActivationInvalid, label="synthetic activation",
+        )
+    assert store.account_ids() == ("sim:orphan-1",)
+    with pytest.raises(SyntheticActivationInvalid):
+        store.latest("sim:orphan-1")
+
+    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+        restoring = booting.start_dry_run_restoration()
+        await asyncio.wait_for(restoring, timeout=10.0)
+
+    (failed,) = _logged(caplog, "boot_dry_run_restoration_failed")
+    assert failed.strategy_instance_id == "orphan-1"
+    assert failed.restoration == "not_restored"
+    assert failed.exc_info is not None
+    assert get_clerk_runtime("sim:orphan-1") is None
+
+
+async def test_an_unreadable_activation_ledger_is_one_logged_skip(
+    tmp_path: Path, booting: BotTaskRegistry, caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = SyntheticActivationStore(tmp_path)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text("this is not a sealed activation row\n", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+        restoring = booting.start_dry_run_restoration()
+        await asyncio.wait_for(restoring, timeout=10.0)
+
+    (unreadable,) = _logged(caplog, "boot_dry_run_activations_unreadable")
+    assert unreadable.exc_info is not None
+    assert _logged(caplog, "boot_dry_run_restoration_failed") == []
+
+
+async def test_an_orphan_whose_binding_cannot_be_read_is_skipped_and_its_siblings_restored(
+    tmp_path: Path, booting: BotTaskRegistry, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _crash_before_binding(tmp_path, "orphan-unmatched")
+    await _crash_before_binding(tmp_path, "orphan-ok")
+    read_binding = booting._read_binding
+
+    def _unreadable_for_one(sid: str) -> BrokerBotBinding | None:
+        if sid == "orphan-unmatched":
+            raise OSError("binding file unreadable")
+        return read_binding(sid)
+
+    monkeypatch.setattr(booting, "_read_binding", _unreadable_for_one)
+
+    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+        restoring = booting.start_dry_run_restoration()
+        await asyncio.wait_for(restoring, timeout=10.0)
+
+    (unmatched,) = _logged(caplog, "boot_dry_run_activation_unmatched")
+    assert unmatched.account_id == "sim:orphan-unmatched"
+    assert unmatched.exc_info is not None
+    # Skipped, not opened; the sibling is restored as though nothing happened.
+    assert get_clerk_runtime("sim:orphan-unmatched") is None
+    assert get_clerk_runtime("sim:orphan-ok") is not None
+    assert _logged(caplog, "boot_dry_run_restoration_failed") == []
+
+
+async def test_an_orphan_whose_recovery_raises_is_its_own_failure(
+    tmp_path: Path, booting: BotTaskRegistry, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _crash_before_binding(tmp_path, "orphan-broken")
+    await _crash_before_binding(tmp_path, "orphan-ok")
+    recover = SqliteAlpacaClerkFacade.recover
+
+    async def _recovery_raises_for_one(facade: SqliteAlpacaClerkFacade) -> None:
+        if facade.account_id == "sim:orphan-broken":
+            raise RuntimeError("startup recovery failed")
+        await recover(facade)
+
+    monkeypatch.setattr(SqliteAlpacaClerkFacade, "recover", _recovery_raises_for_one)
+
+    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+        restoring = booting.start_dry_run_restoration()
+        await asyncio.wait_for(restoring, timeout=10.0)
+
+    (failed,) = _logged(caplog, "boot_dry_run_restoration_failed")
+    assert failed.strategy_instance_id == "orphan-broken"
+    assert failed.restoration == "not_restored"
+    assert "startup recovery failed" in failed.error_detail
+    assert failed.exc_info is not None
+    assert get_clerk_runtime("sim:orphan-broken") is None
+    assert get_clerk_runtime("sim:orphan-ok") is not None

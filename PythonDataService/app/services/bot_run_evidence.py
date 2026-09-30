@@ -32,6 +32,10 @@ from app.services.bot_lifecycle_projection import (
 from app.services.bot_runner_errors import UnknownBotError
 
 PROVISIONAL_STOP_REASON_CODE = "STOPPED_PENDING_CUSTODY_PROOF"
+#: Terminal reason for a launch that failed after its Clerk STOP: the run
+#: ended because the launch failed, not because an operator stopped it
+#: (#2559).
+ACTIVATION_FAILED_STOP_REASON_CODE = "ACTIVATION_FAILED_AFTER_REGISTRATION"
 
 logger = logging.getLogger(__name__)
 

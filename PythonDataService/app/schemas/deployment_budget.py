@@ -208,8 +208,10 @@ class AccountMoneyView(BaseModel):
 class DeploymentBudgetPreview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # ``awaiting_price``: the review asked IBKR for the instrument and no fresh
-    # quote has arrived yet -- transient, so the client re-checks.
+    # ``awaiting_price``: the feed is connected, the review asked IBKR for the
+    # instrument, and no fresh quote has arrived yet -- transient, so the
+    # client re-checks. A disconnected feed is ``unavailable`` with its own
+    # copy, never a wait it cannot ride out (#2559).
     state: Literal["ready", "unavailable", "awaiting_price"]
     detail: str
     world: AuthorityKind

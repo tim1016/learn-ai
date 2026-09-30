@@ -9,7 +9,9 @@ actions can never land in two different worlds:
   never reach Alpaca;
 - a Dry Run whose Deploy committed in its simulator but crashed before the
   launch recorded its binding is found through that simulator's own
-  activation, exactly as its money is;
+  activation, exactly as its money is. It is only ever read -- its store
+  opens without the recovery that would release it -- so an action on it is
+  refused (#2559); the next restart's restoration releases it;
 - every other bot, and a custody subject the runner never bound (a manual
   order's), belongs to the account's own authority -- ``None`` when none is
   installed.
@@ -26,32 +28,53 @@ from contextlib import asynccontextmanager
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.services.bot_runner import get_bot_task_registry
+from app.services.bot_binding_authority import UnboundDryRunAuthority
+from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner_errors import InvalidStrategyInstanceIdError, UnknownBotError
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 
 
 @asynccontextmanager
 async def bot_clerk_runtime(broker: str, sid: str) -> AsyncIterator[ActiveClerkRuntime | None]:
-    """The Clerk runtime that custodies bot ``sid``, held open for the caller's request."""
+    """The Clerk runtime that custodies bot ``sid``, held open for the caller's read."""
     registry = get_bot_task_registry()
-    try:
-        binding = None if registry is None else registry.binding_for_control(broker, sid)
-    except (UnknownBotError, InvalidStrategyInstanceIdError):
-        binding = None
+    binding = _binding(registry, broker, sid)
     if binding is not None:
         async with binding_clerk_runtime(registry, binding) as runtime:
             yield runtime
         return
-    account = _account_runtime(broker)
-    repository = None if account is None else account.sqlite_repository
-    unbound = getattr(registry, "unbound_synthetic_runtime_for_projection", None)
-    if callable(unbound) and repository is not None and repository.deployment_budget(sid) is None:
-        async with unbound(sid) as runtime:
-            if runtime is not None:
-                yield _own_simulator(runtime)
-                return
-    yield account
+    orphan = _unbound_dry_run(registry, broker, sid)
+    if orphan is not None:
+        async with orphan.runtime_for_projection() as runtime:
+            yield _own_simulator(runtime)
+        return
+    yield _account_runtime(broker)
+
+
+@asynccontextmanager
+async def bot_action_runtime(broker: str, sid: str) -> AsyncIterator[ActiveClerkRuntime | None]:
+    """``bot_clerk_runtime`` for a request that acts on the bot.
+
+    The same selection, except that a Dry Run whose Deploy crashed before its
+    binding was recorded is refused rather than opened: its store only ever
+    opens for a read, without the recovery that would settle it (#2559).
+    """
+    registry = get_bot_task_registry()
+    binding = _binding(registry, broker, sid)
+    if binding is not None:
+        async with binding_clerk_runtime(registry, binding) as runtime:
+            yield runtime
+        return
+    if _unbound_dry_run(registry, broker, sid) is not None:
+        raise PanelUnavailableError(
+            "This Dry Run never finished launching, so it cannot be acted on.",
+            detail=(
+                "Its launch stopped before the bot was recorded. Each time the Clerk starts, it ends "
+                "a Dry Run like this one and releases the budget it held."
+            ),
+        )
+    yield _account_runtime(broker)
 
 
 @asynccontextmanager
@@ -86,6 +109,30 @@ async def bot_custody_facade(broker: str, sid: str) -> AsyncIterator[SqliteAlpac
     """``bot_clerk_runtime``'s facade, for a caller that acts through the Clerk facade."""
     async with bot_clerk_runtime(broker, sid) as runtime:
         yield custody_facade(runtime)
+
+
+@asynccontextmanager
+async def bot_action_facade(broker: str, sid: str) -> AsyncIterator[SqliteAlpacaClerkFacade | None]:
+    """``bot_action_runtime``'s facade, for a caller that acts through the Clerk facade."""
+    async with bot_action_runtime(broker, sid) as runtime:
+        yield custody_facade(runtime)
+
+
+def _binding(registry: BotTaskRegistry | None, broker: str, sid: str) -> BrokerBotBinding | None:
+    try:
+        return None if registry is None else registry.binding_for_control(broker, sid)
+    except (UnknownBotError, InvalidStrategyInstanceIdError):
+        return None
+
+
+def _unbound_dry_run(registry: object, broker: str, sid: str) -> UnboundDryRunAuthority | None:
+    """The Dry Run a crash left without a binding, when the account's own authority does not hold ``sid``."""
+    account = _account_runtime(broker)
+    repository = None if account is None else account.sqlite_repository
+    unbound = getattr(registry, "unbound_dry_run", None)
+    if not callable(unbound) or repository is None or repository.deployment_budget(sid) is not None:
+        return None
+    return unbound(sid)
 
 
 def _account_runtime(broker: str) -> ActiveClerkRuntime | None:

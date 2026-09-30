@@ -19,6 +19,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -84,6 +85,23 @@ from app.schemas.account_authority import CustodyWorld
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+
+class SyntheticOpening(Enum):
+    """How a ``sim:`` store is opened: one choice, so no caller can spell an unguarded mix (#2559).
+
+    ``OPERATE`` -- admission and boot's restoration: samples the simulated
+    account (envelope sync) and runs the store's startup recovery.
+    ``PROJECT`` -- a bound bot's read: runs startup recovery, whose published
+    verdict the bot's money views project (#1776), and samples nothing.
+    ``READ_ONLY`` -- an unbound Dry Run orphan's read: opens the store without
+    its mutating startup pass, so nothing is retired, nothing reconciled and
+    no custody transition appended; boot's restoration owns the repair.
+    """
+
+    OPERATE = "operate"
+    PROJECT = "project"
+    READ_ONLY = "read_only"
 
 
 class ActivationResolver(Protocol):
@@ -358,16 +376,18 @@ async def select_synthetic_clerk_runtime(
     execution_lease_wait_timeout_s: float = 0.0,
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     simulation_initial_cash: Decimal | None = None,
-    projection_only: bool = False,
+    opening: SyntheticOpening = SyntheticOpening.OPERATE,
 ) -> ActiveClerkRuntime:
     """Recover one explicit synthetic account without consulting Alpaca.
 
     The caller provides a synthetic read/trade pair.  Identity, activation and
     the opened repository must agree before a Clerk is returned.
-    A projection-only opening retains existing custody recovery, but never
-    samples simulated financial state or starts its observation cadence.
-    The execution-lease wait is a single attempt unless the caller asks for
-    one; boot asks, because a restart meets its dead predecessor's lease.
+    ``opening`` decides what the opening does (``SyntheticOpening``): only an
+    ``OPERATE`` opening samples simulated financial state or starts its
+    observation cadence, and a ``READ_ONLY`` one skips the store's startup
+    recovery. The execution-lease wait is a single attempt unless the caller
+    asks for one; boot asks, because a restart meets its dead predecessor's
+    lease.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -468,11 +488,12 @@ async def select_synthetic_clerk_runtime(
         )
         # Explicit transient consent can price the first deployment before
         # its command commits. Recovery uses the durable commitment instead.
-        if not projection_only:
+        if opening is SyntheticOpening.OPERATE:
             await envelope_sync.tick()
             envelope_sync.start()
         sweep.start_lease_heartbeat()
-        await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
+        if opening is not SyntheticOpening.READ_ONLY:
+            await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
     except BaseException as exc:
         # A cancelled opening -- boot's Dry Run restoration interrupted by
         # shutdown (#2582) -- releases its lease and heartbeat like a failed one.
@@ -667,6 +688,7 @@ __all__ = [
     "AuthorityKind",
     "ClerkAuthorityRegistry",
     "ClerkStartupFailure",
+    "SyntheticOpening",
     "activate_shadow_clerk_authority",
     "activate_synthetic_clerk_authority",
     "close_synthetic_clerk_runtimes",
