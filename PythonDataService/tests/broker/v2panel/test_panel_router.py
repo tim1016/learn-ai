@@ -206,15 +206,15 @@ class _FakeRegistry:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
-    async def cancel_end(self, sid: str, *, updated_by: str) -> None:
+    async def cancel_end(self, sid: str, *, lifecycle_run_id: str, updated_by: str) -> None:
         """The panel's Stop cancels the bot's end before its STOP commits (#2607); this fleet has no end."""
         self.status("alpaca", sid)
 
     async def stop_after_durable_clerk_stop(
-        self, broker: str, sid: str, *, updated_by: str, reason: str
+        self, broker: str, sid: str, *, lifecycle_run_id: str, updated_by: str, reason: str
     ) -> None:
         """The in-process quiescence step `stop_bot_decisions` drives after its
-        durable SQLite STOP commits (recovery_execution.quiesce_bot_process).
+        durable SQLite STOP commits (recovery_execution._quiesce_bot_process).
         Recorded, not asserted on, by every test in this module except the
         lease-revival ones, which use it to prove the retried write actually
         reached this step."""

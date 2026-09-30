@@ -326,11 +326,18 @@ class _PanelFacade:
     """
 
     account_id = "paper-account"
-    repository = SimpleNamespace(get_command=lambda _command_id: None)
 
     def __init__(self, clerk: _EndClerk, registry: BotTaskRegistry) -> None:
         self.clerk = clerk
         self.registry = registry
+        # The Clerk's runs as the Stop reads them: the bot's current run is its ACTIVE one.
+        self.repository = SimpleNamespace(
+            get_command=lambda _command_id: None,
+            active_run=lambda sid: (
+                SimpleNamespace(lifecycle_run_id=clerk.active_runs[sid]) if sid in clerk.active_runs else None
+            ),
+            latest_run=lambda _sid: None,
+        )
 
     async def stop_strategy_run(self, *, strategy_instance_id: str, run_id: str, reason: str | None = None):
         await self.clerk.stop_strategy_run(strategy_instance_id=strategy_instance_id, run_id=run_id, reason=reason)
@@ -393,7 +400,9 @@ async def test_the_end_watch_leaves_a_run_an_operator_stopped_to_that_stop(tmp_p
     await clerk.stop_strategy_run(strategy_instance_id=_SID, run_id=run_id, reason="operator stop")
     await registry.carry_out_due_ends()
     await asyncio.sleep(0)
-    await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+    await registry.stop_after_durable_clerk_stop(
+        "alpaca", _SID, lifecycle_run_id=run_id, updated_by="operator_recovery", reason="op"
+    )
     await asyncio.gather(*registry._end_stop_tasks.values())
 
     assert registry.pending_ends([_SID]) == []
@@ -409,9 +418,13 @@ async def test_an_operators_stop_of_a_bot_whose_process_is_gone_cancels_its_end(
     await _deploy(registry)
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
     assert registry.pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)]
+    binding = registry._read_binding(_SID)
+    assert binding is not None
 
     with pytest.raises(UnknownBotError):
-        await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+        await registry.stop_after_durable_clerk_stop(
+            "alpaca", _SID, lifecycle_run_id=binding.run_id, updated_by="operator_recovery", reason="op"
+        )
 
     assert registry.pending_ends([_SID]) == []
     assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
@@ -428,7 +441,9 @@ async def test_an_operators_stop_with_no_process_records_the_same_stop_as_the_la
 
     for sid in ("bot-idle", "never-deployed"):
         with pytest.raises(UnknownBotError):
-            await registry.stop_after_durable_clerk_stop("alpaca", sid, updated_by="operator_recovery", reason="op")
+            await registry.stop_after_durable_clerk_stop(
+                "alpaca", sid, lifecycle_run_id="its-run", updated_by="operator_recovery", reason="op"
+            )
 
     desired = _desired_json(tmp_path, "bot-idle")
     assert (desired["desired_state"], desired["reason"], desired["end"]) == ("STOPPED", "op", None)
@@ -445,7 +460,7 @@ async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
     broken.parent.mkdir(parents=True)
     broken.write_text("not json", encoding="utf-8")
 
-    await registry.cancel_end(_SID, updated_by="operator_recovery")
+    await registry.cancel_end(_SID, lifecycle_run_id="its-run", updated_by="operator_recovery")
 
     [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_unreadable"]
     # A repaired file would carry its end out after all: the repair must clear it.
@@ -461,13 +476,35 @@ async def test_a_stop_of_a_running_bot_whose_desired_state_cannot_be_read_still_
     stable_desired_state_path(tmp_path, _SID).write_text("{not json", encoding="utf-8")
 
     with pytest.raises(DesiredStateCorruptError):
-        await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+        await registry.stop_after_durable_clerk_stop(
+            "alpaca", _SID, lifecycle_run_id=managed.binding.run_id, updated_by="operator_recovery", reason="op"
+        )
 
     assert not managed.run_gate.is_set()
     assert managed.task.done()
     assert _SID not in registry._bots
     outcome = registry._bindings.read_outcome(_SID, managed.binding.run_id)
     assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
+
+
+async def test_an_operators_stop_of_an_earlier_run_leaves_the_bots_later_run_as_it_was(tmp_path: Path) -> None:
+    """#2664 review: a Stop acts for its run alone, as the Clerk's stop at the end does. A retry
+    of an earlier run's Stop reaching the runner once a later run is deployed -- the Clerk read
+    the earlier run as the bot's current one just before -- neither cancels the later run's
+    end nor stops its process or records its intent STOPPED."""
+    registry = await _deployed(tmp_path, _Clock())
+    managed = registry._bots[_SID]
+
+    await registry.cancel_end(_SID, lifecycle_run_id="an-earlier-run", updated_by="operator_recovery")
+    with pytest.raises(UnknownBotError):
+        await registry.stop_after_durable_clerk_stop(
+            "alpaca", _SID, lifecycle_run_id="an-earlier-run", updated_by="operator_recovery", reason="op"
+        )
+
+    assert registry.status("alpaca", _SID).running is True
+    assert managed.run_gate.is_set()
+    assert registry.pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)]
+    assert _desired_json(tmp_path)["desired_state"] == "RUNNING"
 
 
 def test_cancelling_the_end_of_a_bot_with_no_desired_state_writes_none(tmp_path: Path) -> None:

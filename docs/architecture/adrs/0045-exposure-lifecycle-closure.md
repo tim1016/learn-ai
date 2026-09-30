@@ -209,12 +209,21 @@ durably, whether or not the runner still has the bot's process, and whatever
 the intent already says -- then records STOPPED, a write that never touches
 the end. A crash, a restart or a service shutdown keeps the end, so the Clerk
 still carries it out; a crash records STOPPED with the end kept, and a later
-operator Stop, the lane-wide one included, still cancels it. The panel's Stop,
-and the raw route's when it names the bot's active run, cancels the end before
-it commits its STOP and then stops the process, so nothing that runs in
-between (the runner's end watch, a Clerk pass) reads the end as still to be
-carried out. The runner stops a process "at its end" only when
-the run's STOP is the Clerk's own at the end (`operator_reason`
+operator Stop, the lane-wide one included, still cancels it. The panel's Stop
+and the raw route's are one sequence (`recovery_execution.operator_stop_run`),
+an operator Stop of the run it names: when that run is the bot's current
+one -- its ACTIVE run, else its latest -- the Stop cancels the end before it
+commits its STOP and then stops the process, so nothing that runs in between
+(the runner's end watch, a Clerk pass) reads the end as still to be carried
+out. It does so whether that run is live, died in a crash the sweep or a
+restart then stopped, or was stopped by the Clerk at its end. A run is stopped
+once, under its first STOP's reason, so a retry of either Stop -- after a lost
+response, or after its process stop failed -- replays that STOP and does the
+cancel and the process stop again. A Stop naming an earlier run (a retry
+landing after a redeploy) changes nothing: its STOP is replayed, and the later
+run's end and process are left as they are -- the runner, too, acts on a Stop
+only for the run its live process runs. The runner stops a process "at its
+end" only when the run's STOP is the Clerk's own at the end (`operator_reason`
 `scheduled_end`, which the raw lifecycle Stop route refuses as reserved); a
 run any other Stop ended is that Stop's. A Stop landing
 after the Clerk's STOP at the end still cancels the end: its STOP is the one
