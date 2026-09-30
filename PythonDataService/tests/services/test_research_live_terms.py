@@ -43,7 +43,11 @@ def _noop(_: str) -> None:
     return None
 
 
-def test_an_engine_run_fills_at_the_decision_minute_open_and_records_it(lake: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("spelling", ["decision_minute_open", " DECISION_MINUTE_OPEN "])
+def test_an_engine_run_fills_at_the_decision_minute_open_and_records_it(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
+) -> None:
+    """Whatever spelling the request used, every record names the canonical mode, so a rerun restores it."""
     persisted: dict[str, Any] = {}
 
     def _capture(**kwargs: Any) -> Any:
@@ -57,7 +61,7 @@ def test_an_engine_run_fills_at_the_decision_minute_open_and_records_it(lake: Pa
         params={"symbol": "SPY", **SMA_PARAMS},
         from_date=START.isoformat(),
         to_date=END.isoformat(),
-        fill_mode="decision_minute_open",
+        fill_mode=spelling,
         auto_fetch=False,
     )
 

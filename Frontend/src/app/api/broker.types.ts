@@ -17004,7 +17004,7 @@ export interface components {
         GridSearchJobRequest: {
             /**
              * Commissionperorder
-             * @description Flat fee per order; 0, the default, charges no fees
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
              * @default 0
              */
             commissionPerOrder?: number;
@@ -17089,7 +17089,7 @@ export interface components {
         GridSearchSpecRequest: {
             /**
              * Commissionperorder
-             * @description Flat fee per order; 0, the default, charges no fees
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
              * @default 0
              */
             commissionPerOrder?: number;
@@ -28252,7 +28252,7 @@ export interface components {
         WalkForwardStudyJobRequest: {
             /**
              * Commissionperorder
-             * @description Flat fee per order; 0, the default, charges no fees
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
              * @default 0
              */
             commissionPerOrder?: number;
@@ -28343,7 +28343,7 @@ export interface components {
         WalkForwardStudySpecRequest: {
             /**
              * Commissionperorder
-             * @description Flat fee per order; 0, the default, charges no fees
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
              * @default 0
              */
             commissionPerOrder?: number;

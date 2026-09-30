@@ -572,6 +572,9 @@ def _execute_engine_backtest_core(
     _resolve_legacy_data_policy(request, validated_params)
 
     fill_mode = _parse_fill_mode(request.fill_mode)
+    # Every record of the run -- response, stored row, rerun -- names the mode
+    # by its canonical value, whatever spelling the parser accepted.
+    request.fill_mode = fill_mode.value
 
     data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
     if not data_roots:
