@@ -600,7 +600,7 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         acknowledged_at_ms=None,
         ack_operator=None,
         evidence_refs=(broker_order_id,),
-        broker_state=order.status.strip().lower() or None,
+        broker_state=order.status.strip().lower(),
         filled_quantity=order.filled_quantity,
     )
 

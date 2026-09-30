@@ -370,9 +370,11 @@ def from_alpaca_order(
     Alpaca omits a multi-leg parent's symbol and side and a leg's type, and
     one bad order must not refuse every other order: that answer holds the
     account stale with no reductions, the exit freeze #2363 exists to end.
-    The Clerk contains a blank order on its own instead -- a foreign one as
-    unfoldable, an answer about its own one as a lost response (#2643).
-    ``extended_hours`` must be a boolean when present.
+    The Clerk contains a blank order on its own instead (#2643): a foreign
+    order missing its id, symbol, side, type, time in force or status is
+    recorded unfoldable, and an answer about its own order missing its id,
+    status, symbol or side is withheld as a lost response. ``extended_hours``
+    must be a boolean when present.
     """
     submitted_at_ms = opt_rfc3339_to_ms(payload.get("submitted_at"))
     filled_at_ms = opt_rfc3339_to_ms(payload.get("filled_at"))

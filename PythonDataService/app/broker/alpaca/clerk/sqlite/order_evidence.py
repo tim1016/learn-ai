@@ -874,8 +874,8 @@ def fold_order_submission_response(
     observation, so withholding it would create a filled order with no
     durable position attribution. That port capability — never the
     aggregate's own spelling — is what routes the fold to the simulated
-    exact path (#2178). A response that names no broker order id or status
-    folds as a lost one (:func:`withhold_unnamed_order`).
+    exact path (#2178). A response missing its broker order id, status,
+    symbol or side folds as a lost one (:func:`withhold_unnamed_order`).
     """
     if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
         return
@@ -937,20 +937,29 @@ def withhold_unnamed_order(
     effect_operation_id: str,
     order: BrokerOrder,
 ) -> bool:
-    """Withhold a broker answer about our own order that names no id or status (#2643).
+    """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
 
     Nothing of it can be folded: the acknowledgement keeps the first broker
     order id it sees, so a blank one would be this order's broker identity
-    for ever, and a blank status is no lifecycle state. It is treated exactly
-    like a lost response -- nothing recorded, the effect folded ``unknown`` --
-    so the sweep's exact lookup by ``client_order_id`` recovers the order
-    once the broker names it. Every entrance of evidence about our own order
-    asks this first; a foreign order is contained by the external-order fold.
-    Returns whether the answer was withheld.
+    for ever; a blank status is no lifecycle state; and both fill folds take
+    the answer's symbol and side, so a blank symbol would credit a fill in
+    no instrument and a blank side is refused by the fills table, raising
+    out of the sweep or the stream. It is treated exactly like a lost
+    response -- nothing recorded, the effect folded ``unknown`` -- so the
+    sweep's exact lookup by ``client_order_id`` recovers the order once the
+    broker names it. The order type and time in force are not withheld: no
+    fold of our own order reads them. Every entrance of evidence about our
+    own order asks this first; a foreign order is contained by the
+    external-order fold. Returns whether the answer was withheld.
     """
     missing = [
         name
-        for name, value in (("broker order id", order.order_id), ("status", order.status))
+        for name, value in (
+            ("broker order id", order.order_id),
+            ("status", order.status),
+            ("symbol", order.symbol),
+            ("side", order.side),
+        )
         if not value.strip()
     ]
     if not missing:
@@ -959,7 +968,7 @@ def withhold_unnamed_order(
     assert order_ref is not None
     why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
     logger.warning(
-        "A broker answer about the Clerk's own order did not name it",
+        "A broker answer about the Clerk's own order was incomplete and was withheld",
         extra={
             "action": "unnamed_order_evidence_withheld",
             "order_ref": order_ref,

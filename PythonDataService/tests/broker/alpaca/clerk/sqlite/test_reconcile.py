@@ -1625,22 +1625,24 @@ class _RawOwnOrderClient:
         return {**self._answer, "client_order_id": client_order_id}
 
 
-@pytest.mark.parametrize("field", ["id", "status"])
-async def test_an_answer_about_our_own_order_without_its_id_or_status_stays_unknown_and_recoverable(
+@pytest.mark.parametrize("field", ["id", "status", "symbol", "side"])
+async def test_an_answer_about_our_own_order_missing_its_identity_text_stays_unknown_and_recoverable(
     repo: ClerkSqliteRepository,
     field: str,
 ) -> None:
     """A null id once made our ENTER's broker order "None" (#2643).
 
-    Read blank, it would be worse: the acknowledgement fold keeps the first
-    broker id it sees, so ``""`` would be our order's id for ever. The answer
-    is withheld like a lost response instead: the ENTER folds ``unknown``,
-    and the sweep's exact lookup by ``client_order_id`` recovers the order
-    once the broker names it.
+    Read blank, it would be worse: the acknowledgement keeps the first broker
+    id it sees, so ``""`` would be the order's id for ever; and the fill takes
+    the answer's symbol and side, so a blank symbol credited the bot a fill in
+    no instrument and a blank side raised out of the sweep. The answer is
+    withheld like a lost response instead: the ENTER folds ``unknown``, and
+    the sweep's exact lookup by ``client_order_id`` recovers the order and its
+    fill once the broker names it.
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
-    answer = dict(load_alpaca_fixture_file("orders", "orders.json")[1])
+    answer = dict(load_alpaca_fixture_file("orders", "orders.json")[0])  # a filled SPY buy of 1
     unnamed = AlpacaBroker(client=_RawOwnOrderClient({**answer, field: None}))  # type: ignore[arg-type]
 
     submission = await submit_enter(
@@ -1666,16 +1668,53 @@ async def test_an_answer_about_our_own_order_without_its_id_or_status_stays_unkn
     await reconcile_account(repo, read=_FakeRead(), trade=unnamed, pricing=UNPRICEABLE_RECOVERY)
     order = repo.order(order_ref)
     assert order is not None and order.broker_order_id is None
+    assert repo.fills_for_order(order_ref) == []
+    assert repo.attributed_positions_by_symbol() == {}
     effect = repo.effect_operation(submission.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
 
-    # ...and recovers the order once the broker names it.
+    # ...and recovers the order and its fill once the broker names it.
     named = AlpacaBroker(client=_RawOwnOrderClient(answer))  # type: ignore[arg-type]
     await reconcile_account(repo, read=_FakeRead(), trade=named, pricing=UNPRICEABLE_RECOVERY)
     order = repo.order(order_ref)
     assert order is not None and order.broker_order_id == answer["id"]
+    assert repo.position(SID, "SPY") == 1.0
     effect = repo.effect_operation(submission.effect_operation_id)
     assert effect is not None and effect.state != "unknown"
+
+
+@pytest.mark.parametrize("path", ["exact-lookup", "orders-snapshot"])
+@pytest.mark.parametrize("field", ["symbol", "side"])
+async def test_a_filled_answer_missing_its_symbol_or_side_is_withheld_never_credited_or_raised(
+    repo: ClerkSqliteRepository,
+    path: str,
+    field: str,
+) -> None:
+    """A blank side once raised ``IntegrityError`` out of the sweep (#2643).
+
+    The fill fold takes the answer's side, and the fills table admits only
+    BUY or SELL; a blank symbol instead credited the bot a fill in "".
+    Either answer about our own order is now withheld like a lost one.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    order_ref = await _make_uncertain_order(repo)
+    filled = {**load_alpaca_fixture_file("orders", "orders.json")[0], "client_order_id": order_ref, field: ""}
+    if path == "exact-lookup":
+        read: Any = _FakeRead()
+        trade: Any = AlpacaBroker(client=_RawOwnOrderClient(filled))  # type: ignore[arg-type]
+    else:
+        read = AlpacaBroker(client=_RawOrdersClient([filled]))  # type: ignore[arg-type]
+        trade = _FakeTrade(lookup_absent=True)
+
+    await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+    assert repo.fills_for_order(order_ref) == []
+    assert repo.attributed_positions_by_symbol() == {}
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id is None
+    effect = repo.effect_operation(order.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
 
 
 async def test_reconcile_fails_closed_when_open_order_snapshot_hits_limit(
