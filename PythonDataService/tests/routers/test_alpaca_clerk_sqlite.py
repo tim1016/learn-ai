@@ -1643,7 +1643,12 @@ async def test_per_bot_actions_refuse_an_unbound_dry_run_and_its_reads_stay_read
         assert refused.json()["detail"] == {
             "reason": "bot_custody_authority_unavailable",
             "message": "This Dry Run never finished launching, so it cannot be acted on.",
-            "next_step": "Restart the Clerk: its restoration ends this Dry Run and releases its budget.",
+            # A fact, not "restart": a restart that already released this Dry
+            # Run leaves it refused, and the prescription would loop.
+            "next_step": (
+                "Its launch stopped before the bot was recorded. Each time the Clerk starts, it ends "
+                "a Dry Run like this one and releases the budget it held."
+            ),
         }
     executed.assert_not_awaited()
     # The read reaches the orphan's own store -- its committed run is there --

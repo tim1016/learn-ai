@@ -69,7 +69,10 @@ async def bot_action_runtime(broker: str, sid: str) -> AsyncIterator[ActiveClerk
     if _unbound_dry_run(registry, broker, sid) is not None:
         raise PanelUnavailableError(
             "This Dry Run never finished launching, so it cannot be acted on.",
-            detail="Restart the Clerk: its restoration ends this Dry Run and releases its budget.",
+            detail=(
+                "Its launch stopped before the bot was recorded. Each time the Clerk starts, it ends "
+                "a Dry Run like this one and releases the budget it held."
+            ),
         )
     yield _account_runtime(broker)
 
