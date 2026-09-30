@@ -742,10 +742,13 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
       the window. It is counted in scheduled NYSE sessions from the canonical
       calendar, walking back from the day before ``from_date`` — weekends and
       holidays hold no bars, so a Monday window reaches back past its weekend.
-      An intraday bar counts ``ceil(session span / bar length)`` bars per
-      session, an early close contributing its shorter span; a bar of a
-      session or longer spans ``ceil(bar_minutes / REGULAR_SESSION_MINUTES)``
-      sessions.
+      An intraday bar counts the bars a session is *guaranteed* to hold after
+      the regular-hours filter — an early close contributing its shorter span
+      — and a bar length that does not evenly divide the session span counts
+      its floor, because a bin straddling the open or close may be dropped by
+      the provider (Polygon serves 6 or 7 hourly bins per regular session;
+      #2611); a bar of a session or longer spans
+      ``ceil(bar_minutes / REGULAR_SESSION_MINUTES)`` sessions.
     * The lead-in never reaches before the provider's history floor
       (:func:`polygon_history_floor` as of today's ET date): history the
       provider does not serve cannot warm anything up, and asking for it
@@ -754,9 +757,10 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
       bars it gets and must say so; this resolver never pretends.
 
     Formula: fetch_from = the latest session s with
-      Σ_{sessions in [s, from_date)} ceil(span / bar) ≥ max_lookback × INDICATOR_WARMUP_MULTIPLIER
-      (intraday), or the (warmup_bars × ceil(bar / 390))-th session back (a
-      session or longer); never before the provider's history floor.
+      Σ_{sessions in [s, from_date)} floor(span / bar) ≥ max_lookback × INDICATOR_WARMUP_MULTIPLIER
+      (intraday — the guaranteed per-session count above), or the
+      (warmup_bars × ceil(bar / 390))-th session back (a session or longer);
+      never before the provider's history floor.
     Reference: repository-internal warm-up policy (``indicator_warmup_policy``;
       owner decision 2026-09-29, "warm up per timeframe"); sessions from the
       canonical NYSE calendar.
@@ -778,7 +782,7 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
         bar_span_ms = bar_minutes * 60_000
         remaining = warmup_bars
         for session in reversed(sessions):
-            remaining -= -(-(session.close_ms_utc - session.open_ms_utc) // bar_span_ms)
+            remaining -= (session.close_ms_utc - session.open_ms_utc) // bar_span_ms
             if remaining <= 0:
                 fetch_from = session.session_date
                 break
@@ -787,18 +791,6 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
         if needed_sessions <= len(sessions):
             fetch_from = sessions[-needed_sessions].session_date
     return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars)
-
-
-def estimate_max_lookback(indicator_entries: list[dict[str, Any]]) -> int:
-    """Scan indicator_entries for the largest lookback parameter."""
-    lookback = 0
-    for entry in indicator_entries:
-        params = entry.get("params", {})
-        for key in ("length", "slow", "k", "bb_length", "kc_length", "lower_length", "upper_length"):
-            val = params.get(key, 0)
-            if isinstance(val, (int, float)):
-                lookback = max(lookback, int(val))
-    return max(lookback, 200)
 
 
 def indicator_table_params_to_entries(

@@ -472,6 +472,55 @@ def test_a_fully_warmed_chart_carries_no_warmup_note(served: None) -> None:
     assert warmup.lead_in_bars >= warmup.required_bars == 1000
 
 
+def test_a_daily_ema20_chart_with_enough_history_carries_no_warmup_note(served: None) -> None:
+    """#2611: sized from the request, a daily EMA-20 chart warms up on 100
+    sessions and the held universe reaches further back, so no note. On master
+    the fixed 200-bar floor demanded 1,000 sessions and every daily chart
+    reported a warm-up shortfall it did not have."""
+    chart = _chart("rth", _EMAS[:1], "1D")
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.cold_bars, warmup.uncomputed) == (100, 0, [])
+    assert warmup.lead_in_bars >= 100
+    assert warmup.note is None
+
+
+def test_a_weekly_ema20_chart_that_really_lacks_history_still_says_so(served: None) -> None:
+    """Right-sizing the lead-in does not mean always satisfying it: EMA-20 on
+    weekly bars warms up on 100 weekly bars — 500 sessions, most of a year —
+    and the held universe holds 23 of them, so every visible value is short
+    and the note says so."""
+    chart = _chart("rth", _EMAS[:1], "1W")
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.lead_in_bars) == (100, 23)
+    assert warmup.cold_bars == len(chart["bars"])
+    assert warmup.note is not None
+    assert "not fully warmed up" in warmup.note
+
+
+def test_a_shorter_lead_in_leaves_finite_window_values_identical(
+    served: None, chart_frames: list[pd.DataFrame]
+) -> None:
+    """#2611: an SMA's value depends only on its own window, so the visible
+    values computed over the requested-sized lead-in (5 × 20 = 100 daily bars)
+    and over the old 200-bar floor's lead-in (1,000 bars — forced here by
+    requesting EMA-200 beside it) are equal at atol=1e-9, rtol=0. Exponentially
+    weighted indicators carry a geometric tail instead: their first visible
+    values can shift by ~1e-6 of price (EMA-20) — the price of right-sizing,
+    stated for the owner in the PR, with both surfaces shifting together."""
+    _chart("rth", [{"name": "sma", "params": {"length": 20}}], "1D")
+    short_lead_in = chart_frames[0]["sma_length20"].to_numpy(dtype="float64")
+
+    _chart("rth", [{"name": "sma", "params": {"length": 20}}, _EMAS[1]], "1D")
+    old_floor_lead_in = chart_frames[1]["sma_length20"].to_numpy(dtype="float64")
+
+    assert short_lead_in.shape == old_floor_lead_in.shape
+    np.testing.assert_allclose(short_lead_in, old_floor_lead_in, atol=1e-9, rtol=0)
+
+
 def test_a_daily_chart_says_which_values_the_held_history_could_not_warm_up(served: None) -> None:
     """Owner decision 2026-09-29: warm up per timeframe, and where the provider
     simply does not hold enough history, say so. EMA-200 on daily bars needs
@@ -511,9 +560,10 @@ def test_a_single_held_bar_before_the_range_is_said_in_the_singular(
     warmup = ChartDataResponse.model_validate(chart).indicator_warmup
     assert warmup is not None
     assert warmup.lead_in_bars == 1
+    assert warmup.required_bars == 100
     assert warmup.note == (
         "Indicator values on all 2 bars are not fully warmed up: the chart warms its indicators up on "
-        "1,000 bars of earlier history, and only 1 bar is available before this range. "
+        "100 bars of earlier history, and only 1 bar is available before this range. "
         "Not shown: EMA (length=20) could not be computed from the 3 bars available."
     )
 
@@ -549,16 +599,43 @@ def test_an_early_close_in_the_lead_in_counts_its_shorter_session() -> None:
 @pytest.mark.parametrize("bar_minutes", [1, 5, 15, 30, 60, 240])
 @pytest.mark.parametrize("from_date", ["2026-01-07", "2026-01-12", "2025-12-01"])
 def test_an_intraday_lead_in_holds_just_enough_bars_of_its_own_length(from_date: str, bar_minutes: int) -> None:
-    """Bars per session divide by the bar length (the old sizing multiplied):
-    the lead-in holds the warm-up, and one session fewer would not."""
+    """Bars per session: a bar length that evenly divides the session span
+    counts its exact bins; anything else counts its floor, because the bin
+    straddling the open or close may be dropped by the regular-hours filter
+    (Polygon serves 6 or 7 hourly bins per regular session; #2611). The
+    lead-in holds the warm-up under that guaranteed count, and one session
+    fewer would not."""
     window = resolve_indicator_window(from_date, max_lookback=200, bar_minutes=bar_minutes)
 
     spans = {
-        session.session_date: -(-(session.close_ms_utc - session.open_ms_utc) // (bar_minutes * _MINUTE_MS))
+        session.session_date: (session.close_ms_utc - session.open_ms_utc) // (bar_minutes * _MINUTE_MS)
         for session in session_windows_ms_utc(date.fromisoformat(window.fetch_from), date.fromisoformat(from_date))
     }
     bars = [spans[day] for day in _lead_in_sessions(from_date, window.fetch_from)]
     assert sum(bars) >= window.warmup_bars > sum(bars[1:])
+
+
+def test_the_lead_in_is_sized_from_the_requested_indicators_not_a_fixed_floor() -> None:
+    """#2611: EMA-20 on daily bars warms up on 100 sessions (5 × 20), not the
+    1,000 a fixed 200-bar lookback floor forced on every daily, weekly and
+    monthly chart."""
+    window = resolve_indicator_window(
+        "2026-01-12", max_lookback=20, bar_minutes=bar_minutes_for("day", 1)
+    )
+
+    assert window.warmup_bars == 100
+    assert len(_lead_in_sessions("2026-01-12", window.fetch_from)) == 100
+
+
+def test_hour_bars_count_the_guaranteed_six_per_regular_session() -> None:
+    """#2611: Polygon serves 6 or 7 hourly bins per regular session after the
+    regular-hours filter, so the lead-in is sized on the guaranteed 6 and can
+    never be one bin short. 20 warm-up bars take Tue 2026-01-06 through Fri
+    2026-01-09 (4 × 6 = 24); one session fewer holds only 18."""
+    window = resolve_indicator_window("2026-01-12", max_lookback=4, bar_minutes=60)
+
+    assert window.warmup_bars == 20
+    assert window.fetch_from == "2026-01-06"
 
 
 def test_daily_bars_warm_up_on_one_session_each() -> None:

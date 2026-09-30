@@ -12,12 +12,12 @@ from app.models.requests import CalculateIndicatorsRequest, IndicatorTableReques
 from app.models.responses import CalculateIndicatorsResponse, IndicatorTableResponse
 from app.services.dataset_service import (
     bar_minutes_for,
-    estimate_max_lookback,
     indicator_table_params_to_entries,
     preprocess_and_calculate,
     rename_to_indicator_table_columns,
     resolve_indicator_window,
 )
+from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
 from app.services.polygon_client import PolygonClientService
 from app.services.ta_service import TechnicalAnalysisService
 
@@ -74,10 +74,14 @@ async def generate_indicator_table(request: IndicatorTableRequest):
             adx_length=request.adx_length,
         )
 
-        # Compute warm-up: account for ADX double smoothing and RSI+MA chain
-        max_lookback = estimate_max_lookback(indicator_entries)
-        max_lookback = max(max_lookback, request.adx_length * 2)
-        max_lookback = max(max_lookback, request.rsi_length + request.rsi_ma_length)
+        # Compute warm-up: the requested recipes' own windows, widened for
+        # the two chains whose convergence outlasts any single parameter —
+        # ADX's double Wilders smoothing and the RSI-then-MA chain.
+        max_lookback = max(
+            requested_indicator_warmup_lookback(indicator_entries),
+            request.adx_length * 2,
+            request.rsi_length + request.rsi_ma_length,
+        )
 
         # The lead-in and the window start come from the one resolver the
         # chart and the dataset export share (#2458).

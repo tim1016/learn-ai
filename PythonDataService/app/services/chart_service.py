@@ -40,12 +40,12 @@ from app.services.dataset_service import (
     IndicatorWindow,
     assert_canonical_bar_stream,
     calculate_indicators_then_trim,
-    estimate_max_lookback,
     fetch_bars_chunked,
     indicator_params_label,
     resolve_indicator_window,
     trim_to_window,
 )
+from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
 from app.services.polygon_client import PolygonClientService
 from app.utils.timestamps import now_ms_utc
 
@@ -1330,7 +1330,7 @@ def get_chart_data(
     # indicator cold.
     window = resolve_indicator_window(
         from_date,
-        max_lookback=estimate_max_lookback(indicators) if indicators else 0,
+        max_lookback=requested_indicator_warmup_lookback(indicators) if indicators else 0,
         bar_minutes=TIMEFRAME_DEFS[timeframe]["minutes"],
     )
     fetch_from = window.fetch_from
