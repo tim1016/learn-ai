@@ -732,6 +732,8 @@ async def test_a_reconnect_that_ended_final_keeps_a_home_line_without_activation
     [line] = attention.items
     assert line.condition_id == "account:authority-failed:CLERK_RECONNECT_FAILED"
     assert line.severity == "blocking"
+    # The lane has no repository, so order records answer 503; Settings loads.
+    assert line.action.destination == "settings"
 
 
 async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(

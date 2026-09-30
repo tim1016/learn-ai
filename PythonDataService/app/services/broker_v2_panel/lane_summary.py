@@ -182,6 +182,15 @@ def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
             kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE,
             action=LaneAttentionAction(label="Open Settings", destination="settings"),
         )
+    if failure.reason_code == RECONNECT_FAILED:
+        # The reconnect broke, so the lane has no repository and order
+        # records answer 503 here too (#2620); Settings loads and names the
+        # same failure.
+        return LaneAttentionItem(
+            condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
+            kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,
+            action=LaneAttentionAction(label="Open Settings", destination="settings"),
+        )
     return LaneAttentionItem(
         condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
         kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,
