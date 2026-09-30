@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+from app.broker.alpaca.clerk.money import recorded_dollars
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.contract.errors import BrokerError
@@ -52,7 +53,7 @@ def read_account_risk_state(
             loss_usd=None if limits is None else limits.loss_usd,
             applied_at_ms=None if policy is None else policy.applied_at_ms,
             entry_state=state, detail=detail, limit_missing=readiness.limit_missing,
-            hold_loss_limit_usd=None if cause is None else cause.loss_limit_usd,
+            hold_loss_limit_usd=None if cause is None else recorded_dollars(cause.loss_limit_usd),
             hold_session_start_ms=None if cause is None else cause.day_start_ms,
             hold_policy_revision=None if cause is None else cause.policy_revision,
         )

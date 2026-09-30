@@ -126,6 +126,30 @@ def dollars(cents: int) -> str:
     return f"{sign}{value // 100}.{value % 100:02d}"
 
 
+def display_dollars(amount: Decimal) -> str:
+    """An exact ``Decimal`` figure as the dollars the owner reads.
+
+    The composition every owner-facing renderer of one already-exact figure
+    uses (#2612); centralizing it keeps a future renderer from rounding a
+    derived float here instead.
+    """
+    return dollars(display_cents(amount))
+
+
+def recorded_dollars(value: object) -> str:
+    """One recorded figure as the dollars the owner reads.
+
+    The recorded float (or string/Decimal) is normalized as recorded, a float
+    by its shortest repr (the bytes a seal carries), then rounded half-even
+    once. The figure may be one the loss rule itself combined in float, such
+    as its limit or its day total: this names the cent of the value that was
+    recorded and judged, which at a half-cent tie can differ from the cent of
+    the exact formula. An already-exact figure goes through
+    :func:`display_dollars` instead (#2612).
+    """
+    return dollars(display_cents(normalize_money(value)))
+
+
 def cash_admits(*, cash: object, claims: object, required: object) -> bool:
     """Compare exact normalized money with no tolerance or display rounding."""
     with money_context():

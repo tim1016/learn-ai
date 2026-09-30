@@ -16,7 +16,7 @@ from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.money import display_dollars
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_bps,
@@ -427,7 +427,7 @@ async def with_finished_results(
     return [
         row if row.group != "finished" else row.model_copy(update={
             "trade_count": results[row.strategy_instance_id].trade_count,
-            "final_result_usd": dollars(display_cents(results[row.strategy_instance_id].result)),
+            "final_result_usd": display_dollars(results[row.strategy_instance_id].result),
         })
         for row in rows
     ]

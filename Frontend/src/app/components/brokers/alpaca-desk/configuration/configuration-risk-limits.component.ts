@@ -20,6 +20,7 @@ import type { components } from '../../../../api/broker.types';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
 import { AlpacaLiveVerdictService } from '../../../../services/alpaca-live-verdict.service';
+import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokerConfigurationService } from './broker-configuration.service';
 import { ConfigurationRefusalComponent } from './configuration-refusal.component';
@@ -58,7 +59,7 @@ let nextFieldId = 0;
 @Component({
   selector: 'app-configuration-risk-limits',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormField, CurrencyPipe, PercentPipe, ConfigurationRefusalComponent, TimestampDisplayComponent],
+  imports: [FormField, CurrencyPipe, PercentPipe, AuthoredUsdPipe, ConfigurationRefusalComponent, TimestampDisplayComponent],
   templateUrl: './configuration-risk-limits.component.html',
   styleUrl: './configuration-risk-limits.component.scss',
 })
