@@ -140,15 +140,17 @@ class FakeCatalog:
                    for row in self.rows.values())
 
     async def init_pool(self) -> None:
-        # Same contract as seeded_lake_catalog's init_pool: the catalog rows
-        # are faked, but the asyncpg pool must stay real when a database is
-        # configured, because app.research.persistence.db shares
-        # catalog_client's pool for its own writes (#2619). _REAL_INIT_POOL is
-        # captured at import time, before any fixture patches the module
-        # attribute - importing it lazily here would re-fetch the patched
-        # fake and recurse.
-        if settings.POSTGRES_URL:
-            await _REAL_INIT_POOL()
+        # Deliberately a no-op even when POSTGRES_URL is configured — unlike
+        # seeded_lake_catalog's init_pool. The data-lake suites that install
+        # this catalog drive the whole materialization pipeline against the
+        # fake rows; a real pool behind it sends their catalog reads to the
+        # database (missing receipts → every artifact reads 'partial': the
+        # branch-dispatched Daily Full Suite caught 18 such failures). Nothing
+        # in those suites writes research rows, so the pool is never needed.
+        # If a test ever combines install_fake_catalog with research
+        # persistence, give it seeded_lake_catalog's conditional passthrough
+        # and re-run the daily data-lake suite (#2619).
+        return None
 
     async def scope_verified_legacy_metadata(
         self, artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
