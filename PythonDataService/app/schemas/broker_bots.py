@@ -314,6 +314,9 @@ class AlpacaPaperDeployStrategy(BaseModel):
     admissible_modes: tuple[Literal["dry_run", "paper", "shadow", "live"], ...]
     override_explanation: str | None = None
     blocked_explanation: str | None = None
+    # The registry entry's owner-facing warning (#2607), which the Deploy form
+    # shows as-is while this strategy is chosen; ``None`` when it has none.
+    experimental_notice: str | None = None
     # This strategy's registered tunables as JSON schema — the same schema
     # Engine Lab and Strategy Lab already render (`GET /api/engine/strategies`).
     # `symbol` is never present: it is deploy-authoritative, carried on the

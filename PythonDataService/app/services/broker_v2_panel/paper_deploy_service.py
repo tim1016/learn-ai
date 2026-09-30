@@ -10,7 +10,12 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
+from app.engine.strategy.registry import (
+    _STRATEGY_REGISTRY,
+    hidden_params_present,
+    public_params_schema,
+    strategy_experimental_notice,
+)
 from app.lean_sidecar.trading_calendar import next_trading_day
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
@@ -439,6 +444,7 @@ def _strategy_views(
             ),
             override_explanation=entry.override_explanation,
             blocked_explanation=entry.blocked_explanation,
+            experimental_notice=strategy_experimental_notice(entry.strategy_key),
             params_schema=_deploy_params_schema(entry.strategy_key),
         )
         for entry in compose_strategy_catalog(

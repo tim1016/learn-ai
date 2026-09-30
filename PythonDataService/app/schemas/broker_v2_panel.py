@@ -612,6 +612,10 @@ class BotPanelView(BaseModel):
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
+    # The strategy's registry warning (#2607) -- "Experimental validation
+    # only -- not a trading strategy" for Deployment Validation -- which the
+    # bot page shows as-is beside the strategy; ``None`` when it has none.
+    experimental_notice: str | None = None
     broker: str
     account_id: str
     symbol: str

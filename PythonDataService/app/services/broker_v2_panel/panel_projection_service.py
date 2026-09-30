@@ -28,6 +28,7 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
+from app.engine.strategy.registry import strategy_experimental_notice
 from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.bot_end import BotEndView
@@ -884,6 +885,7 @@ def build_panel(
             status.strategy_label
             or status.strategy_key.replace("_", " ").replace("-", " ").title()
         ),
+        experimental_notice=strategy_experimental_notice(status.strategy_key),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,

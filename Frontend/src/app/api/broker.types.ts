@@ -2515,6 +2515,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/end-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot End Preview
+         * @description Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).
+         */
+        post: operations["fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions": {
         parameters: {
             query?: never;
@@ -2668,6 +2688,26 @@ export interface paths {
          */
         get: operations["fleet_bot_deploy_prefill_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_prefill_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Fleet Bot End Edit
+         * @description Fleet-routed PUT /accounts/{account_id}/bots/{sid}/end (bot_action).
+         */
+        put: operations["fleet_bot_end_edit_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__end_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -8838,6 +8878,8 @@ export interface components {
              * @enum {string}
              */
             evidence_status: "accepted" | "evidence_only" | "blocked";
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Explanation */
             explanation: string;
             /** Golden Validation Scope */
@@ -10340,6 +10382,8 @@ export interface components {
             /** Execution Policy */
             execution_policy: string;
             exit_terms?: components["schemas"]["ExitTerms"] | null;
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -26106,6 +26150,8 @@ export interface components {
             description: string;
             /** Display Name */
             display_name: string;
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Gotchas */
             gotchas?: string[];
             /** Lean Twin */
@@ -33885,6 +33931,45 @@ export interface operations {
             };
         };
     };
+    fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post: {
         parameters: {
             query?: never;
@@ -34160,6 +34245,46 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_end_edit_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__end_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

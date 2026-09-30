@@ -70,6 +70,21 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     assert "next_bar_open" in combined
 
 
+def test_list_engine_strategies_names_deployment_validation_experimental_only():
+    """Owner decision 7 (#2607): the note comes from DV's registry entry, never its sealed sources."""
+    notices = {s["name"]: s["experimental_notice"] for s in _list_strategies()}
+
+    assert notices["deployment_validation"] == "Experimental validation only — not a trading strategy"
+    assert {name for name, notice in notices.items() if notice is not None} == {"deployment_validation"}
+
+
+def test_every_operational_harness_carries_an_experimental_notice():
+    """A harness is never a trading strategy, so every one says so wherever it is shown."""
+    for name, registration in _STRATEGY_REGISTRY.items():
+        if registration.strategy_category == "operational_validation_harness":
+            assert registration.experimental_notice, name
+
+
 def test_deployment_validation_has_matching_spec_fixture():
     from app.routers.spec_strategy import list_fixtures
 
