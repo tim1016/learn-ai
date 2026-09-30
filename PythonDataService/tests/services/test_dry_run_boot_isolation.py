@@ -295,6 +295,26 @@ def _logged(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogRe
     return [record for record in caplog.records if getattr(record, "action", None) == action]
 
 
+async def test_an_unbound_dry_run_can_only_be_read_or_restored(tmp_path: Path) -> None:
+    """#2661 review (M3): the orphan's read-only status is its type, not a flag
+    chosen by ``isinstance``. It has no binding and no consent, so it offers a
+    read that never recovers and boot's restoration -- nothing that admits,
+    launches, projects a lifecycle or reconciles at run end."""
+    await _crash_before_binding(tmp_path, "orphan-1")
+    registry = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    try:
+        orphan = registry.unbound_dry_run("orphan-1")
+
+        assert orphan is not None
+        assert {name for name in dir(orphan) if not name.startswith("_")} == {
+            "account_id", "strategy_instance_id", "runtime_for_projection", "ensure_recoverable",
+        }
+        assert (orphan.account_id, orphan.strategy_instance_id) == ("sim:orphan-1", "orphan-1")
+        assert registry.unbound_dry_run("never-deployed") is None
+    finally:
+        await registry.stop_all()
+
+
 @pytest.fixture
 async def booting(tmp_path: Path) -> AsyncIterator[BotTaskRegistry]:
     """The restarted process's runner, before its Dry Run restoration starts."""

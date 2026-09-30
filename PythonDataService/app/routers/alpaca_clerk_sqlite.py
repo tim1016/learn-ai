@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from enum import StrEnum
 from typing import TypeVar
 
@@ -87,7 +87,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     safe_flatten_pricing_response,
 )
 from app.schemas.paper_live_experiments import ClerkDecisionEvidencePage
-from app.services.broker_v2_panel.bot_custody import bot_custody_facade
+from app.services.broker_v2_panel.bot_custody import bot_action_facade, bot_custody_facade
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
@@ -168,10 +168,34 @@ async def _bot_facade(
     H33). Only entering the selection can be refused as the bot's authority
     being unavailable; a fault inside the request stays its own.
     """
+    async with _selected_bot_facade(account_id, bot_custody_facade("alpaca", strategy_instance_id)) as facade:
+        yield facade
+
+
+@asynccontextmanager
+async def _bot_action_facade(
+    account_id: str,
+    strategy_instance_id: str,
+) -> AsyncIterator[SqliteAlpacaClerkFacade]:
+    """``_bot_facade`` for a per-bot route that acts on custody.
+
+    The same selection, except a Dry Run whose Deploy crashed before its
+    binding was recorded: it is only ever read until a restart releases it,
+    so an action on it is refused as its authority being unavailable (#2559).
+    """
+    async with _selected_bot_facade(account_id, bot_action_facade("alpaca", strategy_instance_id)) as facade:
+        yield facade
+
+
+@asynccontextmanager
+async def _selected_bot_facade(
+    account_id: str,
+    selection: AbstractAsyncContextManager[SqliteAlpacaClerkFacade | None],
+) -> AsyncIterator[SqliteAlpacaClerkFacade]:
     account = _active_sqlite_facade(account_id)
     async with AsyncExitStack() as stack:
         try:
-            facade = await stack.enter_async_context(bot_custody_facade("alpaca", strategy_instance_id))
+            facade = await stack.enter_async_context(selection)
         except PanelUnavailableError as exc:
             raise HTTPException(
                 status_code=503,
@@ -717,7 +741,7 @@ async def confirm_bot_historical_execution_recovery(
     body: HistoricalExecutionRecoveryConfirmRequest,
 ) -> HistoricalExecutionRecoveryReceiptResponse:
     """Append only the signed plan's exact evidence and its existing proof result."""
-    async with _bot_facade(account_id, strategy_instance_id) as facade:
+    async with _bot_action_facade(account_id, strategy_instance_id) as facade:
         return await _confirm_historical_execution_recovery(facade, strategy_instance_id=strategy_instance_id, body=body)
 
 
@@ -846,7 +870,7 @@ async def execute_bot_recovery_action(
     strategy_instance_id: str,
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
-    async with _bot_facade(account_id, strategy_instance_id) as facade:
+    async with _bot_action_facade(account_id, strategy_instance_id) as facade:
         return await _execute_presented_recovery_action(
             facade,
             strategy_instance_id=strategy_instance_id,

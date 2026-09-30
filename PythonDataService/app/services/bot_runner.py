@@ -33,6 +33,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -87,8 +88,9 @@ from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import (
     BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+    BindingAuthority,
     BindingAuthoritySelector,
-    SyntheticBindingAuthority,
+    UnboundDryRunAuthority,
 )
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -254,6 +256,23 @@ class LaneStopOutcome:
     intent_stopped: tuple[LaneIntentStoppedBot, ...]
     refused: tuple[LaneStopRefusal, ...]
     still_running: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _DryRunRestoration:
+    """One Dry Run boot restores: its own account, then the repair its runs get (#2582)."""
+
+    strategy_instance_id: str
+    authority: BindingAuthority | UnboundDryRunAuthority
+    #: Runs once the account is open. A bound Dry Run's runs get the sweep's
+    #: own repair, its binding's run the fallback candidate; an unbound
+    #: orphan's get none, because its opening's full recovery already retired
+    #: the run and failed its command (#2559).
+    repair: Callable[[], Awaitable[tuple[str, ...]]]
+
+
+async def _nothing_to_repair() -> tuple[str, ...]:
+    return ()
 
 
 def _release_run_owner(run_owner: asyncio.Future[None]) -> None:
@@ -1706,26 +1725,16 @@ class BotTaskRegistry:
                 )
             yield runtime
 
-    @asynccontextmanager
-    async def unbound_synthetic_runtime_for_projection(
-        self,
-        strategy_instance_id: str,
-    ) -> AsyncIterator[ActiveClerkRuntime | None]:
-        """Project the Dry Run authority a Deploy committed before recording its binding.
+    def unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority | None:
+        """The Dry Run authority a Deploy committed before recording its binding, if any.
 
         Deploy commits the private ``sim:`` authority's budget and run before
         the launch writes the binding, so a crash in between leaves only that
-        authority's own activation to find it by. The read opens its sealed
-        store projection-only -- never activating, admitting or launching --
-        and yields ``None`` when no private authority was ever activated for
-        this identity.
+        authority's own activation to find it by. ``None`` when no private
+        authority was ever activated for this identity. The authority it
+        answers can only be read, never admitted or launched (#2559).
         """
-        authority = self._authorities.for_unbound_dry_run(strategy_instance_id)
-        if authority is None:
-            yield None
-            return
-        async with authority.runtime_for_projection() as runtime:
-            yield runtime
+        return self._authorities.for_unbound_dry_run(strategy_instance_id)
 
     def start_dry_run_restoration(self) -> asyncio.Task[None]:
         """Restore every Dry Run's own simulated account after boot, off the serving path (#2582).
@@ -1743,24 +1752,25 @@ class BotTaskRegistry:
         them through the recovery path instead of the next read doing it.
         """
         dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
-        restorations: list[tuple[str, SyntheticBindingAuthority, BrokerBotBinding | None]] = [
-            (binding.strategy_instance_id, self._authority_for(binding), binding) for binding in dry_runs
-        ]
-        restorations.extend(
-            (sid, authority, None)
-            for sid, authority in self._unbound_dry_run_authorities(
-                bound={binding.strategy_instance_id for binding in dry_runs}
+        restorations = [
+            _DryRunRestoration(
+                binding.strategy_instance_id, self._authority_for(binding), partial(self._repair_restored_dry_run, binding),
             )
+            for binding in dry_runs
+        ]
+        restorations += [
+            _DryRunRestoration(orphan.strategy_instance_id, orphan, _nothing_to_repair)
+            for orphan in self._unbound_dry_run_authorities(bound={binding.strategy_instance_id for binding in dry_runs})
+        ]
+        self._dry_run_restorations = dict.fromkeys(
+            (restoration.strategy_instance_id for restoration in restorations), "restoring"
         )
-        self._dry_run_restorations = dict.fromkeys((sid for sid, _authority, _binding in restorations), "restoring")
         self._dry_run_restoration_task = asyncio.create_task(
             self._restore_dry_runs(restorations), name="dry-run-boot-restoration"
         )
         return self._dry_run_restoration_task
 
-    def _unbound_dry_run_authorities(
-        self, *, bound: set[str]
-    ) -> list[tuple[str, SyntheticBindingAuthority]]:
+    def _unbound_dry_run_authorities(self, *, bound: set[str]) -> list[UnboundDryRunAuthority]:
         """Private ``sim:`` authorities a crash left with no binding (#2559).
 
         Found by their own activations, skipped when a binding indexes them:
@@ -1773,7 +1783,7 @@ class BotTaskRegistry:
         listing; the ledger's own consistency is proven where the orphan is
         opened, inside the restoration's per-bot boundary.
         """
-        authorities: list[tuple[str, SyntheticBindingAuthority]] = []
+        orphans: list[UnboundDryRunAuthority] = []
         try:
             account_ids = SyntheticActivationStore(self._artifacts_root).account_ids()
         except Exception as exc:
@@ -1782,7 +1792,7 @@ class BotTaskRegistry:
                 extra={"action": "boot_dry_run_activations_unreadable", "error": str(exc)},
                 exc_info=True,
             )
-            return authorities
+            return orphans
         for account_id in account_ids:
             # The store admits only ``sim:`` accounts.
             sid = account_id.removeprefix(SIM_ACCOUNT_PREFIX)
@@ -1791,7 +1801,7 @@ class BotTaskRegistry:
             try:
                 if self._read_binding(sid) is not None:
                     continue
-                authorities.append((sid, self._authorities.unbound_dry_run(sid)))
+                orphans.append(self._authorities.unbound_dry_run(sid))
             except Exception as exc:
                 logger.error(
                     "A Dry Run activation could not be matched to a binding at boot; it is skipped",
@@ -1802,11 +1812,13 @@ class BotTaskRegistry:
                     },
                     exc_info=True,
                 )
-        return authorities
+        return orphans
 
-    async def _restore_dry_runs(
-        self, restorations: list[tuple[str, SyntheticBindingAuthority, BrokerBotBinding | None]]
-    ) -> None:
+    async def _repair_restored_dry_run(self, binding: BrokerBotBinding) -> tuple[str, ...]:
+        """The sweep's own repair for a restored Dry Run's runs; its binding's run is the fallback candidate."""
+        return await self._boot_recovery.repair_restored_dry_run(self._binding_recovery_candidates(binding).values())
+
+    async def _restore_dry_runs(self, restorations: list[_DryRunRestoration]) -> None:
         """Restore each Dry Run under one lease deadline; one bot's failure is only its own.
 
         The dead process's leases all lapse within one lease lifetime of its
@@ -1814,24 +1826,14 @@ class BotTaskRegistry:
         it passes is another live process's. Whatever stops one Dry Run --
         this is the isolation boundary, so it is every exception -- is logged
         with its cause and refuses that bot's Start alone.
-
-        An unbound orphan needs no candidate repair: its full recovery inside
-        ``ensure_recoverable`` is what retires the run and fails the command
-        (#2559); the sweep's own repair is the bound path's, whose fallback
-        candidate comes from the binding.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
-        for sid, authority, binding in restorations:
+        for restoration in restorations:
+            sid, authority = restoration.strategy_instance_id, restoration.authority
             try:
                 await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
-                interrupted = (
-                    await self._boot_recovery.repair_restored_dry_run(
-                        self._binding_recovery_candidates(binding).values()
-                    )
-                    if binding is not None
-                    else ()
-                )
+                interrupted = await restoration.repair()
             except Exception as exc:
                 self._dry_run_restorations[sid] = (
                     "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"
