@@ -520,6 +520,9 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
         def status(self, _broker: str, sid: str) -> SimpleNamespace:
             return SimpleNamespace(phase="RETIRED" if sid == cleared.strategy_instance_id else "OFF_DUTY")
 
+        def dry_run_restoration_state(self, _sid: str) -> None:
+            return None
+
         @asynccontextmanager
         async def synthetic_runtime_for_projection(self, received_binding: SimpleNamespace):
             assert received_binding is binding, "a cleared Dry Run's simulator was opened by the poll"
@@ -546,6 +549,83 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
     # A misspelt fact is refused, never silently dropped.
     with pytest.raises(TypeError, match="simulated_cash"):
         result[0].with_facts(simulated_cash=None)
+
+
+@pytest.mark.asyncio
+async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restored(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One Dry Run boot is still restoring is its own wait, never the roster's 503 (#2668, #2582).
+
+    Its own read refuses at once rather than waiting out its restoration's
+    lease; Home's catalog passes over it, says so in the log, and lists the
+    account's other Dry Runs.
+    """
+
+    class _SyntheticFacade:
+        account_id = "sim:dry-spy"
+        repository = SimpleNamespace(deployment_budget=lambda sid: {"committed_cents": 200_000})
+
+    sealed_row = BotCatalogView(
+        strategy_instance_id="dry-spy",
+        strategy_key="deployment_validation",
+        strategy_label="Deployment Validation",
+        broker="alpaca",
+        account_id="sim:dry-spy",
+        symbol="SPY",
+        mode="trade",
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        running=True,
+        status_label="Working",
+        status_explanation="The Dry Run's sealed simulator.",
+        exposure={},
+        fills_today=0,
+        realized_pnl_today=0.0,
+        open_pnl=0.0,
+        day_pnl=0.0,
+        last_activity_at_ms=None,
+        needs_attention=False,
+        group="dry_run",
+        world_label="DRY RUN · simulated cash",
+    )
+    restoring = SimpleNamespace(strategy_instance_id="dry-restoring", mode="dry_run")
+    restored = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
+    facade = _SyntheticFacade()
+
+    class _Registry:
+        def bindings_for_broker(self, _broker: str) -> list[SimpleNamespace]:
+            return [restoring, restored]
+
+        def status(self, _broker: str, _sid: str) -> SimpleNamespace:
+            return SimpleNamespace(phase="OFF_DUTY")
+
+        def dry_run_restoration_state(self, sid: str) -> str | None:
+            return "restoring" if sid == restoring.strategy_instance_id else None
+
+        @asynccontextmanager
+        async def synthetic_runtime_for_projection(self, received_binding: SimpleNamespace):
+            assert received_binding is restored, "the poll opened a Dry Run still being restored"
+            yield SimpleNamespace(clerk=facade, authority_kind="synthetic")
+
+    async def real_catalog(_broker: str, _account_id: str) -> list[object]:
+        return []
+
+    async def synthetic_catalog(_broker: str, _facade: _SyntheticFacade) -> list[BotCatalogView]:
+        return [sealed_row]
+
+    monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(bot_custody, "SqliteAlpacaClerkFacade", _SyntheticFacade)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", real_catalog)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog_from_facade", synthetic_catalog)
+
+    with caplog.at_level(logging.INFO, logger=panel_data_source.__name__):
+        result = await panel_data_source.get_catalog("alpaca", "paper-account")
+
+    assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
+    (skipped,) = [record for record in caplog.records if getattr(record, "action", None) == "catalog_dry_run_restoring_skipped"]
+    assert skipped.strategy_instance_id == "dry-restoring"
 
 
 @pytest.mark.asyncio

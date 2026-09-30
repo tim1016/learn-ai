@@ -118,7 +118,16 @@ async def close_failed_startup() -> None:
         get_trade_updates_consumer,
         set_trade_updates_consumer,
     )
+    from app.services.bot_runner import get_bot_task_registry
 
+    # Boot's Dry Run restoration starts before later startup steps (#2582),
+    # and a restoration still inside its lease wait registers its runtime only
+    # after the synthetic close below -- leaving its account's lease held in a
+    # process that never serves. Cancelled first, an interrupted opening
+    # releases the lease itself (#2668).
+    registry = get_bot_task_registry()
+    if registry is not None:
+        await registry.stop_dry_run_restoration()
     updates = get_trade_updates_consumer()
     if updates is not None:
         await updates.stop()

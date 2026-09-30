@@ -279,7 +279,10 @@ class _DryRunRestoration:
     """One Dry Run boot restores: its own account, then the repair its runs get (#2582)."""
 
     strategy_instance_id: str
-    authority: BindingAuthority | UnboundDryRunAuthority
+    #: Built inside the bot's own restoration boundary (#2668): constructing
+    #: an authority can fail for one bot, and that must refuse that bot's
+    #: Start alone -- never abort the restoration of every later Dry Run.
+    authority_for: Callable[[], BindingAuthority | UnboundDryRunAuthority]
     #: Runs once the account is open. A bound Dry Run's runs get the sweep's
     #: own repair, its binding's run the fallback candidate; an unbound
     #: orphan's get none, because its opening's full recovery already retired
@@ -681,6 +684,10 @@ class BotTaskRegistry:
             budget_consent=budget_consent,
             end=end,
         )
+        # #2668: answered before the bot's operation lock, which a boot
+        # restoration of this Dry Run may hold while it waits out a lease --
+        # Start never waits on that restoration, it refuses it at once.
+        self._refuse_unrestored_dry_run_at_once(strategy_instance_id)
         # Graduation re-observes the complete stopped roster and appends the
         # boot-selection fence. No deploy may cross that exact interval.
         async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
@@ -736,6 +743,10 @@ class BotTaskRegistry:
             strategy_param_origins=strategy_param_origins,
             budget_consent=budget_consent,
         )
+        # #2668: answered before the bot's operation lock, which a boot
+        # restoration of this Dry Run may hold while it waits out a lease --
+        # Start never waits on that restoration, it refuses it at once.
+        self._refuse_unrestored_dry_run_at_once(strategy_instance_id)
         async with self._operation_lock(strategy_instance_id):
             try:
                 return await self._start_admission.preview(request)
@@ -1376,14 +1387,21 @@ class BotTaskRegistry:
             )
         return intent_stopped
 
-    async def stop_all(self) -> None:
-        """Service shutdown: stop every task without overwriting operator intent."""
+    async def stop_dry_run_restoration(self) -> None:
+        """Cancel and await boot's Dry Run restoration, on every path out of the process (#2668).
+
+        An opening a cancellation interrupts releases its account's lease
+        (#2582). Stopping is safe when no restoration ever started.
+        """
         restoring = self._dry_run_restoration_task
         if restoring is not None and not restoring.done():
-            # An opening it interrupts releases its account's lease (#2582).
             restoring.cancel()
             with suppress(asyncio.CancelledError):
                 await restoring
+
+    async def stop_all(self) -> None:
+        """Service shutdown: stop every task without overwriting operator intent."""
+        await self.stop_dry_run_restoration()
         # No new end is asked for; a stop already asked for finishes first,
         # so its outcome is the end's, not the shutdown's (#2607).
         watch = self._end_watch_task
@@ -2247,6 +2265,21 @@ class BotTaskRegistry:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
 
+    def _refuse_unrestored_dry_run_at_once(self, strategy_instance_id: str) -> None:
+        """Refuse Start for an unrestored Dry Run before the bot's operation lock (#2668).
+
+        The restoration now holds that lock while it waits out a lease, and a
+        Start that waited for it would wait out the lease too -- #2582's
+        contract is the opposite: the refusal is immediate, translated the
+        same way the admission flow translates it. It is the one place Start
+        refuses one: both Start entries answer it before the lock, and a
+        restoration that has left ``restoring`` never returns to it.
+        """
+        try:
+            refuse_unrestored_dry_run(self.dry_run_restoration_state(strategy_instance_id))
+        except StartAdmissionUnavailable as exc:
+            raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+
     def _authority_for(self, binding: BrokerBotBinding):
         """Return the one typed custody/evidence authority for a binding."""
         return self._authorities.for_binding(binding)
@@ -2255,9 +2288,6 @@ class BotTaskRegistry:
         self,
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
-        # Before the Dry Run's own account is opened for Start: a Start never
-        # meets an account boot is still restoring or could not restore.
-        refuse_unrestored_dry_run(self._dry_run_restorations.get(binding.strategy_instance_id))
         return self._authority_for(binding).start_custody_guard()
 
     def _start_custody_projection(
@@ -2305,6 +2335,16 @@ class BotTaskRegistry:
         """
         return self._authorities.for_unbound_dry_run(strategy_instance_id)
 
+    def dry_run_restoration_state(self, strategy_instance_id: str) -> DryRunRestorationState | None:
+        """Where boot's restoration of this Dry Run stands; ``None`` once restored (#2582).
+
+        The one read the panel uses to answer at once for a bot still being
+        restored (#2668) -- its account's runtime lock is held by the
+        restoration's lease wait -- and Start uses to refuse until the bot's
+        own restoration settles.
+        """
+        return self._dry_run_restorations.get(strategy_instance_id)
+
     def start_dry_run_restoration(self) -> asyncio.Task[None]:
         """Restore every Dry Run's own simulated account after boot, off the serving path (#2582).
 
@@ -2323,12 +2363,18 @@ class BotTaskRegistry:
         dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
         restorations = [
             _DryRunRestoration(
-                binding.strategy_instance_id, self._authority_for(binding), partial(self._repair_restored_dry_run, binding),
+                binding.strategy_instance_id,
+                partial(self._authority_for, binding),
+                partial(self._repair_restored_dry_run, binding),
             )
             for binding in dry_runs
         ]
         restorations += [
-            _DryRunRestoration(orphan.strategy_instance_id, orphan, _nothing_to_repair)
+            _DryRunRestoration(
+                orphan.strategy_instance_id,
+                (lambda authority=orphan: authority),
+                _nothing_to_repair,
+            )
             for orphan in self._unbound_dry_run_authorities(bound={binding.strategy_instance_id for binding in dry_runs})
         ]
         self._dry_run_restorations = dict.fromkeys(
@@ -2393,16 +2439,24 @@ class BotTaskRegistry:
         The dead process's leases all lapse within one lease lifetime of its
         death, so one deadline covers every Dry Run: a lease still held when
         it passes is another live process's. Whatever stops one Dry Run --
-        this is the isolation boundary, so it is every exception -- is logged
-        with its cause and refuses that bot's Start alone.
+        this is the isolation boundary, so it is every exception, including
+        building its authority -- is logged with its cause and refuses that
+        bot's Start alone.
+
+        Each restoration runs under its bot's own operation lock (#2668), so
+        an Archive or Stop of that bot waits for the restoration to settle
+        instead of interleaving with it over one account. The lock is
+        per-bot: the lane's other bots and the serving path never wait on it.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
         for restoration in restorations:
-            sid, authority = restoration.strategy_instance_id, restoration.authority
+            sid = restoration.strategy_instance_id
             try:
-                await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
-                interrupted = await restoration.repair()
+                async with self._operation_lock(sid):
+                    authority = restoration.authority_for()
+                    await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
+                    interrupted = await restoration.repair()
             except Exception as exc:
                 self._dry_run_restorations[sid] = (
                     "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"
@@ -2415,7 +2469,7 @@ class BotTaskRegistry:
                     extra={
                         "action": "boot_dry_run_restoration_failed",
                         "strategy_instance_id": sid,
-                        "account_id": authority.account_id,
+                        "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
                         "error": str(exc),
                         "error_detail": detail,
                         "restoration": self._dry_run_restorations[sid],
@@ -2429,7 +2483,7 @@ class BotTaskRegistry:
                 extra={
                     "action": "boot_dry_run_restored",
                     "strategy_instance_id": sid,
-                    "account_id": authority.account_id,
+                    "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
                     "interrupted": list(interrupted),
                 },
             )

@@ -32,7 +32,23 @@ from app.services.bot_binding_authority import UnboundDryRunAuthority
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner_errors import InvalidStrategyInstanceIdError, UnknownBotError
-from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
+from app.services.broker_v2_panel.panel_errors import DryRunRestoringError, PanelUnavailableError
+
+
+def _refuse_while_restoring(registry: BotTaskRegistry, sid: str) -> None:
+    """Answer at once for a Dry Run whose boot restoration has not settled (#2668).
+
+    The restoration holds the account's runtime lock while it waits out a
+    lease another process holds, and this module's reads take the same lock:
+    without this check a restoring bot's panel blocks for the whole lease
+    deadline. The refusal is its own type, so a roster of many bots can pass
+    over the one still being restored.
+    """
+    if registry.dry_run_restoration_state(sid) == "restoring":
+        raise DryRunRestoringError(
+            "This Dry Run is still being restored after the Clerk restarted.",
+            detail="Wait up to a minute, then open it again.",
+        )
 
 
 @asynccontextmanager
@@ -46,6 +62,7 @@ async def bot_clerk_runtime(broker: str, sid: str) -> AsyncIterator[ActiveClerkR
         return
     orphan = _unbound_dry_run(registry, broker, sid)
     if orphan is not None:
+        _refuse_while_restoring(registry, sid)
         async with orphan.runtime_for_projection() as runtime:
             yield _own_simulator(runtime)
         return
@@ -87,6 +104,7 @@ async def binding_clerk_runtime(registry: object, binding: object) -> AsyncItera
     if getattr(binding, "mode", None) != "dry_run":
         yield _account_runtime(str(getattr(binding, "broker", "alpaca")))
         return
+    _refuse_while_restoring(registry, binding.strategy_instance_id)
     projection_runtime = getattr(registry, "synthetic_runtime_for_projection", None)
     if not callable(projection_runtime):
         raise PanelUnavailableError(

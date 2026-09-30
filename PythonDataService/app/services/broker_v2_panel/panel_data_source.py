@@ -89,6 +89,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
+    DryRunRestoringError,
     PanelUnavailableError,
     UnknownBotError,
 )
@@ -341,6 +342,17 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
                 assert facade is not None
                 rows = await read_sqlite_catalog_from_facade(broker, facade)
                 budget = facade.repository.deployment_budget(binding.strategy_instance_id)
+        except DryRunRestoringError:
+            # A Dry Run boot is still restoring is that bot's wait alone
+            # (#2582): the lane's other bots list, and it lists once restored.
+            logger.info(
+                "A Dry Run still being restored is left off this roster read",
+                extra={
+                    "action": "catalog_dry_run_restoring_skipped",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                },
+            )
+            continue
         except SqliteCatalogProjectionUnavailable as exc:
             raise PanelUnavailableError(
                 "The sealed Dry Run roster could not be projected.",

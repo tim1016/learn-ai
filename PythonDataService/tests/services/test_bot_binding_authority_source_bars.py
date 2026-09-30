@@ -215,6 +215,7 @@ async def test_private_budget_seed_refreshes_preview_then_survives_runtime_relea
         monkeypatch.setattr(budget_deploy, "_primary", lambda account: object())
         monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: SimpleNamespace(
             binding_for_control=lambda broker, identity: authority.binding,
+            dry_run_restoration_state=lambda _sid: None,
             synthetic_runtime_for_projection=lambda _: authority.runtime_for_projection(),
         ))
         receipt = await budget_deploy.command_receipt("PARENT", DeploySubmission(

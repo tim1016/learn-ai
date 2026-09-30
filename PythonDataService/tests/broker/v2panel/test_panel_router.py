@@ -197,6 +197,10 @@ class _FakeRegistry:
         self.status(broker, sid)
         return []
 
+    def dry_run_restoration_state(self, sid: str) -> None:
+        """No boot restoration is in flight in this harness (#2582)."""
+        return None
+
     def bot_end(self, broker: str, sid: str) -> BotEndView:
         """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
         self.status(broker, sid)
