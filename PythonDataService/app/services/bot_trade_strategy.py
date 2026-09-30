@@ -57,6 +57,7 @@ from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
     admit_on_delivery,
     continuity_policy_for,
+    decision_valid_until_ms,
     late_decision,
 )
 from app.services.market_liveness import (
@@ -1015,6 +1016,7 @@ async def run_trade_bot(
                 evaluation,
                 intent,
                 source_bars=source_bars,
+                continuity=continuity,
                 decision_lateness_ms=lateness.exempt_lateness_ms,
             )
             receipt = await clerk.execute_for_instance(
@@ -1038,6 +1040,10 @@ async def run_trade_bot(
                 # refusing it leaves nothing to unwind. (#1671 AC6 / #1708 review
                 # finding 1 described compensating rollbacks; the staged protocol
                 # in #1730 removed the emission-time mutation they compensated.)
+                # A REJECTED receipt is final: an ENTER refused only because
+                # executions postdate the account's last reading is kept by the
+                # Clerk until a newer reading lands or its evidence's
+                # ``decision_valid_until_ms`` passes (#2623).
                 _discard_evaluation(evaluation)
             else:
                 _settle_evaluation(evaluation, Settlement.COMMIT)
@@ -1260,6 +1266,7 @@ def _decision_bar_evidence(
     intent: SignalIntent,
     *,
     source_bars: SourceBarLedger | None,
+    continuity: ContinuityPolicy | None,
     decision_lateness_ms: int | None = None,
 ) -> tuple[RetainedSourceBar | None, EffectDecisionEvidence]:
     """The exact retained decision bar and the evidence that names it.
@@ -1271,6 +1278,10 @@ def _decision_bar_evidence(
     including the RTH-inside-extended ones that only ever wanted a market
     leg. It was written out once per runner before, and only the Dry Run
     copy resolved the bar.
+
+    An ENTER carries the instant it stops being on time (#2623): the Clerk
+    keeps an ENTER refused only for executions newer than the account's last
+    reading until then, rather than this runner discarding it.
 
     The ledger identity is authored from each observation's feed provenance.
     A wrapper's stream capability name may differ (for example a test or
@@ -1296,6 +1307,11 @@ def _decision_bar_evidence(
         trace_digest=_evaluation_trace_digest(evaluation),
         decision_bar_close_ms=evaluation.decision_bar_close_ms,
         decision_lateness_ms=decision_lateness_ms,
+        decision_valid_until_ms=(
+            decision_valid_until_ms(continuity, evaluation.decision_bar_close_ms)
+            if intent.kind is SignalIntentKind.ENTER
+            else None
+        ),
     )
     return retained, evidence
 
@@ -1399,6 +1415,7 @@ async def run_dry_run_bot(
                 evaluation,
                 intent,
                 source_bars=source_bars,
+                continuity=continuity,
                 decision_lateness_ms=lateness.exempt_lateness_ms,
             )
             receipt = await clerk.execute_for_instance(
@@ -1414,6 +1431,10 @@ async def run_dry_run_bot(
                 decision_evidence=decision_evidence,
             )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+                # A REJECTED receipt is final: an ENTER refused only because
+                # executions postdate the account's last reading is kept by the
+                # Clerk until a newer reading lands or its evidence's
+                # ``decision_valid_until_ms`` passes (#2623).
                 _discard_evaluation(evaluation)
                 continue
             _settle_evaluation(evaluation, Settlement.COMMIT)

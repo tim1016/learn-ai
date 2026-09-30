@@ -348,6 +348,54 @@ All four ENTER-time codes are transient at the runner: none disarms an
 instance or stops a bot, and the same decision can be re-admitted once the
 sync republishes a judgeable observation.
 
+**An ENTER behind the account reading waits for a new one (#2623, owner
+decision 2026-09-29).** One `LIVE_ENVELOPE_UNOBSERVED` refusal is not
+dropped: executions were recorded after the last reading
+(`sqlite/risk_admission.py` raises `AccountReadingBehindExecutions`, judged by
+the one watermark rule `sqlite/day_pnl.py::reading_covers_executions`).
+
+- **The reading behind executions stays published.** Neither this refusal nor
+  a cadence reading an execution overtakes withdraws it (the tick answers
+  `superseded`, logged at INFO). So every other ENTER that decides meanwhile —
+  a third bot on the same bar, one deciding during a pause — meets the same
+  refusal and waits too, instead of finding no reading and being dropped as
+  unobserved. Leaving it cannot admit anything: every commitment, a budget
+  deploy included, re-runs the watermark rule, and that reading fails it until
+  a newer one replaces it.
+- **One reading, shared, paced.** The facade
+  (`sqlite/runtime.py::SqliteAlpacaClerkFacade._execute_effect`) leaves its
+  intake fence and asks `LiveEnvelopeSync.read_for_entry` for a reading now.
+  Every waiting ENTER shares the reading in flight; a new one starts no sooner
+  than `entry_reading_interval_s` (1 s) after the last began, and not at all
+  once the ENTER's run has stopped. The reading runs through the cadence's own
+  judgement, so it is published and logged exactly as a tick is; a fault no
+  verdict maps is logged (`live_envelope_entry_reading_failed`) and ends the
+  wait as unread rather than crashing each waiting bot.
+- **Then the whole decision is judged again**, so every other refusal —
+  cash, the market-closed gate — applies afresh and drops the ENTER under its
+  own code.
+- **How the wait ends without the entry.** Each ending is one `blocked`
+  receipt under `LIVE_ENVELOPE_UNOBSERVED` whose words name it: the bot was
+  stopped (checked under the intake fence Stop commits under, and first); the
+  account could not be read; no covering reading landed while the decision was
+  on time — its bar's close plus the 20 s delivery allowance, carried as
+  `EffectDecisionEvidence.decision_valid_until_ms`, which also covers a reading
+  an execution overtook with no time left for another, and a broker still
+  answering at the limit (the wait is cut off there, so a slow Alpaca cannot
+  hold a bot past its next bar); or the Clerk was shutting down (its sync
+  stopped, and cancelled the reading in flight). The time limit is judged in
+  `read_for_entry` alone.
+- **Idempotent.** Nothing is durable before acceptance, so the decision is
+  accepted at most once however many attempts it takes.
+- **Stop.** Stop closes the bot's decision gate, then commits through the
+  Clerk's intake fence. A retry that takes the fence in between is still
+  admitted — the same race any ENTER in flight at Stop has always had. What the
+  wait changes is which ENTERs can be in that window (one waiting up to its
+  time limit, not only one already queued), not the window itself.
+
+The daily loss limit still works from Alpaca's readings alone; no Clerk-side
+loss figure was added.
+
 ## Loss hold
 
 `LiveEnvelopeSync.tick`
