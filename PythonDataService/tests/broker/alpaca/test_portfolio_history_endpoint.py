@@ -123,6 +123,15 @@ async def test_get_portfolio_history_maps_range_and_normalizes_timestamps(
             },
             id="misaligned-series",
         ),
+        # A null timeframe once became timeframe "None" (#2643).
+        pytest.param(
+            {"timestamp": [1_700_000_000], "equity": [1.0], "profit_loss": [0.0], "timeframe": None},
+            id="null-timeframe",
+        ),
+        pytest.param(
+            {"timestamp": [1_700_000_000], "equity": [1.0], "profit_loss": [0.0], "timeframe": " "},
+            id="blank-timeframe",
+        ),
     ],
 )
 @responses.activate

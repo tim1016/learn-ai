@@ -223,7 +223,7 @@ def from_alpaca_account(
         broker=BROKER_ID,
         account_id=account_number,
         account_mode=account_mode,
-        account_status=str(payload["status"]),
+        account_status=to_str(payload["status"], field="status"),
         currency=str(payload.get("currency") or "USD"),
         cash=to_float(payload["cash"]),
         equity=to_float(payload["equity"]),
@@ -255,7 +255,7 @@ def from_alpaca_portfolio_history(
         equity=[to_float(value) for value in payload["equity"]],
         profit_loss=[to_float(value) for value in payload["profit_loss"]],
         base_value=opt_float(payload.get("base_value")),
-        timeframe=str(payload["timeframe"]),
+        timeframe=to_str(payload["timeframe"], field="timeframe"),
     )
 
 
@@ -359,10 +359,13 @@ def from_alpaca_order(
 ) -> BrokerOrder:
     """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event.
 
-    ``id`` and ``status`` are required text. ``symbol`` and ``side`` are not:
-    Alpaca leaves both blank on a multi-leg parent, and the Clerk contains
-    that one order rather than refusing the whole orders answer, which
-    would freeze exits account-wide (#2363).
+    ``id``, ``status`` and ``time_in_force`` are required text. ``symbol`` and
+    ``side`` are not: Alpaca leaves both blank on a multi-leg parent, and the
+    Clerk contains that one order rather than refusing the whole orders
+    answer, which would freeze exits account-wide (#2363). The order type is
+    not either: alpaca-py's ``Order`` makes ``order_type`` and ``type``
+    optional, omitted from multi-leg legs. ``extended_hours`` must be a
+    boolean when present (#2643).
     """
     submitted_at_ms = opt_rfc3339_to_ms(payload.get("submitted_at"))
     filled_at_ms = opt_rfc3339_to_ms(payload.get("filled_at"))
@@ -374,12 +377,12 @@ def from_alpaca_order(
         asset_class=opt_str(payload.get("asset_class")),
         side=str(payload["side"]),
         order_type=str(payload.get("order_type") or payload.get("type")),
-        time_in_force=str(payload["time_in_force"]),
+        time_in_force=to_str(payload["time_in_force"], field="time_in_force"),
         quantity=opt_float(payload.get("qty")),
         filled_quantity=opt_float(payload.get("filled_qty")) or 0.0,
         limit_price=opt_float(payload.get("limit_price")),
         stop_price=opt_float(payload.get("stop_price")),
-        extended_hours=bool(payload.get("extended_hours") or False),
+        extended_hours=opt_bool(payload.get("extended_hours")) or False,
         filled_avg_price=opt_float(payload.get("filled_avg_price")),
         status=to_str(payload["status"], field="status"),
         submitted_at_ms=submitted_at_ms,
@@ -519,17 +522,21 @@ def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
     aliases it to ``asset_class``); prefer the raw key, fall back to the alias.
     A missing class fails loudly like every other required field — no sentinel
     default that would mask a schema change (the drift guard catches renames).
+    ``tradable`` and ``fractionable`` are required booleans: ``bool("false")``
+    is true (#2643).
     """
     return BrokerAsset(
         broker=BROKER_ID,
         asset_id=to_str(payload["id"], field="id"),
         symbol=to_str(payload["symbol"], field="symbol"),
         name=opt_str(payload.get("name")),
-        asset_class=str(payload["class"] if "class" in payload else payload["asset_class"]),
+        asset_class=to_str(
+            payload["class"] if "class" in payload else payload["asset_class"], field="class"
+        ),
         exchange=opt_str(payload.get("exchange")),
         status=to_str(payload["status"], field="status"),
-        tradable=bool(payload.get("tradable", False)),
-        fractionable=bool(payload.get("fractionable", False)),
+        tradable=to_bool(payload["tradable"]),
+        fractionable=to_bool(payload["fractionable"]),
         shortable=opt_bool(payload.get("shortable")),
         marginable=opt_bool(payload.get("marginable")),
     )
@@ -548,9 +555,10 @@ def from_alpaca_clock(
 
     An open answer must name its close: liveness reads it as the instant the
     answer stops proving the market open (#2596), so one without it raises
-    rather than proving the market open with no end.
+    rather than proving the market open with no end. ``is_open`` must be a
+    boolean: ``bool("false")`` would prove a closed market open (#2643).
     """
-    is_open = bool(payload["is_open"])
+    is_open = to_bool(payload["is_open"])
     next_close_ms = opt_rfc3339_to_ms(payload.get("next_close"))
     if is_open and next_close_ms is None:
         raise ValueError("Alpaca clock reports the market open but names no next close.")

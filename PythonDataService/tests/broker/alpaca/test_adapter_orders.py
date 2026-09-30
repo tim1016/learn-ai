@@ -251,9 +251,9 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     assert isinstance(info.value.__cause__, cause_type)
 
 
-@pytest.mark.parametrize("field", ["id", "status"])
+@pytest.mark.parametrize("field", ["id", "status", "time_in_force"])
 @pytest.mark.parametrize("value", [None, "", "   "], ids=["null", "blank", "whitespace"])
-async def test_broker_refuses_an_order_whose_identity_is_not_text(
+async def test_broker_refuses_an_order_whose_required_text_is_blank(
     load_alpaca_fixture: AlpacaFixtureLoader,
     field: str,
     value: object,
@@ -267,6 +267,21 @@ async def test_broker_refuses_an_order_whose_identity_is_not_text(
 
     assert isinstance(info.value.__cause__, ValueError)
     assert f"'{field}'" in str(info.value.__cause__)
+
+
+@pytest.mark.parametrize("flag", ["false", "true", 0, 1], ids=repr)
+async def test_broker_refuses_an_extended_hours_flag_that_is_not_a_boolean(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    flag: object,
+) -> None:
+    """``bool("false")`` once read a regular-hours order as extended-hours (#2643)."""
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+    broker = AlpacaBroker(client=_OrdersClient([{**open_order, "extended_hours": flag}]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
+        await broker.list_orders(status="open", limit=500)
+
+    assert isinstance(info.value.__cause__, TypeError)
 
 
 @pytest.mark.parametrize("blank", [None, ""], ids=["null", "blank"])
