@@ -36,6 +36,15 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS
 _NEXT_READING = f"The account is read again every {ENVELOPE_SYNC_INTERVAL_S:g} seconds."
 
 
+class AccountReadingBehindExecutions(AdmissionBlockedError):
+    """New exposure is refused only because executions postdate the last account reading.
+
+    Every other input was judged and admitted, so a reading newer than those
+    executions can admit it: an ENTER refused this way waits for one instead
+    of being dropped (#2623, owner decision 2026-09-29).
+    """
+
+
 @dataclass(frozen=True)
 class RiskReadiness:
     observation: AccountObservation | None = None
@@ -44,6 +53,8 @@ class RiskReadiness:
     breach_cause: LossHoldCause | None = None
     # No limit is set at all: the fix is setting one, not waiting for evidence.
     limit_missing: bool = False
+    # The one refusal a newer account reading can lift (#2623).
+    reading_behind_executions: bool = False
 
     @property
     def allowed(self) -> bool:
@@ -90,7 +101,7 @@ def current_risk_readiness(
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
                 detail=f"The simulated account's session baseline or current market prices are out of date, so new entries wait. {_NEXT_READING}")
         if observation.risk_fill_sequence != risk_fill_sequence(repo):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, reading_behind_executions=True,
                 detail=f"Executions changed after the last account reading, so new entries wait. {_NEXT_READING}")
         if observation.equity_usd is None:
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
@@ -124,6 +135,7 @@ def require_current_risk_admission(
             cause = decision.breach_cause
             raise_account_hold(repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
                 evidence_refs=[f"day-pnl:{cause.day_start_ms}"], cause_facts=cause.to_mapping())
-        raise AdmissionBlockedError(CapabilityDecision(
+        refusal = AccountReadingBehindExecutions if decision.reading_behind_executions else AdmissionBlockedError
+        raise refusal(CapabilityDecision(
             allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=decision.reason_code, why=decision.detail,
         ))

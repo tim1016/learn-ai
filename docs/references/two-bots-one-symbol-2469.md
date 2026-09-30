@@ -38,7 +38,8 @@ committed in the repo.
   from the account object (a changelog entry dated 2026-07-06 by its URL). All
   Alpaca accounts are margin accounts.
 - **A2 (#2441) is fixed on master.** A second, stricter gate now also refuses
-  every ENTER after any bot's fill until cash is re-read.
+  every ENTER after any bot's fill until cash is re-read; since #2623 that ENTER
+  waits for the re-read instead of being dropped.
 
 ## 1. How shares and fills are attributed
 
@@ -107,12 +108,16 @@ for example when shares were sold outside the Clerk.
   ("Executions changed after the last account reading") until the next reading.
   [code] `clerk/sqlite/risk_admission.py:92-94`, added by `b920c799` / `78ca2b40`
   (#2543, #2566).
-- **The refused ENTER is dropped.** The runtime returns a rejected receipt
-  [code] `clerk/sqlite/runtime.py:1164-1168`, and the bot discards that decision
-  [code] `services/bot_trade_strategy.py:1029-1038`.
+- **The refused ENTER waits for that reading (#2623).** At `79c79f22` it was
+  dropped: the runtime returned a rejected receipt and the bot discarded the
+  decision. Since the owner's decision of 2026-09-29 the Clerk reads the account
+  at once and judges the ENTER again, while the decision is still on time (its
+  bar's close plus 20 s). Any other refusal still drops it.
+  [code] `clerk/sqlite/runtime.py` (`_execute_effect`),
+  `clerk/sqlite/live_envelope_sync.py` (`read_for_entry`)
 - **Two bots deciding on the same bar:** once the first bot's fill is recorded,
-  the second bot's entry is refused rather than delayed.
-  [test] `test_one_bots_fill_refuses_the_other_bots_entry_until_the_next_account_reading`
+  the second bot's entry waits for the next reading, then enters.
+  [test] `test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_reading`
 
 ## 2. Wash trades at Alpaca
 

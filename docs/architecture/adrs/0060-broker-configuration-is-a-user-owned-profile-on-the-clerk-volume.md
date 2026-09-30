@@ -249,3 +249,17 @@ configuration for recovery and historical verification.
 selections, a new four-field revision survives reopen, the database refuses two
 simultaneous representations, and the current document is immutable. Historical
 seal tests continue to verify original record digests; no golden hash is updated.
+
+
+### 2026-09-29 amendment — an ENTER behind the account reading waits (#2623)
+
+Owner decision: the execution watermark above stays, and the daily loss limit
+keeps working from Alpaca's readings alone; no Clerk-side loss figure is added.
+What changes is the ENTER it refuses. When the watermark is the only refusal
+(executions were recorded after the last reading), the Clerk keeps the ENTER,
+reads the account at once outside its intake fence instead of waiting for the
+15 s cadence, and judges the whole decision again. The wait ends when a
+covering reading lands, the run is stopped, the account cannot be read, or the
+decision outlives its delivery allowance (its bar's close plus 20 s); every
+ending but admission is a recorded refusal. Every other refusal still drops the
+ENTER. The mechanics are in `docs/references/alpaca-live-envelope.md`.

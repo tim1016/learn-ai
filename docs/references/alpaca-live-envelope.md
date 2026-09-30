@@ -348,6 +348,24 @@ All four ENTER-time codes are transient at the runner: none disarms an
 instance or stops a bot, and the same decision can be re-admitted once the
 sync republishes a judgeable observation.
 
+**An ENTER behind the account reading waits for a new one (#2623, owner
+decision 2026-09-29).** One `LIVE_ENVELOPE_UNOBSERVED` refusal is not
+dropped: executions were recorded after the last reading
+(`sqlite/risk_admission.py` raises `AccountReadingBehindExecutions`). The
+facade (`sqlite/runtime.py::SqliteAlpacaClerkFacade._execute_effect`) leaves
+its intake fence, asks the sync to read the account now
+(`LiveEnvelopeSync.read_for_entry`, one reading shared by every waiting ENTER,
+read again one second later when a fill lands while the broker is read), and
+judges the whole decision again. The wait ends, with a `blocked` receipt under
+`LIVE_ENVELOPE_UNOBSERVED` saying why, when the run is stopped, the account
+cannot be read, or the decision outlives its time limit — its bar's close plus
+the 20 s delivery allowance, carried as
+`EffectDecisionEvidence.decision_valid_until_ms`. Every other refusal still
+drops the ENTER, and a refusal the new reading raises (cash, the market-closed
+gate) drops it under its own code. Nothing is durable before acceptance, so
+the decision is accepted at most once. The daily loss limit still works from
+Alpaca's readings alone; no Clerk-side loss figure was added.
+
 ## Loss hold
 
 `LiveEnvelopeSync.tick`

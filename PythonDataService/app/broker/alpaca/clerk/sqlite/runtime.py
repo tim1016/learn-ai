@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.exit_terms import (
 from app.broker.alpaca.clerk.live_arming import latest_arming
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -140,6 +140,7 @@ from app.broker.alpaca.clerk.sqlite.residue_discharge import (
     ResidueDischargeReceipt,
     discharge_attributed_residue,
 )
+from app.broker.alpaca.clerk.sqlite.risk_admission import AccountReadingBehindExecutions
 from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner, RunOwnership
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
@@ -190,6 +191,45 @@ _MARKET_ENTRY_AFTER_THE_CLOSE: Final = (
     "could reach the broker after the close and wait there until the next open."
 )
 logger = logging.getLogger(__name__)
+
+
+class EntryReading(Protocol):
+    """Read the account now for an ENTER waiting on executions (``LiveEnvelopeSync.read_for_entry``)."""
+
+    async def __call__(self, *, until_ms: int) -> bool: ...
+
+
+@dataclass(frozen=True)
+class _EntryReadingWait:
+    """An ENTER refused only because executions postdate the last account reading (#2623).
+
+    Returned from under the intake fence so the account is read outside it;
+    the decision is then judged again from the start. ``until_ms`` is the
+    decision's own time limit (``EffectDecisionEvidence.decision_valid_until_ms``);
+    ``read`` is whether the reading taken for it covered every execution.
+    """
+
+    until_ms: int
+    read: bool = False
+
+    def ended(self, *, now_ms: int, run_active: bool) -> tuple[str, str] | None:
+        """Why the wait is over without an entry -- a code for the log, words for the receipt."""
+        if not run_active:
+            return "run_stopped", (
+                "Executions changed after the last account reading, and the bot was stopped "
+                "while this entry waited for a new reading, so the entry was dropped."
+            )
+        if not self.read:
+            return "account_unread", (
+                "Executions changed after the last account reading, and the account could not "
+                "be read again, so this entry was dropped."
+            )
+        if now_ms > self.until_ms:
+            return "decision_late", (
+                "Executions changed after the last account reading, and no newer reading arrived "
+                "while this decision was still on time, so the entry was dropped."
+            )
+        return None
 
 
 class _DecisionBarBoundTradePort:
@@ -283,6 +323,7 @@ class SqliteAlpacaClerkFacade:
         live_envelope: LiveEnvelopeGate | None = None,
         live_arming: ArmingGate | None = None,
         quote_source: QuoteSource | None = None,
+        entry_reading: EntryReading | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -321,6 +362,12 @@ class SqliteAlpacaClerkFacade:
         # (qualification rehearsals). Composed by the authority selector,
         # never built here.
         self._live_envelope = live_envelope
+        # #2623: how an ENTER refused only because executions postdate the
+        # last account reading asks for a reading now instead of waiting for
+        # the envelope's 15 s cadence. Composed beside the envelope's sync;
+        # ``None`` where no sync reads the account, and such an ENTER is
+        # dropped as before.
+        self._entry_reading = entry_reading
         # ADR 0059 D11: per-instance arming on the live authority only;
         # ``None`` on paper and under shadow. It admits no ENTER (#2553: only a
         # budgeted account does); the live verdict reads its mode hold.
@@ -1000,6 +1047,63 @@ class SqliteAlpacaClerkFacade:
         retained_source_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
+        """Judge one decision; an ENTER behind the account reading waits for a new one (#2623).
+
+        An ENTER refused only because executions postdate the last account
+        reading is kept: the account is read now, outside the intake fence,
+        and the whole decision is judged again, so every other refusal --
+        the market-closed one included -- applies afresh. Nothing durable is
+        written until an attempt is accepted, so the decision is accepted at
+        most once however many attempts it takes; the wait ends, recorded as
+        a refusal, when the run stops, the account cannot be read, or the
+        decision outlives its time limit.
+        """
+        reading_wait: _EntryReadingWait | None = None
+        while True:
+            outcome = await self._execute_effect_once(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                decision_id=decision_id,
+                purpose=purpose,
+                action_plan=action_plan,
+                quantity=quantity,
+                use_rth=use_rth,
+                capability_account_id=capability_account_id,
+                retained_source_bar=retained_source_bar,
+                decision_evidence=decision_evidence,
+                reading_wait=reading_wait,
+            )
+            if isinstance(outcome, EffectOperationReceipt):
+                return outcome
+            # ``_execute_effect_once`` waits only where a reader is composed.
+            assert self._entry_reading is not None
+            logger.info(
+                "an ENTER waits for an account reading newer than the account's executions",
+                extra={
+                    "action": "enter_awaits_account_reading",
+                    "account_id": self._repo.account_id,
+                    "strategy_instance_id": strategy_instance_id,
+                    "decision_id": decision_id,
+                    "until_ms": outcome.until_ms,
+                },
+            )
+            reading_wait = replace(outcome, read=await self._entry_reading(until_ms=outcome.until_ms))
+
+    async def _execute_effect_once(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose: EffectPurpose,
+        action_plan: ActionPlan,
+        quantity: int,
+        use_rth: bool,
+        capability_account_id: str | None,
+        retained_source_bar: RetainedSourceBar | None,
+        decision_evidence: EffectDecisionEvidence | None,
+        reading_wait: _EntryReadingWait | None,
+    ) -> EffectOperationReceipt | _EntryReadingWait:
         def rejected(
             *,
             reason_code: str,
@@ -1030,6 +1134,28 @@ class SqliteAlpacaClerkFacade:
             )
 
         async with self._intake:
+            if reading_wait is not None:
+                # Judged under the fence Stop commits under, so an entry the
+                # run no longer owns is never admitted after its reading.
+                active = self._repo.active_run(strategy_instance_id)
+                ended = reading_wait.ended(
+                    now_ms=self._repo.clock(),
+                    run_active=active is not None and active.lifecycle_run_id == run_id,
+                )
+                if ended is not None:
+                    logger.warning(
+                        "an ENTER waiting for an account reading was dropped",
+                        extra={
+                            "action": "enter_account_reading_wait_ended",
+                            "account_id": self._repo.account_id,
+                            "strategy_instance_id": strategy_instance_id,
+                            "decision_id": decision_id,
+                            "why": ended[0],
+                        },
+                    )
+                    return rejected(
+                        reason_code=LIVE_ENVELOPE_UNOBSERVED, explanation=ended[1], next_step=_ENTRY_NOT_RETRIED,
+                    )
             if self.binds_decision_bar and retained_source_bar is None:
                 return rejected(
                     reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
@@ -1201,6 +1327,16 @@ class SqliteAlpacaClerkFacade:
                         ),
                     )
                 except AdmissionBlockedError as exc:
+                    # #2623: the one refusal a newer account reading can lift
+                    # keeps the decision, while it is still on time.
+                    until_ms = None if decision_evidence is None else decision_evidence.decision_valid_until_ms
+                    if (
+                        isinstance(exc, AccountReadingBehindExecutions)
+                        and self._entry_reading is not None
+                        and until_ms is not None
+                        and self._repo.clock() <= until_ms
+                    ):
+                        return _EntryReadingWait(until_ms=until_ms)
                     return rejected(
                         reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
                         explanation=exc.decision.why or "The Clerk refused new exposure.",
@@ -1985,6 +2121,7 @@ def _clerk_generation(meta: ControlMetaSnapshot) -> str:
 
 
 __all__ = [
+    "EntryReading",
     "IntakeFencePoisonedError",
     "IntakeFenceYieldError",
     "MissingEntryCustodyError",

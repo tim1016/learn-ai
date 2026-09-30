@@ -13,6 +13,7 @@ broker equity rather than Clerk FIFO.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -30,9 +31,9 @@ from app.broker.alpaca.clerk.live_envelope import (
     AccountObservation,
     LiveEnvelopeGate,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
-from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import ENTRY_READING_RETRY_INTERVAL_S, LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -48,6 +49,7 @@ from app.broker.contract.models import (
     BrokerPosition,
 )
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
+from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_RISK_REVISION,
@@ -1033,6 +1035,115 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     assert budget.order_claims == Decimal(1_000)
 
 
+# ── A reading taken for a waiting ENTER (#2623) ───────────────────────────────
+# An ENTER refused only because executions postdate the last reading asks the
+# sync to read the account now instead of at its next tick. ``read_for_entry``
+# answers whether the reading it took covers every execution recorded so far.
+
+
+class _CountedReads(_LiveBroker):
+    """The live account, counting its account reads; one can be held open until released."""
+
+    def __init__(self, *, now_ms: int) -> None:
+        super().__init__(now_ms=now_ms)
+        self.account_reads = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.release.set()
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        self.account_reads += 1
+        self.started.set()
+        await self.release.wait()
+        return await super().get_account()
+
+
+async def test_entries_waiting_together_share_one_account_reading(
+    envelope_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    read = _CountedReads(now_ms=T0)
+    read.release.clear()
+    sync = make_sync(envelope_repo, read)
+    first = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS))
+    await read.started.wait()
+    second = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS))
+    read.release.set()
+
+    assert (await first, await second) == (True, True)
+    assert read.account_reads == 1
+
+
+async def test_a_reading_an_execution_supersedes_is_taken_again_after_a_pause(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """The first instance's fill lands while the account is read: that reading is withdrawn.
+
+    One pause later the account is read again, and that reading covers the fill.
+    """
+    first_instance, _second_instance = two_active_instances
+    first = _enter(envelope_repo, first_instance, symbol="SPY", envelope=_observed_gate(cash=2_000.02, simulated=False))
+    read = _FillLandsMidRead(clock=envelope_clock, cash=2_000.02,
+                             record_fill=_fill_all_ten(envelope_repo, envelope_clock, first))
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+        envelope_clock.advance(round(seconds * 1000))
+
+    sync = make_sync(envelope_repo, read, simulated=False, sleep=pause)
+
+    assert await sync.read_for_entry(until_ms=envelope_clock() + 60_000) is True
+    assert pauses == [ENTRY_READING_RETRY_INTERVAL_S]
+    observation = sync.envelope.latest_observation()
+    assert observation is not None and observation.risk_fill_sequence == risk_fill_sequence(envelope_repo)
+
+
+async def test_no_second_reading_starts_after_the_entrys_time_limit(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    first_instance, _second_instance = two_active_instances
+    first = _enter(envelope_repo, first_instance, symbol="SPY", envelope=_observed_gate(cash=2_000.02, simulated=False))
+    read = _FillLandsMidRead(clock=envelope_clock, cash=2_000.02,
+                             record_fill=_fill_all_ten(envelope_repo, envelope_clock, first))
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+
+    sync = make_sync(envelope_repo, read, simulated=False, sleep=pause)
+
+    # The superseded read itself takes both legs; a second could not begin in time.
+    assert await sync.read_for_entry(until_ms=envelope_clock() + 2 * READ_LEG_MS) is False
+    assert pauses == []
+
+
+async def test_a_reading_the_broker_cannot_answer_ends_the_wait(
+    envelope_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    sync = make_sync(envelope_repo, _Read(fail=True))
+
+    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS) is False
+
+
+async def test_a_stopped_sync_takes_no_reading_for_an_entry(
+    envelope_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A closing authority admits no new entry, so it reads nothing for one."""
+    read = _CountedReads(now_ms=T0)
+    sync = make_sync(envelope_repo, read)
+    await sync.stop()
+
+    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS) is False
+    assert read.account_reads == 0
 
 
 @pytest.mark.parametrize("via_tick", [False, True])

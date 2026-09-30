@@ -13,18 +13,33 @@ built the way alpaca-py raises it.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from alpaca.common.exceptions import APIError
 
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.live_envelope import (
+    FILL_VISIBILITY_GRACE_MS,
+    LIVE_ENVELOPE_CASH_EXCEEDED,
+    LIVE_ENVELOPE_UNOBSERVED,
+    LiveEnvelopeGate,
+)
+from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
@@ -32,14 +47,15 @@ from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, 
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import ENTRY_READING_RETRY_INTERVAL_S, LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryStatus
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import plan_account_reconciliation, reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
-    AdmissionBlockedError,
     Capability,
     ReductionIntent,
     decide_capability,
@@ -51,19 +67,29 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.alpaca.marketable_limit import marketable_limit_price
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted, BrokerUnavailable
-from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.marketdata.feed import DELIVERY_ALLOWANCE_MS, MarketDataBar
+from app.schemas.deployment_budget import DeployBudgetConsent
+from app.services import market_liveness
+from app.services.bot_binding_authority import SyntheticBindingAuthority
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.session_authority import et_minute_of_day_ms
+from app.services.source_bar_ledger import RetainedSourceBar
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
     _FakeTradePort,
     _fill_entry,
     _make_held_position,
+    _TestClock,
     _walk_clock_to,
+    complete_fee_evidence,
 )
-from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
+from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.alpaca.clerk.sqlite.test_exit import POST_CLOSE_MS
 from tests.broker.alpaca.clerk.sqlite.test_exit_send_session import _live_touch
+from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _cash_flow, _Read
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
     WATCHDOG_POST_T0,
@@ -79,6 +105,7 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _register_second_spy_lane,
     clocked_repo,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.v2panel.test_dry_run_recovery import _publish_quote
 
 # Alpaca's documented wash-trade refusal: HTTP 403 on POST /v2/orders
 # (https://docs.alpaca.markets/us/docs/user-protection). The page states only
@@ -698,29 +725,436 @@ async def test_a_refused_after_hours_exit_waits_for_the_next_session_and_never_e
 
 
 # ── One account reading for every bot ─────────────────────────────────────────
+# A fill recorded after the last account reading refuses every bot's ENTER
+# until a newer reading lands (#2543). Owner decision 2026-09-29 (#2623): such
+# an ENTER is no longer dropped. The Clerk reads the account at once, outside
+# its intake fence, and judges the ENTER again -- while the decision is still
+# on time (its bar's close plus the 20 s delivery allowance). Every other
+# refusal still drops it.
+#
+# The harness is the real facade and the real envelope sync over one budgeted
+# paper account with bots ``a`` and ``b``; only the broker is a double. Its
+# clock is the repository's, and the sync's pause between readings advances it.
+
+_B_DECISION = hashlib.sha256(b"b-decides-enter-on-the-noon-bar").hexdigest()
+_ON_TIME_UNTIL_MS = NOON + DELIVERY_ALLOWANCE_MS
 
 
-def test_one_bots_fill_refuses_the_other_bots_entry_until_the_next_account_reading(tmp_path: Path) -> None:
-    """A fill recorded after the last account reading refuses every bot's ENTER.
+class _Account(_Read):
+    """The account the envelope reads: every read is counted, and each queued action runs during the next one.
 
-    Two bots deciding on the same bar: A's buy fills first, so B's ENTER is
-    refused until the next observation (15 s cadence) re-reads cash.
+    An action runs after the reading's stamp was taken and before the broker
+    answers, and never changes that answer -- it is the world moving while
+    the account is read.
     """
+
+    def __init__(self) -> None:
+        super().__init__(account_observed_at_ms=NOON)
+        self.account_reads = 0
+        self.while_read: list[Callable[[], Awaitable[None]]] = []
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        self.account_reads += 1
+        if self.while_read:
+            await self.while_read.pop(0)()
+        return await super().get_account()
+
+
+@dataclass
+class _OneAccount:
+    repo: ClerkSqliteRepository
+    clock: _TestClock
+    clerk: SqliteAlpacaClerkFacade
+    sync: LiveEnvelopeSync
+    account: _Account
+    trade: _FakeTradePort
+
+    def accept_a_and_fill(self, *, quantity: int = 1, filled: int = 1) -> EnterSubmission:
+        """Bot A's ENTER, accepted, and ``filled`` of its shares recorded -- after the last reading."""
+        entry = accept_enter(self.repo, account_id=self.repo.account_id, strategy_instance_id="a", decision_id="a-1",
+            lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
+            reference_price=100, envelope=self.clerk.live_envelope)
+        _append_slice(self.repo, entry, execution_id="a-fill-1", quantity=filled, source_event_at_ms=self.clock())
+        return entry
+
+    async def b_decides_enter(
+        self, *, quantity: int = 1, bar_close_ms: int = NOON, until_ms: int | None = _ON_TIME_UNTIL_MS,
+    ) -> EffectOperationReceipt:
+        """Bot B's ENTER on the bar closing at ``bar_close_ms``, as its runner hands it to the Clerk."""
+        bar = RetainedSourceBar.from_market_bar(seq=1, account_id=self.repo.account_id, bar=MarketDataBar(
+            feed_id="ibkr", symbol="SPY", start_ms=bar_close_ms - 60_000, end_ms=bar_close_ms, open=Decimal(100),
+            high=Decimal(100), low=Decimal(100), close=Decimal(100), volume=100, fetched_at_ms=bar_close_ms,
+            session_phase="RTH",
+        ))
+        return await self.clerk.execute_for_instance(
+            strategy_instance_id="b", run_id="run-b", decision_id=_B_DECISION, purpose=EffectPurpose.ENTER,
+            action_plan=alpaca_v1_action_plan("SPY"), quantity=quantity, retained_source_bar=bar,
+            decision_evidence=EffectDecisionEvidence(
+                evaluation_id=_B_DECISION, bar_ref=bar.bar_ref, symbol="SPY", outcome="enter_intent",
+                observed_at_ms=bar_close_ms, decision_bar_close_ms=bar_close_ms, decision_valid_until_ms=until_ms,
+            ),
+        )
+
+    def b_enter_commands(self) -> int:
+        return self.repo._conn.execute(
+            "SELECT COUNT(*) FROM commands WHERE strategy_instance_id = 'b' AND action = 'ENTER'"
+        ).fetchone()[0]
+
+    def b_receipts(self) -> list[tuple[str, dict[str, Any]]]:
+        return [(receipt.outcome, json.loads(receipt.facts_json))
+                for receipt in self.repo.decision_receipt_tail(strategy_instance_id="b", limit=50)]
+
+
+@pytest.fixture
+async def one_account(tmp_path: Path) -> AsyncIterator[_OneAccount]:
     repo = _new_budget_repo(tmp_path)
+    _deploy(repo, "a", 50_000)
+    _deploy(repo, "b", 50_000)
+    clock = repo.clock
+    assert isinstance(clock, _TestClock)
+
+    async def pause(seconds: float) -> None:
+        clock.advance(round(seconds * 1000))
+
+    account = _Account()
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    sync = LiveEnvelopeSync(repo=repo, read=account, envelope=gate, sleep=pause)
+    trade = _FakeTradePort()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=account, trade=trade, account_mode="paper",
+        live_envelope=gate, entry_reading=sync.read_for_entry)
+    assert await sync.tick() == "observed"
     try:
-        _deploy(repo, "a", 50_000)
-        _deploy(repo, "b", 50_000)
-        gate = _gate()
-        leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
-        entry_a = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="a-1",
-                               lifecycle_run_id="run-a", leg=leg, reference_price=100, envelope=gate)
-        _append_slice(repo, entry_a, execution_id="a-fill", quantity=1, source_event_at_ms=NOON)
-
-        with pytest.raises(AdmissionBlockedError) as refused:
-            accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
-                         lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=gate)
-
-        assert refused.value.decision.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
-        assert "Executions changed after the last account reading" in (refused.value.decision.why or "")
+        yield _OneAccount(repo=repo, clock=clock, clerk=clerk, sync=sync, account=account, trade=trade)
     finally:
+        await sync.stop()
         repo.close()
+
+
+async def test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_reading(
+    one_account: _OneAccount,
+) -> None:
+    """Two bots decide ENTER on the same bar; A's buy fills first.
+
+    B's ENTER is refused only because A's fill postdates the last reading. It
+    is not dropped: the Clerk reads the account at once -- one read, no
+    waiting for the 15 s cadence -- and B enters well inside its 20 s.
+    """
+    one_account.accept_a_and_fill()
+
+    receipt = await one_account.b_decides_enter()
+
+    assert receipt.state is not EffectOperationState.REJECTED, receipt.explanation
+    assert len(receipt.child_order_refs) == 1
+    assert one_account.trade.submit_calls == list(receipt.child_order_refs)
+    assert one_account.account.account_reads == 2  # the harness's reading, then the one B asked for
+    assert one_account.clock() == NOON  # no pause between readings: the first one covered A's fill
+    assert [outcome for outcome, _facts in one_account.b_receipts()] == ["enter_intent"]
+
+
+async def test_a_fill_recorded_while_the_account_is_read_makes_the_entry_read_again(
+    one_account: _OneAccount,
+) -> None:
+    """A's second share fills while B's reading is in flight, so that reading is withdrawn.
+
+    B keeps waiting: after one pause the account is read again, and B enters
+    on the reading that covers both of A's fills.
+    """
+    entry_a = one_account.accept_a_and_fill(quantity=2, filled=1)
+
+    async def a_fills_again() -> None:
+        _append_slice(one_account.repo, entry_a, execution_id="a-fill-2", quantity=1,
+                      source_event_at_ms=one_account.clock())
+
+    one_account.account.while_read = [a_fills_again]
+
+    receipt = await one_account.b_decides_enter()
+
+    assert receipt.state is not EffectOperationState.REJECTED, receipt.explanation
+    assert one_account.account.account_reads == 3
+    assert one_account.clock() == NOON + round(ENTRY_READING_RETRY_INTERVAL_S * 1000)
+
+
+async def test_an_entry_whose_reading_lands_after_its_time_limit_is_dropped_with_the_reason(
+    one_account: _OneAccount,
+) -> None:
+    """The wait is capped by the 20 s entry-staleness rule; past it the decision is dropped.
+
+    B's reading covers A's fill but returns 21 s after the bar closed. B is
+    judged on time no longer: no order, no claim, and one ``blocked`` receipt
+    saying why.
+    """
+    one_account.accept_a_and_fill()
+
+    async def the_read_is_slow() -> None:
+        one_account.clock.advance(DELIVERY_ALLOWANCE_MS + 1_000)
+
+    one_account.account.while_read = [the_read_is_slow]
+
+    receipt = await one_account.b_decides_enter()
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert one_account.trade.submit_calls == []
+    assert one_account.b_enter_commands() == 0
+    ((outcome, facts),) = one_account.b_receipts()
+    assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
+    assert "no newer reading arrived while this decision was still on time" in facts["refusal_reason"]
+
+
+async def test_a_stop_during_the_wait_drops_the_entry_and_nothing_is_sent_after_it(
+    one_account: _OneAccount,
+) -> None:
+    """The operator stops B while its reading is in flight.
+
+    Stop commits through the Clerk's intake fence, which the wait does not
+    hold. The reading lands, but B's run is no longer ACTIVE: B is dropped
+    with no ENTER, no reservation and no order.
+    """
+    one_account.accept_a_and_fill()
+
+    async def operator_stops_b() -> None:
+        await one_account.clerk.stop_strategy_run(strategy_instance_id="b", run_id="run-b", reason="operator_stop")
+
+    one_account.account.while_read = [operator_stops_b]
+
+    receipt = await one_account.b_decides_enter()
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert one_account.trade.submit_calls == []
+    assert one_account.b_enter_commands() == 0
+    ((outcome, facts),) = one_account.b_receipts()
+    assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
+    assert "the bot was stopped while this entry waited" in facts["refusal_reason"]
+
+
+async def test_nothing_durable_exists_while_an_entry_waits_so_a_crash_leaves_nothing_to_undo(
+    one_account: _OneAccount,
+) -> None:
+    """A process that dies mid-wait leaves no ENTER, claim, order or receipt behind.
+
+    So a crash discards the decision cleanly: the restarted runner's replay
+    finds it uncaptured and records ``CANDIDATE_UNCAPTURED_AT_CRASH``
+    (``test_candidate_uncaptured_at_crash.py``).
+    """
+    one_account.accept_a_and_fill()
+    durable_mid_wait: list[tuple[int, list[tuple[str, dict[str, Any]]], list[str]]] = []
+
+    async def the_process_could_die_here() -> None:
+        durable_mid_wait.append(
+            (one_account.b_enter_commands(), one_account.b_receipts(), list(one_account.trade.submit_calls))
+        )
+
+    one_account.account.while_read = [the_process_could_die_here]
+
+    await one_account.b_decides_enter()
+
+    assert durable_mid_wait == [(0, [], [])]
+
+
+async def test_a_waiting_entry_is_accepted_once_however_often_it_is_asked(
+    one_account: _OneAccount,
+) -> None:
+    """The retry never mints a second intent, claim or order.
+
+    A refused-before-acceptance attempt leaves nothing durable behind, so the
+    decision's own identity is free for the retry. The runner asking again
+    while it waits joins the same attempt; asking after it was accepted
+    answers with the existing ENTER.
+    """
+    one_account.accept_a_and_fill()
+    asked_again: list[asyncio.Task[EffectOperationReceipt]] = []
+
+    async def the_runner_asks_again() -> None:
+        asked_again.append(asyncio.create_task(one_account.b_decides_enter()))
+
+    one_account.account.while_read = [the_runner_asks_again]
+
+    first = await one_account.b_decides_enter()
+    second = await asked_again[0]
+    replayed = await one_account.b_decides_enter()
+
+    assert first.state is not EffectOperationState.REJECTED, first.explanation
+    assert first.child_order_refs == second.child_order_refs == replayed.child_order_refs
+    assert one_account.trade.submit_calls == list(first.child_order_refs)
+    assert one_account.b_enter_commands() == 1
+    assert len(one_account.repo.entry_orders_for_strategy("b")) == 1
+    assert [outcome for outcome, _facts in one_account.b_receipts()] == ["enter_intent"]
+
+
+async def test_an_entry_refused_for_another_reason_is_dropped_without_a_reading(
+    one_account: _OneAccount,
+) -> None:
+    """Only the refusal a newer reading can lift waits.
+
+    B's ten shares exceed its $500 budget. Nothing A did is involved, so no
+    reading is taken and B is dropped at once, as before.
+    """
+    receipt = await one_account.b_decides_enter(quantity=10)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED)
+    assert one_account.account.account_reads == 1
+
+
+async def test_a_waiting_entry_the_new_reading_refuses_is_dropped_under_that_refusal(
+    one_account: _OneAccount,
+) -> None:
+    """A's fill makes B wait; the new reading then shows B's order does not fit.
+
+    The first refusal was the reading, so B waited for one. Judged again, B's
+    ten shares exceed its budget: B is dropped under the cash refusal, after
+    exactly one reading.
+    """
+    one_account.accept_a_and_fill()
+
+    receipt = await one_account.b_decides_enter(quantity=10)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED)
+    assert one_account.account.account_reads == 2
+    assert one_account.b_enter_commands() == 0
+
+
+async def test_the_wait_never_lets_a_fill_during_its_reading_be_spent_twice(
+    one_account: _OneAccount,
+) -> None:
+    """#2441 inside the wait: a withdrawal, then A's fill while B's reading is in flight.
+
+    The account holds $1,000.02, enough for both $500 budgets. A buys four
+    $100 shares; one fills, so B's four-share ENTER waits. The owner then
+    withdraws $200, and A's other three shares fill while B's reading is in
+    flight -- the broker's answer predates them, still showing $700.02. That
+    reading is superseded, so B waits one pause for another, which is slow:
+    it returns after the fill-visibility grace. The broker still answers
+    $700.02, but the reading is stamped when it was issued, inside the grace
+    after A's fills, so they stay claimed at cost. B is refused for cash:
+    $400.02 is truly left, and B needs $400.01 beside A's $99.99 free budget.
+    A stamp taken on return would release A's fills and admit B (#2441).
+    """
+    account = one_account.account
+    account.cash, account.last_equity = 1_000.02, 1_000.02
+    assert await one_account.sync.tick() == "observed"
+    entry_a = one_account.accept_a_and_fill(quantity=4, filled=1)
+    account.cash, account.equity = 700.02, 800.02  # one share held at $100
+    account.cash_flows = [_cash_flow("CSW", -200.0)]
+    slow_read_ms = FILL_VISIBILITY_GRACE_MS + 1_000
+
+    async def a_fills_the_rest() -> None:
+        _append_slice(one_account.repo, entry_a, execution_id="a-fill-2", quantity=3,
+                      source_event_at_ms=one_account.clock())
+
+    async def the_read_is_slow() -> None:
+        one_account.clock.advance(slow_read_ms)
+
+    account.while_read = [a_fills_the_rest, the_read_is_slow]
+
+    receipt = await one_account.b_decides_enter(quantity=4)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED), receipt.explanation
+    assert one_account.clock() == NOON + round(ENTRY_READING_RETRY_INTERVAL_S * 1000) + slow_read_ms
+    assert one_account.trade.submit_calls == []
+
+
+async def test_a_waiting_entry_whose_reading_lands_after_the_close_is_refused_as_closed(
+    one_account: _OneAccount,
+) -> None:
+    """Every refusal is judged afresh on the retry, the market-closed one included.
+
+    B decides on a bar that closed 15 s before the regular session's close;
+    its reading returns after the close. The market ENTER could now reach
+    Alpaca after the close, so it is refused as closed and never sent.
+    """
+    close_ms = session_close_ms_utc(date(2026, 9, 8))
+    bar_close_ms = close_ms - 15_000
+    _walk_clock_to(one_account.repo, bar_close_ms)
+    complete_fee_evidence(one_account.repo)
+    one_account.account.account_observed_at_ms = bar_close_ms
+    assert await one_account.sync.tick() == "observed"
+    one_account.accept_a_and_fill()
+
+    async def the_close_passes() -> None:
+        one_account.clock.advance(16_000)
+
+    one_account.account.while_read = [the_close_passes]
+
+    receipt = await one_account.b_decides_enter(
+        bar_close_ms=bar_close_ms, until_ms=bar_close_ms + DELIVERY_ALLOWANCE_MS,
+    )
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith("MARKET_CLOSED")
+    assert one_account.trade.submit_calls == []
+
+
+_DRY_RUN_SID = "dry-run-spy"
+
+
+def _dry_run_binding() -> BrokerBotBinding:
+    return BrokerBotBinding(
+        strategy_instance_id=_DRY_RUN_SID, strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
+        mode="dry_run", quantity=1, action_plan=alpaca_v1_action_plan("SPY"), run_id="run-dry", created_at_ms=0,
+        sealed_account_id=synthetic_account_id_for_strategy(_DRY_RUN_SID), exit_terms=TERMS,
+        budget_consent=DeployBudgetConsent(
+            committed_cents=100_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic",
+        ),
+    )
+
+
+def _no_lifecycle_repo(_strategy_instance_id: str) -> Any:
+    raise AssertionError("a Dry Run's entry never reads the runner's lifecycle state")
+
+
+async def test_a_dry_runs_entry_after_its_own_fills_waits_for_its_projection_and_enters(
+    tmp_path: Path,
+) -> None:
+    """A private Dry Run's reading is a projection of its own Clerk records.
+
+    Composed as a Deploy composes it. The bot buys and sells before its sync
+    reads again, so its next ENTER is refused only for executions newer than
+    the reading. The synthetic Clerk projects a reading at once -- no broker
+    is read -- and the bot enters.
+    """
+    clock = _TestClock(NOON)
+    binding = _dry_run_binding()
+    market_liveness.reset_market_liveness_store_for_testing()
+    _publish_quote(NOON, bid=100.0, ask=100.0)  # the Deploy prices its minimum position at the ask
+    authority = SyntheticBindingAuthority(
+        binding=binding, artifacts_root=tmp_path, lifecycle_repo_for=_no_lifecycle_repo,
+        runtime_in_use=lambda _sid: True, brokers={}, clock=clock,
+    )
+    try:
+        await authority.ensure_recoverable()
+        runtime = get_clerk_runtime(binding.sealed_account_id or "")
+        assert runtime is not None and runtime.clerk is not None
+        await runtime.clerk.register_strategy_run(binding)
+        bars = authority.source_bars()
+        try:
+            bar = bars.append(MarketDataBar(
+                feed_id="ibkr", symbol="SPY", start_ms=NOON - 60_000, end_ms=NOON, open=Decimal(100),
+                high=Decimal(100), low=Decimal(100), close=Decimal(100), volume=100, fetched_at_ms=NOON,
+                session_phase="RTH",
+            ), run_id=binding.run_id)
+        finally:
+            bars.close()
+        clock.value = NOON + 1_000
+
+        async def decide(purpose: EffectPurpose, decision_id: str, **evidence: Any) -> Any:
+            assert runtime.clerk is not None
+            return await runtime.clerk.execute_for_instance(
+                strategy_instance_id=binding.strategy_instance_id, run_id=binding.run_id, decision_id=decision_id,
+                purpose=purpose, action_plan=binding.action_plan, quantity=1, retained_source_bar=bar, **evidence,
+            )
+
+        bought = await decide(EffectPurpose.ENTER, "enter-1")
+        sold = await decide(EffectPurpose.EXIT, "exit-1")
+        again = await decide(EffectPurpose.ENTER, _B_DECISION, decision_evidence=EffectDecisionEvidence(
+            evaluation_id=_B_DECISION, bar_ref=bar.bar_ref, symbol="SPY", outcome="enter_intent",
+            observed_at_ms=NOON, decision_bar_close_ms=NOON, decision_valid_until_ms=_ON_TIME_UNTIL_MS,
+        ))
+
+        assert bought.child_order_refs and sold.child_order_refs
+        assert again.state is not EffectOperationState.REJECTED, again.explanation
+        assert again.child_order_refs
+    finally:
+        await close_synthetic_clerk_runtimes()
+        market_liveness.reset_market_liveness_store_for_testing()
