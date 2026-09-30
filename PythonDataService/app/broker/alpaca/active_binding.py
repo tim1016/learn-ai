@@ -141,9 +141,19 @@ def get_active_alpaca_binding() -> AlpacaRuntimeContext | None:
     return _binding
 
 
-def active_alpaca_binding_refusal() -> UnboundBroker | None:
-    """The recorded refusal, or ``None`` when bound or not yet resolved."""
-    return _refusal
+def account_background_work_refused() -> bool:
+    """Whether the binding is refused, so the account's background work does not run (#2669).
+
+    The one decision the boot's start and a reconnect's stop share
+    (``app/broker_configuration/worker_lifecycle.py``): market liveness and
+    the sovereign equity snapshot scheduler run only while the binding
+    stands, so a boot that met a binding refusal directly starts neither, and
+    a reconnect whose acknowledgement refuses the binding stops whatever an
+    unanswered-Alpaca boot had started -- the lane ends in the same state
+    either way. Keyed on the refusal alone: a clerk-authority refusal under a
+    standing binding is not this decision's business.
+    """
+    return _refusal is not None
 
 
 def resolved_alpaca_settings() -> AlpacaSettings:
@@ -176,7 +186,7 @@ __all__ = [
     "RETIRED_ENVIRONMENT_SETTINGS",
     "BrokerUnbound",
     "UnboundBroker",
-    "active_alpaca_binding_refusal",
+    "account_background_work_refused",
     "get_active_alpaca_binding",
     "refuse_active_alpaca_binding",
     "reset_active_alpaca_binding_for_testing",

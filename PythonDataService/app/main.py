@@ -23,11 +23,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 # that is already cached). Keep this import ahead of every other `app.`
 # import; importing the bootstrap IS the anchor.
 import app.services.program_source_bootstrap
-from app.broker.alpaca.active_binding import (
-    BrokerUnbound,
-    UnboundBroker,
-    active_alpaca_binding_refusal,
-)
+from app.broker.alpaca.active_binding import BrokerUnbound, UnboundBroker
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.alpaca.profile import BrokerProfileError
 from app.broker.fleet.errors import FleetControlError
@@ -501,12 +497,15 @@ async def _service_lifespan(
         select_active_clerk_runtime,
     )
     from app.broker_configuration.worker_lifecycle import (
+        AccountBackgroundWork,
+        acknowledge_reconnected_binding,
         acknowledge_runtime_binding,
         selection_handover,
+        start_account_background_work,
+        stop_account_background_work,
     )
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
-    sovereign_equity_snapshot_scheduler = None
     # The selection cannot move between preflight, lease acquisition and the
     # effective acknowledgement, including writes by another process.
     handover = (
@@ -537,10 +536,7 @@ async def _service_lifespan(
             # #1671: scheduled session structure remains calendar-owned; this
             # source combines Alpaca's execution clock with IBKR's read-only
             # symbol status. It never subscribes to Alpaca market data.
-            from app.broker.alpaca.market_liveness import (
-                AlpacaMarketLivenessConsumer,
-                set_market_liveness_consumer,
-            )
+            from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
 
             alpaca_market_liveness = AlpacaMarketLivenessConsumer.for_alpaca(
                 read=alpaca_broker,
@@ -720,30 +716,32 @@ async def _service_lifespan(
                     endpoint_mode=alpaca_settings.mode,
                     reconnecting=alpaca_clerk_runtime.reconnecting,
                 )
-            if active_alpaca_binding_refusal() is None:
-                alpaca_market_liveness.start()
-                set_market_liveness_consumer(alpaca_market_liveness)
-                logger.info("IBKR market-status source and Alpaca execution clock started.")
+            # #2669: the account's background work starts here unless the
+            # binding is refused, stops when a reconnect's acknowledgement
+            # refuses it, and stops at shutdown -- all through the one unit in
+            # ``worker_lifecycle``, which reads the one decision.
+            from app.services.sovereign_equity_snapshots import (
+                DailySovereignEquitySnapshotScheduler,
+                DailySovereignEquitySnapshotStore,
+                DailySovereignEquitySnapshotWriter,
+                sovereign_equity_snapshot_database_path,
+            )
+
+            start_account_background_work(
+                AccountBackgroundWork(
+                    market_liveness=alpaca_market_liveness,
+                    equity_snapshots=DailySovereignEquitySnapshotScheduler(
+                        writer=DailySovereignEquitySnapshotWriter(
+                            store=DailySovereignEquitySnapshotStore(
+                                sovereign_equity_snapshot_database_path(alpaca_clerk_root)
+                            ),
+                            account_snapshot_provider=alpaca_broker.get_account,
+                            expected_account_id=alpaca_binding.context.account_pin,
+                        )
+                    ),
+                )
+            )
             _install_alpaca_authority(alpaca_clerk_runtime)
-
-            if active_alpaca_binding_refusal() is None:
-                from app.services.sovereign_equity_snapshots import (
-                    DailySovereignEquitySnapshotScheduler,
-                    DailySovereignEquitySnapshotStore,
-                    DailySovereignEquitySnapshotWriter,
-                    sovereign_equity_snapshot_database_path,
-                )
-
-                sovereign_equity_snapshot_scheduler = DailySovereignEquitySnapshotScheduler(
-                    writer=DailySovereignEquitySnapshotWriter(
-                        store=DailySovereignEquitySnapshotStore(
-                            sovereign_equity_snapshot_database_path(alpaca_clerk_root)
-                        ),
-                        account_snapshot_provider=alpaca_broker.get_account,
-                    )
-                )
-                sovereign_equity_snapshot_scheduler.start()
-                logger.info("Daily sovereign Alpaca equity snapshot scheduler started.")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -1032,7 +1030,9 @@ async def _service_lifespan(
         reconnecting_binding = alpaca_binding
 
         async def _acknowledge_reconnected(selected: ActiveClerkRuntime) -> ActiveClerkRuntime:
-            return await acknowledge_runtime_binding(bound=reconnecting_binding, runtime=selected)
+            # #2669: an acknowledgement that refuses the binding also stops
+            # the account's background work the boot started under it.
+            return await acknowledge_reconnected_binding(bound=reconnecting_binding, runtime=selected)
 
         def _install_reconnected(reconnected: ActiveClerkRuntime) -> None:
             if fleet_lane is not None:
@@ -1090,8 +1090,6 @@ async def _service_lifespan(
             alpaca_reconnect_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await alpaca_reconnect_task
-        if sovereign_equity_snapshot_scheduler is not None:
-            await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
         # MarketDataFeed, which is torn down later in this block. Operator
         # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
@@ -1111,10 +1109,6 @@ async def _service_lifespan(
             get_active_clerk_runtime,
             set_active_clerk_runtime,
         )
-        from app.broker.alpaca.market_liveness import (
-            get_market_liveness_consumer,
-            set_market_liveness_consumer,
-        )
         from app.broker.alpaca.trade_updates import (
             get_trade_updates_consumer,
             set_trade_updates_consumer,
@@ -1124,10 +1118,8 @@ async def _service_lifespan(
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
-        alpaca_market_liveness = get_market_liveness_consumer()
-        if alpaca_market_liveness is not None:
-            await alpaca_market_liveness.stop()
-            set_market_liveness_consumer(None)
+        # The market-status source and the equity snapshot scheduler (#2669).
+        await stop_account_background_work()
         # The installed primary, which a reconnect may have replaced since boot.
         installed_alpaca_runtime = get_active_clerk_runtime()
         await close_synthetic_clerk_runtimes()
