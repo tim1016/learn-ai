@@ -213,6 +213,22 @@ async def test_broker_names_an_unusable_account_number_as_unavailable_evidence(
     assert "account_number" in str(info.value.__cause__)
 
 
+@pytest.mark.parametrize("status", [None, "", "   "], ids=["null", "blank", "whitespace"])
+async def test_broker_names_an_account_with_no_status_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    status: object,
+) -> None:
+    """A null status once became account status "None" (#2643)."""
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload["status"] = status
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account data this app could not read") as info:
+        await _broker(payload).get_account()
+
+    assert isinstance(info.value.__cause__, ValueError)
+    assert "'status'" in str(info.value.__cause__)
+
+
 def test_live_mode_maps_live_and_a_non_pa_account_number(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:

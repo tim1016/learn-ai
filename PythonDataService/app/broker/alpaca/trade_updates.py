@@ -142,6 +142,8 @@ class TradeUpdateCounters:
     - ``unexplained`` — events whose order this Clerk did not own.
     - ``unfoldable_orders`` — events whose order the Clerk could not fold;
       recorded durably by name and contained to that order (#2363).
+    - ``withheld_orders`` — events about the Clerk's own order missing its
+      id, status, symbol or side; withheld like a lost response (#2643).
     - ``parse_errors`` — frames that captured but would not parse.
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
@@ -155,6 +157,7 @@ class TradeUpdateCounters:
     stale_terminal: int = 0
     unexplained: int = 0
     unfoldable_orders: int = 0
+    withheld_orders: int = 0
     parse_errors: int = 0
     reconnects: int = 0
     connects: int = 0
@@ -687,6 +690,9 @@ class TradeUpdatesConsumer:
         elif kind == "unfoldable_order":
             # Logged by the recorder with its reason; counted here.
             self._counters.unfoldable_orders += 1
+        elif kind == "withheld_order":
+            # Logged by the withholding fold with what was missing; counted here.
+            self._counters.withheld_orders += 1
         else:
             self._counters.events_applied += 1
         # Mark the order finalized (owned or not) so a later re-observation of

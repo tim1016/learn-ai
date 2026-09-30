@@ -162,6 +162,23 @@ async def test_activity_cursor_stops_after_its_strict_page_bound(
     assert activities == []
 
 
+async def test_activity_cursor_refuses_rows_without_an_id_instead_of_merging_them(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    """Two null ids once both became "None", so the walk kept one and dropped the other (#2643)."""
+    trade = load_alpaca_fixture("activities", "activities.json")[0]
+    first = {**trade, "id": None, "qty": "1"}
+    second = {**trade, "id": None, "qty": "2"}
+    broker = AlpacaBroker(client=_ActivitiesClient({None: [first, second]}))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="activity data this app could not read") as info:
+        await broker.list_activities(after_ms=rfc3339_to_ms("2026-07-24T00:00:00Z"), limit=25)
+
+    assert info.value.http_status == 503
+    assert isinstance(info.value.__cause__, ValueError)
+    assert "'id'" in str(info.value.__cause__)
+
+
 async def test_activity_evidence_carries_provider_exhaustion_and_retains_unknown_dates(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
@@ -489,6 +506,11 @@ _GENERIC_ACTIVITY_READS = {
         pytest.param("missing-type", KeyError, id="missing-type"),
         pytest.param("unparseable-time", ValueError, id="unparseable-time"),
         pytest.param("non-object-row", TypeError, id="non-object-row"),
+        # A null or blank identity once became the text "None" or "" (#2643).
+        pytest.param("null-id", ValueError, id="null-id"),
+        pytest.param("blank-id", ValueError, id="blank-id"),
+        pytest.param("null-type", ValueError, id="null-type"),
+        pytest.param("blank-type", ValueError, id="blank-type"),
     ],
 )
 async def test_generic_activity_reads_name_a_malformed_row_as_unavailable_evidence(
@@ -503,6 +525,10 @@ async def test_generic_activity_reads_name_a_malformed_row_as_unavailable_eviden
         "missing-type": [{key: value for key, value in trade.items() if key != "activity_type"}],
         "unparseable-time": [{**trade, "transaction_time": "not-a-time"}],
         "non-object-row": [trade, None],
+        "null-id": [{**trade, "id": None}],
+        "blank-id": [{**trade, "id": " "}],
+        "null-type": [{**trade, "activity_type": None}],
+        "blank-type": [{**trade, "activity_type": ""}],
     }
     broker = AlpacaBroker(client=_ActivitiesClient({None: rows[shape]}))  # type: ignore[arg-type, dict-item]
 
@@ -547,12 +573,16 @@ async def test_transfer_cursor_rejects_a_missing_or_blank_activity_id(
         client=_ActivitiesClient({None: [transfer]})  # type: ignore[arg-type]
     )
 
-    with pytest.raises(BrokerUnavailable, match="valid activity id"):
+    with pytest.raises(BrokerEvidenceUnavailable, match="transfer activity data this app could not read") as info:
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,
             activity_type="TRANS",
         )
+
+    # The adapter's one required-text check refuses it, as for every activity (#2643).
+    assert isinstance(info.value.__cause__, ValueError)
+    assert "'id'" in str(info.value.__cause__)
 
 
 @pytest.mark.parametrize("status", [None, "pending"])

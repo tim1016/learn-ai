@@ -14751,6 +14751,17 @@
             "title": "Risk Revision",
             "type": "integer"
           },
+          "same_symbol_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Same Symbol Note"
+          },
           "shortcuts": {
             "default": [],
             "items": {
