@@ -8,11 +8,8 @@ gate.
 
 from __future__ import annotations
 
-from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
-    ARMING_NEXT_STEP,
-    ARMING_REQUIRED_ADMITTED_NOTE,
     CORPUS_UNCOVERED_NEXT_STEP,
     RunAdmissionDecision,
     RunAdmissionFactAges,
@@ -26,11 +23,6 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
     "Corpus coverage is UNCOVERED: Dry Run admits this exploratory configuration without broker orders. "
     "It is not citable as qualification evidence."
 )
-
-def _not_armed(bot: RunAdmissionFacts) -> bool:
-    """Whether the admitted launch must say that every ENTER refuses until it is armed (R6)."""
-    return bot.arming is not None and bot.arming.state == "NOT_ARMED"
-
 
 def _decision(
     bot: RunAdmissionFacts,
@@ -192,16 +184,6 @@ def evaluate_run_admission(
             ),
             next_step=CORPUS_UNCOVERED_NEXT_STEP,
         )
-    # ADR 0059 D11 (slice 7): a launch under arming evidence nobody can verify
-    # is refused, not parked. A merely unarmed instance is admitted — the
-    # Clerk refuses its every ENTER — and told so below.
-    if bot.arming is not None and bot.arming.state == "UNREADABLE":
-        return decide(
-            allowed=False,
-            reason_code=bot.arming.reason_code or LIVE_ARMING_LEDGER_INVALID,
-            explanation=bot.arming.explanation,
-            next_step=bot.arming.next_step or ARMING_NEXT_STEP,
-        )
     if bot.validation.state != "VERIFIED":
         return decide(
             allowed=False,
@@ -360,17 +342,15 @@ def evaluate_run_admission(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
         explanation=_admitted_explanation(bot),
-        next_step=ARMING_NEXT_STEP if _not_armed(bot) else None,
+        next_step=None,
     )
 
 
 def _admitted_explanation(bot: RunAdmissionFacts) -> str:
-    """The admitted sentence with the corpus-coverage and not-armed notices that apply."""
+    """The admitted sentence with the corpus-coverage notice when it applies."""
     admitted = "The process slot is absent, market data is ready, and the Clerk proves flat custody."
     if bot.validation.state == "VERIFIED" and (bot.validation.event_id or "").startswith("golden-validation:"):
         admitted = f"{admitted} {bot.validation.explanation}"
     if bot.mode == "dry_run" and bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
-    if _not_armed(bot):
-        admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
     return admitted

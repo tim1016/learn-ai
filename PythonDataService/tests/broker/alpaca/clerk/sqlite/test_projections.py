@@ -916,6 +916,65 @@ def test_recovery_policy_reads_working_orders_outside_the_operation_page(
     )
 
 
+def test_bot_snapshot_counts_every_working_order_as_the_commit_check_does(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Clear's presented guard reads ``working_order_refs`` (#2635), so it must
+    count what the commit-time check counts (``order_evidence.is_working_order``):
+    a ``pending_replace`` order the panel's narrower working list omits, even
+    when it sits outside the bounded operation page. An order still waiting
+    for its broker state is not working. Two live ENTERs need #1722's fence
+    bypassed, as in the recovery-policy test above."""
+    monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
+    older = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-older",
+        lifecycle_run_id="run-1",
+        leg=leg,
+    )
+    accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-newer",
+        lifecycle_run_id="run-1",
+        leg=leg,
+    )
+    observed_at_ms = clock()
+    repo._conn.execute(
+        "UPDATE orders SET broker_order_id = ?, broker_state = 'pending_replace', "
+        "submitted_at_ms = ?, updated_at_ms = ? WHERE order_ref = ?",
+        ("alpaca-order-older", observed_at_ms, observed_at_ms, older.order_ref),
+    )
+    repo._conn.commit()
+
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.bot_snapshot(SID, operation_limit=1)
+        account = reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    assert older.effect_operation_id not in {operation.effect_operation_id for operation in snapshot.operations}
+    assert snapshot.working_order_refs == (older.order_ref,)
+    assert account.working_order_refs == ()
+
+
 def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
     tmp_path: Path,
 ) -> None:

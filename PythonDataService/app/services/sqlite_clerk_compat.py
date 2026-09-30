@@ -222,6 +222,7 @@ def failed_sqlite_projection(
         runs=(),
         commands=(),
         operations=(),
+        working_order_refs=(),
         positions=(),
         holds=(),
         uncertainties=(),

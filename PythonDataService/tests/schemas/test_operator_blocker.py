@@ -11,7 +11,6 @@ from app.schemas.operator_blocker import (
     OperatorConfirmationCopy,
     OperatorMove,
     RemoveAction,
-    RetireReplaceAction,
 )
 
 
@@ -92,7 +91,7 @@ def test_valid_fix_elsewhere_blocker_constructs() -> None:
     assert blocker.primary_move.action.kind == "navigate"
 
 
-def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
+def test_terminal_blocker_accepts_a_primary_and_a_secondary_move() -> None:
     blocker = OperatorBlocker.for_host(
         condition_id="run_poisoned",
         scope="bot",
@@ -101,10 +100,7 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
         disposition="terminal",
         headline="Can't recover",
         detail="This run is poisoned and cannot be restarted safely.",
-        primary_move=OperatorMove(
-            label="Replace",
-            action=RetireReplaceAction(kind="retire_replace"),
-        ),
+        primary_move=_nav_move(),
         secondary_moves=[
             OperatorMove(
                 label="Remove",
@@ -115,27 +111,34 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
     )
 
     assert blocker.primary_move is not None
-    assert blocker.primary_move.action.kind == "retire_replace"
+    assert blocker.primary_move.action.kind == "navigate"
     assert blocker.secondary_moves[0].action.kind == "remove"
+
+
+def test_the_retired_retire_replace_move_is_rejected() -> None:
+    """#2590: nothing constructed ``retire_replace`` and the action it named is
+    gone (#2578), so the closed move vocabulary no longer admits it."""
+    with pytest.raises(ValidationError):
+        OperatorMove.model_validate({"label": "Replace", "action": {"kind": "retire_replace"}})
 
 
 def test_operator_move_serializes_backend_confirmation_copy() -> None:
     move = OperatorMove(
-        label="Replace",
-        action=RetireReplaceAction(kind="retire_replace"),
+        label="Remove",
+        action=RemoveAction(kind="remove"),
         confirmation=OperatorConfirmationCopy(
-            title="Retire & Replace",
-            body="Retire this bot before replacement deploy.",
+            title="Remove this bot",
+            body="Remove this bot from the catalog.",
             consequence="Only confirm after broker exposure is flat.",
-            confirm_label="Retire & Replace",
+            confirm_label="Remove",
         ),
     )
 
     assert move.model_dump()["confirmation"] == {
-        "title": "Retire & Replace",
-        "body": "Retire this bot before replacement deploy.",
+        "title": "Remove this bot",
+        "body": "Remove this bot from the catalog.",
         "consequence": "Only confirm after broker exposure is flat.",
-        "confirm_label": "Retire & Replace",
+        "confirm_label": "Remove",
         "required_token": "",
     }
 

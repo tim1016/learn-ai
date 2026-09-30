@@ -12,7 +12,8 @@ ADR 0012 fixes the invariants this schema encodes:
 * every leg carries an explicit ``instrument.underlying`` — no implicit
   fallback from ``live_config.symbol`` (§5);
 * ``qty_ratio`` is a declarative positive integer; composition against
-  ``live_config.sizing`` is deferred to Slice 4 (§4);
+  a sizing policy was deferred to Slice 4 (§4), and the
+  ``live_config.sizing`` policy it named was deleted (#2602);
 * exit entries are lifecycle actions — Slice 1 ships only ``close_leg``,
   which references an entry by ``entry_leg_id``. Exits NEVER redeclare
   selectors (§3);

@@ -3,20 +3,20 @@
 The original account-rooted JSONL bytes and versioned seals remain evidence.
 Only an explicit budget-authority cutover changes authorization; this reader
 cannot mint a grant, renew it, revoke it or translate one into a bot budget.
+Its one reader is the one-time exit-terms upgrade
+(``sqlite/runtime.py::SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms``);
+nothing judges permission or prices a leg against it (#2629).
 """
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
 from app.broker.alpaca.clerk.live_arming import (
-    LIVE_ARMING_INSTANCE_UNSEALED,
     LedgerRecord,
     LiveArmingInvalid,
     LiveArmingRecord,
-    LiveArmingRefused,
     LiveDisarmRecord,
 )
 from app.broker.alpaca.clerk.sealed_ledger import (
@@ -24,16 +24,9 @@ from app.broker.alpaca.clerk.sealed_ledger import (
 )
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 
-logger = logging.getLogger(__name__)
-
 LIVE_ARMING_FILENAME = "live_arming.jsonl"
 _LABEL = "live arming"
 _ARMING_DIR = "arming"
-
-
-def _arming_root(artifacts_root: Path) -> Path:
-    """The account-rooted arming tree; it need not exist yet."""
-    return resolve_contained_path(artifacts_root, "accounts", _ARMING_DIR)
 
 
 class LiveArmingLedger:
@@ -79,73 +72,8 @@ class LiveArmingLedger:
                 rows.append(record)
         return tuple(rows)
 
-    @classmethod
-    def discover(cls, artifacts_root: Path, *, strategy_instance_id: str) -> LiveArmingLedger | None:
-        """The one account whose arming ledger names this instance, from the tree alone.
-
-        ``disarm`` is the closed direction and ``status`` is read-only. The
-        shadow activation proof or runner binding they would normally read can
-        be deleted or damaged after an arming -- precisely during the incident
-        those operations need to report. The arming rows already name their
-        own live account, so the tree can answer the question.
-
-        A directory whose name is not a real, path-safe account id is not an
-        arming ledger and is skipped; a ledger that will not verify is skipped
-        too, but never quietly -- it is logged at error level with its
-        traceback, because a damaged sibling must be visible and must not hide
-        a readable one. ``None`` means no ledger names the instance. Two
-        ledgers naming it is a refusal: nothing here can choose between two
-        accounts that both armed the same instance id.
-        """
-        found = [cls(artifacts_root, live_account_id=account_id)
-                 for account_id, records in cls.discover_records(artifacts_root).items()
-                 if any(row.strategy_instance_id == strategy_instance_id for row in records)]
-        if len(found) > 1:
-            raise LiveArmingRefused(
-                LIVE_ARMING_INSTANCE_UNSEALED,
-                f"{strategy_instance_id} is armed on more than one live account "
-                f"({', '.join(ledger.live_account_id for ledger in found)}); "
-                "the historical reader cannot choose between them",
-            )
-        return found[0] if found else None
-
-    @classmethod
-    def discover_records(cls, artifacts_root: Path) -> dict[str, tuple[LedgerRecord, ...]]:
-        """Read each confined ledger once; report corrupt siblings without hiding healthy ones."""
-        found: dict[str, tuple[LedgerRecord, ...]] = {}
-        for directory in sorted(_arming_root(artifacts_root).glob("*")):
-            if not (directory / LIVE_ARMING_FILENAME).is_file():
-                continue
-            try:
-                ledger = cls(artifacts_root, live_account_id=require_real_account_id(directory.name))
-            except ValueError:
-                logger.error(
-                    "an arming tree directory does not name a real live account; it is skipped",
-                    extra={"action": "live_arming_ledger_invalid", "account_id": directory.name},
-                    exc_info=True,
-                )
-                continue
-            try:
-                records = ledger.records()
-            except LiveArmingInvalid:
-                logger.error(
-                    "an arming ledger will not verify; it cannot answer for this instance",
-                    extra={
-                        "action": "live_arming_ledger_invalid",
-                        "account_id": ledger.live_account_id,
-                    },
-                    exc_info=True,
-                )
-                continue
-            found[ledger.live_account_id] = records
-        return found
-
     def records_for(self, strategy_instance_id: str) -> tuple[LedgerRecord, ...]:
         return tuple(row for row in self.records() if row.strategy_instance_id == strategy_instance_id)
-
-    def latest(self, strategy_instance_id: str) -> LedgerRecord | None:
-        rows = self.records_for(strategy_instance_id)
-        return rows[-1] if rows else None
 
 
 __all__ = ["LIVE_ARMING_FILENAME", "LiveArmingLedger"]

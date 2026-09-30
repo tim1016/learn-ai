@@ -130,6 +130,7 @@ def _projection(
         runs=(),
         commands=(),
         operations=(),
+        working_order_refs=(),
         positions=(),
         holds=holds,
         uncertainties=(),

@@ -309,7 +309,7 @@ def _account_snapshot(**overrides: Any) -> Any:
     return BrokerAccountSnapshot(**{
         "broker": "alpaca", "account_id": "PA-ELIGIBLE", "account_mode": "paper", "account_status": "ACTIVE",
         "currency": "USD", "cash": 100.0, "equity": 100.0, "buying_power": 100.0, "portfolio_value": 100.0,
-        "long_market_value": 0.0, "short_market_value": 0.0, "pattern_day_trader": False,
+        "long_market_value": 0.0, "short_market_value": 0.0,
         "trading_blocked": False, "account_blocked": False, "created_at_ms": None, "observed_at_ms": 1,
         **overrides,
     })

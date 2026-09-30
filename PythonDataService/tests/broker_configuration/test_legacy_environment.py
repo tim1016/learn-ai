@@ -46,6 +46,10 @@ LEGACY_LIVE_ENVIRONMENT = {
 }
 
 
+_RETIRED_SETTINGS = ("live_shadow_sessions", "live_arming_max_sessions")
+_CURRENT_SETTINGS = tuple(field for field in ENVELOPE_FIELD_BY_SETTING if field not in _RETIRED_SETTINGS)
+
+
 def _presence(**overrides: str) -> LegacyEnvironmentPresence:
     return LegacyEnvironmentPresence(_env_file=None, **overrides)
 
@@ -181,9 +185,15 @@ def test_legacy_values_declare_the_same_types_and_constraints() -> None:
     canonical = AlpacaSettings.model_fields
     ours = LegacyEnvironmentValues.model_fields
 
-    for field in ENVELOPE_FIELD_BY_SETTING:
+    for field in _CURRENT_SETTINGS:
         assert ours[field].annotation == canonical[field].annotation, field
         assert _constraints(ours[field]) == _constraints(canonical[field]), field
+    # The retired counts are no setting any more (#2629): these are their only
+    # declarations, and they keep the bound the old boot enforced.
+    for field in _RETIRED_SETTINGS:
+        assert field not in canonical, field
+        assert ours[field].annotation == int | None, field
+        assert _constraints(ours[field]) == ["Ge(ge=1)"], field
 
     # ``mode`` is the one deliberate difference: optional here, defaulted to
     # "paper" there, because absence has to be distinguishable from a choice.
@@ -198,7 +208,7 @@ def test_the_retired_envelope_set_matches_the_canonical_required_set() -> None:
     If a seventh envelope value were ever added there, this module would keep
     importing six and the cutover would silently drop one.
     """
-    assert set(_LIVE_REQUIRED_FIELDS) == set(ENVELOPE_FIELD_BY_SETTING) - {"live_shadow_sessions", "live_arming_max_sessions"}
+    assert set(_LIVE_REQUIRED_FIELDS) == set(_CURRENT_SETTINGS)
 
 
 def _constraints(field: object) -> list[str]:
@@ -225,7 +235,7 @@ def test_legacy_values_parse_exactly_as_alpaca_settings_does(
     legacy = _values()
 
     assert legacy.mode == canonical.mode
-    for settings_field in ENVELOPE_FIELD_BY_SETTING:
+    for settings_field in _CURRENT_SETTINGS:
         theirs = getattr(canonical, settings_field)
         ours = getattr(legacy, settings_field)
         assert ours == theirs, settings_field
@@ -247,7 +257,11 @@ def test_the_imported_envelope_hashes_to_the_legacy_one(
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
 
     configured = AlpacaSettings(_env_file=None)
-    canonical_sha = LiveEnvelopeValues(**{field: getattr(configured, setting) for setting, field in ENVELOPE_FIELD_BY_SETTING.items()}).sha
+    canonical_sha = LiveEnvelopeValues(
+        **{ENVELOPE_FIELD_BY_SETTING[setting]: getattr(configured, setting) for setting in _CURRENT_SETTINGS},
+        shadow_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_SHADOW_SESSIONS"]),
+        arming_max_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_ARMING_MAX_SESSIONS"]),
+    ).sha
     legacy = _values()
     imported = ValidatedLiveEnvelope.from_mapping(
         {

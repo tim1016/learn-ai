@@ -5624,9 +5624,7 @@
             "anyOf": [
               {
                 "enum": [
-                  "deploy",
                   "archive",
-                  "cancel_order",
                   "reconcile_now",
                   "recover_exact_execution_evidence",
                   "resolve_execution_coverage",
@@ -6307,17 +6305,6 @@
             "title": "Currency",
             "type": "string"
           },
-          "daytrading_buying_power": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daytrading Buying Power"
-          },
           "equity": {
             "title": "Equity",
             "type": "number"
@@ -6374,17 +6361,6 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
-          "pattern_day_trader": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pattern Day Trader"
-          },
           "portfolio_value": {
             "title": "Portfolio Value",
             "type": "number"
@@ -6432,7 +6408,6 @@
           "portfolio_value",
           "long_market_value",
           "short_market_value",
-          "pattern_day_trader",
           "trading_blocked",
           "account_blocked",
           "created_at_ms",
@@ -29364,8 +29339,7 @@
               "mapping": {
                 "confirm_in_form": "#/components/schemas/ConfirmInFormAction",
                 "navigate": "#/components/schemas/NavigateAction",
-                "remove": "#/components/schemas/RemoveAction",
-                "retire_replace": "#/components/schemas/RetireReplaceAction"
+                "remove": "#/components/schemas/RemoveAction"
               },
               "propertyName": "kind"
             },
@@ -29375,9 +29349,6 @@
               },
               {
                 "$ref": "#/components/schemas/ConfirmInFormAction"
-              },
-              {
-                "$ref": "#/components/schemas/RetireReplaceAction"
               },
               {
                 "$ref": "#/components/schemas/RemoveAction"
@@ -30518,9 +30489,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30597,9 +30566,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30682,9 +30649,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30742,9 +30707,7 @@
         "properties": {
           "action_id": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -30801,7 +30764,7 @@
         "type": "object"
       },
       "PanelProfile": {
-        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``; an unsupported action never renders at all. Snapshot-\ncontract-tested per broker.",
+        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``. A bot's commands are not listed here: its panel\npresents exactly the actions it may run (``BotPanelView.actions``).\nSnapshot-contract-tested per broker.",
         "properties": {
           "broker": {
             "title": "Broker",
@@ -30826,35 +30789,13 @@
             },
             "title": "Stations",
             "type": "array"
-          },
-          "supported_action_ids": {
-            "items": {
-              "enum": [
-                "deploy",
-                "archive",
-                "cancel_order",
-                "reconcile_now",
-                "recover_exact_execution_evidence",
-                "resolve_execution_coverage",
-                "cancel_verified_working_orders",
-                "prepare_safe_flatten",
-                "execute_safe_flatten",
-                "discharge_attributed_residue",
-                "stop_bot_decisions",
-                "open_custody_timeline"
-              ],
-              "type": "string"
-            },
-            "title": "Supported Action Ids",
-            "type": "array"
           }
         },
         "required": [
           "broker",
           "fee_fidelity",
           "live_bars_supported",
-          "stations",
-          "supported_action_ids"
+          "stations"
         ],
         "title": "PanelProfile",
         "type": "object"
@@ -31797,7 +31738,7 @@
       },
       "ProfilePatchRequest": {
         "additionalProperties": false,
-        "description": "Metadata only. A rename never invalidates an arming (ADR 0060 D4).",
+        "description": "Metadata only: a rename or an archive changes no revision's values (ADR 0060 D4).",
         "properties": {
           "archived": {
             "anyOf": [
@@ -33150,9 +33091,7 @@
           },
           "operation": {
             "enum": [
-              "deploy",
               "archive",
-              "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",
@@ -35313,21 +35252,6 @@
           "origin"
         ],
         "title": "ResolvedSignalParameter",
-        "type": "object"
-      },
-      "RetireReplaceAction": {
-        "additionalProperties": false,
-        "description": "Move: retire this bot and start a fresh deploy flow with lineage kept.",
-        "properties": {
-          "kind": {
-            "const": "retire_replace",
-            "title": "Kind"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "title": "RetireReplaceAction",
         "type": "object"
       },
       "ReturnDistributionInsufficientCoverageResponse": {
@@ -40541,31 +40465,6 @@
         "title": "StageAdvanceCriterionResponse",
         "type": "object"
       },
-      "StartRunRequest": {
-        "properties": {
-          "lifecycle_run_id": {
-            "minLength": 1,
-            "title": "Lifecycle Run Id",
-            "type": "string"
-          },
-          "operator_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Operator Reason"
-          }
-        },
-        "required": [
-          "lifecycle_run_id"
-        ],
-        "title": "StartRunRequest",
-        "type": "object"
-      },
       "StartupJoinView": {
         "description": "Where the current run is in joining its warmup to its live stream (#2410).\n\n``waiting_for_stream``: subscribed, no print yet -- nothing to repair, and\nno deadline running. ``filling``: the stream joined; history through\n``live_from_ms`` is being fetched, and the run is refused if that is not\ndone by ``deadline_ms``. ``history_joined``: warmup history reaches the\nstream and the strategy is being rebuilt. ``ready``: the run takes live\nbars. ``refused``: the fill failed; ``missing_start_ms``..``missing_end_ms``\nis the interval history did not return, when it could be named.",
         "properties": {
@@ -41831,15 +41730,6 @@
             "default": false,
             "title": "Recency Supported",
             "type": "boolean"
-          },
-          "sizing_surface": {
-            "default": "policy",
-            "enum": [
-              "policy",
-              "explicit"
-            ],
-            "title": "Sizing Surface",
-            "type": "string"
           },
           "strategy_bars": {
             "$ref": "#/components/schemas/StrategyBarCadenceInfo"
@@ -49335,87 +49225,9 @@
         ]
       }
     },
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
-      "post": {
-        "description": "Reserve and admit a Start command. Idempotent on\n``(account_id, strategy_instance_id, lifecycle_run_id)`` \u2014 the frontend\nmints ``lifecycle_run_id`` once and resends the same value on retry.",
-        "operationId": "start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "strategy_instance_id",
-            "required": true,
-            "schema": {
-              "title": "Strategy Instance Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartRunRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommandResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Run",
-        "tags": [
-          "alpaca-clerk-sqlite"
-        ]
-      }
-    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
       "post": {
-        "description": "Reserve and admit a Stop command for ``body.lifecycle_run_id`` \u2014\ncaller-supplied, exactly like Start (corrective foundation slice).",
+        "description": "Reserve and admit a Stop command for ``body.lifecycle_run_id`` \u2014\ncaller-supplied (corrective foundation slice).",
         "operationId": "stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post",
         "parameters": [
           {
@@ -60674,107 +60486,6 @@
           }
         },
         "summary": "Fleet Custody Bot Recovery Execute",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).",
-        "operationId": "fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Custody Runs Start",
         "tags": [
           "broker-clerks"
         ]

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,8 +25,7 @@ from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import shadow_runtim
 
 _NOW = 1_800_000_000_000
 _LIVE = {
-    "live_loss_fraction": 0.02, "live_loss_usd": 500.0, "live_shadow_sessions": 5,
-    "live_arming_max_sessions": 20, "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
+    "live_loss_fraction": 0.02, "live_loss_usd": 500.0, "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
 }
 
 
@@ -118,6 +118,21 @@ def test_every_verdict_carries_server_authored_copy(final: str) -> None:
 
     assert verdict.final_verdict == final
     assert verdict.headline and verdict.detail
+
+
+def test_a_mid_session_mode_disagreement_the_envelope_sync_observed_is_disagreed() -> None:
+    """#2629: the envelope sync is the one observer; no arming gate echoes it any more."""
+    runtime = ActiveClerkRuntime(
+        authority_kind="sqlite",
+        account_id=LIVE_ACCT,
+        envelope_sync=SimpleNamespace(account_mode_disagreed=True),  # type: ignore[arg-type]
+    )
+
+    verdict = alpaca_live_verdict(settings=_live(), runtime=runtime, now_ms=_NOW)
+
+    assert verdict.mode_agreement == "disagreed"
+    assert verdict.clerk_refusal_reason_code == "LIVE_MODE_DISAGREEMENT"
+    assert verdict.final_verdict == "unknown"
 
 
 def test_paper_with_mode_disagreement_is_unknown_not_reassuring() -> None:

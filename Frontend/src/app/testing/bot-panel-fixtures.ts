@@ -231,8 +231,8 @@ export function fakeSqliteBotActions({ running = true }: { running?: boolean } =
     headline: 'No attributed exposure requires a flatten plan.',
     detail: 'Run Reconcile now and refresh the custody snapshot.',
   };
-  // `action_policy`'s archive for a stopped, flat bot: the one generic
-  // lifecycle action the SQLite panel keeps, and only once the bot stops.
+  // `action_policy.archive_action` for a stopped, flat bot: the one lifecycle
+  // action the SQLite adapter presents, and only once the bot stops.
   const archive = fakePanelAction('archive', {
     label: 'Clear',
     explanation: 'Take a finished bot off Home. It must be stopped and flat, with nothing claimed. '

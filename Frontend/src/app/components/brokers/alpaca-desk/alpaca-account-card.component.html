@@ -75,7 +75,6 @@
           <span [class.account-flag--alert]="acct.account_blocked">
             Account {{ acct.account_blocked ? 'blocked' : 'clear' }}
           </span>
-          <span>Pattern day trader: {{ acct.pattern_day_trader === null ? 'Unknown' : (acct.pattern_day_trader ? 'Yes' : 'No') }}</span>
         </div>
 
         <footer class="account-timestamp">

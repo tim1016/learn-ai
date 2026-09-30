@@ -77,6 +77,4 @@ async def apply_budget_authority(service: BrokerConfigurationService, runtime: A
                     commit_budget_authority_cutover(repo, actor=actor, reviewed_token=request.review_token, stop_receipt=receipt.receipt_id)
                 except BudgetUnavailable as exc:
                     raise BrokerConfigurationError(str(exc), next_step="Reload Settings and resolve the remaining Stop evidence before retrying.") from exc
-                if runtime.envelope_sync is not None:
-                    runtime.envelope_sync.refresh_arming()
                 return read_budget_authority(runtime)

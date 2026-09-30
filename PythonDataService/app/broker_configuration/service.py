@@ -874,17 +874,6 @@ class BrokerConfigurationService:
                     f"it is no longer generation {previous_generation}.",
                     next_step="Reload the selection and repeat your change.",
                 )
-            if action == "effective_acknowledged" and profile_id is not None and revision is not None:
-                from app.broker_configuration.arming_policy import record_effective_arming_invalidations
-
-                record_effective_arming_invalidations(
-                    self._store,
-                    conn,
-                    revision=self._require_revision(profile_id, revision),
-                    account_id=selection.effective_account_id,
-                    actor=actor,
-                    recorded_at_ms=self._clock(),
-                )
             self._record_event(
                 conn,
                 actor=actor,

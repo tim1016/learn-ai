@@ -187,7 +187,6 @@ function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number
     account_status: 'ACTIVE',
     account_blocked: false,
     trading_blocked: false,
-    pattern_day_trader: false,
     currency: 'USD',
     cash: equity,
     equity,
@@ -562,7 +561,6 @@ const PANEL_PROFILE = {
   fee_fidelity: 'per_fill',
   live_bars_supported: true,
   stations: [],
-  supported_action_ids: ['deploy', 'archive'],
 } satisfies PanelProfile;
 
 /** The flatten sequence's progress through the Clerk: reconcile mints the

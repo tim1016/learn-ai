@@ -157,13 +157,10 @@ class BrokerAccountSnapshot(_ContractModel):
     # ``cash`` and never any of these.
     multiplier: float | None = None
     regt_buying_power: float | None = None
-    daytrading_buying_power: float | None = None
     maintenance_margin: float | None = None
     initial_margin: float | None = None
     sma: float | None = None
     last_equity: float | None = None
-    # Alpaca omits this field for some paper accounts; absence is unknown, not false.
-    pattern_day_trader: bool | None
     trading_blocked: bool
     account_blocked: bool
     created_at_ms: int | None

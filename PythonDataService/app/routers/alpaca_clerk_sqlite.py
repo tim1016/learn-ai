@@ -36,7 +36,6 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     InvalidIdentityError,
     NoActiveRunError,
     UnknownStrategyInstanceError,
-    submit_start_run,
 )
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -85,7 +84,6 @@ from app.schemas.alpaca_clerk_sqlite import (
     RecoveryActionExecuteRequest,
     RecoveryActionExecuteResponse,
     RecoveryCapabilityResponse,
-    StartRunRequest,
     StopRunRequest,
     TimelinePageResponse,
     safe_flatten_pricing_response,
@@ -325,47 +323,6 @@ async def _decision_evidence_page(
 
 
 @router.post(
-    "/accounts/{account_id}/bots/{strategy_instance_id}/runs/start",
-    response_model=CommandResponse,
-    status_code=202,
-)
-async def start_run(
-    account_id: str, strategy_instance_id: str, body: StartRunRequest
-) -> CommandResponse:
-    """Reserve and admit a Start command. Idempotent on
-    ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
-    mints ``lifecycle_run_id`` once and resends the same value on retry."""
-    # A run started here has no in-process runner holding it, so the
-    # reconciliation sweep retires it, fail closed, after one pass's grace
-    # (#2369, ``run_ownership``). A bot run is admitted through the bot
-    # registry, which registers the run's owner. This raw lifecycle route acts
-    # on the account's own authority only, unlike the per-bot reads and
-    # recovery: a Dry Run's runs start and stop inside its simulator through
-    # the registry, and here its identity is unknown, so it is refused.
-    repo = await _repo(account_id)
-    try:
-        submission = await asyncio.to_thread(
-            submit_start_run,
-            repo,
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-            lifecycle_run_id=body.lifecycle_run_id,
-            operator_reason=body.operator_reason,
-        )
-    except DurableConflictError as exc:
-        raise _conflict_response(exc) from exc
-    except InvalidIdentityError as exc:
-        raise HTTPException(
-            status_code=400, detail={"reason": "invalid_identity", "message": str(exc)}
-        ) from exc
-    except UnknownStrategyInstanceError as exc:
-        raise _unknown_bot_response(exc) from exc
-    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
-        raise _unavailable_response(exc) from exc
-    return CommandResponse.from_resource(submission.command)
-
-
-@router.post(
     "/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop",
     response_model=CommandResponse,
     status_code=202,
@@ -374,7 +331,7 @@ async def stop_run(
     account_id: str, strategy_instance_id: str, body: StopRunRequest
 ) -> CommandResponse:
     """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
-    caller-supplied, exactly like Start (corrective foundation slice)."""
+    caller-supplied (corrective foundation slice)."""
     if body.operator_reason == SCHEDULED_END_REASON:
         # The Clerk's own reason for its STOP at a bot's end (#2607), and the
         # one STOP the runner takes as the end's (``_carry_out_due_end``): it
@@ -392,8 +349,8 @@ async def stop_run(
                 ),
             },
         )
-    # The account's own authority only, exactly like Start: a Dry Run's run
-    # stops inside its simulator through the bot registry.
+    # The account's own authority only: a Dry Run's run stops inside its
+    # simulator through the bot registry.
     facade = _active_sqlite_facade(account_id)
     try:
         # An operator's Stop of the named run, as the panel's Stop makes it

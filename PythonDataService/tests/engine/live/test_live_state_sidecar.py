@@ -436,3 +436,19 @@ def test_concurrent_write_if_missing_keeps_first_seed(tmp_path: Path) -> None:
     loaded = repo.read()
     assert loaded is not None
     assert loaded.run_id == successes[0]
+
+
+def test_envelope_wal_cursor_defaults_to_zero() -> None:
+    assert _min_envelope().last_intent_wal_seq == 0
+
+
+def test_envelope_wal_cursor_round_trips() -> None:
+    env = _min_envelope(last_intent_wal_seq=42)
+    restored = LiveStateEnvelope.model_validate_json(env.model_dump_json())
+    assert restored.last_intent_wal_seq == 42
+
+
+def test_envelope_without_cursor_field_reads_as_zero() -> None:
+    legacy = _min_envelope().model_dump()
+    legacy.pop("last_intent_wal_seq")
+    assert LiveStateEnvelope.model_validate(legacy).last_intent_wal_seq == 0

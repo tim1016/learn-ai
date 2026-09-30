@@ -5,14 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { OperatorBlocker, OperatorMove } from '../../../../api/operator-blocker.types';
 import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
+import { fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { PanelActionButtonComponent } from './panel-action-button.component';
 
+/** A neutral unconfirmed action, as the SQLite panel presents Reconcile now. */
 function action(overrides: Partial<PanelAction> = {}): PanelAction {
   return {
-    action_id: 'stop_bot_decisions',
-    label: 'Stop',
-    explanation: 'Stop after the current bar.',
+    action_id: 'reconcile_now',
+    label: 'Reconcile now',
+    explanation: 'Compare durable Clerk custody with a fresh Alpaca account observation.',
     enabled: true,
     blockers: [],
     confirmation: null,
@@ -25,16 +27,7 @@ function action(overrides: Partial<PanelAction> = {}): PanelAction {
 describe('PanelActionButtonComponent', () => {
   it('does not mount a closed confirmation dialog', async () => {
     const view = await render(PanelActionButtonComponent, {
-      inputs: {
-        action: action({
-          confirmation: {
-            title: 'Stop bot',
-            body: 'This stops the bot.',
-            consequence: 'The bot will stop evaluating bars.',
-            confirm_label: 'Stop',
-          },
-        }),
-      },
+      inputs: { action: fakeSqliteStopAction() },
     });
 
     expect(view.fixture.nativeElement.querySelector('dialog')).toBeNull();
@@ -48,7 +41,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(triggered).toHaveBeenCalledWith({ action: presented, reason: null });
   });
@@ -60,7 +53,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(triggered).not.toHaveBeenCalled();
   });
@@ -93,7 +86,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: 'Reconcile now' }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(button.getAttribute('aria-describedby')).toBeTruthy();
@@ -107,7 +100,7 @@ describe('PanelActionButtonComponent', () => {
   it('renders backend-presented confirmation and blockers', async () => {
     await render(PanelActionButtonComponent, {
       inputs: {
-        action: action({
+        action: fakeSqliteStopAction({
           blockers: [
             {
               condition: {
@@ -125,29 +118,23 @@ describe('PanelActionButtonComponent', () => {
               applies_to: 'run',
             },
           ],
-          confirmation: {
-            title: 'Stop bot',
-            body: 'This stops the bot.',
-            consequence: 'The bot will stop evaluating bars.',
-            confirm_label: 'Stop',
-          },
         }),
       },
     });
 
-    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: 'Stop bot decisions' }) as HTMLButtonElement;
     expect(button.title).toContain('Open Order');
     expect(button.title).toContain('An order is still open.');
     expect(button.getAttribute('aria-describedby')).toBeTruthy();
 
     fireEvent.click(button);
-    expect(screen.getByText('This stops the bot.')).toBeTruthy();
+    expect(screen.getByText('Stop the bot making new decisions. Stopping doesn\'t sell its shares.')).toBeTruthy();
   });
 
   it('can suppress only the blocker its parent already presents', async () => {
     await render(PanelActionButtonComponent, {
       inputs: {
-        action: action({
+        action: fakeSqliteStopAction({
           enabled: false,
           blockers: [
             {
@@ -189,7 +176,7 @@ describe('PanelActionButtonComponent', () => {
 
     expect(screen.queryByText('The bot is already stopped.')).toBeNull();
     expect(screen.getByText('Bot Already Stopped')).toBeTruthy();
-    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: 'Stop bot decisions' }) as HTMLButtonElement;
     expect(button.title).not.toContain('The bot is already stopped.');
     expect(button.title).toContain('The Clerk cannot prove current account custody.');
   });
@@ -373,18 +360,11 @@ describe('PanelActionButtonComponent', () => {
   // cancel, so the return has to survive the dialog being destroyed.
 
   describe('focus after a cancelled confirmation', () => {
-    const confirmed = action({
-      confirmation: {
-        title: 'Stop this bot?',
-        body: 'It stops after the current bar.',
-        consequence: 'No new orders are placed.',
-        confirm_label: 'Stop',
-      },
-    });
+    const confirmed = fakeSqliteStopAction();
 
     async function openConfirmation(): Promise<HTMLElement> {
       await render(PanelActionButtonComponent, { inputs: { action: confirmed } });
-      const opener = screen.getByRole('button', { name: 'Stop' });
+      const opener = screen.getByRole('button', { name: 'Stop bot decisions' });
       opener.focus();
       fireEvent.click(opener);
       await Promise.resolve();

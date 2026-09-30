@@ -603,8 +603,7 @@ async def test_panel_profile_endpoint(api) -> None:
     assert response.status_code == 200, response.text
     assert response.json()["broker"] == "alpaca"
     assert len(response.json()["stations"]) == 6
-    assert "clear_hold" not in response.json()["supported_action_ids"]
-    assert "record_inventory_baseline" not in response.json()["supported_action_ids"]
+    assert "supported_action_ids" not in response.json()
 
 
 async def test_catalog_scoped_returns_sqlite_roster(api) -> None:

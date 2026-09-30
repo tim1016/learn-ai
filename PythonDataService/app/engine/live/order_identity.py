@@ -40,12 +40,8 @@ ORDER_REF_FIXED_OVERHEAD = (
 DEFAULT_ORDER_REF_MAX_LENGTH = 60
 """Conservative default cap on ``order_ref`` length.
 
-TODO(#446 Acceptance Gate #1): replace with the value proven by a live paper
-order — place one order, read back the stored ``orderRef``, confirm IBKR echoes
-the full string untruncated. Truncation is silent and catastrophic, so until
-that receipt exists this stays conservative AND activation is refused (see
-``broker_ownership_query.require_durable_submit_activation``). A cap of 60
-leaves ``len(strategy_instance_id) <= 25``.
+Truncation is silent and catastrophic, so the cap stays conservative. A cap
+of 60 leaves ``len(strategy_instance_id) <= 25``.
 """
 
 

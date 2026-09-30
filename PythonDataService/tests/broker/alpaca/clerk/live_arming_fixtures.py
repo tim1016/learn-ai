@@ -64,8 +64,6 @@ def live_settings(**overrides: Any) -> AlpacaSettings:
         "mode": "live",
         "live_loss_fraction": TEST_ENVELOPE_VALUES.loss_fraction,
         "live_loss_usd": TEST_ENVELOPE_VALUES.loss_usd,
-        "live_shadow_sessions": TEST_ENVELOPE_VALUES.shadow_sessions,
-        "live_arming_max_sessions": TEST_ENVELOPE_VALUES.arming_max_sessions,
         "live_xh_entry_bps": TEST_ENVELOPE_VALUES.xh_entry_bps,
         "live_xh_exit_bps": TEST_ENVELOPE_VALUES.xh_exit_bps,
     }

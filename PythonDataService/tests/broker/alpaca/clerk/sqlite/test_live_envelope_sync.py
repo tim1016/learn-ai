@@ -117,7 +117,6 @@ class _Read:
             long_market_value=0.0,
             short_market_value=0.0,
             last_equity=self.last_equity,
-            pattern_day_trader=False,
             trading_blocked=False,
             account_blocked=False,
             created_at_ms=None,

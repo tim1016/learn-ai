@@ -32,10 +32,17 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+    sql_string_list,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_PRICE_CONFLICT_REASON_CODE,
     ExecutionPriceConflictCause,
 )
+
+# The one terminal broker-state set, spelled for SQL (``order_projection``).
+_TERMINAL_BROKER_STATES_SQL = sql_string_list(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES)
 
 _COMMAND_COLUMNS: tuple[str, ...] = (
     "command_id",
@@ -765,7 +772,7 @@ def terminal_entry_orders_unproven_at_broker(
         "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
         "AND e.strategy_instance_id IS NOT NULL "
         "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
-        "('filled','canceled','expired','rejected','replaced')) "
+        f"({_TERMINAL_BROKER_STATES_SQL})) "
         f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
         f"{exclude_clause}"
         ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
@@ -966,7 +973,7 @@ def reconcilable_effect_operations(
         + subject_clause +
         "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
-        "('filled','canceled','expired','rejected','replaced') "
+        f"({_TERMINAL_BROKER_STATES_SQL}) "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
         "SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref "
         f"AND {_EFFECTIVE_FILL_PREDICATE})) "

@@ -43,7 +43,6 @@ def _account(*, account_mode: str = "paper") -> BrokerAccountSnapshot:
         portfolio_value=1_000,
         long_market_value=0,
         short_market_value=0,
-        pattern_day_trader=False,
         trading_blocked=False,
         account_blocked=False,
         created_at_ms=None,

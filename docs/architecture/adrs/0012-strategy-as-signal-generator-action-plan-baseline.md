@@ -6,6 +6,7 @@
 **Decision drivers:** Strategy code today decides *both* when to act and what to act on — signal logic (EMAs crossed, RSI 50–70) and instrument logic (buy 1 SPY at market) are interleaved in one Python file. `process_bar` calls `set_holdings` / `liquidate` directly. There is no clean seam to reuse a SPY-EMA-crossover signal against a stock one day and an iron condor the next without forking the strategy. The deploy/bot control is the natural place to **declare** which instruments the bot opens on entry and closes on exit; the strategy stays the signal generator. ADR 0009 (live sizing authority) established the parallel pattern for *quantity*; this ADR establishes the same seam for *instrument*.
 
 **Related:** ADR 0009 (live sizing authority — quantity stays here; this ADR does NOT supersede 0009), ADR 0006 (deploy / `account_id` / `live_config` hashed into `run_id` — `live_config.action` joins the existing hash inputs), ADR 0004 (instance-addressed operator control plane — the bot control page card surfaces from `/status`), PRD #593 (this slice's parent PRD; Slices 1–3 only), follow-up ADR 0013 (deferred, Slice 4 PRD: `SignalIntent`, `StructureSizer`, the one-to-many `Decision → ActionIntent → Execution` artifact model, runtime guard against direct portfolio calls).
+**Note (2026-09-30):** three names this ADR cites no longer exist. The `LIVE_CONFIG_LEDGER_KEYS` allow-list went with #1678. The `OrderSizer` quantity authority and the `sizing_surface` registry flag that `instrument_surface` parallels went with #2602.
 
 ## Context
 

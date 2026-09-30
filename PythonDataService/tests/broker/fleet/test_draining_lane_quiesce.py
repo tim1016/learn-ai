@@ -265,7 +265,6 @@ async def test_a_draining_lane_routes_its_quiesce_operations_and_reads(
         "custody_bot_recovery_execute",
         "custody_recovery_execute",
         "bot_create",
-        "custody_runs_start",
         "paper_access_confirm",
         "live_graduation_apply",
         "manual_order_ticket_put",

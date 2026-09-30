@@ -270,3 +270,14 @@ the Clerk shuts down. Every other refusal still drops the ENTER. Stop keeps the
 race it always had between closing the bot's decision gate and committing
 through the intake fence; the wait changes which ENTERs can be in that window,
 not the window. The mechanics are in `docs/references/alpaca-live-envelope.md`.
+
+
+### 2026-09-30 amendment — arming prices nothing (#2629)
+
+Owner decision: Decision 4's arming clauses no longer hold. Arming was retired
+as a permission (#2553, #2629), and a historical arming no longer prices a leg
+either. ENTER prices from the effective revision's live envelope; a `sim:` Dry
+Run bound to a live account uses that envelope too. EXIT prices from the owning
+bot's immutable exit terms ([ADR 0045](0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504)).
+The one reader of the arming ledger left is the one-time exit-terms upgrade,
+which seals a legacy bot's terms from its own newest arming.

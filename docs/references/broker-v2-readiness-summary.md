@@ -11,9 +11,9 @@ readiness_blocked_count = number_of_checks - readiness_ready_count
 ```
 
 The counts do not classify gates or infer readiness. Each `check.ready` value
-already comes from the Python-owned presented-action contract. The aggregate is
-authored by `panel_projection_service.py::build_panel_view`; Angular renders the
-two response fields verbatim.
+already comes from the SQLite Clerk's recovery catalog. The aggregate is
+authored by `sqlite_panel_adapter.py::adapt_sqlite_panel`, which every served
+panel passes through; Angular renders the two response fields verbatim.
 
 ## Reference and tolerance
 
@@ -23,9 +23,9 @@ Its reference is the `readiness_checks` array in the same immutable
 
 ## Golden fixture
 
-`PythonDataService/tests/broker/v2panel/test_panel_projection.py::test_panel_composes_cards_rail_and_actions`
-pins a representative eight-action panel to `4 ready` and `4 blocked`, then
-also proves that both values partition the emitted check list. The Angular
+`PythonDataService/tests/broker/v2panel/test_panel_projection.py::test_served_readiness_counts_partition_the_recovery_checks`
+pins a three-check served panel to `2 ready` and `1 blocked`, and to the
+emitted check list those two values partition. The Angular
 regression in `operator-lens.component.spec.ts` supplies deliberately different
 contract totals and verifies they are displayed unchanged, preventing a second
 frontend implementation.

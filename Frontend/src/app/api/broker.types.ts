@@ -224,28 +224,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Run
-         * @description Reserve and admit a Start command. Idempotent on
-         *     ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
-         *     mints ``lifecycle_run_id`` once and resends the same value on retry.
-         */
-        post: operations["start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
         parameters: {
             query?: never;
@@ -258,7 +236,7 @@ export interface paths {
         /**
          * Stop Run
          * @description Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
-         *     caller-supplied, exactly like Start (corrective foundation slice).
+         *     caller-supplied (corrective foundation slice).
          */
         post: operations["stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post"];
         delete?: never;
@@ -2888,26 +2866,6 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute (custody_command).
          */
         post: operations["fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Custody Runs Start
-         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).
-         */
-        post: operations["fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10439,7 +10397,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -10672,8 +10630,6 @@ export interface components {
             created_at_ms: number | null;
             /** Currency */
             currency: string;
-            /** Daytrading Buying Power */
-            daytrading_buying_power?: number | null;
             /** Equity */
             equity: number;
             /** Initial Margin */
@@ -10688,8 +10644,6 @@ export interface components {
             multiplier?: number | null;
             /** Observed At Ms */
             observed_at_ms: number;
-            /** Pattern Day Trader */
-            pattern_day_trader: boolean | null;
             /** Portfolio Value */
             portfolio_value: number;
             /** Regt Buying Power */
@@ -20821,7 +20775,7 @@ export interface components {
         /** OperatorMove */
         OperatorMove: {
             /** Action */
-            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RemoveAction"];
             confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Label */
             label: string;
@@ -21362,7 +21316,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -21395,7 +21349,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -21424,7 +21378,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -21447,7 +21401,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21472,8 +21426,9 @@ export interface components {
          * @description Closed descriptor extending BrokerCapabilities for the panel (§4).
          *
          *     Angular renders strictly from this: an inapplicable station renders as
-         *     ``not_applicable``; an unsupported action never renders at all. Snapshot-
-         *     contract-tested per broker.
+         *     ``not_applicable``. A bot's commands are not listed here: its panel
+         *     presents exactly the actions it may run (``BotPanelView.actions``).
+         *     Snapshot-contract-tested per broker.
          */
         PanelProfile: {
             /** Broker */
@@ -21487,8 +21442,6 @@ export interface components {
             live_bars_supported: boolean;
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
-            /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * PanelQuiesceActionRequest
@@ -21939,7 +21892,7 @@ export interface components {
         };
         /**
          * ProfilePatchRequest
-         * @description Metadata only. A rename never invalidates an arming (ADR 0060 D4).
+         * @description Metadata only: a rename or an archive changes no revision's values (ADR 0060 D4).
          */
         ProfilePatchRequest: {
             /** Archived */
@@ -22464,7 +22417,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -23249,17 +23202,6 @@ export interface components {
             unit: string;
             /** Value */
             value: string | number | boolean;
-        };
-        /**
-         * RetireReplaceAction
-         * @description Move: retire this bot and start a fresh deploy flow with lineage kept.
-         */
-        RetireReplaceAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "retire_replace";
         };
         /** ReturnDistributionInsufficientCoverageResponse */
         ReturnDistributionInsufficientCoverageResponse: {
@@ -25711,13 +25653,6 @@ export interface components {
              */
             required_repr?: string;
         };
-        /** StartRunRequest */
-        StartRunRequest: {
-            /** Lifecycle Run Id */
-            lifecycle_run_id: string;
-            /** Operator Reason */
-            operator_reason?: string | null;
-        };
         /**
          * StartupJoinView
          * @description Where the current run is in joining its warmup to its live stream (#2410).
@@ -26248,12 +26183,6 @@ export interface components {
              * @default false
              */
             recency_supported?: boolean;
-            /**
-             * Sizing Surface
-             * @default policy
-             * @enum {string}
-             */
-            sizing_surface?: "policy" | "explicit";
             strategy_bars: components["schemas"]["StrategyBarCadenceInfo"];
             /**
              * Strategy Category
@@ -29441,44 +29370,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecoveryActionExecuteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StartRunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandResponse"];
                 };
             };
             /** @description Validation Error */
@@ -34650,46 +34541,6 @@ export interface operations {
         };
     };
     fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post: {
         parameters: {
             query?: never;
             header?: {

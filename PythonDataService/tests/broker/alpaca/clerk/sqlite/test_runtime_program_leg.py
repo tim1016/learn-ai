@@ -263,16 +263,15 @@ async def test_an_extended_exit_decision_submits_a_marketable_day_limit_at_the_e
     )
 
 
-def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sides(
+def test_the_one_published_leg_policy_carries_the_envelope_allowances_for_both_sides(
     tmp_path: Path,
 ) -> None:
-    """Entries are sealed like exits, and admission reads the policy that prices.
+    """Entries are priced from the envelope, and admission reads the policy that prices.
 
     The owner's decision names entries *and* exits. The entry price cannot be
-    driven end-to-end the way the exit is — a live ENTER whose environment
-    differs from its seal is refused ``LIVE_ENVELOPE_DISAGREEMENT`` before it
-    is priced, and one with no fresh observation is refused
-    ``LIVE_ENVELOPE_UNOBSERVED`` — so what is pinned here is the accessor both
+    driven end-to-end the way the exit is — a live ENTER with no fresh
+    observation is refused ``LIVE_ENVELOPE_UNOBSERVED`` before it is priced
+    — so what is pinned here is the accessor both
     sides share. Start and Resume admission receive it with the held
     custody snapshot; ``_execute_effect`` prices from it (which
     the extended-exit tests above prove end-to-end). One accessor is what stops
@@ -288,7 +287,7 @@ def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sid
         # The composed policy's 10 / 20 bps is the pre-envelope answer, and the
         # one a wrong wiring would give.
         program_leg_policy=_EXTENDED_POLICY,
-        live_envelope=LiveEnvelopeGate(values=armed, sealed=armed, custody_is_simulated=False),
+        live_envelope=LiveEnvelopeGate(values=armed, custody_is_simulated=False),
     )
     try:
         policy = facade.program_leg_policy
@@ -301,13 +300,12 @@ def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sid
     assert policy.window == _EXTENDED_POLICY.window
 
 
-async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged_edit(
+async def test_an_extended_exit_is_priced_from_the_bots_sealed_terms_not_the_account_envelope(
     tmp_path: Path,
 ) -> None:
-    """The bot's deployed 20 bps outranks both the account seal (40) and staged edit (500)."""
+    """The bot's deployed 20 bps outranks the account envelope's 500."""
     envelope = LiveEnvelopeGate(
         values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=500.0, xh_exit_bps=500.0),
-        sealed=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0),
         custody_is_simulated=False,
     )
 
@@ -324,17 +322,13 @@ async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged
     assert leg.limit_price == pytest.approx(99.80)  # registered 20 bps outranks account envelope
 
 
-async def test_an_extended_exit_still_prices_when_no_arming_record_seals_the_account(
+async def test_an_extended_exit_prices_from_the_configured_envelope(
     tmp_path: Path,
 ) -> None:
-    """An EXIT is never refused or delayed for want of a seal.
+    """An EXIT is never refused or delayed for want of an arming.
 
-    A position the operator is closing must not be stranded because no ceremony
-    has armed this account yet, or because this observation could not read the
-    ledger. Both leave ``sealed`` at ``None``, and the exit prices from the
-    configured values exactly as it did before the envelope existed. (The loss
-    judgement deliberately does *not* take this fallback — see
-    ``LiveEnvelopeSync._seal_unreadable``.)
+    A position the operator is closing prices from the configured values;
+    no arming record seals the envelope any more (#2629).
     """
     envelope = LiveEnvelopeGate(
         # As in production, the environment feeds both the configured envelope
@@ -342,7 +336,6 @@ async def test_an_extended_exit_still_prices_when_no_arming_record_seals_the_acc
         values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=10.0, xh_exit_bps=20.0),
         custody_is_simulated=False,
     )
-    assert envelope.sealed is None
 
     trade, state, explanation = await _exit(
         tmp_path,
@@ -1001,8 +994,8 @@ async def test_new_start_without_explicit_exit_terms_is_refused(tmp_path: Path) 
         repo.close()
 
 
-def test_legacy_upgrade_uses_refreshed_live_seal_once(tmp_path: Path, monkeypatch) -> None:
-    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
+def test_legacy_upgrade_prices_each_bot_from_its_own_arming_once(tmp_path: Path, monkeypatch) -> None:
+    """The one-time exit-terms upgrade still reads historical arming (#2629 keeps it)."""
     from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
     from tests.broker.alpaca.clerk.test_live_arming import _armed
 
@@ -1015,10 +1008,9 @@ def test_legacy_upgrade_uses_refreshed_live_seal_once(tmp_path: Path, monkeypatc
         ledger.append(_armed(instance=SID, account=ACCOUNT_ID, envelope=replace(TEST_ENVELOPE_VALUES, xh_exit_bps=40)))
         ledger.append(_armed(instance="another-bot", account=ACCOUNT_ID, envelope=replace(TEST_ENVELOPE_VALUES, xh_exit_bps=70)))
         configured = replace(TEST_ENVELOPE_VALUES, xh_exit_bps=20)
-        armed = replace(TEST_ENVELOPE_VALUES, xh_exit_bps=70)
-        gate = LiveEnvelopeGate(values=configured, sealed=armed, custody_is_simulated=False)
+        gate = LiveEnvelopeGate(values=configured, custody_is_simulated=False)
         facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),
-            account_mode="live", live_envelope=gate, live_arming=ArmingGate(), program_leg_policy=_EXTENDED_POLICY)
+            account_mode="live", live_envelope=gate, program_leg_policy=_EXTENDED_POLICY)
         assert repo.exit_terms(SID) is None
         facade.upgrade_legacy_exit_terms(ledger)
         terms = repo.exit_terms(SID)

@@ -41,7 +41,6 @@ def _account_snapshot(*, account_id: str = "alpaca-account", equity: float = 100
         portfolio_value=equity,
         long_market_value=50_125.75,
         short_market_value=0.0,
-        pattern_day_trader=False,
         trading_blocked=False,
         account_blocked=False,
         created_at_ms=None,

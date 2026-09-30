@@ -14,8 +14,42 @@ from app.engine.execution.signal_intent_executor import (
     SignalIntentExecutionContext,
     SignalIntentExecutor,
 )
-from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+
+
+def stock_symbol_from_action_plan(action: object) -> str | None:
+    """Return the single stock underlying declared by a live action plan.
+
+    Action plans are operator-authored deploy identity. For the current
+    stock-only runtime path, exactly one long stock leg is the traded ticker.
+    Option, short, and multi-leg plans are not consumable by the stock runtime
+    yet, so they deliberately return ``None``.
+    """
+    if not isinstance(action, dict):
+        return None
+    on_enter = action.get("on_enter")
+    if not isinstance(on_enter, list) or not on_enter:
+        return None
+
+    symbols: set[str] = set()
+    for leg in on_enter:
+        if not isinstance(leg, dict):
+            return None
+        if leg.get("position") != "long":
+            return None
+        instrument = leg.get("instrument")
+        if not isinstance(instrument, dict):
+            return None
+        if instrument.get("kind") != "stock":
+            return None
+        underlying = instrument.get("underlying")
+        if not isinstance(underlying, str) or not underlying.strip():
+            return None
+        symbols.add(underlying.strip().upper())
+
+    if len(symbols) != 1 or len(on_enter) != 1:
+        return None
+    return next(iter(symbols))
 
 
 @dataclass(frozen=True)

@@ -68,7 +68,6 @@ export const PROFILE: PanelProfile = {
   fee_fidelity: 'none',
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: [],
 };
 
 export function panelAtRevision(revision: number): BotPanelView {

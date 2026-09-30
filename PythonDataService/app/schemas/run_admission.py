@@ -104,25 +104,6 @@ class ExtendedHoursAdmissionFact(BaseModel):
         return self
 
 
-class ArmingAdmissionFact(BaseModel):
-    """Whether the sealed instance is armed on the live account it will trade (ADR 0059 D3/D11, slice 7).
-
-    Present only on the real-live custody world; ``None`` on the facts model
-    means the world has no arming to consult (paper, shadow, Dry Run).
-    ``UNREADABLE`` refuses a launch; ``NOT_ARMED`` admits it and rides the
-    decision's explanation — submission, not the launch, is what arming
-    gates, and every ENTER of an unarmed instance refuses at the Clerk.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    state: Literal["ARMED", "NOT_ARMED", "UNREADABLE"]
-    reason_code: str | None = None
-    explanation: str
-    next_step: str | None = None
-    observed_at_ms: int = Field(ge=0)
-
-
 class StartRuntimeAdmissionFact(BaseModel):
     """Runner-owned recovery evidence for Start."""
 
@@ -185,14 +166,6 @@ CORPUS_UNCOVERED_EXPLANATION = (
 )
 CORPUS_UNCOVERED_NEXT_STEP = (
     "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
-)
-ARMING_NEXT_STEP = (
-    "Open Settings and switch this account to budgets. Then deploy a fresh run "
-    "with its own budget and Live consent; historical grants cannot be renewed."
-)
-ARMING_REQUIRED_ADMITTED_NOTE = (
-    "This legacy run has no current entry permission. Reducing recovery remains available; "
-    "switch this account to budgets in Settings before a fresh Deploy."
 )
 
 
@@ -319,7 +292,6 @@ class StartRunFacts(BaseModel):
     market_liveness: MarketLivenessFact
     extended_hours: ExtendedHoursAdmissionFact
     start_window: StartWindowFact | None = None
-    arming: ArmingAdmissionFact | None = None
 
 
 RunAdmissionFacts = StartRunFacts

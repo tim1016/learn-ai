@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, select_active_clerk_runtime
-from app.broker.alpaca.clerk.live_arming_history import instance_seal_hashes
-from app.broker.alpaca.clerk.live_authority import InstanceSealsForAccount
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
@@ -100,41 +98,15 @@ def pinned_repository(now_ms: int) -> Callable[[str, Path], ClerkSqliteRepositor
     return _open
 
 
-def instance_seals_over(live_state_root: Path) -> InstanceSealsForAccount:
-    """The composition root's seals reader, over a test's runner root.
-
-    Mirrors ``main.py``'s ``_alpaca_instance_seals``: the same ceremony read,
-    narrowed to the live world's own custody id (design R15).
-    """
-
-    def _seals(live_account_id: str) -> dict[str, str]:
-        return {
-            sid: seal.seal_hash
-            for sid, seal in instance_seal_hashes(
-                live_account_id=live_account_id,
-                live_state_root=live_state_root,
-                custody_world="real_live",
-            ).items()
-        }
-
-    return _seals
-
-
 async def compose_live(
     tmp_path: Path,
     broker: _LiveBroker,
     *,
     now_ms: int,
-    live_state_root: Path,
     control_unauthenticated: bool = False,
     live_envelope_values: LiveEnvelopeValues | None = TEST_ENVELOPE_VALUES,
-    with_seals: bool = True,
 ) -> ActiveClerkRuntime:
-    """Initialize the live custody database, activate it, and run the real selector.
-
-    ``with_seals=False`` composes the authority with no seals reader at all --
-    the fail-closed shape a composition root that never wired one would get.
-    """
+    """Initialize the live custody database, activate it, and run the real selector."""
     repository = ClerkSqliteRepository.initialize(
         account_id=LIVE_ACCT, artifacts_root=tmp_path, clock=lambda: now_ms
     )
@@ -150,7 +122,6 @@ async def compose_live(
         activation_store=_ActivationStore(activation),
         repository_opener=pinned_repository(now_ms),
         live_envelope_values=live_envelope_values,
-        instance_seals=instance_seals_over(live_state_root) if with_seals else None,
         control_unauthenticated=control_unauthenticated,
     )
 
@@ -159,7 +130,6 @@ __all__ = [
     "LIVE_SID",
     "_RecordingLiveBroker",
     "compose_live",
-    "instance_seals_over",
     "live_activation",
     "pinned_repository",
 ]

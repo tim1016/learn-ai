@@ -247,113 +247,44 @@ def test_response_dto_projects_only_current_fields_without_rewriting_history(ser
     assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == LiveEnvelopeValues.from_settings(AlpacaSettings(**_ENVIRONMENT_SETTINGS)).sha
 
 
-def test_reverting_effective_envelope_does_not_revive_an_invalidated_arming(
+def test_applying_a_live_revision_writes_no_arming_evidence_and_reads_no_ledger(
     service: BrokerConfigurationService,
     clerk_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A → B → A persists a refusal without changing historical ledger bytes."""
-    from app.broker.alpaca.clerk import live_arming_history
+    """#2629: an Apply no longer invalidates historical armings.
+
+    It used to read the arming ledger inside the Apply transaction and append a
+    ``live_arming_invalidated`` event per disagreeing record, so an unreadable
+    ledger refused the Apply. The ledger is history now: its bytes are never
+    read or rewritten here, and no such event is written.
+    """
     from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 
     account_id = "9LIVE0001"
-    instance_id = "ema-live-1"
-    envelope = _settings_envelope()
-    now_ms = 1_757_000_000_000
-    armed = LiveArmingRecord.create(
-        live_account_id=account_id,
-        strategy_instance_id=instance_id,
-        seal_hash="a" * 64,
-        configured_signal_hash="b" * 64,
-        shadow_receipt_sha256=None,
-        envelope=envelope,
-        armed_at_ms=now_ms,
-        max_sessions=envelope.arming_max_sessions,
-    )
     ledger = LiveArmingLedger(clerk_dir, live_account_id=account_id)
-    ledger.append(armed)
-    original = ledger.path.read_bytes()
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    ledger.path.write_bytes(b"unreadable retired permission\n")
     profile_id = _live_profile(service)
-    service.create_revision(
-        profile_id,
-        expected_revision=1,
-        credential_slot="alpaca_live_primary",
-        endpoint_mode="live",
-        live_envelope=ValidatedLiveEnvelope.from_mapping(
-            {**LIVE_ENVELOPE_PAYLOAD, "loss_usd": 6_000.0}
-        ),
+
+    service.stage_selection(
+        profile_id=profile_id,
+        revision=1,
+        expected_selection_generation=service.selection().selection_generation,
     )
-    monkeypatch.setattr(
-        live_arming_history,
-        "instance_seal_hashes",
-        lambda **_: {instance_id: live_arming_history.InstanceSeal("a" * 64, "b" * 64)},
+    service.acknowledge_effective(
+        profile_id=profile_id,
+        revision=1,
+        account_id=account_id,
+        expected_selection_generation=service.selection().selection_generation,
     )
 
-    def status() -> str:
-        return live_arming_history.account_arming(
-            live_account_id=account_id,
-            artifacts_root=clerk_dir,
-            live_state_root=clerk_dir / "test-bindings",
-            configured_envelope=service.read_revision(
-                profile_id, service.selection().effective_revision
-            ).live_envelope.to_values(),
-            now_ms=now_ms + 1,
-        ).statuses[instance_id].state
-
-    for revision in (1, 2, 1):
-        service.stage_selection(
-            profile_id=profile_id,
-            revision=revision,
-            expected_selection_generation=service.selection().selection_generation,
-        )
-        service.acknowledge_effective(
-            profile_id=profile_id,
-            revision=revision,
-            account_id=account_id,
-            expected_selection_generation=service.selection().selection_generation,
-        )
-        if revision == 2:
-            assert status() == "disarmed"
-
-    assert status() == "disarmed"
-    assert ledger.path.read_bytes() == original
-    # A new ceremony can grant permission again, even when both Applies and
-    # the original arming shared one millisecond. No timestamp heuristic.
-    ledger.append(LiveArmingRecord.create(
-        live_account_id=account_id,
-        strategy_instance_id=instance_id,
-        seal_hash="a" * 64,
-        configured_signal_hash="b" * 64,
-        shadow_receipt_sha256=None,
-        envelope=envelope,
-        armed_at_ms=now_ms + 1,
-        max_sessions=envelope.arming_max_sessions,
-    ))
-    assert status() == "armed"
-
-
-def test_worker_snapshot_keeps_configuration_invalidation_across_refreshes() -> None:
-    """Publishing a fresh readable arming ledger cannot clear the Apply fence."""
-    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate, ArmingSnapshot
-
-    envelope = _settings_envelope()
-    now_ms = 1_757_000_000_000
-    record = LiveArmingRecord.create(
-        live_account_id="9LIVE0001", strategy_instance_id="ema-live-1",
-        seal_hash="a" * 64, configured_signal_hash="b" * 64,
-        shadow_receipt_sha256=None, envelope=envelope,
-        armed_at_ms=now_ms, max_sessions=envelope.arming_max_sessions,
-    )
-    gate = ArmingGate()
-    gate.set_configuration_invalidations(frozenset({record.record_sha256}))
-    for observed_at in (now_ms, now_ms + 1):
-        gate.publish(ArmingSnapshot(
-            observed_at_ms=observed_at,
-            live_account_id=record.live_account_id,
-            records=(record,),
-            seals={record.strategy_instance_id: record.seal_hash},
-            configured_envelope=envelope,
-        ))
-        snapshot = gate.fresh_snapshot(observed_at)
-        assert snapshot is not None
-        assert snapshot.status_for(record.strategy_instance_id, now_ms=observed_at).state == "disarmed"
+    assert service.selection().effective_revision == 1
+    assert ledger.path.read_bytes() == b"unreadable retired permission\n"
+    conn = sqlite3.connect(profiles_database_path(clerk_dir))
+    try:
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM configuration_events WHERE action = 'live_arming_invalidated'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert count == 0

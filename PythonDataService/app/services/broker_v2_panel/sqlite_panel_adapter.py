@@ -2,7 +2,8 @@
 
 The panel remains the product surface.  This module is only a projection
 adapter: it neither replays transitions nor authors a second recovery policy.
-Every action and action token comes from the SQLite recovery catalog.
+Every recovery action and its token comes from the SQLite recovery catalog;
+Clear's ``archive`` comes from the one archive rule (``action_policy``).
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.v2panel.action_policy import archive_action
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
@@ -80,14 +82,9 @@ _WORKING_BROKER_STATES = frozenset(
 _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 
 # SQLite owns broker-recovery actions after activation, but the bot-lifecycle
-# action (Clear's ``archive``) remains the runner's.  Preserve it from the
-# generic panel policy instead of trying to reconstruct its guard from the
-# custody projection.
-#
-# Membership does double duty: it is also what routes a POST past the SQLite
-# recovery executor to the generic performer (`sqlite_panel_source`).  An
-# action omitted here is silently deleted on the way to Angular however
-# completely its guard and performer are wired (#1778, S5).
+# action (Clear's ``archive``) remains the runner's: this adapter presents it
+# (``_lifecycle_actions``) and membership here routes its POST past the SQLite
+# recovery executor to the runner's performer (`sqlite_panel_source`).
 SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"archive"})
 
 
@@ -120,20 +117,11 @@ def adapt_sqlite_panel(
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
-    lifecycle_actions = [
-        action.model_copy(update={"revision": projection.control_revision})
-        for action in panel.actions
-        if (
-            action.action_id in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
-            and not panel.health.running
-        )
-    ]
     actions = [
-        *lifecycle_actions,
+        *_lifecycle_actions(panel, projection),
         *(
             _panel_action(item, projection.control_revision, flatten_verdict=flatten_verdict)
             for item in projection.recovery_actions
-            if item.action_id not in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
         ),
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
@@ -198,6 +186,34 @@ def adapt_sqlite_panel(
             **open_pnl_fields(None if economics is None else economics.exact_open_pnl),
         }
     )
+
+
+def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list[PanelAction]:
+    """Clear's ``archive`` for a stopped bot's page; a running bot's page has none.
+
+    A running bot's stop is the recovery catalog's ``stop_bot_decisions``.
+    ``panel`` is the pre-adaptation projection: archive reads its runner
+    liveness and phase, the Clerk card's freeze and the SQLite exposure it was
+    built from. The working-order count is the Clerk's own
+    (``projection.working_order_refs``), the set the commit-time check reads.
+    The pre-adaptation projection's list comes from the legacy order journal,
+    which nothing writes any more, so a working order never disabled the
+    button (#2635).
+    """
+    if panel.health.running:
+        return []
+    return [
+        archive_action(
+            running=panel.health.running,
+            phase=panel.health.phase,
+            freeze_active=panel.clerk.freeze_active,
+            exposure=panel.exposure,
+            working_order_count=len(projection.working_order_refs),
+            account_id=panel.account_id,
+            strategy_instance_id=panel.strategy_instance_id,
+            revision=projection.control_revision,
+        )
+    ]
 
 
 def _has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:

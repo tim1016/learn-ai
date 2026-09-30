@@ -93,11 +93,11 @@ class ClerkPriorAccountObligations:
 
     ``clerk_dir`` is the Clerk volume that holds ``accounts/alpaca/``;
     ``live_state_root`` is the artifacts root that *contains* ``live_state/``
-    (the same argument ``live_state_binding_repository`` takes, and the same
-    name ``instance_seal_hashes`` gives it). ``None`` means "whatever this
-    deployment is configured with", resolved per observation rather than at
-    construction so that a misconfigured installation refuses one preflight
-    instead of failing to build a probe at all.
+    (the same argument ``live_state_binding_repository`` takes). ``None``
+    means "whatever this deployment is configured with", resolved per
+    observation rather than at construction so that a misconfigured
+    installation refuses one preflight instead of failing to build a probe at
+    all.
     """
 
     def __init__(
@@ -320,12 +320,10 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
     The canonical repository's strict listing propagates corrupt or incomplete
     rows rather than skipping a bot whose obligations cannot be established.
 
-    Two further departures from ``instance_seal_hashes``, which asks a similar
-    question for arming:
+    Two further rules:
 
-    * A binding with no v2 ``sealed_program`` is **kept**. That skip is correct
-      for arming (a legacy record cannot be armed) and wrong for obligations —
-      a legacy bot on the prior account is still a bot on the prior account.
+    * A binding with no v2 ``sealed_program`` is **kept**: a legacy bot on the
+      prior account is still a bot on the prior account.
     * Only ``sealed_account_id`` attributes a binding to an account, so a legacy
       record that sealed no account is not counted against *this* one. It cannot
       be: counting every unattributable binding against every account would
