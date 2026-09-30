@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
+from app.broker.alpaca.clerk.authority_reconnect import RECONNECT_FAILED
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_FAILED_HEADLINE as _AUTHORITY_FAILED_HEADLINE,
 )
@@ -125,6 +126,12 @@ async def lane_attention_read() -> LaneAttentionRead:
     repository = None if runtime is None else runtime.sqlite_repository
     if runtime is None or repository is None:
         failure = None if runtime is None else runtime.startup_failure
+        if failure is not None and (failure.reconnecting or failure.reason_code == RECONNECT_FAILED):
+            # The account-identity read failing is the most common outage
+            # shape, and its refusal carries no activation evidence
+            # (#2620): the reconnecting line shows anyway, and a reconnect
+            # that broke ends final on the same lane, which stays on Home.
+            return LaneAttentionRead(account_id=failure.account_id, items=[_failed_authority_item(failure)])
         if failure is None or not failure.activation_detected:
             return LaneAttentionRead(account_id=None, items=[])
         return LaneAttentionRead(account_id=failure.account_id, items=[_failed_authority_item(failure)])
@@ -167,11 +174,13 @@ def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
     """
     if failure.reconnecting:
         # Not a failure (#2582): the authority installs on its own once Alpaca
-        # answers, and this line clears with it.
+        # answers, and this line clears with it. Order records answer 503
+        # while the lane reconnects, so the one action points at Settings,
+        # which loads and says the same thing (#2620).
         return LaneAttentionItem(
             condition_id="account:authority-reconnecting", reason_code=failure.reason_code,
             kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE,
-            action=_ORDER_RECORDS,
+            action=LaneAttentionAction(label="Open Settings", destination="settings"),
         )
     return LaneAttentionItem(
         condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
