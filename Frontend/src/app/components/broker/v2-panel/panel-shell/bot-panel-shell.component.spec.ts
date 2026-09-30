@@ -2290,6 +2290,7 @@ describe('BotPanelShellComponent', () => {
       explanation: 'At Wed Sep 30, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
       notice: null,
       editable: true,
+      default_end_at_ms: null,
     };
 
     function changeEnd(): HTMLButtonElement {

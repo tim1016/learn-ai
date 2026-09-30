@@ -388,7 +388,7 @@ class _BenchRegistry:
         record = DesiredStateRepo(stable_desired_state_path(self.artifacts_root, sid)).read()
         return bot_end_view(
             None if record is None else record.end,
-            now_ms=1_700_000_000_000, dry_run=False, running=sid not in self._stopped,
+            now_ms=1_700_000_000_000, dry_run=False, running=sid not in self._stopped, use_rth=True,
         )
 
     def bindings_for_broker(self, broker: str) -> list[object]:

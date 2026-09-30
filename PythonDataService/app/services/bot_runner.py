@@ -1825,6 +1825,7 @@ class BotTaskRegistry:
             now_ms=now_ms,
             dry_run=binding.mode == "dry_run",
             running=self._is_running(binding.strategy_instance_id),
+            use_rth=binding.use_rth,
             notice=notice,
         )
 

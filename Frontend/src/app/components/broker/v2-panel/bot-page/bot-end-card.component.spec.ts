@@ -20,6 +20,20 @@ const SCHEDULED: BotEndView = {
   explanation: 'At Wed Sep 30, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
   notice: null,
   editable: true,
+  default_end_at_ms: null,
+};
+
+/** A running bot with no end: the backend offers the default end — today's
+ * close minus a minute — for the fields to open on when one is added (#2663). */
+const NO_END: BotEndView = {
+  end_at_ms: null,
+  end_action: 'SELL',
+  status: 'no_end',
+  headline: 'No end · runs until you stop it',
+  explanation: 'This bot has no end time. It runs until you stop it.',
+  notice: null,
+  editable: true,
+  default_end_at_ms: END_AT,
 };
 
 /** After Stop: the backend's own words — a Stop cancels the end, and nothing is sold at it. */
@@ -31,6 +45,7 @@ const STOPPED: BotEndView = {
   explanation: 'This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it.',
   notice: null,
   editable: false,
+  default_end_at_ms: null,
 };
 
 const etTime = (ms: number): string => formatTimestampDisplay(ms, { mode: 'et', granularity: 'time' });
@@ -117,6 +132,34 @@ describe('BotEndCardComponent (#2607)', () => {
     }));
   });
 
+  it.each([
+    { session: 'a full session', defaultAt: END_AT, etMinute: '15:59' },
+    { session: 'a half-day', defaultAt: Date.UTC(2026, 10, 27, 17, 59), etMinute: '12:59' },
+  ])('opens a bot with no end on the default end the backend offers, on $session', async ({ defaultAt, etMinute }) => {
+    const { save, fixture } = await renderCard({ ...NO_END, default_end_at_ms: defaultAt });
+
+    const fields = await openEditor(fixture);
+    const wall = localWallClock(defaultAt);
+    expect(within(fields).getByLabelText<HTMLInputElement>('End date').value).toBe(wall.date);
+    expect(within(fields).getByLabelText<HTMLInputElement>(/^End time/).value).toBe(wall.clock);
+    expect(within(fields).getByRole<HTMLInputElement>('checkbox', { name: 'No end — run until I stop it' }).checked).toBe(false);
+    const market = within(fields).getByText(/^Market time/).textContent ?? '';
+    expect(market).toContain(etTime(defaultAt));
+    expect(market).toContain(etMinute);
+    fireEvent.click(within(fields).getByRole('button', { name: 'Save end' }));
+
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: defaultAt, end_action: 'SELL' }));
+  });
+
+  it('opens a bot the backend offers no default end on "No end"', async () => {
+    const { fixture } = await renderCard({ ...NO_END, default_end_at_ms: null });
+
+    const fields = await openEditor(fixture);
+
+    expect(within(fields).getByRole<HTMLInputElement>('checkbox', { name: 'No end — run until I stop it' }).checked).toBe(true);
+    expect(within(fields).getByLabelText<HTMLInputElement>('End date').value).toBe('');
+  });
+
   it('says the typed time in market time beside it, and nothing while the date or time names no minute', async () => {
     const { fixture } = await renderCard(SCHEDULED);
     const fields = await openEditor(fixture);
@@ -144,6 +187,21 @@ describe('BotEndCardComponent (#2607)', () => {
     fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
 
     await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: null, end_action: 'SELL' }));
+  });
+
+  it('never rewrites the default end the owner is changing when a poll offers a later one', async () => {
+    const { save, fixture, rerender } = await renderCard(NO_END);
+    const fields = await openEditor(fixture);
+    fireEvent.input(within(fields).getByLabelText(/^End time/), { target: { value: '12:30' } });
+
+    await rerender({ partialUpdate: true, inputs: { end: { ...NO_END, default_end_at_ms: END_AT + 86_400_000 } } });
+    fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
+
+    const [year, month, day] = localWallClock(END_AT).date.split('-').map(Number);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith({
+      end_at_ms: new Date(year, month - 1, day, 12, 30).getTime(),
+      end_action: 'SELL',
+    }));
   });
 
   it('offers no Keep for a Dry Run, which always sells at its end', async () => {

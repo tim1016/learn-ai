@@ -49,8 +49,8 @@ from app.schemas.bot_end import (
     RecordedEnd,
 )
 from app.services.session_authority import et_minute_of_day_ms
+from app.utils.et_words import et_clock_words, et_day_words, et_when_words
 from app.utils.session_anchors import et_date_at_ms
-from app.utils.timestamps import ny_datetime
 
 #: The end is one minute before the close: the bot is gone before the bar that
 #: ends at the close is decided.
@@ -105,12 +105,9 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
                 next_action="Choose an end time, or choose no end with Sell.",
             )
         return ResolvedBotEnd(end=None)
-    if not use_rth:
-        raise BotEndRefused(
-            "This bot can't have an end.",
-            detail="An end is set within regular hours, and this bot also trades outside them.",
-            next_action="Remove the end, or deploy the bot for regular hours only.",
-        )
+    hours_refusal = _hours_refusal(use_rth=use_rth)
+    if hours_refusal is not None:
+        raise hours_refusal
     if choice is None:
         return ResolvedBotEnd(end=default_bot_end(now_ms))
     if dry_run and choice.end_action == "KEEP":
@@ -120,6 +117,22 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
             next_action="Choose Sell for this Dry Run.",
         )
     return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
+
+
+def _hours_refusal(*, use_rth: bool) -> BotEndRefused | None:
+    """Why a bot's hours allow it no end, or ``None`` when they allow one.
+
+    The one answer for :func:`resolve_bot_end` and the default
+    :func:`bot_end_view` offers: an end is set within regular hours, so a bot
+    that also trades outside them (``use_rth`` ``False``) has no end rule yet.
+    """
+    if use_rth:
+        return None
+    return BotEndRefused(
+        "This bot can't have an end.",
+        detail="An end is set within regular hours, and this bot also trades outside them.",
+        next_action="Remove the end, or deploy the bot for regular hours only.",
+    )
 
 
 def end_edit_refusal(pending: BotEnd | None, *, running: bool, now_ms: int) -> BotEndRefused | None:
@@ -153,12 +166,19 @@ def bot_end_view(
     now_ms: int,
     dry_run: bool,
     running: bool,
+    use_rth: bool,
     notice: str | None = None,
 ) -> BotEndView:
-    """A bot's end in the owner's words, at ``now_ms``."""
+    """A bot's end in the owner's words, at ``now_ms``.
+
+    A bot with no end whose end may change now is offered the default end
+    (:func:`default_bot_end`, Deploy's rule) for the owner adding one --
+    unless its hours allow it no end (:func:`_hours_refusal`).
+    """
     pending = None if recorded is None else recorded.pending()
     editable = end_edit_refusal(pending, running=running, now_ms=now_ms) is None
     if recorded is None:
+        offers_default = editable and _hours_refusal(use_rth=use_rth) is None
         return BotEndView(
             end_at_ms=None, end_action="SELL", status="no_end",
             headline="No end · runs until you stop it" if running else "No end scheduled",
@@ -168,42 +188,36 @@ def bot_end_view(
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
             notice=notice, editable=editable,
+            default_end_at_ms=default_bot_end(now_ms).end_at_ms if offers_default else None,
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
         done = "sold at its last price" if dry_run else _DONE_WORDS[recorded.end_action]
-        headline = f"Ended {when_words(recorded.carried_out_at_ms, now_ms=now_ms)} · {done}"
+        headline = f"Ended {et_when_words(recorded.carried_out_at_ms, now_ms=now_ms)} · {done}"
     else:
         status = "ending" if recorded.end_at_ms <= now_ms else "scheduled"
-        when = when_words(recorded.end_at_ms, now_ms=now_ms)
+        when = et_when_words(recorded.end_at_ms, now_ms=now_ms)
         action = _ACTION_WORDS[recorded.end_action]
         headline = f"Ends {when} · {action}" if status == "scheduled" else f"End reached {when} · {action}"
     return BotEndView(
         end_at_ms=recorded.end_at_ms, end_action=recorded.end_action, status=status, headline=headline,
         explanation=_explanation(
-            status, recorded.end_action, when_words(recorded.end_at_ms, now_ms=now_ms),
+            status, recorded.end_action, et_when_words(recorded.end_at_ms, now_ms=now_ms),
             dry_run=dry_run, running=running,
         ),
-        notice=notice, editable=editable,
+        notice=notice, editable=editable, default_end_at_ms=None,
     )
 
 
 def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
-    """An end the Deploy form chose, before its bot exists, with the notice when its time was moved."""
+    """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
+
+    Every Deploy is regular hours only.
+    """
     return bot_end_view(
         None if resolved.end is None else RecordedEnd.scheduled(resolved.end),
-        now_ms=now_ms, dry_run=dry_run, running=True, notice=resolved.notice,
+        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice,
     )
-
-
-def when_words(instant_ms: int, *, now_ms: int) -> str:
-    """An instant as the owner reads it: ``Wed Sep 30, 15:59 ET``, with the year when it is not this one.
-
-    Always the weekday and date, never "today": the owner may not be in the
-    market's time zone, so "today" in ET can be tomorrow where they are.
-    """
-    at = ny_datetime(instant_ms)
-    return f"{_day_words(at.date(), now_ms=now_ms)}, {at:%H:%M} ET"
 
 
 _ACTION_WORDS: dict[BotEndAction, str] = {"SELL": "sells", "KEEP": "keeps its shares"}
@@ -215,9 +229,10 @@ def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> Re
     with _calendar_covers_the_date():
         day = et_date_at_ms(end_at_ms)
         trading_day = is_trading_day(day)
+    day_words = et_day_words(end_at_ms, now_ms=now_ms)
     if not trading_day:
         raise BotEndRefused(
-            f"The market is closed on {_day_words(day, now_ms=now_ms)}.",
+            f"The market is closed on {day_words}.",
             detail="A bot can only end while the market is open.",
             next_action="Choose a trading day.",
         )
@@ -229,17 +244,17 @@ def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> Re
     if moved_to_early_close:
         end_at_ms = last_ms
         notice = (
-            f"{_day_words(day, now_ms=now_ms)} closes early at {_clock_words(window.close_ms_utc)} ET, "
-            f"so this bot ends at {_clock_words(last_ms)} ET."
+            f"{day_words} closes early at {et_clock_words(window.close_ms_utc)} ET, "
+            f"so this bot ends at {et_clock_words(last_ms)} ET."
         )
     if not window.open_ms_utc <= end_at_ms <= last_ms:
         raise BotEndRefused(
             "The end must fall within regular hours.",
             detail=(
-                f"On {_day_words(day, now_ms=now_ms)} the market is open from {_clock_words(window.open_ms_utc)} to "
-                f"{_clock_words(window.close_ms_utc)} ET, so the latest end is {_clock_words(last_ms)} ET."
+                f"On {day_words} the market is open from {et_clock_words(window.open_ms_utc)} to "
+                f"{et_clock_words(window.close_ms_utc)} ET, so the latest end is {et_clock_words(last_ms)} ET."
             ),
-            next_action=f"Choose a time from {_clock_words(window.open_ms_utc)} to {_clock_words(last_ms)} ET.",
+            next_action=f"Choose a time from {et_clock_words(window.open_ms_utc)} to {et_clock_words(last_ms)} ET.",
         )
     if end_at_ms <= now_ms:
         raise BotEndRefused(
@@ -301,16 +316,6 @@ def _full_session_last_end_ms(day: date) -> int:
     return et_minute_of_day_ms(day, session_close_minute_et(full_day)) - BOT_END_LEAD_MS
 
 
-def _clock_words(instant_ms: int) -> str:
-    return f"{ny_datetime(instant_ms):%H:%M}"
-
-
-def _day_words(day: date, *, now_ms: int) -> str:
-    """A date as the owner reads it: ``Wed Sep 30``, with the year when it is not this one (in ET)."""
-    year = "" if day.year == et_date_at_ms(now_ms).year else f" {day.year}"
-    return f"{day:%a %b} {day.day}{year}"
-
-
 @contextmanager
 def _calendar_covers_the_date() -> Iterator[None]:
     """Refuse, in plain words, a date the market calendar cannot answer for.
@@ -338,5 +343,4 @@ __all__ = [
     "end_edit_refusal",
     "resolve_bot_end",
     "resolved_bot_end_view",
-    "when_words",
 ]
