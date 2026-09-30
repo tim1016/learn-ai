@@ -1645,6 +1645,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/end-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the end a Deploy would record: the default, a move to before an early close, or a refusal (#2607) */
+        post: operations["preview_bot_end_scoped_api_brokers__broker__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
         parameters: {
             query?: never;
@@ -1765,6 +1782,23 @@ export interface paths {
         /** Deploy again: one earlier bot's sealed settings, never its money or consent */
         get: operations["read_deploy_prefill_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_prefill_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change a bot's end or its sell/keep choice now, with no restart and no seal touched (#2607) */
+        put: operations["edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2480,6 +2514,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/end-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot End Preview
+         * @description Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).
+         */
+        post: operations["fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions": {
         parameters: {
             query?: never;
@@ -2633,6 +2687,26 @@ export interface paths {
          */
         get: operations["fleet_bot_deploy_prefill_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_prefill_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Fleet Bot End Edit
+         * @description Fleet-routed PUT /accounts/{account_id}/bots/{sid}/end (bot_action).
+         */
+        put: operations["fleet_bot_end_edit_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__end_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -8530,6 +8604,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8748,6 +8824,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8801,6 +8879,8 @@ export interface components {
              * @enum {string}
              */
             evidence_status: "accepted" | "evidence_only" | "blocked";
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Explanation */
             explanation: string;
             /** Golden Validation Scope */
@@ -8856,6 +8936,7 @@ export interface components {
             carryover_explanation: string;
             /** Carryover Label */
             carryover_label: string;
+            default_end: components["schemas"]["BotEndView"];
             default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             dry_run_eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
@@ -10069,13 +10150,79 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            kind: "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
             run_id?: string | null;
+        };
+        /**
+         * BotEndInput
+         * @description The owner's choice of end, as Deploy and the bot panel send it.
+         *
+         *     Both fields are required. ``end_at_ms`` ``null`` is the explicit "no
+         *     end" choice, sent with ``end_action`` ``SELL``: a bot with no end has no
+         *     shares to keep at one. A Deploy that sends no ``end`` at all gets the
+         *     default end.
+         */
+        BotEndInput: {
+            /**
+             * End Action
+             * @enum {string}
+             */
+            end_action: "SELL" | "KEEP";
+            /** End At Ms */
+            end_at_ms: number | null;
+        };
+        /**
+         * BotEndPreviewRequest
+         * @description Check an end on the Deploy form before the bot exists.
+         *
+         *     ``end`` omitted previews the default end; an explicit ``null`` is refused
+         *     (:data:`EXPLICIT_NULL_END`).
+         */
+        BotEndPreviewRequest: {
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode: "paper" | "dry_run" | "shadow" | "live";
+        };
+        /**
+         * BotEndView
+         * @description A bot's end in the owner's words, authored by the backend.
+         *
+         *     ``headline`` is the one line the panel shows ("Ends Wed Sep 30, 15:59 ET
+         *     · sells"); ``explanation`` says what will happen, or what happened.
+         *     ``notice`` is set only when the chosen time was moved, e.g. to one minute
+         *     before an early close. ``editable`` says whether the panel may offer to
+         *     change it now.
+         */
+        BotEndView: {
+            /** Editable */
+            editable: boolean;
+            /**
+             * End Action
+             * @enum {string}
+             */
+            end_action: "SELL" | "KEEP";
+            /** End At Ms */
+            end_at_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Headline */
+            headline: string;
+            /** Notice */
+            notice?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "no_end" | "scheduled" | "ending" | "ended";
         };
         /**
          * BotHealthCard
@@ -10202,7 +10349,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            kind: "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */
@@ -10254,9 +10401,12 @@ export interface components {
             /** Broker */
             broker: string;
             clerk: components["schemas"]["ClerkCard"];
+            end?: components["schemas"]["BotEndView"] | null;
             /** Execution Policy */
             execution_policy: string;
             exit_terms?: components["schemas"]["ExitTerms"] | null;
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -10394,7 +10544,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            kind: "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */
@@ -26061,6 +26211,8 @@ export interface components {
             description: string;
             /** Display Name */
             display_name: string;
+            /** Experimental Notice */
+            experimental_notice?: string | null;
             /** Gotchas */
             gotchas?: string[];
             /** Lean Twin */
@@ -32009,6 +32161,44 @@ export interface operations {
             };
         };
     };
+    preview_bot_end_scoped_api_brokers__broker__accounts__account_id__bots_end_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotEndPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotEndView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post: {
         parameters: {
             query?: never;
@@ -32289,6 +32479,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotDeployPrefill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotEndInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotEndView"];
                 };
             };
             /** @description Validation Error */
@@ -33728,6 +33957,45 @@ export interface operations {
             };
         };
     };
+    fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post: {
         parameters: {
             query?: never;
@@ -34003,6 +34271,46 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_end_edit_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__end_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -286,6 +286,7 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "admissible_modes",
         "override_explanation",
         "blocked_explanation",
+        "experimental_notice",
         "params_schema",
         "qualified_configuration",
     }

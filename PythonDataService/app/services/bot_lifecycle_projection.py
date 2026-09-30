@@ -53,6 +53,8 @@ class AlpacaLifecycleAuthority(Protocol):
         reason: str | None,
     ) -> None: ...
 
+    def stop_reason(self, strategy_instance_id: str, run_id: str) -> str | None: ...
+
 
 class SqliteAlpacaLifecycleAuthority:
     """Read the lifecycle facts SQLite already owns."""
@@ -93,6 +95,15 @@ class SqliteAlpacaLifecycleAuthority:
             strategy_instance_id=strategy_instance_id,
             retired_at_ms=retired_at_ms,
             operator_reason=reason,
+        )
+
+    def stop_reason(self, strategy_instance_id: str, run_id: str) -> str | None:
+        from app.broker.alpaca.clerk.sqlite.commands import run_stop_reason
+
+        return run_stop_reason(
+            self._repository,
+            strategy_instance_id=strategy_instance_id,
+            lifecycle_run_id=run_id,
         )
 
 
@@ -155,6 +166,17 @@ class ActiveSqliteAlpacaLifecycleAuthority:
             reason,
         )
 
+    def stop_reason(self, strategy_instance_id: str, run_id: str) -> str | None:
+        from app.broker.alpaca.clerk import get_alpaca_clerk
+
+        reader = getattr(get_alpaca_clerk(), "run_stop_reason", None)
+        if callable(reader):
+            return reader(strategy_instance_id, run_id)
+        return SqliteAlpacaLifecycleAuthority(self._active_repository()).stop_reason(
+            strategy_instance_id,
+            run_id,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class AlpacaLifecycleProjectionResult:
@@ -197,6 +219,14 @@ class AlpacaLifecycleProjector:
         self._authority = authority
         self._lifecycle_repo_for = lifecycle_repo_for
         self._require_alpaca_identity = require_alpaca_identity
+
+    def run_is_active(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        """Whether the Clerk still holds this exact run ACTIVE: a read, never a projection."""
+        return self._authority.snapshot(strategy_instance_id, run_id).expected_run_state == "ACTIVE"
+
+    def run_stop_reason(self, *, strategy_instance_id: str, run_id: str) -> str | None:
+        """The reason the Clerk stopped this exact run under; ``None`` while it has not: a read."""
+        return self._authority.stop_reason(strategy_instance_id, run_id)
 
     def project_active(
         self,

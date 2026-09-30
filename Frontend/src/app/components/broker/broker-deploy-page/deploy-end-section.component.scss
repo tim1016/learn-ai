@@ -1,0 +1,54 @@
+@use '../../../styles/eyebrow-heading' as *;
+@use '../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.deploy-end {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+
+  p {
+    margin: 0;
+    line-height: 1.45;
+  }
+}
+
+.deploy-end__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.deploy-end__title {
+  @include eyebrow-heading;
+  margin: 0;
+}
+
+.deploy-end__change { @include link-button; }
+
+// Neither blocks nor warns: the end is being checked, or the check could not be read.
+.deploy-end__state { color: var(--text-secondary); font-size: var(--fs-xs); }
+
+.deploy-end__refusal {
+  color: var(--bear);
+  font-size: var(--fs-xs);
+
+  strong { font-weight: var(--fw-semi); }
+}
+
+.deploy-end__code {
+  display: block;
+  color: var(--text-subtle);
+}
+
+.deploy-end__answer { margin-bottom: var(--space-3); }
+
+div.deploy-end__answer {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.deploy-end__default { @include soft-button; }

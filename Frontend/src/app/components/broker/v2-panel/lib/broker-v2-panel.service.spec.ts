@@ -61,6 +61,26 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(command).resolves.toMatchObject({ status: 'pending', committed_usd: '1234.56' });
   });
 
+  it('checks a Deploy’s end as a read, and changes a bot’s end as an enveloped PUT (#2607)', async () => {
+    const end = { end_at_ms: 1_790_020_740_000, end_action: 'KEEP' as const };
+    const preview = service.previewBotEnd(target('PA9'), { execution_mode: 'paper', end });
+    const check = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/end-preview');
+    expect(check.request.method).toBe('POST');
+    expect(check.request.body).toEqual({ execution_mode: 'paper', end });
+    check.flush({ headline: 'Ends today 15:59 ET · keeps its shares' });
+    await expect(preview).resolves.toMatchObject({ headline: 'Ends today 15:59 ET · keeps its shares' });
+
+    const change = service.editBotEnd(target('PA9', 'sid/1'), 'sid/1', end);
+    const put = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/end');
+    expect(put.request.method).toBe('PUT');
+    expect(put.request.body).toMatchObject(end);
+    expect(put.request.body.command_context).toMatchObject({
+      capability: 'bot_action', idempotency_key: 'command-key-1', expected_effective_binding_generation: 3,
+    });
+    put.flush({ headline: 'Ends today 15:59 ET · keeps its shares' });
+    await expect(change).resolves.toMatchObject({ headline: 'Ends today 15:59 ET · keeps its shares' });
+  });
+
   it('reads budget and durable deployment status through the selected account and escaped bot identity', async () => {
     const budget = service.getBudget(target('PA9'), 'sid/1');
     const money = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/budget');

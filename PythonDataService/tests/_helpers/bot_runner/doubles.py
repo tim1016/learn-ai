@@ -241,6 +241,8 @@ class _CustodyClerk:
         self.stopped_runs: list[str] = []
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
+        # The reason each run's STOP committed under: a run is stopped once.
+        self.stop_reasons: dict[tuple[str, str], str | None] = {}
 
     async def register_strategy_run(
         self, binding: BrokerBotBinding, *, run_owner: object = None
@@ -285,10 +287,13 @@ class _CustodyClerk:
         run_id: str,
         reason: str | None = None,
     ) -> None:
-        del reason
         self.stopped_runs.append(run_id)
         if self.active_runs.get(strategy_instance_id) == run_id:
             self.active_runs.pop(strategy_instance_id)
+            self.stop_reasons[(strategy_instance_id, run_id)] = reason
+
+    def run_stop_reason(self, strategy_instance_id: str, run_id: str) -> str | None:
+        return self.stop_reasons.get((strategy_instance_id, run_id))
 
     def lifecycle_snapshot(
         self,
@@ -323,6 +328,11 @@ class _CustodyClerk:
         return tuple(sorted(self.active_runs.items()))
 
     async def prove_instance_custody(self, sid: str) -> InstanceCustodyProof:
+        assert sid == self.proof.strategy_instance_id
+        return self.proof
+
+    async def published_custody(self, sid: str) -> InstanceCustodyProof | None:
+        """The latest pass's proof, which in this double always saw the bot's every transition."""
         assert sid == self.proof.strategy_instance_id
         return self.proof
 

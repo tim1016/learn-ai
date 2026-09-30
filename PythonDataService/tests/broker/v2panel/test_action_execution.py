@@ -677,6 +677,9 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         def dry_run_activity(self, _broker: str, _sid: str):
             return []
 
+        def bot_end(self, _broker: str, _sid: str):
+            return None
+
         def binding_for_control(self, _broker: str, sid: str):
             return SimpleNamespace(
                 strategy_instance_id=sid,
@@ -796,6 +799,9 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     class _Registry:
         def dry_run_activity(self, _broker: str, _sid: str):
             return []
+
+        def bot_end(self, _broker: str, _sid: str):
+            return None
 
         def binding_for_control(self, _broker: str, sid: str):
             return SimpleNamespace(

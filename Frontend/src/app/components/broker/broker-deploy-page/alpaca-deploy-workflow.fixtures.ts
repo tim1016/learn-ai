@@ -8,7 +8,76 @@
  * compilation.
  */
 
-import type { DeployBotView } from '../v2-panel/lib/broker-v2-panel.service';
+import type { BotEndInput, BotEndPreviewRequest, BotEndView, DeployBotView } from '../v2-panel/lib/broker-v2-panel.service';
+
+/** The end a Deploy that names none gets — one minute before the next
+ * close, 15:59 ET — verbatim as the backend words it
+ * (`bot_end.resolved_bot_end_view`, #2607). */
+export const DEFAULT_END: BotEndView = {
+  end_at_ms: 1_700_081_940_000,
+  end_action: 'SELL',
+  status: 'scheduled',
+  headline: 'Ends Wed Nov 15, 15:59 ET · sells',
+  explanation:
+    'At Wed Nov 15, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+  notice: null,
+  editable: true,
+};
+
+/** The test double's copy of `bot_end.when_words` — "Wed Nov 15, 15:59 ET" —
+ * for an instant in the same year as the fixtures' "now", so no year is
+ * said. Backend prose, reproduced only to answer as the backend would; the
+ * app itself renders the words it is sent and never derives them. */
+function whenWords(ms: number): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(ms);
+  const part = (type: Intl.DateTimeFormatPartTypes): string => parts.find((each) => each.type === type)?.value ?? '';
+  return `${part('weekday')} ${part('month')} ${part('day')}, ${part('hour')}:${part('minute')} ET`;
+}
+
+/**
+ * `bot_end.resolved_bot_end_view` for an end the backend accepts as sent — a
+ * running bot's end, or no end — in its exact words: "Ends Wed Nov 15, 15:59
+ * ET · keeps its shares", and what the Clerk (or a Dry Run's simulation)
+ * does then. An end moved before an early close is a spec's own fixture.
+ */
+export function scheduledEndView(end: BotEndInput, { dryRun = false }: { dryRun?: boolean } = {}): BotEndView {
+  if (end.end_at_ms === null) {
+    return {
+      end_at_ms: null,
+      end_action: 'SELL',
+      status: 'no_end',
+      headline: 'No end · runs until you stop it',
+      explanation: 'This bot has no end time. It runs until you stop it.',
+      notice: null,
+      editable: true,
+    };
+  }
+  const at = whenWords(end.end_at_ms);
+  const keeps = end.end_action === 'KEEP';
+  return {
+    end_at_ms: end.end_at_ms,
+    end_action: end.end_action,
+    status: 'scheduled',
+    headline: `Ends ${at} · ${keeps ? 'keeps its shares' : 'sells'}`,
+    explanation: dryRun
+      ? `At ${at} the bot stops, and its simulation sells what it holds at the last price it saw.`
+      : keeps
+        ? `At ${at} the Clerk stops the bot and cancels its working orders. It keeps its shares.`
+        : `At ${at} the Clerk stops the bot, cancels its working orders and sells its shares at market.`,
+    notice: null,
+    editable: true,
+  };
+}
+
+/** The Deploy form's end check (`POST …/bots/end-preview`) as the backend
+ * answers it: an omitted end is the default end. */
+export function previewedEnd(request: BotEndPreviewRequest): BotEndView {
+  const end = request.end ?? { end_at_ms: DEFAULT_END.end_at_ms, end_action: 'SELL' };
+  return scheduledEndView(end, { dryRun: request.execution_mode === 'dry_run' });
+}
 
 export const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   strategy_key: 'deployment_validation',
@@ -23,6 +92,8 @@ export const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   admissible_modes: ['dry_run', 'paper'],
   override_explanation: null,
   blocked_explanation: null,
+  // Verbatim from its registry entry (`registry.py`, #2607).
+  experimental_notice: 'Experimental validation only — not a trading strategy',
 };
 
 export const EMA_STRATEGY: DeployBotView['strategies'][number] = {
@@ -74,6 +145,8 @@ export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = 
 
 export const DEPLOY_VIEW: DeployBotView = {
   default_exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
+  // The end a Deploy that names none gets, as the backend authors it (#2607).
+  default_end: DEFAULT_END,
   broker: 'alpaca',
   account_id: 'PA9',
   account_mode: 'paper',

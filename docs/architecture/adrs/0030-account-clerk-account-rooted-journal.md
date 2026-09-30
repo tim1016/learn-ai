@@ -201,11 +201,16 @@ broker writer or enabling overnight trading.
   flatness. Only an empty fresh snapshot, a durably persisted `STOPPED` latch,
   and the completed command acknowledgement make `clock_out_receipt.json`
   eligible for `CLOCKED_OUT_FLAT` / `OFF_DUTY` projection.
-- **Every dead child gets a fact, never an invented clean exit.** The daemon
-  maps a complete clock-out receipt to `CLOCKED_OUT_FLAT`; all other reaped,
-  crashed, halted, and failed-launch paths record their specific terminal
-  duty outcome. The cockpit renders that persisted outcome and reason rather
-  than holding a dead child in optimistic `RUNNING` copy.
+  *Superseded 2026-09-29 (#2607):* the daemon, `CLOCK_OUT` and its receipt are
+  gone, and so are `CLOCKED_OUT_FLAT` and the `end_day_requested` marker. A
+  bot's day ends at the one-time end its owner sets (ADR 0045's #2607
+  amendment): the account Clerk stops the run, cancels its entries, sells or
+  keeps its shares, and records the run's duty outcome as `SCHEDULED_END`.
+- **Every dead child gets a fact, never an invented clean exit.** Every reaped,
+  crashed, halted, and failed-launch path records its specific terminal duty
+  outcome (originally including the daemon's `CLOCKED_OUT_FLAT`, retired with
+  it). The cockpit renders that persisted outcome and reason rather than
+  holding a dead child in optimistic `RUNNING` copy.
 - **Carryover remains explicitly disabled.** Each bot lifecycle record now
   reserves `carryover_policy=FORBID`. No extended-hours or overnight behavior
   is activated by this field. A later policy must be Clerk-authored and opt in

@@ -62,6 +62,24 @@ describe('LaneAttentionBellComponent', () => {
     );
   });
 
+  it('tells the owner a bot’s end sale waits for the open, its code through the receipt label (#2607)', async () => {
+    // `lane_summary._end_sale_item`, exactly.
+    const headline = 'ema-1 reached its end while the market was closed. Its sale of 5 SPY goes out at the open, Thu Oct 1, 09:30 ET.';
+    await renderBell({ unknown: false, errorReason: null, items: [item({
+      condition_id: 'end-sale-waits:ema-1', reason_code: 'SCHEDULED_END_WAITS_FOR_OPEN', kind: 'exit',
+      severity: 'warning', headline, action: { label: 'Open bot', destination: 'bot' },
+    })] });
+
+    await fireEvent.click(bellButton());
+
+    expect(screen.getByText('Warning')).toBeTruthy();
+    expect(screen.getByText('Scheduled End Waits For Open')).toBeTruthy();
+    expect(screen.getByText(headline)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open bot' }).getAttribute('href')).toBe(
+      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}/bots/ema-1`,
+    );
+  });
+
   it('links an account-level line to where its fix lives', async () => {
     await renderBell({ unknown: false, errorReason: null, items: [item({
       condition_id: 'hold-1', kind: 'out_of_sync', reason_code: 'UNEXPLAINED_ORDER_HOLD', strategy_instance_id: null,

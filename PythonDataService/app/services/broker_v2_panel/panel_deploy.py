@@ -51,6 +51,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel.bot_end_panel import resolve_deploy_end
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
     DeploySubmission,
@@ -287,7 +288,19 @@ def _sending(submission_key: str) -> Iterator[None]:
 
 
 def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) -> str:
-    return request.fingerprint(account=canonical_alpaca_account_id(account_id))
+    """What one submission key binds: the settings, the account, and the end the request named.
+
+    The end stays out of the settings' own ``fingerprint`` -- consent and the
+    budget review never bind it, since the owner may change it while the bot
+    runs -- but a key resent with another end is a different Deploy, refused
+    like any other change of settings (#2607). The request's own ``end`` is
+    bound, not the end it resolved to, so the default end (none named) binds
+    nothing, and every key recorded before the end existed still matches.
+    """
+    account = canonical_alpaca_account_id(account_id)
+    if request.end is None:
+        return request.fingerprint(account=account)
+    return request.fingerprint(account=account, end=request.end.model_dump_json())
 
 
 def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
@@ -381,6 +394,7 @@ async def deploy_alpaca_paper_bot(
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
             view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
             resolved_params = _require_alpaca_deploy_request(view, request)
+            end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
             except BudgetUnavailable as exc:
@@ -405,6 +419,7 @@ async def deploy_alpaca_paper_bot(
                 strategy_params=resolved_params.effective,
                 exit_terms=request.exit_terms.seal(),
                 strategy_param_origins=resolved_params.origins,
+                end=end,
                 **({"budget_consent": consent} if consent is not None else {}),
             )
         except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
@@ -516,6 +531,8 @@ async def preview_alpaca_paper_start_admission(
     """
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
+    # The end the Deploy would refuse is refused here too (#2607).
+    resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run")
     registry = _runner()
     try:
         sid = DeploySubmissionLedger(registry.artifacts_root).provisional_name(

@@ -42,6 +42,7 @@ describe('deriveActionRejection', () => {
       message: 'Stop is no longer available for this bot.',
       why: 'The Clerk evidence changed before activation.',
       reasonCode: 'TERMINAL_EVIDENCE_UNREADABLE',
+      nextAction: null,
     });
   });
 
@@ -266,6 +267,47 @@ describe('nested legacy bodies that carry next_step', () => {
     });
 
     expect(deriveActionRejection(terse, 'fallback').why).toBe('Coverage Proof Insufficient');
+  });
+});
+
+describe('the next step, apart from why (#2607)', () => {
+  it('reads the panel’s next_action beside its why and code', () => {
+    // `_raise_panel_error`'s body for a refused bot end, exactly.
+    const refused = new HttpErrorResponse({
+      status: 400,
+      error: { detail: {
+        message: 'The end must fall within regular hours.',
+        why: 'On Tue Nov 14 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET.',
+        next_action: 'Choose a time from 09:30 to 15:59 ET.',
+        reason_code: 'BOT_END_REFUSED',
+      } },
+    });
+
+    expect(deriveActionRejection(refused, 'fallback')).toEqual({
+      outcome: 'unknown',
+      message: 'The end must fall within regular hours.',
+      why: 'On Tue Nov 14 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET.',
+      reasonCode: 'BOT_END_REFUSED',
+      nextAction: 'Choose a time from 09:30 to 15:59 ET.',
+    });
+  });
+
+  it('reads the fleet’s next_step, then the pinned copy’s, and nothing when no step was sent', () => {
+    const fleet = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.', next_step: 'Reload the lane.' },
+    });
+    const terse = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+    });
+
+    expect(deriveActionRejection(fleet, 'fallback').nextAction).toBe('Reload the lane.');
+    expect(deriveActionRejection(terse, 'fallback').nextAction).toBe(
+      "Refresh the lane's current binding generation, then re-prepare the command.",
+    );
+    expect(deriveActionRejection(rejection({ message: 'boom', why: null, next_action: null }), 'fallback').nextAction).toBeNull();
+    expect(deriveActionRejection(new Error('network down'), 'fallback').nextAction).toBeNull();
   });
 });
 

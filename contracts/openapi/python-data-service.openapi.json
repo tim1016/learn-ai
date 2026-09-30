@@ -1109,6 +1109,14 @@
             "title": "Carryover Policy",
             "type": "string"
           },
+          "end": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BotEndInput"
+              }
+            ],
+            "title": "End"
+          },
           "evidence_override": {
             "anyOf": [
               {
@@ -1696,6 +1704,14 @@
             "title": "Carryover Policy",
             "type": "string"
           },
+          "end": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BotEndInput"
+              }
+            ],
+            "title": "End"
+          },
           "evidence_override": {
             "anyOf": [
               {
@@ -1784,6 +1800,17 @@
             ],
             "title": "Evidence Status",
             "type": "string"
+          },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
           },
           "explanation": {
             "title": "Explanation",
@@ -1913,6 +1940,9 @@
             "title": "Carryover Label",
             "type": "string"
           },
+          "default_end": {
+            "$ref": "#/components/schemas/BotEndView"
+          },
           "default_exit_terms": {
             "anyOf": [
               {
@@ -1993,6 +2023,7 @@
           "execution_modes",
           "strategies",
           "sizing_options",
+          "default_end",
           "action_plan_explanation",
           "carryover_available",
           "carryover_label",
@@ -4795,7 +4826,6 @@
         "properties": {
           "kind": {
             "enum": [
-              "CLOCKED_OUT_FLAT",
               "STOPPED",
               "HALTED",
               "CRASHED",
@@ -4832,6 +4862,138 @@
           "recorded_at_ms"
         ],
         "title": "BotDutyOutcomeView",
+        "type": "object"
+      },
+      "BotEndInput": {
+        "additionalProperties": false,
+        "description": "The owner's choice of end, as Deploy and the bot panel send it.\n\nBoth fields are required. ``end_at_ms`` ``null`` is the explicit \"no\nend\" choice, sent with ``end_action`` ``SELL``: a bot with no end has no\nshares to keep at one. A Deploy that sends no ``end`` at all gets the\ndefault end.",
+        "properties": {
+          "end_action": {
+            "enum": [
+              "SELL",
+              "KEEP"
+            ],
+            "title": "End Action",
+            "type": "string"
+          },
+          "end_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End At Ms"
+          }
+        },
+        "required": [
+          "end_at_ms",
+          "end_action"
+        ],
+        "title": "BotEndInput",
+        "type": "object"
+      },
+      "BotEndPreviewRequest": {
+        "additionalProperties": false,
+        "description": "Check an end on the Deploy form before the bot exists.\n\n``end`` omitted previews the default end; an explicit ``null`` is refused\n(:data:`EXPLICIT_NULL_END`).",
+        "properties": {
+          "end": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BotEndInput"
+              }
+            ],
+            "title": "End"
+          },
+          "execution_mode": {
+            "enum": [
+              "paper",
+              "dry_run",
+              "shadow",
+              "live"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_mode"
+        ],
+        "title": "BotEndPreviewRequest",
+        "type": "object"
+      },
+      "BotEndView": {
+        "additionalProperties": false,
+        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now.",
+        "properties": {
+          "editable": {
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "end_action": {
+            "enum": [
+              "SELL",
+              "KEEP"
+            ],
+            "title": "End Action",
+            "type": "string"
+          },
+          "end_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End At Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "status": {
+            "enum": [
+              "no_end",
+              "scheduled",
+              "ending",
+              "ended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "end_at_ms",
+          "end_action",
+          "status",
+          "headline",
+          "explanation",
+          "editable"
+        ],
+        "title": "BotEndView",
         "type": "object"
       },
       "BotHealthCard": {
@@ -5175,7 +5337,6 @@
           },
           "kind": {
             "enum": [
-              "CLOCKED_OUT_FLAT",
               "STOPPED",
               "HALTED",
               "CRASHED",
@@ -5318,6 +5479,16 @@
           "clerk": {
             "$ref": "#/components/schemas/ClerkCard"
           },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotEndView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "execution_policy": {
             "title": "Execution Policy",
             "type": "string"
@@ -5331,6 +5502,17 @@
                 "type": "null"
               }
             ]
+          },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
           },
           "exposure": {
             "additionalProperties": {
@@ -5793,7 +5975,6 @@
           },
           "kind": {
             "enum": [
-              "CLOCKED_OUT_FLAT",
               "STOPPED",
               "HALTED",
               "CRASHED",
@@ -41548,6 +41729,17 @@
             "title": "Display Name",
             "type": "string"
           },
+          "experimental_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experimental Notice"
+          },
           "gotchas": {
             "items": {
               "type": "string"
@@ -54718,6 +54910,83 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/end-preview": {
+      "post": {
+        "operationId": "preview_bot_end_scoped_api_brokers__broker__accounts__account_id__bots_end_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotEndPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotEndView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check the end a Deploy would record: the default, a move to before an early close, or a refusal (#2607)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
       "post": {
         "operationId": "run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post",
@@ -55336,6 +55605,92 @@
           }
         },
         "summary": "Deploy again: one earlier bot's sealed settings, never its money or consent",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/end": {
+      "put": {
+        "operationId": "edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotEndInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotEndView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change a bot's end or its sell/keep choice now, with no restart and no seal touched (#2607)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -58544,6 +58899,98 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/end-preview": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).",
+        "operationId": "fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot End Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions": {
       "post": {
         "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions (bot_action).",
@@ -59245,6 +59692,107 @@
           }
         },
         "summary": "Fleet Bot Deploy Prefill Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/end": {
+      "put": {
+        "description": "Fleet-routed PUT /accounts/{account_id}/bots/{sid}/end (bot_action).",
+        "operationId": "fleet_bot_end_edit_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__end_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot End Edit",
         "tags": [
           "broker-clerks"
         ]

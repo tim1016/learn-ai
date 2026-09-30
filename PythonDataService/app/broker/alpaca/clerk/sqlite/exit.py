@@ -122,12 +122,14 @@ def _accept_exit_capture(
     decision_receipt: AtomicDecisionReceipt | None,
     program_leg: ProgramLeg | None = None,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
+    regular_session_only: bool = False,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
     A deciding program's ``program_leg`` (its shape with the end of the
     session it was priced for) or an operator's ``confirmed_shape`` — never
-    both — is durable with the acceptance.
+    both — is durable with the acceptance, and so is ``regular_session_only``
+    (``ExitAcceptedFacts.regular_session_only``).
 
     The run identity is supplied by ``resolve_run_id``: a strategy decision
     binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
@@ -186,6 +188,7 @@ def _accept_exit_capture(
             decision_id=decision_id,
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
+            regular_session_only=regular_session_only,
         ).with_reducing_shape(
             None if recorded is None else recorded.shape,
             valid_until_ms=None if recorded is None else recorded.valid_until_ms,
@@ -305,6 +308,7 @@ def accept_recovery_exit(
     entry_order_ref: str,
     forbid_active_run: bool = False,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
+    regular_session_only: bool = False,
 ) -> ExitSubmission:
     """Capture one reduction-only recovery EXIT without the active-run fence.
 
@@ -330,7 +334,8 @@ def accept_recovery_exit(
 
     Decision-id namespaces: ``recovery-flatten-<hex16>``,
     ``exit-redrive-<episode-hex12>-<n>``, ``dry-run-close-<hex16>`` (a Dry
-    Run's run-end close, ``dry_run_close``) (all colon-free; the idempotency
+    Run's run-end close, ``dry_run_close``), ``scheduled-end-<hex16>`` (the
+    sale at a bot's owner-scheduled end, ``scheduled_end``) (all colon-free; the idempotency
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
 
@@ -341,6 +346,10 @@ def accept_recovery_exit(
     the regular session — reduces market DAY. Either way the leg reaches the
     broker only through the send-time rule every EXIT passes
     (``exit_resolution``, ``recovery_reduction.reducing_leg_verdict``).
+
+    ``regular_session_only`` (the sale at a bot's scheduled end and its
+    re-drives, #2607) holds the market leg for the next regular open wherever
+    another EXIT would be re-priced for an extended session.
     """
 
     def resolve_run_id(target: OrderResource) -> str:
@@ -360,6 +369,7 @@ def accept_recovery_exit(
         resolve_run_id=resolve_run_id,
         decision_receipt=None,
         confirmed_shape=confirmed_shape,
+        regular_session_only=regular_session_only,
     )
 
 

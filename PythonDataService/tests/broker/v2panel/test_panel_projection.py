@@ -1638,6 +1638,23 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     )
 
 
+def test_build_panel_carries_the_strategys_registry_warning() -> None:
+    """#2607 owner decision 7: a DV bot's page says it is experimental; other bots say nothing."""
+    unproven = ProgramBuildAdmissionFact(
+        state="UNPROVEN",
+        program_key="deployment_validation",
+        verified_at_ms=_NOW,
+        explanation="No build receipt was read for this test.",
+    )
+    dv_panel = _panel(
+        _status(strategy_key="deployment_validation"), _clerk_status(), [], program_build=unproven,
+    )
+    other_panel = _panel(_status(), _clerk_status(), [])
+
+    assert dv_panel.experimental_notice == "Experimental validation only — not a trading strategy"
+    assert other_panel.experimental_notice is None
+
+
 def _sealed_bot_program():
     configured = ConfiguredSignalProgramSeal(
         program_key="ema_crossover_signal",

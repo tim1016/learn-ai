@@ -1,0 +1,21 @@
+<section class="bot-end" [attr.aria-labelledby]="titleId">
+  <div class="bot-end__head">
+    <h3 [id]="titleId">End</h3>
+    @if (end().editable) {
+      <button type="button" class="bot-end__change" [attr.popovertarget]="editor.id" [disabled]="busy()" (click)="prepare()">Change end</button>
+    }
+  </div>
+  <app-bot-end-summary [end]="end()" detailed />
+  @if (refusal(); as refused) {
+    @if (!editor.isOpen()) { <app-bot-end-refusal [refusal]="refused" announce /> }
+  }
+</section>
+
+<app-bot-end-popover #editor heading="Change this bot’s end" closeLabel="Cancel" [(fields)]="fields" [keepOffered]="keepOffered()" [locked]="busy()">
+  @if (refusal(); as refused) {
+    <app-bot-end-refusal class="bot-end__refusal" [refusal]="refused" announce />
+  }
+  <button type="button" class="bot-end__save" [disabled]="busy()" [attr.aria-busy]="saving()" (click)="submit()">
+    {{ saving() ? 'Saving…' : 'Save end' }}
+  </button>
+</app-bot-end-popover>

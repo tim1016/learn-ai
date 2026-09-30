@@ -33,7 +33,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import LANE_COUNT_KEYS
 
-_ADAPTER_VERSION = "alpaca-fleet.12"
+_ADAPTER_VERSION = "alpaca-fleet.13"
 
 
 def _op(
@@ -447,6 +447,20 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # backend answers, the browser does not know the bot's name (#2551).
         _op("bot_deploy_submission_read", "GET", "/accounts/{account_id}/deploy-submissions/{submission_key}", capability=Capability.BOT_PANEL_READ, account=True),
         _op("bot_deploy_prefill_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-prefill", capability=Capability.DEPLOY, account=True),
+        # A bot's owner-set end (#2607): the Deploy form's check of the end it
+        # would record, and the bot page's change of a running bot's end. The
+        # bot page reads the end from its panel poll, so no read is routed.
+        # The change is the owner's schedule, never a start: a draining lane
+        # refuses it with every other non-quiesce mutation.
+        _op("bot_end_preview", "POST", "/accounts/{account_id}/bots/end-preview", capability=Capability.DEPLOY, account=True),
+        _op(
+            "bot_end_edit",
+            "PUT",
+            "/accounts/{account_id}/bots/{sid}/end",
+            capability=Capability.BOT_ACTION,
+            idempotency=_ONE_SHOT,
+            account=True,
+        ),
         _op(
             "bot_cohort_flatten_read",
             "GET",

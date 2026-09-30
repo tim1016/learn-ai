@@ -99,7 +99,7 @@ class BotRunEvidenceService:
                     },
                 )
             return
-        self._record_terminal_receipt(strategy_instance_id, outcome)
+        self.record_terminal_receipt(strategy_instance_id, outcome)
 
     def record_terminal(
         self,
@@ -114,7 +114,7 @@ class BotRunEvidenceService:
     ) -> AlpacaLifecycleProjectionResult:
         """Publish immutable evidence before mutating the lifecycle projection."""
         if persist_receipt:
-            self._record_terminal_receipt(
+            self.record_terminal_receipt(
                 strategy_instance_id,
                 outcome,
                 crash_diagnostic=crash_diagnostic,
@@ -135,13 +135,14 @@ class BotRunEvidenceService:
             reason=reason,
         )
 
-    def _record_terminal_receipt(
+    def record_terminal_receipt(
         self,
         strategy_instance_id: str,
         outcome: BotDutyOutcome,
         *,
         crash_diagnostic: BotCrashDiagnostic | None = None,
     ) -> None:
+        """Write one run's create-once terminal receipt, keyed by its run id; no projection is touched."""
         if outcome.run_id is None:
             return
         self._repository.record_outcome(
