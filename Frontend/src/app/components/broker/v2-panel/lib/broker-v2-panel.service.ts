@@ -119,6 +119,11 @@ export type RunAdmissionDecision = components['schemas']['RunAdmissionDecision']
 // serves both the plan response and the confirm request body.
 export type PaperAccessPlan = components['schemas']['CanaryActivationPlan-Output'];
 export type PaperAccessEvent = components['schemas']['CanaryAdmissionEvent'];
+/** A bot's owner-set end as the Deploy form and the bot page send it (#2607). */
+export type BotEndInput = components['schemas']['BotEndInput'];
+/** A bot's end in the backend's words: the headline, what happens, and any moved time. */
+export type BotEndView = components['schemas']['BotEndView'];
+export type BotEndPreviewRequest = components['schemas']['BotEndPreviewRequest'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -196,6 +201,21 @@ export class BrokerV2PanelService {
   /** Deploy again: `sid`'s sealed strategy, symbol, size, parameters and exit terms. */
   getDeployPrefill(target: ResourceTarget, sid: string): Promise<BotDeployPrefill> {
     return firstValueFrom(this.http.get<BotDeployPrefill>(operationUrl('bot_deploy_prefill_read', { ...target, sid })));
+  }
+
+  /** The Deploy form's check of the end a Deploy would record: its words,
+   * any move to before an early close, or a 400 refusal (#2607). */
+  previewBotEnd(target: ResourceTarget, body: BotEndPreviewRequest): Promise<BotEndView> {
+    return firstValueFrom(this.http.post<BotEndView>(operationUrl('bot_end_preview', target), body));
+  }
+
+  /** Change a bot's end or its sell/keep choice now (#2607). The owner's
+   * schedule, not a sealed term: no restart, and the next panel read shows it.
+   * `target` is frozen by the caller, whose fence and command key it carries. */
+  editBotEnd(target: ResourceTarget, sid: string, body: BotEndInput): Promise<BotEndView> {
+    return firstValueFrom(this.http.put<BotEndView>(
+      operationUrl('bot_end_edit', { ...target, sid }), this.commandBody(target, 'bot_action', body),
+    ));
   }
 
   previewStartAdmission(

@@ -19,6 +19,7 @@ import {
   type LaneModeChip,
 } from '../../../../services/alpaca-live-verdict.service';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
+import { ExperimentalNoticeComponent } from '../../../../shared/experimental-notice/experimental-notice.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type {
@@ -50,6 +51,9 @@ import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action
  *
  * A Dry Run bot is marked as simulated cash, never with the lane's colour
  * (hurdle H23): its money is not the account's.
+ *
+ * A strategy that is not a trading strategy says so under its name, in its
+ * registry entry's words (#2607: Deployment Validation).
  */
 @Component({
   selector: 'app-bot-banner',
@@ -57,6 +61,7 @@ import { actionTone, primaryAction } from '../bot-detail-banner/lifecycle-action
   imports: [
     AlpacaLaneModeChipComponent,
     AssetIdentityComponent,
+    ExperimentalNoticeComponent,
     TimestampDisplayComponent,
     RouterLink,
     PanelActionButtonComponent,

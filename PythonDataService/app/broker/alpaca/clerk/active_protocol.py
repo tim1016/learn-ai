@@ -141,6 +141,13 @@ class ActiveAlpacaClerk(Protocol):
         strategy_instance_id: str,
     ) -> InstanceCustodyProof: ...
 
+    async def published_custody(
+        self,
+        strategy_instance_id: str,
+    ) -> InstanceCustodyProof | None:
+        """The latest published pass's proof of one bot, when that pass saw its every transition (#2607)."""
+        ...
+
     async def custody_snapshot(
         self,
         strategy_instance_id: str,

@@ -38,6 +38,13 @@ session. While one is still open the pass is a hold, until the settle age
 has passed in the regular session, where the ordinary failure path takes
 over. A re-drive refused before the settle age is a hold too, so failure
 time starts where it always has and escalation keeps its timing.
+
+#2607: an episode of a regular-session-only EXIT -- the sale at a bot's
+owner-scheduled end, whose acceptance records it -- is re-driven only by the
+market leg inside the regular session, the refusal above included: "in any
+session" never reaches it. Outside the session it holds for the next regular
+open instead of pricing an extended-hours limit, and each re-drive records
+the same property, so it holds too if it meets the close.
 """
 
 from __future__ import annotations
@@ -68,7 +75,10 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     latest_exit_recovery,
     record_exit_recovery,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    EXIT_REDRIVE_DECISION_PREFIX,
+    regular_session_sale_waits_for_open,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
@@ -140,6 +150,9 @@ class EpisodeAttempt:
     extended_hours: bool
     valid_until_ms: int | None
     redrive: bool
+    # Its EXIT sells only inside the regular session
+    # (``ExitAcceptedFacts.regular_session_only``, #2607).
+    regular_session_only: bool = False
 
 
 type OppositeSide = Literal["open", "ended"]
@@ -167,6 +180,11 @@ class _StaleExit:
     @property
     def regular_failures(self) -> int:
         return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
+
+    @property
+    def regular_session_only(self) -> bool:
+        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too."""
+        return any(a.regular_session_only for a in self.attempts)
 
 
 @dataclass(frozen=True)
@@ -199,15 +217,16 @@ def episode_attempts(
         if row is None:
             continue
         created = ExitReducingOrderCreatedFacts.from_facts_json(row["facts_json"])
+        accepted_row = repo.first_effect_transition(effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED")
+        accepted = None if accepted_row is None else ExitAcceptedFacts.from_facts_json(accepted_row["facts_json"])
         bound = created.valid_until_ms
-        if created.extended_hours and bound is None:
-            accepted = repo.first_effect_transition(effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED")
-            if accepted is not None:
-                bound = ExitAcceptedFacts.from_facts_json(accepted["facts_json"]).reducing_valid_until_ms
+        if created.extended_hours and bound is None and accepted is not None:
+            bound = accepted.reducing_valid_until_ms
         attempts.append(EpisodeAttempt(
             order.order_ref,
             repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
             effect.state == "failed", created.extended_hours, bound, redrive,
+            regular_session_only=accepted is not None and accepted.regular_session_only,
         ))
     return redrives, tuple(attempts)
 
@@ -292,6 +311,9 @@ def evaluate_recovery_wait(
     verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
+    if stale.regular_session_only and verdict != "send":
+        waits = regular_session_sale_waits_for_open(now_ms)
+        return RecoveryResult("hold", waits.reason_code, waits.explanation, waits.available_at_ms)
     if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
         # Past the settle age in the regular session the ordinary failure path
         # takes over, so an order that keeps working escalates as before.
@@ -336,8 +358,11 @@ async def _recover_stale_exit(
     sid, cause = stale.strategy_instance_id, stale.cause
     own_working = await run(lambda: repo.active_exit_for_strategy(sid) is not None)
     now_ms = repo.clock()
+    # A regular-session-only episode is priced as the regular session alone
+    # would price it: its market leg, never an extended-hours limit (#2607).
+    policy = ProgramLegPolicy.regular_only() if stale.regular_session_only else pricing.policy_for(sid)
     result = evaluate_recovery_wait(
-        stale, now_ms=now_ms, own_exit_working=own_working, policy=pricing.policy_for(sid),
+        stale, now_ms=now_ms, own_exit_working=own_working, policy=policy,
         liveness=pricing.read_liveness(cause.symbol, now_ms),
     )
     if result is not None:
@@ -350,8 +375,9 @@ async def _recover_stale_exit(
     # Read the instant after repository hops, immediately before quote/liveness.
     now_ms = repo.clock()
     touch = (
-        PricingSnapshot(pricing.policy_for(sid), None, pricing.read_liveness(cause.symbol, now_ms))
-        if market_leg_sendable(now_ms) else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
+        PricingSnapshot(policy, None, pricing.read_liveness(cause.symbol, now_ms))
+        if market_leg_sendable(now_ms) or stale.regular_session_only
+        else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
     )
     try:
         shape = touch.price(side=reducing_side(stale.remaining),
@@ -368,6 +394,7 @@ async def _recover_stale_exit(
             _accept_admissible_redrive, repo, broker_symbol=broker_symbol, strategy_instance_id=sid,
             symbol=cause.symbol, decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{stale.episode_token}-{stale.redrives + 1}",
             entry_order_ref=entries[-1].order_ref, confirmed_shape=shape,
+            regular_session_only=stale.regular_session_only,
         )
         if accepted is None:
             return None
@@ -453,6 +480,7 @@ def _accept_admissible_redrive(
     decision_id: str,
     entry_order_ref: str,
     confirmed_shape: ConfirmedRecoveryShape | None,
+    regular_session_only: bool = False,
 ) -> ExitSubmission | _RedriveRefused | None:
     """Accept the re-drive EXIT only when the broker and the REDUCE gate admit it.
 
@@ -526,6 +554,7 @@ def _accept_admissible_redrive(
         decision_id=decision_id,
         entry_order_ref=entry_order_ref,
         confirmed_shape=confirmed_shape,
+        regular_session_only=regular_session_only,
     )
 
 

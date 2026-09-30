@@ -14,6 +14,7 @@ import {
   BrokerV2PanelService,
   type AccountMoneyView,
   type BotDeployPrefill,
+  type BotEndPreviewRequest,
   type BudgetDeployReceipt,
   type DeployBotBody,
   type DeployBotView,
@@ -25,12 +26,14 @@ import {
 import { AlpacaDeployWorkflowComponent, SUBMISSION_KEY_RE } from './alpaca-deploy-workflow.component';
 import { DEPLOY_TYPING_SETTLE_MS } from './deploy-money-step.component';
 import {
+  DEFAULT_END,
   DEPLOY_VIEW,
   EMA_STRATEGY,
   LIVE_DEPLOY_VIEW,
   SHADOW_DEPLOY_VIEW,
   SMA_OVERRIDE_STRATEGY,
   VALIDATION_STRATEGY,
+  previewedEnd,
 } from './alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
@@ -173,6 +176,7 @@ function mockService(view: DeployBotView = DEPLOY_VIEW, result: BudgetDeployRece
     getDeployView: vi.fn().mockResolvedValue(view),
     previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION),
     previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => previewFor(view, body)),
+    previewBotEnd: vi.fn().mockImplementation(async (_target, body: BotEndPreviewRequest) => previewedEnd(body)),
     getDeploySubmission: vi.fn().mockRejectedValue(new HttpErrorResponse({
       status: 404,
       error: { detail: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.' },
@@ -363,7 +367,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(what).getByRole('button', { name: 'Edit step 1, What' }).getAttribute('aria-expanded')).toBe('false');
     const how = stepRegion('How');
     expect(within(how).getByText(
-      'Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life',
+      `Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life · ${DEFAULT_END.headline}`,
     )).toBeTruthy();
 
     // The readiness rail and its heading are gone (H8); the name is the backend's.
@@ -657,6 +661,8 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       execution_mode: 'paper',
       carryover_policy: 'FORBID',
       parameters: {},
+      // The end on screen, always sent: here the account's default end (#2607).
+      end: { end_at_ms: DEFAULT_END.end_at_ms, end_action: 'SELL' },
       submission_key: expect.stringMatching(SUBMISSION_KEY_RE),
     });
     expect(body).not.toHaveProperty('strategy_instance_id');
@@ -1359,7 +1365,7 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
     await vi.waitFor(() => expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy());
     // The fresh form's exit terms are the account's defaults, never the replaced bot's 15/3/40.
     expect(within(stepRegion('How')).getByText(
-      'Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life',
+      `Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life · ${DEFAULT_END.headline}`,
     )).toBeTruthy();
     await chooseMoney();
     fireEvent.click(deployButton());

@@ -100,7 +100,7 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     main = _paper_account(tmp_path / "main")
     _dry_run(root)
     _receipt(root, "done", "run-done", "STOPPED", "STOPPED_FLAT")
-    _receipt(root, "dry-1", "run-dry", "CLOCKED_OUT_FLAT", "SESSION_CLOSED")
+    _receipt(root, "dry-1", "run-dry", "STOPPED", "SCHEDULED_END")
     facade = SimpleNamespace(account_id=_ACCOUNT, account_mode="paper", repository=main)
     registry = SimpleNamespace(bindings_for_broker=lambda _broker: [
         SimpleNamespace(strategy_instance_id="dry-1", mode="dry_run"),
@@ -138,7 +138,7 @@ async def test_every_bot_is_listed_with_its_world_status_outcome_and_money(lane:
     assert bots["live"].status == "running" and bots["live"].outcome is None
     dry = bots["dry-1"]
     assert (dry.world, dry.world_label) == ("dry_run", "DRY RUN · simulated cash")
-    assert dry.outcome is not None and dry.outcome.headline == "Finished its day flat"
+    assert dry.outcome is not None and dry.outcome.headline == "Ended at its scheduled time"
     assert dry.account_id == _ACCOUNT
 
 
@@ -239,7 +239,7 @@ def test_every_outcome_kind_has_its_own_words_and_an_unknown_one_still_reads() -
 @pytest.mark.parametrize(
     ("kind", "reason", "flattened", "headline"),
     [
-        ("CLOCKED_OUT_FLAT", "SESSION_CLOSED", False, "Finished its day flat"),
+        ("STOPPED", "SCHEDULED_END", False, "Ended at its scheduled time"),
         ("STOPPED", "STOPPED_FLAT", False, "Stopped by you"),
         ("STOPPED", "STOPPED_FLAT", True, "Stopped and flattened"),
         ("STOPPED", "SERVICE_SHUTDOWN", False, "Stopped when the service shut down"),

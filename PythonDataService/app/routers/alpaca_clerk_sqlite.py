@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
+    cancel_bot_end,
     execute_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -65,6 +66,7 @@ from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
     ExecutionCoverageResolutionUnavailable,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON
 from app.broker.contract.errors import BrokerError, UnknownBrokerError
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.broker.contract.registry import get_broker_registry
@@ -344,9 +346,39 @@ async def stop_run(
 ) -> CommandResponse:
     """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
     caller-supplied, exactly like Start (corrective foundation slice)."""
+    if body.operator_reason == SCHEDULED_END_REASON:
+        # The Clerk's own reason for its STOP at a bot's end (#2607), and the
+        # one STOP the runner takes as the end's (``_carry_out_due_end``): it
+        # stops the process as the end's stop, keeping an end still pending
+        # for the Clerk to carry out. An operator's Stop naming it would be
+        # journaled as the end's -- and, were its end left pending (a desired
+        # state unreadable at the Stop, repaired later), carried out as one.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "reserved_operator_reason",
+                "message": (
+                    f"'{SCHEDULED_END_REASON}' is reserved for the Clerk's stop at a bot's end; "
+                    "give this Stop another reason."
+                ),
+            },
+        )
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
+    active = await asyncio.to_thread(repo.active_run, strategy_instance_id)
+    if active is not None and active.lifecycle_run_id == body.lifecycle_run_id:
+        # An operator's Stop sells nothing at the end time (#2664): the bot's
+        # end is cancelled before its STOP commits, exactly as the panel's
+        # Stop cancels it, so no Clerk pass between the two sells a SELL end.
+        # Only a Stop of the bot's active run cancels it: one naming another
+        # run -- a stale id, or a lost-response retry after a redeploy -- stops
+        # nothing of the running run and is refused or replayed below, its
+        # end untouched (a retry of this Stop finds its end already
+        # cancelled). A Dry Run's bot has no run on this authority, so its end
+        # is untouched too. This Stop does not stop the bot's process in the
+        # runner; the panel's Stop does.
+        await cancel_bot_end(strategy_instance_id, updated_by="operator_runs_stop")
     try:
         submission = await asyncio.to_thread(
             submit_stop_run,

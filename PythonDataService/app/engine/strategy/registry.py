@@ -252,6 +252,12 @@ class StrategyRegistration:
     # deliberately useful in Dry Run/Paper while remaining permanently outside
     # the future Live-promotion population.
     strategy_category: StrategyCategory = "production_candidate"
+    # The owner-facing warning every surface that lists or runs this strategy
+    # shows as-is -- Deploy, Strategy Lab and the bot page (#2607, owner
+    # decision 7). It lives here, on the registry entry, and never in the
+    # program's sealed sources: a byte edit there would break every seal.
+    # ``None`` for a strategy with nothing to warn about.
+    experimental_notice: str | None = None
     # VCR-0004 / Phase 2 — the algorithm class the runner constructs. The
     # registry key is the module name (``app.engine.strategy.algorithms.{key}``);
     # ``class_name`` names the class inside that module. Together they retire
@@ -963,6 +969,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         deploy_code="dv",
         class_name="DeploymentValidationConsecutiveGreen",
         strategy_category="operational_validation_harness",
+        experimental_notice="Experimental validation only — not a trading strategy",
         signal_program_contract=SignalProgramContract(
             program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1812,6 +1819,12 @@ def strategy_program_version(strategy_name: str) -> str | None:
     return contract.program_version if contract is not None else None
 
 
+def strategy_experimental_notice(strategy_key: str) -> str | None:
+    """The registry entry's owner-facing warning for ``strategy_key``, if it has one (#2607)."""
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    return registration.experimental_notice if registration is not None else None
+
+
 def lean_twin_program_version(template: str) -> str | None:
     """Return the one Signal Program version represented by a registered LEAN twin."""
     versions = {
@@ -1831,6 +1844,7 @@ __all__ = [
     "StrategyParamsBase",
     "StrategyRegistration",
     "lean_twin_program_version",
+    "strategy_experimental_notice",
     "strategy_program_version",
     "validate_deploy_codes",
 ]

@@ -453,6 +453,8 @@ async def _get_panel_with_entries_from_authority(
         sealed_program=binding.sealed_program,
         program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
+        # The owner's end lives in the runner's desired state, not in custody (#2607).
+        end=registry.bot_end(broker, sid),
         market_pulse=build_market_pulse(
             market_data_feed,
             # Captured after every await above, not at request start: the

@@ -876,6 +876,11 @@ async def _service_lifespan(
             ),
         )
         set_bot_task_registry(bot_task_registry)
+        # #2607: every Clerk pass in this process carries out the bots' ends,
+        # which live in this runner's desired state.
+        from app.broker.alpaca.clerk.sqlite.scheduled_end import install_bot_end_schedule
+
+        install_bot_end_schedule(bot_task_registry)
         logger.info("In-container bot runner installed (task registry, daemon-free).")
 
     # #2154: once draining, the beat answers lane quiet from the runner's own
@@ -971,6 +976,9 @@ async def _service_lifespan(
     # the network; Start refuses each Dry Run until its own restoration settles.
     if bot_task_registry is not None:
         bot_task_registry.start_dry_run_restoration()
+        # #2607: at a running bot's end, ask its Clerk for a pass now -- a Dry
+        # Run's own Clerk has no periodic sweep to reach it.
+        bot_task_registry.start_end_watch()
 
     await _boot_alpaca_authority(alpaca_clerk_runtime)
 
@@ -1088,6 +1096,10 @@ async def _service_lifespan(
         # MarketDataFeed, which is torn down later in this block. Operator
         # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
         set_lane_account_quiet_source(None)
+        # No Clerk pass asks the runner to stop a bot at its end from here on.
+        from app.broker.alpaca.clerk.sqlite.scheduled_end import install_bot_end_schedule
+
+        install_bot_end_schedule(None)
         if bot_task_registry is not None:
             await bot_task_registry.stop_all()
         set_bot_task_registry(None)

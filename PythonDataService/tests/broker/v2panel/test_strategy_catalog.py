@@ -66,6 +66,17 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
     assert "runtime" in row.blocked_explanation.lower()
 
 
+def test_strategy_views_carry_the_registry_warning_for_deployment_validation() -> None:
+    """#2607 owner decision 7: Deploy shows DV's registry note while DV is chosen."""
+    entry = _accepted_deploy_entry()
+    dv_entry = entry.model_copy(update={"strategy_key": "deployment_validation"})
+
+    rows = {row.strategy_key: row for row in _strategy_views([entry, dv_entry], account_id=ACCT, custody_world="real_paper")}
+
+    assert rows["deployment_validation"].experimental_notice == "Experimental validation only — not a trading strategy"
+    assert rows[entry.strategy_key].experimental_notice is None
+
+
 def test_catalog_reads_a_confirmed_durable_pairing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

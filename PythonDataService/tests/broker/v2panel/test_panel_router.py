@@ -38,6 +38,7 @@ from app.broker.contract.registry import (
 )
 from app.routers import broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
+from app.schemas.bot_end import BotEndView
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotPanelLiveSnapshot,
@@ -46,6 +47,7 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services import broker_account_snapshot, surface_hub
+from app.services.bot_end import bot_end_view
 from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
 from app.services.broker_v2_panel import (
     live_projection,
@@ -195,9 +197,18 @@ class _FakeRegistry:
         self.status(broker, sid)
         return []
 
+    def bot_end(self, broker: str, sid: str) -> BotEndView:
+        """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
+        self.status(broker, sid)
+        return bot_end_view(None, now_ms=_T0, dry_run=False, running=self._running)
+
     def bindings_for_broker(self, broker: str) -> list:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
+
+    async def cancel_end(self, sid: str, *, updated_by: str) -> None:
+        """The panel's Stop cancels the bot's end before its STOP commits (#2607); this fleet has no end."""
+        self.status("alpaca", sid)
 
     async def stop_after_durable_clerk_stop(
         self, broker: str, sid: str, *, updated_by: str, reason: str

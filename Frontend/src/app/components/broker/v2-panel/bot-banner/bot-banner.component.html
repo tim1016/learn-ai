@@ -31,6 +31,9 @@
         <span aria-hidden="true">·</span>
         <app-asset-identity class="bot-banner__symbol" [symbol]="panel().symbol" size="sm" />
       </p>
+      @if (panel().experimental_notice; as notice) {
+        <app-experimental-notice class="bot-banner__experimental" [notice]="notice" />
+      }
       <app-bot-banner-run-timing
         [runState]="runState()"
         [health]="panel().health"

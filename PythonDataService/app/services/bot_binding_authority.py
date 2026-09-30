@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_synthetic_clerk_authority,
+    get_alpaca_clerk,
     get_clerk_runtime,
     primary_custody_world,
     register_clerk_runtime,
@@ -107,6 +108,13 @@ class BindingAuthority:
         """Release once a run has ended; an authority with run-end work does it first."""
         await self.release_if_unused()
 
+    async def reconcile_for_end(self) -> None:
+        """Run this authority's reconciliation pass now: a bot's owner-set end has come (#2607).
+
+        The pass is what carries the end out (``clerk.sqlite.scheduled_end``).
+        """
+        raise NotImplementedError
+
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         return ()
 
@@ -163,6 +171,17 @@ class PrimaryAccountBindingAuthority(BindingAuthority):
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         return self.projector
+
+    async def reconcile_for_end(self) -> None:
+        # The account's periodic sweep would reach the end within its
+        # interval; this pass reaches it on time.
+        clerk = get_alpaca_clerk()
+        if clerk is None:
+            raise StartAdmissionUnavailable(
+                "The account Clerk is not installed.",
+                detail="A bot's end is carried out by its account's Clerk; the end waits until it is back.",
+            )
+        await clerk.reconcile_once()
 
     def source_bars(self) -> SourceBarLedger:
         return SourceBarLedger(
@@ -326,6 +345,18 @@ class SyntheticBindingAuthority(BindingAuthority):
                 )
             finally:
                 await self.release_if_unused()
+
+    async def reconcile_for_end(self) -> None:
+        # A Dry Run's own Clerk has no periodic sweep: without this pass its
+        # end would wait for the next time its account is opened.
+        async with self.runtime_access.hold():
+            runtime = get_clerk_runtime(self.account_id)
+            if runtime is None or runtime.clerk is None:
+                raise StartAdmissionUnavailable(
+                    "This Dry Run's simulated account is not open.",
+                    detail="Its end is carried out the next time its account is opened.",
+                )
+            await runtime.clerk.reconcile_once()
 
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         runtime = get_clerk_runtime(self.account_id)

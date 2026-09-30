@@ -38,6 +38,7 @@ from app.schemas.account_authority import (
     account_authority_agrees,
 )
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
+from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
@@ -611,6 +612,10 @@ class BotPanelView(BaseModel):
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
+    # The strategy's registry warning (#2607) -- "Experimental validation
+    # only -- not a trading strategy" for Deployment Validation -- which the
+    # bot page shows as-is beside the strategy; ``None`` when it has none.
+    experimental_notice: str | None = None
     broker: str
     account_id: str
     symbol: str
@@ -663,6 +668,10 @@ class BotPanelView(BaseModel):
     # This bot's sealed exit terms (PRD #2504), or ``None`` for a bot whose
     # custody holds no seal (a pre-seal or non-SQLite registration).
     exit_terms: ExitTerms | None = None
+    # This bot's owner-set end and its sell/keep choice (#2607), in the
+    # owner's words -- "Ends Wed Sep 30, 15:59 ET · sells". Not a sealed term: the
+    # panel changes it through ``PUT .../bots/{sid}/end``.
+    end: BotEndView | None = None
     # Where the bot is now -- running, holding, finished, or cleared from
     # Home -- the same answer its History row gives (#2574,
     # ``catalog_projection_service.bot_status``). A cleared bot's page is

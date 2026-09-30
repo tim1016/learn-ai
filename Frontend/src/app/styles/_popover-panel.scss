@@ -1,0 +1,36 @@
+@use 'filled-controls' as *;
+
+// A panel over the page — a native `[popover]` dialog — for detail that must
+// never make a Deploy column taller (the one-screen rule, PR #2581): every
+// check, a bot's exit steps, a bot's end. A header row carries the title and
+// the button that closes it.
+//
+// Apply to the popover element's own selector:
+//   .confirm-step__checks { @include popover-panel; }
+@mixin popover-panel($width: 40rem) {
+  // The UA centres a popover with `margin: auto`; the global `* { margin: 0 }`
+  // reset (styles.scss) takes that away and pins it to the top-left corner.
+  margin: auto;
+  width: min($width, calc(100vw - 2rem));
+  max-height: min(44rem, calc(100vh - 4rem));
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 1.25rem 3rem rgb(0 0 0 / 0.55);
+  overflow: auto;
+
+  &::backdrop { background: rgb(0 0 0 / 0.45); }
+
+  > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+
+    h3 { margin: 0; font-size: var(--fs-md); }
+    button { @include soft-button; }
+  }
+}

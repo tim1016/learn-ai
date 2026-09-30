@@ -36,6 +36,9 @@ class ManagedBot:
     # A new managed run evaluates immediately; Stop is the transition
     # that closes this gate.
     run_gate: asyncio.Event = field(default_factory=_open_run_gate, repr=False)
+    # The owner-set end (``end_at_ms``) whose Clerk pass the end watch already
+    # asked for (#2607): asked once per end, never on every look.
+    end_pass_asked_for_ms: int | None = None
 
 
 class DecisionFenceFeed:

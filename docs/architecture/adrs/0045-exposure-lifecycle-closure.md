@@ -173,6 +173,63 @@ out and ends `EXIT_NOT_FLAT` -- and the close then sells what is left and
 clears that notice in the same pass. An EXIT whose order was already sent is
 never raced.
 
+**Amended 2026-09-29 (owner decision, #2607): the owner-scheduled end sells a
+dead run's shares.** Each bot may carry a one-time end the owner chose at
+Deploy and may change while it runs -- an instant, and SELL (the default) or
+KEEP. It is the bot's desired state, never a sealed term. The Clerk carries
+out every bot's end on its reconciliation pass, whether the bot is running or
+its run already died (`clerk/sqlite/scheduled_end.py`): the pass first commits
+Stop's own STOP for the bot's ACTIVE run (before any broker read) and asks the
+runner to stop the bot's process; the #2362 step cancels the run's working
+entries; for SELL, each holding is closed by one recovery EXIT under the
+`scheduled-end-<sha256(entry_order_ref)[:16]>` namespace, through the same
+exposure scan and driver as the Dry Run close (`ended_run_close.py`); then the
+end is recorded carried out. The sale goes out only as a market order inside
+the regular session: outside it the EXIT holds (`EXIT_MARKET_HOLD`,
+`SCHEDULED_END_WAITS_FOR_OPEN`, never re-priced as an extended-hours limit) and
+sells at the next open -- which is how an end missed while the Clerk was down
+is carried out when it is back. That rule is a property of the sale's EXIT, not
+of its decision-id namespace: its acceptance records `regular_session_only`,
+and when Alpaca refuses the sale the stuck-EXIT watchdog re-drives it only as
+that sale would go -- a market order in the regular session, holding for the
+next open otherwise -- and records the property on every re-drive. While a
+sale waits for the open it is a line in the lane's attention bell, naming the
+bot, the symbol and the open; the line clears once the sale is sent. This is
+the one sale a dead run makes by itself; every other dead-run position keeps
+the rule above. On a `sim:` authority the end is a Stop and the Dry Run's
+run-end close does the sale; a Dry Run is never offered KEEP, and a stopped
+Dry Run's end is recorded carried out when it comes, since its run-end close
+already sold. Every operator Stop -- the panel's, and the lane-wide Stop that
+installation migration, lane retirement and the budget cutover run -- ends the
+bot and its end with it: Stop does not sell, so no sale is left scheduled
+behind it. Each makes the same record in the bot's desired state
+(`BotTaskRegistry._record_operator_stop_locked`): it cancels the end first --
+durably, whether or not the runner still has the bot's process, and whatever
+the intent already says -- then records STOPPED, a write that never touches
+the end. A crash, a restart or a service shutdown keeps the end, so the Clerk
+still carries it out; a crash records STOPPED with the end kept, and a later
+operator Stop, the lane-wide one included, still cancels it. The panel's Stop
+cancels the end before it commits its STOP and stops the process, so nothing
+that runs in between (the runner's end watch, a Clerk pass) reads the end as
+still to be carried out. The runner stops a process "at its end" only when
+the run's STOP is the Clerk's own at the end (`operator_reason`
+`scheduled_end`, which the raw lifecycle Stop route refuses as reserved); a
+run any other Stop ended is that Stop's. A Stop landing
+after the Clerk's STOP at the end still cancels the end: its STOP is the one
+already committed, and the pass reads the end again before it sells. Changing
+the end to KEEP after its sale was accepted does not stop that sale: once
+accepted it is its EXIT's, like any sale already sent.
+
+The stop at the end is proven by the pass that ended the bot, never by a pass
+of its own: every bot on the default end stops in the same minute, and a
+reconcile each would be one whole account pass per bot. The runner reads the
+latest published pass (`published_custody`) once that pass's final broker
+comparison saw the bot's every transition and no longer lists any of its
+orders as working, and waits for it with the bot's operation lock released. A
+proof that lands after a later run of the bot began is recorded as the stopped
+run's alone -- its receipt and the replay receipt it owes -- never projected
+over the later run's.
+
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
 order to `execution_evidence_missing`, counting neither a pass nor a divergence.

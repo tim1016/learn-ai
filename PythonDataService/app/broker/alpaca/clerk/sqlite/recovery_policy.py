@@ -230,7 +230,8 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
         confirmation=_confirmation(
             "Stop this bot?",
             "The bot stops making new decisions. A sale already sent can still go through. "
-            "Cash it isn't using goes back to the account.",
+            "Cash it isn't using goes back to the account. Its scheduled end is cancelled: "
+            "nothing is sold at the end time.",
             "Stop bot decisions",
         ),
     ),

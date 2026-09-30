@@ -1,0 +1,41 @@
+<div class="bot-end-editor">
+  <div class="bot-end-editor__when">
+    <label>
+      <span>End date</span>
+      <input
+        #date
+        type="date"
+        [formField]="endForm.date"
+        [attr.aria-invalid]="dateError() !== null"
+        [attr.aria-describedby]="dateError() === null ? null : errorId"
+      />
+    </label>
+    <label>
+      <span>End time <small>· your time</small></span>
+      <input
+        type="time"
+        [formField]="endForm.clock"
+        [attr.aria-invalid]="clockError() !== null"
+        [attr.aria-describedby]="clockError() === null ? marketId : marketId + ' ' + errorId"
+      />
+    </label>
+    <!-- Under the time it restates: the same minute in market time, or "—" while the fields name none. -->
+    <p class="bot-end-editor__market" [id]="marketId">Market time <app-timestamp-display [value]="typedAtMs()" mode="et" granularity="time" /></p>
+  </div>
+  @if (error(); as message) {
+    <p class="bot-end-editor__error" [id]="errorId" role="alert">{{ message }}</p>
+  }
+
+  <label class="bot-end-editor__check">
+    <input #noEnd type="checkbox" [formField]="endForm.noEnd" />
+    <span>No end — run until I stop it</span>
+  </label>
+
+  @if (keepOffered()) {
+    <fieldset class="bot-end-editor__action">
+      <legend>At its end</legend>
+      <label><input type="radio" value="SELL" [formField]="endForm.action" /> Sell its shares</label>
+      <label><input type="radio" value="KEEP" [formField]="endForm.action" /> Keep its shares</label>
+    </fieldset>
+  }
+</div>

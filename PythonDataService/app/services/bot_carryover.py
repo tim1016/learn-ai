@@ -130,7 +130,21 @@ async def prove_stop_outcome(
             },
         )
         return "STOPPED_CUSTODY_UNPROVABLE"
+    return record_stop_outcome(binding, proof, checkpoint_path=checkpoint_path, now_ms=now_ms)
 
+
+def record_stop_outcome(
+    binding: CarryoverBinding,
+    proof: InstanceCustodyProof,
+    *,
+    checkpoint_path: Path,
+    now_ms: Callable[[], int],
+) -> StopCustodyOutcome:
+    """Classify a stopped run's custody ``proof`` and persist the STOP checkpoint.
+
+    Shared by a Stop that reconciles for its proof (:func:`prove_stop_outcome`)
+    and a stop at the bot's end, whose proof is the Clerk's own pass (#2607).
+    """
     if (
         proof.freeze.active
         or proof.reconciliation_verdict != "clean"
