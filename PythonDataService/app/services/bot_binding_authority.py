@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
+    DRY_RUN_ACCOUNT_HELD_SENTENCE,
     ActiveClerkRuntime,
     SyntheticOpening,
     activate_synthetic_clerk_authority,
@@ -68,6 +69,37 @@ BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
 #: How often a Dry Run's opening looks again at a held lease: a lease lapsing
 #: a second from now costs a second, never a whole lease lifetime.
 BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S = 1.0
+
+#: The one owner sentence for a Dry Run whose simulated account another live
+#: copy of this Clerk still holds (#2670). Authored in the broker layer
+#: (``active_authority``, ``DRY_RUN_ACCOUNT_HELD_SENTENCE``) so the
+#: authority's own startup failure, the panel, and Start all quote it;
+#: mapped from the typed ``ExecutionLeaseHeld``, never from its message: an
+#: internal ``sim:`` id and the term "execution lease" are not owner words.
+#: Re-exported here for the runner-side seams that never import the broker
+#: layer's selection module directly.
+
+
+class SyntheticAccountRestoring(RuntimeError):
+    """A ``sim:`` account is under boot's restoration; answer at once (#2684).
+
+    Raised by the account layer before any lock wait, so every reader and
+    action -- the panel, the roster, replay, fees, Start -- gets the same
+    immediate answer instead of waiting out the restoration's lease deadline.
+    """
+
+
+class DryRunAccountHeldElsewhere(StartAdmissionUnavailable):
+    """A ``sim:`` account's lease is still held by another live process (#2670).
+
+    The typed form of the synthetic authority's lease-held startup failure;
+    Start's re-check and boot's restoration both recognize it, and its words
+    are :data:`DRY_RUN_ACCOUNT_HELD_SENTENCE` -- one sentence everywhere.
+    """
+
+    def __init__(self) -> None:
+        headline, detail = DRY_RUN_ACCOUNT_HELD_SENTENCE
+        super().__init__(headline, detail=detail)
 
 
 class BindingAuthority:
@@ -204,10 +236,15 @@ class SyntheticRuntimeAccess:
     Clerk's short intake fence, which lifecycle work may acquire inside it.
     Task reentry lets an admission promote a runtime already opened for its
     projection; child tasks must wait like every other caller.
+
+    ``restoring`` marks the account as under boot's restoration (#2684):
+    while another task restores, every other reader and action is answered
+    at once instead of queueing behind the restoration's lease wait.
     """
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     owner: asyncio.Task | None = field(default=None, init=False)
+    restoring: bool = field(default=False, init=False)
 
     @asynccontextmanager
     async def hold(self) -> AsyncIterator[None]:
@@ -221,6 +258,27 @@ class SyntheticRuntimeAccess:
                 yield
             finally:
                 self.owner = None
+
+    def refuse_if_restoring_elsewhere(self) -> None:
+        """The one fail-fast restoring check (#2684).
+
+        Set by the restoration itself and read by every opening; the restorer
+        and its own reentrant calls pass through untouched.
+        """
+        if not self.restoring:
+            return
+        current = asyncio.current_task()
+        if self.owner is current:
+            return
+        headline, _detail = DRY_RUN_RESTORING_SENTENCE
+        raise SyntheticAccountRestoring(headline)
+
+
+#: The owner sentence every immediate restoring answer carries (#2684).
+DRY_RUN_RESTORING_SENTENCE = (
+    "This Dry Run is still being restored after the Clerk restarted.",
+    "Wait up to a minute, then try again.",
+)
 
 
 @dataclass
@@ -248,12 +306,17 @@ class _SyntheticAccount:
         return SourceBarLedger(artifacts_root=self.artifacts_root, account_id=self.account_id)
 
     async def ensure_operating(self, *, lease_wait_s: float) -> None:
-        """Compose this account for operation -- its full recovery included -- or raise why it cannot be."""
+        """Compose this account for operation -- its full recovery included -- or raise why it cannot."""
         runtime = await self.open(SyntheticOpening.OPERATE, lease_wait_s=lease_wait_s)
         if runtime.clerk is None:
+            failure = runtime.startup_failure
+            if failure is not None and failure.reason_code == "SYNTHETIC_CLERK_LEASE_HELD":
+                # The typed lease-held answer (#2670): boot's restoration,
+                # Start's re-check, and the panel all recognize this one.
+                raise DryRunAccountHeldElsewhere()
             detail = (
-                runtime.startup_failure.recovery
-                if runtime.startup_failure is not None
+                failure.recovery
+                if failure is not None
                 else "Synthetic runtime was not composed."
             )
             raise StartAdmissionUnavailable(
@@ -262,8 +325,29 @@ class _SyntheticAccount:
             )
 
     @asynccontextmanager
+    async def restoring(self) -> AsyncIterator[None]:
+        """Mark this account as under boot's restoration, under its lock (#2684).
+
+        The restorer already holds this access through its recovery; the mark
+        is what every *other* reader and action sees, so each is answered at
+        once with :data:`DRY_RUN_RESTORING_SENTENCE` instead of queueing
+        behind the lease wait. Cleared on every exit, failure included.
+        """
+        async with self.runtime_access.hold():
+            self.runtime_access.restoring = True
+            try:
+                yield
+            finally:
+                self.runtime_access.restoring = False
+
+    def is_restoring(self) -> bool:
+        """Whether boot's restoration currently holds this account."""
+        return self.runtime_access.restoring
+
+    @asynccontextmanager
     async def held_for_request(self, opening: SyntheticOpening) -> AsyncIterator[ActiveClerkRuntime]:
         """This account for one request; a runtime composed only for it is released after it."""
+        self.runtime_access.refuse_if_restoring_elsewhere()
         async with self.runtime_access.hold():
             was_active = get_clerk_runtime(self.account_id) is not None
             runtime = await self.open(opening)
@@ -274,6 +358,7 @@ class _SyntheticAccount:
                     await self.release_if_unused()
 
     async def release_if_unused(self) -> None:
+        self.runtime_access.refuse_if_restoring_elsewhere()
         async with self.runtime_access.hold():
             if self.runtime_in_use(self.strategy_instance_id):
                 return
@@ -284,6 +369,7 @@ class _SyntheticAccount:
             self.brokers.pop(self.account_id, None)
 
     async def open(self, opening: SyntheticOpening, *, lease_wait_s: float = 0.0) -> ActiveClerkRuntime:
+        self.runtime_access.refuse_if_restoring_elsewhere()
         async with self.runtime_access.hold():
             return await self._open_locked(opening, lease_wait_s=lease_wait_s)
 
@@ -393,6 +479,14 @@ class SyntheticBindingAuthority(BindingAuthority):
 
     def source_bars(self) -> SourceBarLedger:
         return self._account.source_bars()
+
+    def restoring(self) -> AbstractAsyncContextManager[None]:
+        """Mark this Dry Run's account as under boot's restoration (#2684)."""
+        return self._account.restoring()
+
+    def is_restoring(self) -> bool:
+        """Whether boot's restoration currently holds this Dry Run's account."""
+        return self._account.is_restoring()
 
     async def ensure_recoverable(self, *, lease_wait_s: float = 0.0) -> None:
         """Compose this Dry Run's authority, or raise why it cannot be.
@@ -518,6 +612,14 @@ class UnboundDryRunAuthority:
     def runtime_for_projection(self) -> AbstractAsyncContextManager[ActiveClerkRuntime]:
         return self._account.held_for_request(SyntheticOpening.READ_ONLY)
 
+    def restoring(self) -> AbstractAsyncContextManager[None]:
+        """Mark this Dry Run's account as under boot's restoration (#2684)."""
+        return self._account.restoring()
+
+    def is_restoring(self) -> bool:
+        """Whether boot's restoration currently holds this Dry Run's account."""
+        return self._account.is_restoring()
+
     async def ensure_recoverable(self, *, lease_wait_s: float = 0.0) -> None:
         await self._account.ensure_operating(lease_wait_s=lease_wait_s)
 
@@ -584,9 +686,12 @@ class BindingAuthoritySelector:
 
 
 __all__ = [
+    "DRY_RUN_ACCOUNT_HELD_SENTENCE",
+    "DRY_RUN_RESTORING_SENTENCE",
     "BindingAuthority",
     "BindingAuthoritySelector",
     "PrimaryAccountBindingAuthority",
+    "SyntheticAccountRestoring",
     "SyntheticBindingAuthority",
     "UnboundDryRunAuthority",
     "primary_custody_kind",

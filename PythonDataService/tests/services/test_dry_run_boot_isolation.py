@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
     SyntheticActivationRecord,
     SyntheticActivationStore,
 )
+from app.engine.live.desired_state import DesiredState
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import bot_runner
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -166,19 +167,26 @@ async def test_a_dry_run_whose_account_another_process_still_holds_is_its_own_fa
     try:
         await restarted_lane.boot_account()
         await restarted_lane.registry.start_dry_run_restoration()
-    finally:
-        holder.close()
+        for _ in range(60):
+            if restarted_lane.registry.dry_run_restoration_state(SID) == "account_held":
+                break
+            await asyncio.sleep(0.05)
+        assert restarted_lane.registry.dry_run_restoration_state(SID) == "account_held"
 
-    assert get_alpaca_clerk() is restarted_lane.account
-    refused = await restarted_lane.start_refusal()
-    assert refused is not None
-    assert str(refused) == (
-        "This Dry Run could not be restored after the Clerk restarted: its simulated "
-        "account is still open in another running copy of this Clerk."
-    )
-    assert refused.detail == "Stop the other copy of this Clerk, then restart this one."
-    for internal in ("lease", "sim:", "live process"):
-        assert internal not in f"{refused} {refused.detail}"
+        assert get_alpaca_clerk() is restarted_lane.account
+        refused = await restarted_lane.start_refusal()
+        assert refused is not None
+        # #2670's one owner sentence; Start re-checks the mark before saying
+        # it, and while the other copy still holds the account it holds.
+        assert str(refused) == (
+            "This Dry Run's simulated account is still open in another running copy of this Clerk."
+        )
+        assert refused.detail == "Stop that copy, then start this bot again."
+        for internal in ("lease", "sim:", "live process"):
+            assert internal not in f"{refused} {refused.detail}"
+    finally:
+        await restarted_lane.registry.stop_dry_run_restoration()
+        holder.close()
 
 
 async def test_boot_waits_out_its_dead_predecessor_s_lease_at_production_cadence(
@@ -480,6 +488,7 @@ async def test_an_unbound_dry_run_can_only_be_read_or_restored(tmp_path: Path) -
         assert orphan is not None
         assert {name for name in dir(orphan) if not name.startswith("_")} == {
             "account_id", "strategy_instance_id", "runtime_for_projection", "ensure_recoverable",
+            "is_restoring", "restoring",
         }
         assert (orphan.account_id, orphan.strategy_instance_id) == ("sim:orphan-1", "orphan-1")
         assert registry.unbound_dry_run("never-deployed") is None
@@ -599,3 +608,122 @@ async def test_an_orphan_whose_recovery_raises_is_its_own_failure(
     assert failed.exc_info is not None
     assert get_clerk_runtime("sim:orphan-broken") is None
     assert get_clerk_runtime("sim:orphan-ok") is not None
+
+
+async def test_a_lease_held_dry_run_panel_shows_only_the_owner_sentence(
+    restarted_lane: _Lane,
+) -> None:
+    """#2670: a Dry Run whose account another live process holds refuses with the
+    one owner sentence on every surface -- never the internal ``sim:`` id,
+    never the words "execution lease" the repository's exception carries."""
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
+    try:
+        with pytest.raises(PanelUnavailableError) as refused:
+            async with binding_clerk_runtime(restarted_lane.registry, _dry_run_binding()):
+                pass
+
+        sentence = f"{refused.value.detail}"
+        assert "still open in another running copy of this Clerk" in sentence
+        assert "Stop that copy" in sentence
+        assert "sim:" not in sentence
+        assert "execution lease" not in sentence
+    finally:
+        holder.close()
+
+
+async def test_start_re_checks_a_held_dry_run_account_and_agrees_with_the_panel(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2670, owner decision 2026-09-30: Start re-checks an ``account_held`` Dry Run.
+
+    While the other copy holds the account, Start answers the one owner
+    sentence at once -- never the boot lease deadline -- and the panel's own
+    refusal names the same state in the same words. Once the other copy lets
+    go, Start itself completes the restoration, the mark clears, and Start no
+    longer says it: no restart, ever."""
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 0.3)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
+    try:
+        restarted_lane.registry.start_dry_run_restoration()
+        for _ in range(50):
+            if restarted_lane.registry.dry_run_restoration_state(SID) == "account_held":
+                break
+            await asyncio.sleep(0.05)
+        assert restarted_lane.registry.dry_run_restoration_state(SID) == "account_held"
+
+        first = await restarted_lane.start_refusal()
+        assert first is not None
+        assert "still open in another running copy of this Clerk" in str(first)
+        assert "sim:" not in str(first)
+        assert "execution lease" not in (first.detail or "")
+
+        started_ms = now_ms_utc()
+        second = await restarted_lane.start_refusal()
+        assert now_ms_utc() - started_ms < 500, "a still-held answer must not wait the lease deadline"
+        assert str(second) == str(first)
+    finally:
+        await restarted_lane.registry.stop_dry_run_restoration()
+        holder.close()
+
+    third = await restarted_lane.start_refusal()
+    assert restarted_lane.registry.dry_run_restoration_state(SID) is None, "Start's re-check restored the account"
+    assert third is None or "another running copy" not in str(third)
+
+
+async def test_the_lane_wide_stop_never_waits_out_a_restoring_dry_run_s_lease(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2684: the lane-wide Stop answers at once for a bot still being restored.
+
+    The restoration holds the bot's operation lock for as long as its lease
+    wait lasts; the lane's Stop used to queue behind it, so one Dry Run's
+    restoration held every Deploy and the lane's Stop. It is refused at once
+    with its own words now -- the restoration records the bot's stopped
+    intent when it settles."""
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
+    restarted_lane.registry._desired_repo(SID).set(
+        DesiredState.RUNNING, updated_by="test", now_ms=now_ms_utc(), reason="deploy"
+    )
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
+    try:
+        restarted_lane.registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration now holds the lock inside its lease wait
+
+        started_ms = now_ms_utc()
+        outcome = await asyncio.wait_for(
+            restarted_lane.registry.stop_every_running_bot(updated_by="operator", reason="lane stop"),
+            timeout=1.0,
+        )
+        assert now_ms_utc() - started_ms < 1_000
+        assert not outcome.still_running
+        (refusal,) = outcome.refused
+        assert refusal.strategy_instance_id == SID
+        assert "still being restored" in refusal.message
+    finally:
+        await restarted_lane.registry.stop_dry_run_restoration()
+        holder.close()
+
+
+async def test_every_account_reader_is_answered_at_once_during_a_restoration(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2684's one account-layer check: while boot's restoration holds the
+    account, every opening is refused at once -- the replay receipt's
+    repository read, the fees read, any reader -- instead of queueing behind
+    the restoration's lease wait."""
+    from app.services.bot_binding_authority import SyntheticAccountRestoring
+
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
+    try:
+        restarted_lane.registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration now holds the account inside its lease wait
+
+        authority = restarted_lane.registry._authority_for(_dry_run_binding())
+        started_ms = now_ms_utc()
+        with pytest.raises(SyntheticAccountRestoring):
+            await asyncio.wait_for(authority.runtime_for_projection().__aenter__(), timeout=1.0)
+        assert now_ms_utc() - started_ms < 1_000
+    finally:
+        await restarted_lane.registry.stop_dry_run_restoration()
+        holder.close()

@@ -23,32 +23,40 @@ an already-authorized request acts.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.services.bot_binding_authority import UnboundDryRunAuthority
+from app.services.bot_binding_authority import (
+    DRY_RUN_RESTORING_SENTENCE,
+    SyntheticAccountRestoring,
+    UnboundDryRunAuthority,
+)
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner_errors import InvalidStrategyInstanceIdError, UnknownBotError
 from app.services.broker_v2_panel.panel_errors import DryRunRestoringError, PanelUnavailableError
 
 
-def _refuse_while_restoring(registry: BotTaskRegistry, sid: str) -> None:
-    """Answer at once for a Dry Run whose boot restoration has not settled (#2668).
+def _translating_restoring() -> AbstractAsyncContextManager[None]:
+    """Translate the account layer's restoring answer into the panel's type.
 
-    The restoration holds the account's runtime lock while it waits out a
-    lease another process holds, and this module's reads take the same lock:
-    without this check a restoring bot's panel blocks for the whole lease
-    deadline. The refusal is its own type, so a roster of many bots can pass
-    over the one still being restored.
+    The one fail-fast check lives in the account layer (#2684):
+    ``_SyntheticAccount`` refuses an opening while another task restores it.
+    This is only the panel-side translation of that typed answer into the
+    roster's own error -- a roster of many bots can pass over the one still
+    being restored.
     """
-    if registry.dry_run_restoration_state(sid) == "restoring":
-        raise DryRunRestoringError(
-            "This Dry Run is still being restored after the Clerk restarted.",
-            detail="Wait up to a minute, then open it again.",
-        )
+
+    @asynccontextmanager
+    async def _translate() -> AsyncIterator[None]:
+        try:
+            yield
+        except SyntheticAccountRestoring as exc:
+            raise DryRunRestoringError(str(exc), detail=DRY_RUN_RESTORING_SENTENCE[1]) from exc
+
+    return _translate()
 
 
 @asynccontextmanager
@@ -62,8 +70,7 @@ async def bot_clerk_runtime(broker: str, sid: str) -> AsyncIterator[ActiveClerkR
         return
     orphan = _unbound_dry_run(registry, broker, sid)
     if orphan is not None:
-        _refuse_while_restoring(registry, sid)
-        async with orphan.runtime_for_projection() as runtime:
+        async with _translating_restoring(), orphan.runtime_for_projection() as runtime:
             yield _own_simulator(runtime)
         return
     yield _account_runtime(broker)
@@ -104,14 +111,13 @@ async def binding_clerk_runtime(registry: object, binding: object) -> AsyncItera
     if getattr(binding, "mode", None) != "dry_run":
         yield _account_runtime(str(getattr(binding, "broker", "alpaca")))
         return
-    _refuse_while_restoring(registry, binding.strategy_instance_id)
     projection_runtime = getattr(registry, "synthetic_runtime_for_projection", None)
     if not callable(projection_runtime):
         raise PanelUnavailableError(
             "The Dry Run custody authority is unavailable.",
             detail="The bot runner cannot compose the sealed synthetic Clerk for this projection.",
         )
-    async with projection_runtime(binding) as runtime:
+    async with _translating_restoring(), projection_runtime(binding) as runtime:
         yield _own_simulator(runtime)
 
 

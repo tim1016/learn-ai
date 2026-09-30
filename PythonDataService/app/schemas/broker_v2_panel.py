@@ -179,7 +179,9 @@ class BotCatalogView(BaseModel):
     # Backend-authored, trader-facing explanation for the row's current state.
     status_explanation: str
     # Rollups (S0 BotRollup) — never account-net; attributed to this bot.
-    exposure: dict[str, float]
+    # ``None`` only on a restoring row (#2684): the account cannot be read
+    # while boot restores it, and unknown must never read as flat ({}).
+    exposure: dict[str, float] | None
     fills_today: int | None
     realized_pnl_today: float | None
     open_pnl: float | None

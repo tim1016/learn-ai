@@ -69,7 +69,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseHeld
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -85,6 +85,17 @@ from app.schemas.account_authority import CustodyWorld
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+#: The one owner sentence for a Dry Run whose simulated account another live
+#: copy of this Clerk still holds (#2670). Authored here -- the authority's
+#: own startup failure is the first place it is shown -- and quoted by the
+#: panel and Start through the typed mapping, never from the exception's
+#: message: an internal ``sim:`` id and the term "execution lease" are not
+#: owner words.
+DRY_RUN_ACCOUNT_HELD_SENTENCE = (
+    "This Dry Run's simulated account is still open in another running copy of this Clerk.",
+    "Stop that copy, then start this bot again.",
+)
 
 
 class SyntheticOpening(Enum):
@@ -505,6 +516,18 @@ async def select_synthetic_clerk_runtime(
             repository.close()
         if not isinstance(exc, Exception):
             raise
+        if isinstance(exc, ExecutionLeaseHeld):
+            # #2670: the lease-held refusal gets its own reason code and the
+            # one owner sentence -- never the exception's message, which
+            # carries an internal ``sim:`` id and the term "execution lease".
+            return unavailable_runtime(
+                "SYNTHETIC_CLERK_LEASE_HELD",
+                account_id=account_id,
+                recovery=" ".join(DRY_RUN_ACCOUNT_HELD_SENTENCE),
+                activation_detected=True,
+                authority_generation=activation.authority_generation,
+                db_identity_token=activation.db_identity_token,
+            )
         return unavailable_runtime(
             "SYNTHETIC_CLERK_STARTUP_FAILED",
             account_id=account_id,

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import DRY_RUN_ACCOUNT_HELD_SENTENCE
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut, RecoveryEvaluationObservation
@@ -175,11 +176,12 @@ def refuse_unrestored_dry_run(state: DryRunRestorationState | None) -> None:
             detail="Wait up to a minute, then start it again.",
         )
     if state == "account_held":
-        raise StartAdmissionUnavailable(
-            "This Dry Run could not be restored after the Clerk restarted: its simulated "
-            "account is still open in another running copy of this Clerk.",
-            detail="Stop the other copy of this Clerk, then restart this one.",
-        )
+        # #2670: the same sentence the authority's own startup failure and
+        # the panel carry. Start re-checks this mark before answering it, so
+        # an operator who sees it and stops the other copy can press Start
+        # again -- no restart (owner decision 2026-09-30).
+        headline, detail = DRY_RUN_ACCOUNT_HELD_SENTENCE
+        raise StartAdmissionUnavailable(headline, detail=detail)
     raise StartAdmissionUnavailable(
         "This Dry Run could not be restored after the Clerk restarted.",
         detail="Restart the Clerk to try again. If it happens again, the Clerk's log names the cause.",

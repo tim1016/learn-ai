@@ -20,6 +20,7 @@ from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
+from app.services.bot_binding_authority import DRY_RUN_RESTORING_SENTENCE
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -147,6 +148,46 @@ class CatalogEconomicRollup:
     open_pnl: float | None
     last_activity_at_ms: int | None
     needs_attention: bool
+
+
+#: The closed-vocabulary label for a Dry Run whose account boot is still
+#: restoring (#2684): its own row on Home, its facts unknown.
+_STATUS_LABEL_RESTORING = "Restoring"
+
+
+def restoring_catalog_view(status: BotStatusView, *, account_id: str) -> BotCatalogView:
+    """The roster row for a Dry Run whose account boot is still restoring (#2684).
+
+    Its simulator cannot be opened while the restoration holds it, so no
+    economic fact is readable: every rollup is unknown and exposure is
+    ``None`` -- never ``{}``, which would read as flat. The bot is never
+    dropped from Home, and it stays in the Dry Run group: "finished" would
+    claim a flatness nobody can prove mid-restoration.
+    """
+    headline, detail = DRY_RUN_RESTORING_SENTENCE
+    return BotCatalogView(
+        strategy_instance_id=status.strategy_instance_id,
+        strategy_key=status.strategy_key,
+        strategy_label=_strategy_label_for(status),
+        broker=status.broker,
+        account_id=account_id,
+        symbol=status.symbol,
+        mode=status.mode,
+        phase=status.phase,
+        desired_state=status.desired_state,
+        running=False,
+        status_label=_STATUS_LABEL_RESTORING,
+        status_explanation=f"{headline} {detail}",
+        exposure=None,
+        fills_today=None,
+        realized_pnl_today=None,
+        open_pnl=None,
+        day_pnl=None,
+        last_activity_at_ms=None,
+        needs_attention=False,
+        group="dry_run",
+        world_label=WORLD_LABELS["synthetic"],
+    )
 
 
 def status_label_for(status: BotStatusView) -> str:

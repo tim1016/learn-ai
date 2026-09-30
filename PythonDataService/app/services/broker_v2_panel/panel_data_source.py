@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
+    synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
@@ -86,6 +87,7 @@ from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, cust
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     custody_bot_status,
+    restoring_catalog_view,
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
@@ -343,14 +345,22 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
                 rows = await read_sqlite_catalog_from_facade(broker, facade)
                 budget = facade.repository.deployment_budget(binding.strategy_instance_id)
         except DryRunRestoringError:
-            # A Dry Run boot is still restoring is that bot's wait alone
-            # (#2582): the lane's other bots list, and it lists once restored.
+            # #2684: a restoring Dry Run keeps its own row on Home instead of
+            # vanishing -- nothing about it is readable while its account is
+            # held, so every fact is unknown, never zero, and the row says
+            # what it is waiting for. It lists normally once restored.
             logger.info(
-                "A Dry Run still being restored is left off this roster read",
+                "A Dry Run still being restored is listed as a restoring row",
                 extra={
-                    "action": "catalog_dry_run_restoring_skipped",
+                    "action": "catalog_dry_run_restoring_row",
                     "strategy_instance_id": binding.strategy_instance_id,
                 },
+            )
+            synthetic_rows.append(
+                restoring_catalog_view(
+                    registry.status(broker, binding.strategy_instance_id),
+                    account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
+                )
             )
             continue
         except SqliteCatalogProjectionUnavailable as exc:
