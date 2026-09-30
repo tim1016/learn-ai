@@ -117,8 +117,11 @@ def adapt_sqlite_panel(
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
+    working_orders = _working_orders(panel, projection, strict=economics is not None)
     actions = [
-        *_lifecycle_actions(panel, revision=projection.control_revision),
+        *_lifecycle_actions(
+            panel, working_order_count=len(working_orders), revision=projection.control_revision,
+        ),
         *(
             _panel_action(item, projection.control_revision, flatten_verdict=flatten_verdict)
             for item in projection.recovery_actions
@@ -160,11 +163,7 @@ def adapt_sqlite_panel(
             "readiness_ready_count": ready_count,
             "readiness_blocked_count": len(checks) - ready_count,
             "exposure": exposure,
-            "working_orders": _working_orders(
-                panel,
-                projection,
-                strict=economics is not None,
-            ),
+            "working_orders": working_orders,
             # SQLite is the sole custody projection after activation.  Legacy
             # JSONL fill/P&L rollups must not be mixed into this evidence cut.
             "recent_fills": (
@@ -188,15 +187,18 @@ def adapt_sqlite_panel(
     )
 
 
-def _lifecycle_actions(panel: BotPanelView, *, revision: int) -> list[PanelAction]:
+def _lifecycle_actions(
+    panel: BotPanelView, *, working_order_count: int, revision: int,
+) -> list[PanelAction]:
     """Clear's ``archive`` for a stopped bot's page; a running bot's page has none.
 
     A running bot's stop is the recovery catalog's ``stop_bot_decisions``.
-    ``panel`` is the pre-adaptation projection, and archive reads the facts the
-    generic action registry read before #2635 moved it here: the runner's
-    liveness and phase, the Clerk card's freeze, and that projection's
-    exposure and working orders -- so the action, its copy and its token are
-    unchanged.
+    ``panel`` is the pre-adaptation projection: archive reads its runner
+    liveness and phase, the Clerk card's freeze and the SQLite exposure it was
+    built from. ``working_order_count`` is the SQLite projection's working
+    orders, the custody the commit-time check reads. The pre-adaptation
+    projection's own list comes from the legacy order journal, which nothing
+    writes any more, so a working order never disabled the button (#2635).
     """
     if panel.health.running:
         return []
@@ -206,7 +208,7 @@ def _lifecycle_actions(panel: BotPanelView, *, revision: int) -> list[PanelActio
             phase=panel.health.phase,
             freeze_active=panel.clerk.freeze_active,
             exposure=panel.exposure,
-            working_order_count=len(panel.working_orders),
+            working_order_count=working_order_count,
             account_id=panel.account_id,
             strategy_instance_id=panel.strategy_instance_id,
             revision=revision,

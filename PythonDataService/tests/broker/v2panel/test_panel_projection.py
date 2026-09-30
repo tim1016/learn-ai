@@ -2034,14 +2034,23 @@ def _stopped(**update: object) -> BotStatusView:
     return _status(running=False).model_copy(update=update)
 
 
-_OPEN_ORDER_ENTRIES = (
-    intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
-    submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
+_WORKING_ENTRY = ProjectedOrder(
+    order_ref="order:entry",
+    client_order_id="client:entry",
+    broker_order_id="broker:entry",
+    role="ENTRY",
+    broker_state="new",
+    submitted_at_ms=_NOW - 400,
+    updated_at_ms=_NOW - 300,
+    symbol="SPY",
+    side="buy",
+    quantity=1.0,
+    filled_quantity=0.0,
 )
 
 
 @pytest.mark.parametrize(
-    ("status", "clerk", "entries", "exposure", "expected"),
+    ("status", "clerk", "orders", "exposure", "expected"),
     [
         pytest.param(
             _stopped(), _clerk_status(), (), {},
@@ -2059,7 +2068,9 @@ _OPEN_ORDER_ENTRIES = (
             id="stopped-holding",
         ),
         pytest.param(
-            _stopped(), _clerk_status(), _OPEN_ORDER_ENTRIES, {},
+            # The Clerk's working order, not the legacy journal's: the journal
+            # is never written now, so its count could not disable Clear (#2635).
+            _stopped(), _clerk_status(), (_WORKING_ENTRY,), {},
             [_served_archive(token="bd25a4709233167f73c67da20e4f76e4", blocker="ARCHIVE_WOULD_STRAND_CUSTODY")],
             id="working-order",
         ),
@@ -2084,7 +2095,7 @@ _OPEN_ORDER_ENTRIES = (
 def test_the_served_archive_is_the_one_the_registry_presented(
     status: BotStatusView,
     clerk: ClerkStatus,
-    entries: tuple,
+    orders: tuple[ProjectedOrder, ...],
     exposure: dict[str, float],
     expected: list[dict[str, object]],
 ) -> None:
@@ -2094,8 +2105,8 @@ def test_the_served_archive_is_the_one_the_registry_presented(
     before the move, and the stopped-flat token is the one every lane served
     on 2026-09-30."""
     served = adapt_sqlite_panel(
-        _panel(status, clerk, list(entries), exposure=exposure),
-        _rail_projection(orders=()),
+        _panel(status, clerk, [], exposure=exposure),
+        _rail_projection(orders=orders),
     )
 
     assert [
