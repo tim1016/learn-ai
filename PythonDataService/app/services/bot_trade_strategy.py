@@ -1374,6 +1374,10 @@ async def run_dry_run_bot(
                 decision_evidence=decision_evidence,
             )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+                # A REJECTED receipt is final: an ENTER refused only because
+                # executions postdate the account's last reading is kept by the
+                # Clerk until a newer reading lands or its evidence's
+                # ``decision_valid_until_ms`` passes (#2623).
                 _discard_evaluation(evaluation)
                 continue
             _settle_evaluation(evaluation, Settlement.COMMIT)

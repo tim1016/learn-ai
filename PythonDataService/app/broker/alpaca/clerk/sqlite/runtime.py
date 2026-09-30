@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -103,6 +103,7 @@ from app.broker.alpaca.clerk.sqlite.lane_quiet import (
     AccountQuietObservation,
     observe_account_quiet,
 )
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import EntryReadingOutcome
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
     submit_manual_order_cancellation,
@@ -194,42 +195,54 @@ logger = logging.getLogger(__name__)
 
 
 class EntryReading(Protocol):
-    """Read the account now for an ENTER waiting on executions (``LiveEnvelopeSync.read_for_entry``)."""
+    """Wait for an account reading covering every execution (``LiveEnvelopeSync.read_for_entry``)."""
 
-    async def __call__(self, *, until_ms: int) -> bool: ...
+    async def __call__(self, *, until_ms: int, wanted: Callable[[], bool]) -> EntryReadingOutcome: ...
 
 
 @dataclass(frozen=True)
-class _EntryReadingWait:
-    """An ENTER refused only because executions postdate the last account reading (#2623).
+class _AwaitReading:
+    """An ENTER refused because executions postdate the last account reading (#2623).
 
     Returned from under the intake fence so the account is read outside it;
     the decision is then judged again from the start. ``until_ms`` is the
-    decision's own time limit (``EffectDecisionEvidence.decision_valid_until_ms``);
-    ``read`` is whether the reading taken for it covered every execution.
+    decision's own time limit (``EffectDecisionEvidence.decision_valid_until_ms``).
     """
 
     until_ms: int
-    read: bool = False
 
-    def ended(self, *, now_ms: int, run_active: bool) -> tuple[str, str] | None:
-        """Why the wait is over without an entry -- a code for the log, words for the receipt."""
-        if not run_active:
-            return "run_stopped", (
-                "Executions changed after the last account reading, and the bot was stopped "
-                "while this entry waited for a new reading, so the entry was dropped."
-            )
-        if not self.read:
-            return "account_unread", (
-                "Executions changed after the last account reading, and the account could not "
-                "be read again, so this entry was dropped."
-            )
-        if now_ms > self.until_ms:
-            return "decision_late", (
-                "Executions changed after the last account reading, and no newer reading arrived "
-                "while this decision was still on time, so the entry was dropped."
-            )
-        return None
+
+# Why an ENTER's wait for an account reading ended without it (#2623): one
+# entry per ending, in the owner's words on the ENTER's ``blocked`` receipt.
+_ENTRY_WAIT_ENDINGS: Final[Mapping[str, str]] = {
+    "run_stopped": (
+        "Executions changed after the last account reading, and the bot was stopped "
+        "while this entry waited for a new reading, so the entry was dropped."
+    ),
+    "unread": (
+        "Executions changed after the last account reading, and the account could not "
+        "be read again, so this entry was dropped."
+    ),
+    "out_of_time": (
+        "Executions changed after the last account reading, and no newer reading arrived "
+        "while this decision was still on time, so the entry was dropped."
+    ),
+    "stopped": (
+        "Executions changed after the last account reading, and the account Clerk was "
+        "shutting down before a new reading arrived, so the entry was dropped."
+    ),
+}
+
+
+def _entry_wait_ending(outcome: EntryReadingOutcome, *, run_active: bool) -> str | None:
+    """The key of why an ENTER's wait ended without it, or ``None`` to judge it again.
+
+    A stopped run comes first: whatever the reading found, an entry the run
+    no longer owns is never judged again.
+    """
+    if not run_active:
+        return "run_stopped"
+    return None if outcome == "covered" else outcome
 
 
 class _DecisionBarBoundTradePort:
@@ -1049,16 +1062,17 @@ class SqliteAlpacaClerkFacade:
     ) -> EffectOperationReceipt:
         """Judge one decision; an ENTER behind the account reading waits for a new one (#2623).
 
-        An ENTER refused only because executions postdate the last account
-        reading is kept: the account is read now, outside the intake fence,
-        and the whole decision is judged again, so every other refusal --
-        the market-closed one included -- applies afresh. Nothing durable is
-        written until an attempt is accepted, so the decision is accepted at
-        most once however many attempts it takes; the wait ends, recorded as
-        a refusal, when the run stops, the account cannot be read, or the
-        decision outlives its time limit.
+        An ENTER refused because executions postdate the last account reading
+        is kept: the envelope's sync reads the account now, outside the intake
+        fence, and the whole decision is judged again, so every other refusal
+        -- the market-closed one included -- applies afresh. Nothing durable
+        is written until an attempt is accepted, so the decision is accepted
+        at most once however many attempts it takes. The wait ends, recorded
+        as a refusal, when the run stops, the account cannot be read, no
+        covering reading lands in the decision's time limit, or the Clerk is
+        shutting down (``_ENTRY_WAIT_ENDINGS``).
         """
-        reading_wait: _EntryReadingWait | None = None
+        reading_outcome: EntryReadingOutcome | None = None
         while True:
             outcome = await self._execute_effect_once(
                 strategy_instance_id=strategy_instance_id,
@@ -1071,7 +1085,7 @@ class SqliteAlpacaClerkFacade:
                 capability_account_id=capability_account_id,
                 retained_source_bar=retained_source_bar,
                 decision_evidence=decision_evidence,
-                reading_wait=reading_wait,
+                reading_outcome=reading_outcome,
             )
             if isinstance(outcome, EffectOperationReceipt):
                 return outcome
@@ -1087,7 +1101,14 @@ class SqliteAlpacaClerkFacade:
                     "until_ms": outcome.until_ms,
                 },
             )
-            reading_wait = replace(outcome, read=await self._entry_reading(until_ms=outcome.until_ms))
+            reading_outcome = await self._entry_reading(
+                until_ms=outcome.until_ms,
+                wanted=lambda: self._run_active(strategy_instance_id, run_id),
+            )
+
+    def _run_active(self, strategy_instance_id: str, run_id: str) -> bool:
+        active = self._repo.active_run(strategy_instance_id)
+        return active is not None and active.lifecycle_run_id == run_id
 
     async def _execute_effect_once(
         self,
@@ -1102,8 +1123,8 @@ class SqliteAlpacaClerkFacade:
         capability_account_id: str | None,
         retained_source_bar: RetainedSourceBar | None,
         decision_evidence: EffectDecisionEvidence | None,
-        reading_wait: _EntryReadingWait | None,
-    ) -> EffectOperationReceipt | _EntryReadingWait:
+        reading_outcome: EntryReadingOutcome | None,
+    ) -> EffectOperationReceipt | _AwaitReading:
         def rejected(
             *,
             reason_code: str,
@@ -1134,28 +1155,29 @@ class SqliteAlpacaClerkFacade:
             )
 
         async with self._intake:
-            if reading_wait is not None:
-                # Judged under the fence Stop commits under, so an entry the
-                # run no longer owns is never admitted after its reading.
-                active = self._repo.active_run(strategy_instance_id)
-                ended = reading_wait.ended(
-                    now_ms=self._repo.clock(),
-                    run_active=active is not None and active.lifecycle_run_id == run_id,
+            # The run is judged under the fence Stop commits under, so an
+            # entry the run no longer owns is never admitted after its reading.
+            ending = (
+                None
+                if reading_outcome is None
+                else _entry_wait_ending(reading_outcome, run_active=self._run_active(strategy_instance_id, run_id))
+            )
+            if ending is not None:
+                logger.warning(
+                    "an ENTER waiting for an account reading was dropped",
+                    extra={
+                        "action": "enter_account_reading_wait_ended",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "why": ending,
+                    },
                 )
-                if ended is not None:
-                    logger.warning(
-                        "an ENTER waiting for an account reading was dropped",
-                        extra={
-                            "action": "enter_account_reading_wait_ended",
-                            "account_id": self._repo.account_id,
-                            "strategy_instance_id": strategy_instance_id,
-                            "decision_id": decision_id,
-                            "why": ended[0],
-                        },
-                    )
-                    return rejected(
-                        reason_code=LIVE_ENVELOPE_UNOBSERVED, explanation=ended[1], next_step=_ENTRY_NOT_RETRIED,
-                    )
+                return rejected(
+                    reason_code=LIVE_ENVELOPE_UNOBSERVED,
+                    explanation=_ENTRY_WAIT_ENDINGS[ending],
+                    next_step=_ENTRY_NOT_RETRIED,
+                )
             if self.binds_decision_bar and retained_source_bar is None:
                 return rejected(
                     reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
@@ -1328,15 +1350,14 @@ class SqliteAlpacaClerkFacade:
                     )
                 except AdmissionBlockedError as exc:
                     # #2623: the one refusal a newer account reading can lift
-                    # keeps the decision, while it is still on time.
+                    # keeps the decision; the reader judges its time limit.
                     until_ms = None if decision_evidence is None else decision_evidence.decision_valid_until_ms
                     if (
                         isinstance(exc, AccountReadingBehindExecutions)
                         and self._entry_reading is not None
                         and until_ms is not None
-                        and self._repo.clock() <= until_ms
                     ):
-                        return _EntryReadingWait(until_ms=until_ms)
+                        return _AwaitReading(until_ms)
                     return rejected(
                         reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
                         explanation=exc.decision.why or "The Clerk refused new exposure.",

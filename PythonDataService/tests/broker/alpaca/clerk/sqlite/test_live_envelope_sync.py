@@ -33,8 +33,9 @@ from app.broker.alpaca.clerk.live_envelope import (
 )
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
-from app.broker.alpaca.clerk.sqlite.live_envelope_sync import ENTRY_READING_RETRY_INTERVAL_S, LiveEnvelopeSync
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.risk_admission import AccountReadingBehindExecutions
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
@@ -1036,9 +1037,13 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
 
 
 # ── A reading taken for a waiting ENTER (#2623) ───────────────────────────────
-# An ENTER refused only because executions postdate the last reading asks the
-# sync to read the account now instead of at its next tick. ``read_for_entry``
-# answers whether the reading it took covers every execution recorded so far.
+# An ENTER refused because executions postdate the last reading asks the sync
+# to read the account now instead of at its next tick. ``read_for_entry``
+# answers how that wait ended: covered, unread, out_of_time or stopped.
+
+
+def _still_wanted() -> bool:
+    return True
 
 
 class _CountedReads(_LiveBroker):
@@ -1065,12 +1070,89 @@ async def test_entries_waiting_together_share_one_account_reading(
     read = _CountedReads(now_ms=T0)
     read.release.clear()
     sync = make_sync(envelope_repo, read)
-    first = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS))
+    first = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted))
     await read.started.wait()
-    second = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS))
+    second = asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted))
     read.release.set()
 
-    assert (await first, await second) == (True, True)
+    assert (await first, await second) == ("covered", "covered")
+    assert read.account_reads == 1
+
+
+async def test_a_reading_an_execution_overtakes_keeps_the_last_one_and_says_so_at_info(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fill landing during a cadence read leaves the reading before it published.
+
+    That reading is older still, so admission refuses it as behind executions
+    -- the refusal an ENTER waits out -- rather than finding no reading at all
+    and dropping the ENTER as unobserved. Nothing is wrong with the account,
+    so the verdict is not a warning.
+    """
+    first_instance, second_instance = two_active_instances
+    first = _enter(envelope_repo, first_instance, symbol="SPY", envelope=_observed_gate(cash=2_000.02, simulated=False))
+    read = _FillLandsMidRead(clock=envelope_clock, cash=2_000.02,
+                             record_fill=_fill_all_ten(envelope_repo, envelope_clock, first))
+    read._fill_pending = False  # the first cadence read sees no fill land
+    sync = make_sync(envelope_repo, read, simulated=False)
+    assert await sync.tick() == "observed"
+    before = sync.envelope.latest_observation()
+    read._fill_pending = True  # the first instance's fill lands during the next one
+
+    with caplog.at_level(logging.INFO, logger=SYNC_LOGGER):
+        assert await sync.tick() == "superseded"
+
+    assert sync.envelope.latest_observation() is before
+    (line,) = [record for record in _sync_records(caplog) if record.action == "live_envelope_superseded"]
+    assert line.levelno == logging.INFO
+    with pytest.raises(AccountReadingBehindExecutions):
+        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
+    assert sync.envelope.latest_observation() is before  # the refusal that waits withdraws nothing
+
+
+async def test_the_minimum_interval_holds_between_any_two_entry_readings(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A covering reading, then another ENTER wanting one at once: it waits the interval out."""
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+        envelope_clock.advance(round(seconds * 1000))
+
+    read = _CountedReads(now_ms=T0)
+    sync = make_sync(envelope_repo, read, sleep=pause, entry_reading_interval_s=2.5)
+    until_ms = T0 + DELIVERY_ALLOWANCE_MS
+
+    assert await sync.read_for_entry(until_ms=until_ms, wanted=_still_wanted) == "covered"
+    assert await sync.read_for_entry(until_ms=until_ms, wanted=_still_wanted) == "covered"
+    assert (pauses, read.account_reads) == ([2.5], 2)
+
+
+async def test_an_entry_no_longer_wanted_after_the_pause_costs_no_reading(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """The ENTER's run stops during the pause: no further reading is taken for it."""
+    wanted = [True]
+
+    async def pause(seconds: float) -> None:
+        envelope_clock.advance(round(seconds * 1000))
+        wanted[0] = False  # the operator stops the bot meanwhile
+
+    read = _CountedReads(now_ms=T0)
+    sync = make_sync(envelope_repo, read, sleep=pause)
+    until_ms = T0 + DELIVERY_ALLOWANCE_MS
+    assert await sync.read_for_entry(until_ms=until_ms, wanted=lambda: wanted[0]) == "covered"
+
+    assert await sync.read_for_entry(until_ms=until_ms, wanted=lambda: wanted[0]) == "stopped"
     assert read.account_reads == 1
 
 
@@ -1080,9 +1162,10 @@ async def test_a_reading_an_execution_supersedes_is_taken_again_after_a_pause(
     two_active_instances: tuple[tuple[str, str], tuple[str, str]],
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    """The first instance's fill lands while the account is read: that reading is withdrawn.
+    """The first instance's fill lands while the account is read: that reading cannot judge it.
 
-    One pause later the account is read again, and that reading covers the fill.
+    The account is read again at once -- that slow read already outlasted the
+    interval between entry readings -- and the second reading covers the fill.
     """
     first_instance, _second_instance = two_active_instances
     first = _enter(envelope_repo, first_instance, symbol="SPY", envelope=_observed_gate(cash=2_000.02, simulated=False))
@@ -1096,8 +1179,8 @@ async def test_a_reading_an_execution_supersedes_is_taken_again_after_a_pause(
 
     sync = make_sync(envelope_repo, read, simulated=False, sleep=pause)
 
-    assert await sync.read_for_entry(until_ms=envelope_clock() + 60_000) is True
-    assert pauses == [ENTRY_READING_RETRY_INTERVAL_S]
+    assert await sync.read_for_entry(until_ms=envelope_clock() + 60_000, wanted=_still_wanted) == "covered"
+    assert pauses == []
     observation = sync.envelope.latest_observation()
     assert observation is not None and observation.risk_fill_sequence == risk_fill_sequence(envelope_repo)
 
@@ -1120,7 +1203,7 @@ async def test_no_second_reading_starts_after_the_entrys_time_limit(
     sync = make_sync(envelope_repo, read, simulated=False, sleep=pause)
 
     # The superseded read itself takes both legs; a second could not begin in time.
-    assert await sync.read_for_entry(until_ms=envelope_clock() + 2 * READ_LEG_MS) is False
+    assert await sync.read_for_entry(until_ms=envelope_clock() + 2 * READ_LEG_MS, wanted=_still_wanted) == "out_of_time"
     assert pauses == []
 
 
@@ -1130,7 +1213,54 @@ async def test_a_reading_the_broker_cannot_answer_ends_the_wait(
 ) -> None:
     sync = make_sync(envelope_repo, _Read(fail=True))
 
-    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS) is False
+    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted) == "unread"
+
+
+async def test_a_fault_no_verdict_maps_ends_the_wait_as_unread_and_is_logged(
+    envelope_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unmapped error in the shared reading never reaches the waiting ENTERs as a crash."""
+    sync = make_sync(envelope_repo, _Read(fail_unexpectedly=True))
+
+    with caplog.at_level(logging.ERROR, logger=SYNC_LOGGER):
+        assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted) == "unread"
+
+    (line,) = [record for record in _sync_records(caplog) if record.action == "live_envelope_entry_reading_failed"]
+    assert line.exc_info is not None
+
+
+async def test_a_reading_still_in_flight_at_the_time_limit_ends_the_wait(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A slow broker cannot hold a bot's decision loop past the ENTER's time limit."""
+    read = _CountedReads(now_ms=T0)
+    read.release.clear()  # the broker does not answer
+    sync = make_sync(envelope_repo, read)
+
+    assert await sync.read_for_entry(until_ms=envelope_clock() + 50, wanted=_still_wanted) == "out_of_time"
+    assert read.account_reads == 1
+
+
+async def test_stopping_the_sync_mid_reading_ends_every_wait_as_stopped(
+    envelope_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    read = _CountedReads(now_ms=T0)
+    read.release.clear()
+    sync = make_sync(envelope_repo, read)
+    waits = [
+        asyncio.create_task(sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted))
+        for _ in range(2)
+    ]
+    await read.started.wait()
+
+    await sync.stop()
+
+    assert [await wait for wait in waits] == ["stopped", "stopped"]
 
 
 async def test_a_stopped_sync_takes_no_reading_for_an_entry(
@@ -1142,7 +1272,7 @@ async def test_a_stopped_sync_takes_no_reading_for_an_entry(
     sync = make_sync(envelope_repo, read)
     await sync.stop()
 
-    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS) is False
+    assert await sync.read_for_entry(until_ms=T0 + DELIVERY_ALLOWANCE_MS, wanted=_still_wanted) == "stopped"
     assert read.account_reads == 0
 
 

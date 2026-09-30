@@ -42,12 +42,14 @@ from app.broker.alpaca.clerk.live_envelope import (
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_accepted_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
-from app.broker.alpaca.clerk.sqlite.live_envelope_sync import ENTRY_READING_RETRY_INTERVAL_S, LiveEnvelopeSync
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import DEFAULT_ENTRY_READING_INTERVAL_S, LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryStatus
@@ -733,10 +735,15 @@ async def test_a_refused_after_hours_exit_waits_for_the_next_session_and_never_e
 # refusal still drops it.
 #
 # The harness is the real facade and the real envelope sync over one budgeted
-# paper account with bots ``a`` and ``b``; only the broker is a double. Its
-# clock is the repository's, and the sync's pause between readings advances it.
+# paper account with bots ``a`` and ``b`` (and ``c`` where a test deploys it);
+# only the broker is a double. Its clock is the repository's, and the sync's
+# pause between readings advances it.
 
-_B_DECISION = hashlib.sha256(b"b-decides-enter-on-the-noon-bar").hexdigest()
+def _decision_of(sid: str) -> str:
+    return hashlib.sha256(f"{sid}-decides-enter-on-the-noon-bar".encode()).hexdigest()
+
+
+_B_DECISION = _decision_of("b")
 _ON_TIME_UNTIL_MS = NOON + DELIVERY_ALLOWANCE_MS
 
 
@@ -768,6 +775,17 @@ class _OneAccount:
     sync: LiveEnvelopeSync
     account: _Account
     trade: _FakeTradePort
+    # One action per coming pause between entry readings, run as it passes.
+    while_paused: list[Callable[[], Awaitable[None]]]
+
+    def deploy_c(self) -> None:
+        """A third bot on SPY, deployed against a reading roomy enough for its budget."""
+        self.repo.register_strategy_instance(strategy_instance_id="c", symbol="SPY", config_hash="seal-c",
+                                             exit_terms=TERMS)
+        submit_budgeted_deploy(self.repo, strategy_instance_id="c", lifecycle_run_id="run-c", world="real_paper",
+            committed_cents=50_000, configuration_hash="seal-c",
+            exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")), risk_revision=1, actor="owner",
+            envelope=_gate(cash=10_000), minimum_position_cost=Decimal("100.01"))
 
     def accept_a_and_fill(self, *, quantity: int = 1, filled: int = 1) -> EnterSubmission:
         """Bot A's ENTER, accepted, and ``filled`` of its shares recorded -- after the last reading."""
@@ -777,32 +795,34 @@ class _OneAccount:
         _append_slice(self.repo, entry, execution_id="a-fill-1", quantity=filled, source_event_at_ms=self.clock())
         return entry
 
-    async def b_decides_enter(
-        self, *, quantity: int = 1, bar_close_ms: int = NOON, until_ms: int | None = _ON_TIME_UNTIL_MS,
+    async def decides_enter(
+        self, sid: str = "b", *, quantity: int = 1, bar_close_ms: int = NOON,
+        until_ms: int | None = _ON_TIME_UNTIL_MS,
     ) -> EffectOperationReceipt:
-        """Bot B's ENTER on the bar closing at ``bar_close_ms``, as its runner hands it to the Clerk."""
+        """A bot's ENTER on the bar closing at ``bar_close_ms``, as its runner hands it to the Clerk."""
         bar = RetainedSourceBar.from_market_bar(seq=1, account_id=self.repo.account_id, bar=MarketDataBar(
             feed_id="ibkr", symbol="SPY", start_ms=bar_close_ms - 60_000, end_ms=bar_close_ms, open=Decimal(100),
             high=Decimal(100), low=Decimal(100), close=Decimal(100), volume=100, fetched_at_ms=bar_close_ms,
             session_phase="RTH",
         ))
+        decision = _decision_of(sid)
         return await self.clerk.execute_for_instance(
-            strategy_instance_id="b", run_id="run-b", decision_id=_B_DECISION, purpose=EffectPurpose.ENTER,
+            strategy_instance_id=sid, run_id=f"run-{sid}", decision_id=decision, purpose=EffectPurpose.ENTER,
             action_plan=alpaca_v1_action_plan("SPY"), quantity=quantity, retained_source_bar=bar,
             decision_evidence=EffectDecisionEvidence(
-                evaluation_id=_B_DECISION, bar_ref=bar.bar_ref, symbol="SPY", outcome="enter_intent",
+                evaluation_id=decision, bar_ref=bar.bar_ref, symbol="SPY", outcome="enter_intent",
                 observed_at_ms=bar_close_ms, decision_bar_close_ms=bar_close_ms, decision_valid_until_ms=until_ms,
             ),
         )
 
-    def b_enter_commands(self) -> int:
+    def enter_commands(self, sid: str = "b") -> int:
         return self.repo._conn.execute(
-            "SELECT COUNT(*) FROM commands WHERE strategy_instance_id = 'b' AND action = 'ENTER'"
+            "SELECT COUNT(*) FROM commands WHERE strategy_instance_id = ? AND action = 'ENTER'", (sid,)
         ).fetchone()[0]
 
-    def b_receipts(self) -> list[tuple[str, dict[str, Any]]]:
+    def receipts(self, sid: str = "b") -> list[tuple[str, dict[str, Any]]]:
         return [(receipt.outcome, json.loads(receipt.facts_json))
-                for receipt in self.repo.decision_receipt_tail(strategy_instance_id="b", limit=50)]
+                for receipt in self.repo.decision_receipt_tail(strategy_instance_id=sid, limit=50)]
 
 
 @pytest.fixture
@@ -812,9 +832,12 @@ async def one_account(tmp_path: Path) -> AsyncIterator[_OneAccount]:
     _deploy(repo, "b", 50_000)
     clock = repo.clock
     assert isinstance(clock, _TestClock)
+    while_paused: list[Callable[[], Awaitable[None]]] = []
 
     async def pause(seconds: float) -> None:
         clock.advance(round(seconds * 1000))
+        if while_paused:
+            await while_paused.pop(0)()
 
     account = _Account()
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
@@ -824,7 +847,8 @@ async def one_account(tmp_path: Path) -> AsyncIterator[_OneAccount]:
         live_envelope=gate, entry_reading=sync.read_for_entry)
     assert await sync.tick() == "observed"
     try:
-        yield _OneAccount(repo=repo, clock=clock, clerk=clerk, sync=sync, account=account, trade=trade)
+        yield _OneAccount(repo=repo, clock=clock, clerk=clerk, sync=sync, account=account, trade=trade,
+                          while_paused=while_paused)
     finally:
         await sync.stop()
         repo.close()
@@ -841,14 +865,208 @@ async def test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_r
     """
     one_account.accept_a_and_fill()
 
-    receipt = await one_account.b_decides_enter()
+    receipt = await one_account.decides_enter()
 
     assert receipt.state is not EffectOperationState.REJECTED, receipt.explanation
     assert len(receipt.child_order_refs) == 1
     assert one_account.trade.submit_calls == list(receipt.child_order_refs)
     assert one_account.account.account_reads == 2  # the harness's reading, then the one B asked for
     assert one_account.clock() == NOON  # no pause between readings: the first one covered A's fill
-    assert [outcome for outcome, _facts in one_account.b_receipts()] == ["enter_intent"]
+    assert [outcome for outcome, _facts in one_account.receipts()] == ["enter_intent"]
+
+
+@pytest.mark.parametrize("c_decides", ["with_b", "while_bs_reading_is_in_flight"])
+async def test_every_entry_behind_the_reading_waits_and_they_share_one_reading(
+    one_account: _OneAccount, c_decides: str,
+) -> None:
+    """A fills; B and C decide ENTER on the same bar, and both enter on one reading.
+
+    B's refusal must not withdraw the account's last reading: C then meets the
+    same refusal -- the one that waits -- rather than "not confirmed
+    recently", which would drop it under a false reason. C joins the reading
+    B asked for; the account is read once for both.
+    """
+    one_account.deploy_c()
+    one_account.accept_a_and_fill()
+    asked: list[asyncio.Task[EffectOperationReceipt]] = []
+
+    async def c_decides_meanwhile() -> None:
+        asked.append(asyncio.create_task(one_account.decides_enter("c")))
+        # Let C be judged, and join the wait, while B's reading is still in
+        # flight. No real I/O happens here, so a fixed number of turns does it.
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+    if c_decides == "with_b":
+        b, c = await asyncio.gather(one_account.decides_enter("b"), one_account.decides_enter("c"))
+    else:
+        one_account.account.while_read = [c_decides_meanwhile]
+        b = await one_account.decides_enter("b")
+        c = await asked[0]
+
+    assert b.state is not EffectOperationState.REJECTED, b.explanation
+    assert c.state is not EffectOperationState.REJECTED, c.explanation
+    assert one_account.account.account_reads == 2  # the harness's reading, then the one B and C shared
+    assert len(one_account.trade.submit_calls) == 2
+
+
+async def test_a_fill_during_a_cadence_reading_makes_the_next_entry_wait_not_drop(
+    one_account: _OneAccount,
+) -> None:
+    """A's buy fills while the 15 s cadence reads the account.
+
+    That reading cannot judge the account, but the one before it stays
+    published, so B meets the refusal that waits, asks for its own reading
+    and enters -- rather than finding no reading and being dropped.
+    """
+    repo = one_account.repo
+    entry_a = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="a-1",
+        lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        reference_price=100, envelope=one_account.clerk.live_envelope)
+
+    async def a_fills_mid_cadence_read() -> None:
+        _append_slice(repo, entry_a, execution_id="a-fill-1", quantity=1, source_event_at_ms=one_account.clock())
+
+    one_account.account.while_read = [a_fills_mid_cadence_read]
+    assert await one_account.sync.tick() == "superseded"
+
+    receipt = await one_account.decides_enter()
+
+    assert receipt.state is not EffectOperationState.REJECTED, receipt.explanation
+    assert one_account.account.account_reads == 3
+
+
+async def test_an_entry_deciding_during_the_pause_between_readings_waits_too(
+    one_account: _OneAccount,
+) -> None:
+    """A's second share fills during B's reading; C decides during the pause that follows.
+
+    Neither is dropped: both enter on the next reading, which they share.
+    """
+    one_account.deploy_c()
+    entry_a = one_account.accept_a_and_fill(quantity=2, filled=1)
+    asked: list[asyncio.Task[EffectOperationReceipt]] = []
+
+    async def a_fills_again() -> None:
+        _append_slice(one_account.repo, entry_a, execution_id="a-fill-2", quantity=1,
+                      source_event_at_ms=one_account.clock())
+
+    async def c_decides_meanwhile() -> None:
+        asked.append(asyncio.create_task(one_account.decides_enter("c")))
+        await asyncio.sleep(0)  # C is judged, and joins the wait, before the next reading starts
+
+    one_account.account.while_read = [a_fills_again]
+    one_account.while_paused.append(c_decides_meanwhile)
+
+    b = await one_account.decides_enter("b")
+    c = await asked[0]
+
+    assert b.state is not EffectOperationState.REJECTED, b.explanation
+    assert c.state is not EffectOperationState.REJECTED, c.explanation
+    assert one_account.account.account_reads == 3  # the harness's, the overtaken one, the shared one
+
+
+async def test_a_fault_in_the_shared_reading_drops_each_waiting_entry_with_a_receipt(
+    one_account: _OneAccount,
+) -> None:
+    """An error no verdict maps must not crash every waiting bot.
+
+    It used to escape each waiter's ``execute_for_instance`` and end its run
+    as CRASHED. Each waiting ENTER is dropped with a ``blocked`` receipt
+    instead, as the ENTER was refused before the wait existed.
+    """
+    one_account.deploy_c()
+    one_account.accept_a_and_fill()
+
+    async def the_reading_breaks() -> None:
+        raise RuntimeError("an adapter or repository fault no verdict maps")
+
+    one_account.account.while_read = [the_reading_breaks]
+
+    results = await asyncio.gather(
+        one_account.decides_enter("b"), one_account.decides_enter("c"), return_exceptions=True,
+    )
+
+    assert [type(result) for result in results] == [EffectOperationReceipt, EffectOperationReceipt]
+    for sid, result in zip(("b", "c"), results, strict=True):
+        assert isinstance(result, EffectOperationReceipt) and result.state is EffectOperationState.REJECTED
+        ((outcome, facts),) = one_account.receipts(sid)
+        assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
+        assert "the account could not be read again" in facts["refusal_reason"]
+
+
+async def test_a_reading_overtaken_with_no_time_left_is_recorded_as_out_of_time(
+    one_account: _OneAccount,
+) -> None:
+    """The account was read; the reading was overtaken; no next one could land in time.
+
+    The receipt says the decision ran out of time -- not that the account
+    could not be read, which it could.
+    """
+    entry_a = one_account.accept_a_and_fill(quantity=2, filled=1)
+
+    async def a_fills_again() -> None:
+        _append_slice(one_account.repo, entry_a, execution_id="a-fill-2", quantity=1,
+                      source_event_at_ms=one_account.clock())
+
+    one_account.account.while_read = [a_fills_again]
+
+    receipt = await one_account.decides_enter(until_ms=NOON + 500)  # inside the 1 s interval
+
+    assert receipt.state is EffectOperationState.REJECTED
+    ((outcome, facts),) = one_account.receipts()
+    assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
+    assert "no newer reading arrived while this decision was still on time" in facts["refusal_reason"]
+    assert one_account.account.account_reads == 2
+
+
+async def test_a_reading_still_in_flight_at_the_time_limit_drops_the_entry_then(
+    one_account: _OneAccount,
+) -> None:
+    """A slow broker cannot hold the bot past its decision's time limit.
+
+    The broker never answers; B's decision has 50 ms left. The wait ends at
+    the limit -- the bot's loop is free again long before its next bar -- and
+    the receipt says the decision ran out of time.
+    """
+    one_account.accept_a_and_fill()
+    never = asyncio.Event()
+    one_account.account.while_read = [never.wait]
+
+    receipt = await asyncio.wait_for(one_account.decides_enter(until_ms=NOON + 50), timeout=5)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    ((_outcome, facts),) = one_account.receipts()
+    assert "no newer reading arrived while this decision was still on time" in facts["refusal_reason"]
+
+
+async def test_the_clerk_shutting_down_mid_wait_drops_the_entry_as_such(
+    one_account: _OneAccount,
+) -> None:
+    """The authority closes while B's reading is in flight: the reading is cancelled.
+
+    B is dropped with a receipt saying the Clerk was shutting down, and no
+    reading task is left behind with an exception nobody retrieves.
+    """
+    one_account.accept_a_and_fill()
+    reading_started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def the_broker_hangs() -> None:
+        reading_started.set()
+        await never.wait()
+
+    one_account.account.while_read = [the_broker_hangs]
+    waiting = asyncio.create_task(one_account.decides_enter())
+    await reading_started.wait()
+
+    await one_account.sync.stop()
+    receipt = await asyncio.wait_for(waiting, timeout=5)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    ((_outcome, facts),) = one_account.receipts()
+    assert "the account Clerk was shutting down" in facts["refusal_reason"]
+    assert one_account.trade.submit_calls == []
 
 
 async def test_a_fill_recorded_while_the_account_is_read_makes_the_entry_read_again(
@@ -867,11 +1085,11 @@ async def test_a_fill_recorded_while_the_account_is_read_makes_the_entry_read_ag
 
     one_account.account.while_read = [a_fills_again]
 
-    receipt = await one_account.b_decides_enter()
+    receipt = await one_account.decides_enter()
 
     assert receipt.state is not EffectOperationState.REJECTED, receipt.explanation
     assert one_account.account.account_reads == 3
-    assert one_account.clock() == NOON + round(ENTRY_READING_RETRY_INTERVAL_S * 1000)
+    assert one_account.clock() == NOON + round(DEFAULT_ENTRY_READING_INTERVAL_S * 1000)
 
 
 async def test_an_entry_whose_reading_lands_after_its_time_limit_is_dropped_with_the_reason(
@@ -890,12 +1108,12 @@ async def test_an_entry_whose_reading_lands_after_its_time_limit_is_dropped_with
 
     one_account.account.while_read = [the_read_is_slow]
 
-    receipt = await one_account.b_decides_enter()
+    receipt = await one_account.decides_enter()
 
     assert receipt.state is EffectOperationState.REJECTED
     assert one_account.trade.submit_calls == []
-    assert one_account.b_enter_commands() == 0
-    ((outcome, facts),) = one_account.b_receipts()
+    assert one_account.enter_commands() == 0
+    ((outcome, facts),) = one_account.receipts()
     assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
     assert "no newer reading arrived while this decision was still on time" in facts["refusal_reason"]
 
@@ -916,12 +1134,12 @@ async def test_a_stop_during_the_wait_drops_the_entry_and_nothing_is_sent_after_
 
     one_account.account.while_read = [operator_stops_b]
 
-    receipt = await one_account.b_decides_enter()
+    receipt = await one_account.decides_enter()
 
     assert receipt.state is EffectOperationState.REJECTED
     assert one_account.trade.submit_calls == []
-    assert one_account.b_enter_commands() == 0
-    ((outcome, facts),) = one_account.b_receipts()
+    assert one_account.enter_commands() == 0
+    ((outcome, facts),) = one_account.receipts()
     assert (outcome, facts["reason_code"]) == ("blocked", LIVE_ENVELOPE_UNOBSERVED)
     assert "the bot was stopped while this entry waited" in facts["refusal_reason"]
 
@@ -940,12 +1158,12 @@ async def test_nothing_durable_exists_while_an_entry_waits_so_a_crash_leaves_not
 
     async def the_process_could_die_here() -> None:
         durable_mid_wait.append(
-            (one_account.b_enter_commands(), one_account.b_receipts(), list(one_account.trade.submit_calls))
+            (one_account.enter_commands(), one_account.receipts(), list(one_account.trade.submit_calls))
         )
 
     one_account.account.while_read = [the_process_could_die_here]
 
-    await one_account.b_decides_enter()
+    await one_account.decides_enter()
 
     assert durable_mid_wait == [(0, [], [])]
 
@@ -964,20 +1182,20 @@ async def test_a_waiting_entry_is_accepted_once_however_often_it_is_asked(
     asked_again: list[asyncio.Task[EffectOperationReceipt]] = []
 
     async def the_runner_asks_again() -> None:
-        asked_again.append(asyncio.create_task(one_account.b_decides_enter()))
+        asked_again.append(asyncio.create_task(one_account.decides_enter()))
 
     one_account.account.while_read = [the_runner_asks_again]
 
-    first = await one_account.b_decides_enter()
+    first = await one_account.decides_enter()
     second = await asked_again[0]
-    replayed = await one_account.b_decides_enter()
+    replayed = await one_account.decides_enter()
 
     assert first.state is not EffectOperationState.REJECTED, first.explanation
     assert first.child_order_refs == second.child_order_refs == replayed.child_order_refs
     assert one_account.trade.submit_calls == list(first.child_order_refs)
-    assert one_account.b_enter_commands() == 1
+    assert one_account.enter_commands() == 1
     assert len(one_account.repo.entry_orders_for_strategy("b")) == 1
-    assert [outcome for outcome, _facts in one_account.b_receipts()] == ["enter_intent"]
+    assert [outcome for outcome, _facts in one_account.receipts()] == ["enter_intent"]
 
 
 async def test_an_entry_refused_for_another_reason_is_dropped_without_a_reading(
@@ -988,7 +1206,7 @@ async def test_an_entry_refused_for_another_reason_is_dropped_without_a_reading(
     B's ten shares exceed its $500 budget. Nothing A did is involved, so no
     reading is taken and B is dropped at once, as before.
     """
-    receipt = await one_account.b_decides_enter(quantity=10)
+    receipt = await one_account.decides_enter(quantity=10)
 
     assert receipt.state is EffectOperationState.REJECTED
     assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED)
@@ -1006,12 +1224,12 @@ async def test_a_waiting_entry_the_new_reading_refuses_is_dropped_under_that_ref
     """
     one_account.accept_a_and_fill()
 
-    receipt = await one_account.b_decides_enter(quantity=10)
+    receipt = await one_account.decides_enter(quantity=10)
 
     assert receipt.state is EffectOperationState.REJECTED
     assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED)
     assert one_account.account.account_reads == 2
-    assert one_account.b_enter_commands() == 0
+    assert one_account.enter_commands() == 0
 
 
 async def test_the_wait_never_lets_a_fill_during_its_reading_be_spent_twice(
@@ -1047,11 +1265,11 @@ async def test_the_wait_never_lets_a_fill_during_its_reading_be_spent_twice(
 
     account.while_read = [a_fills_the_rest, the_read_is_slow]
 
-    receipt = await one_account.b_decides_enter(quantity=4)
+    receipt = await one_account.decides_enter(quantity=4)
 
     assert receipt.state is EffectOperationState.REJECTED
     assert receipt.explanation.startswith(LIVE_ENVELOPE_CASH_EXCEEDED), receipt.explanation
-    assert one_account.clock() == NOON + round(ENTRY_READING_RETRY_INTERVAL_S * 1000) + slow_read_ms
+    assert one_account.clock() == NOON + round(DEFAULT_ENTRY_READING_INTERVAL_S * 1000) + slow_read_ms
     assert one_account.trade.submit_calls == []
 
 
@@ -1077,7 +1295,7 @@ async def test_a_waiting_entry_whose_reading_lands_after_the_close_is_refused_as
 
     one_account.account.while_read = [the_close_passes]
 
-    receipt = await one_account.b_decides_enter(
+    receipt = await one_account.decides_enter(
         bar_close_ms=bar_close_ms, until_ms=bar_close_ms + DELIVERY_ALLOWANCE_MS,
     )
 
