@@ -28,7 +28,8 @@ break the equivalence; the fill would then need pinning to the run's end.
 
 Each close is one recovery EXIT under ``DRY_RUN_CLOSE_DECISION_PREFIX``,
 keyed on the exposure's newest entry, so a re-run of the pass drives the same
-EXIT and never sells twice. The EXIT machine sends it regardless of the
+EXIT and never sells twice (``ended_run_close``, shared with the sale at a
+scheduled end). The EXIT machine sends it regardless of the
 session and binds it to the last delivered bar (``exit_resolution``). A close
 that cannot be sent folds like any EXIT (``EXIT_NOT_FLAT``); from there the
 stuck-EXIT watchdog's bounded re-drive and the operator's safe flatten, both
@@ -48,39 +49,25 @@ would race it, and one already sent may have filled.
 
 from __future__ import annotations
 
-import hashlib
 import logging
-from dataclasses import dataclass
 from functools import partial
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
-from app.broker.alpaca.clerk.sqlite.exit import (
-    RecoveryRunActiveError,
-    accept_recovery_exit,
-    exit_effect_operation_id,
-    resolve_accepted_exit,
+from app.broker.alpaca.clerk.sqlite.ended_run_close import (
+    CloseDeferred,
+    OwedClose,
+    closes_owed_under,
+    drive_close,
 )
+from app.broker.alpaca.clerk.sqlite.exit import exit_effect_operation_id
 from app.broker.alpaca.clerk.sqlite.exit_resolution import DRY_RUN_CLOSE_DECISION_PREFIX
-from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class OwedClose:
-    """One ended Dry Run's position the simulation still has to close."""
-
-    strategy_instance_id: str
-    symbol: str
-    entry_order_ref: str
-    decision_id: str
 
 
 def ended_dry_runs(repo: ClerkSqliteRepository) -> list[str]:
@@ -100,27 +87,7 @@ def closes_owed_for(repo: ClerkSqliteRepository, strategy_instance_id: str) -> l
     An exposure whose close was already accepted -- driven, folded or
     finished -- is not owed again.
     """
-    held = [
-        symbol
-        for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items()
-        if position_quantity_is_nonzero(quantity)
-    ]
-    if not held:
-        return []
-    owned_entries = repo.entry_orders_for_strategy(strategy_instance_id)
-    owed: list[OwedClose] = []
-    for symbol in held:
-        entries = [order for order in owned_entries if entry_order_symbol(repo, order.order_ref).upper() == symbol]
-        if not entries or any(repo.active_exit_for_order(order.order_ref) is not None for order in entries):
-            continue
-        entry_order_ref = entries[-1].order_ref
-        decision_id = f"{DRY_RUN_CLOSE_DECISION_PREFIX}{hashlib.sha256(entry_order_ref.encode('utf-8')).hexdigest()[:16]}"
-        if repo.effect_operation(
-            exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
-        ) is not None:
-            continue
-        owed.append(OwedClose(strategy_instance_id, symbol, entry_order_ref, decision_id))
-    return owed
+    return closes_owed_under(repo, strategy_instance_id, decision_prefix=DRY_RUN_CLOSE_DECISION_PREFIX)
 
 
 def closes_owed(repo: ClerkSqliteRepository) -> list[OwedClose]:
@@ -168,36 +135,21 @@ async def _close_one(
     pricing: RecoveryPricing,
     run: OffLoop,
 ) -> None:
-    """Accept and drive one run-end close.
-
-    A run that re-activated before the capture, a held operation claim or a
-    policy block defers it: an accepted EXIT is re-driven by the next pass's
-    operation recovery, and one never accepted is owed again.
-    """
+    """Accept and drive one run-end close (``ended_run_close.drive_close``)."""
     extra = {
         "account_id": repo.account_id,
         "strategy_instance_id": close.strategy_instance_id,
         "symbol": close.symbol,
         "decision_id": close.decision_id,
     }
-    try:
-        accepted = await intake.off_loop(
-            accept_recovery_exit,
-            repo,
-            account_id=repo.account_id,
-            strategy_instance_id=close.strategy_instance_id,
-            decision_id=close.decision_id,
-            entry_order_ref=close.entry_order_ref,
-            forbid_active_run=True,
-        )
-        resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
-    except RecoveryRunActiveError:
+    resolved = await drive_close(repo, close, trade=trade, intake=intake, pricing=pricing, run=run)
+    if resolved is CloseDeferred.RUN_ACTIVE:
         logger.info(
             "deferred a Dry Run's run-end close: its bot started a new run",
             extra={"action": "dry_run_close_deferred_run_active", **extra},
         )
         return
-    except (OperationClaimError, AdmissionBlockedError):
+    if resolved is CloseDeferred.BUSY:
         logger.info(
             "deferred a Dry Run's run-end close: its custody is busy or blocked",
             extra={"action": "dry_run_close_deferred", **extra},

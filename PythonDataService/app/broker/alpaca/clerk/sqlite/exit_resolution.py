@@ -33,6 +33,12 @@ One EXIT is outside the send-time rule: a Dry Run's run-end close
 the simulation at the last price its run saw, not at a market that could hold
 it, so it always sends (:func:`_send_verdict`), and only a simulation can bind
 its price.
+
+One EXIT is narrower than the rule: the sale at a bot's owner-scheduled end
+(``SCHEDULED_END_DECISION_PREFIX``, minted by ``scheduled_end``, #2607). It
+goes out only as a market order inside the regular session; outside it, it
+holds -- never re-priced as an extended-hours limit -- and sells at the next
+open (owner default, grill 2026-09-29: "never after hours").
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ from typing import ClassVar, Literal, NamedTuple
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
     LegShape,
+    ProgramLegPolicy,
     ProgramLegRefused,
     regular_session_shape,
 )
@@ -58,6 +65,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     PricingSnapshot,
     RecoveryPricing,
     ReducingLegVerdict,
+    next_redrive_at_ms,
     reducing_leg_session_end_ms,
     reducing_send_verdict,
     reduction_touch,
@@ -160,6 +168,25 @@ OWNER_FLATTEN_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, PANEL_FLATT
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
 DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
+# The sale at a bot's owner-scheduled end (``scheduled_end``, #2607).
+SCHEDULED_END_DECISION_PREFIX = "scheduled-end-"
+
+
+def scheduled_end_waits_for_open(now_ms: int) -> LegRefusal:
+    """Why the sale at a bot's scheduled end is held, and when it can go out.
+
+    A hold, not a failure: the EXIT keeps custody and the pass re-drives it
+    until the regular session opens (#2607).
+    """
+    return LegRefusal(
+        reason_code="SCHEDULED_END_WAITS_FOR_OPEN",
+        explanation=(
+            "This bot reached its end while the market was closed. Its sale waits for the next "
+            "regular session and goes out at the open as a market order; it never goes out after hours."
+        ),
+        next_step="Nothing to do: the Clerk sends the sale when the market opens.",
+        available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
 
 
 async def resolve_exit(
@@ -860,12 +887,19 @@ def _send_verdict(
 
     That close fills at a price its run already saw, never at the market, so
     no session, halt or missing quote can hold it (owner decision 2026-09-29).
+    The sale at a scheduled end sends only its market leg: where any other
+    EXIT would be re-priced for the session open now, it holds for the next
+    regular session instead (#2607).
     """
-    if _exit_intent(facts) == "run_end_close":
+    intent = _exit_intent(facts)
+    if intent == "run_end_close":
         return "send"
-    return reducing_send_verdict(
+    verdict = reducing_send_verdict(
         extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms, liveness=liveness,
     )
+    if intent == "scheduled_end" and verdict == "wait":
+        return scheduled_end_waits_for_open(now_ms)
+    return verdict
 
 
 def _created_leg_may_be_sent(
@@ -1637,7 +1671,7 @@ async def _submit_reducing_order(
             case "run_end_close":
                 bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
                 why = "The simulation has no price its run saw to close this position at; no order was sent."
-            case "recovery":
+            case "recovery" | "scheduled_end":
                 bound = broker.bind_latest_recovery_bar(
                     reducing.client_order_id, symbol=facts.symbol, side=leg.side,
                 )
@@ -1804,7 +1838,7 @@ def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str
     return reduction_touch(confirmed.side, bid=facts.reference_bid, ask=facts.reference_ask)
 
 
-type _ExitIntent = Literal["decision", "recovery", "run_end_close"]
+type _ExitIntent = Literal["decision", "recovery", "run_end_close", "scheduled_end"]
 
 
 def _exit_intent(facts: ExitAcceptedFacts) -> _ExitIntent:
@@ -1814,10 +1848,14 @@ def _exit_intent(facts: ExitAcceptedFacts) -> _ExitIntent:
     decision bar. ``recovery`` -- the operator's safe flatten or the
     watchdog's re-drive, priced from the live quote. ``run_end_close`` -- a
     Dry Run's simulation closing what an ended run left, at the last price it
-    saw. Both of the latter are recovery EXITs (``accept_recovery_exit``).
+    saw. ``scheduled_end`` -- the Clerk selling at a bot's owner-scheduled end,
+    at market in the regular session only. The last three are recovery EXITs
+    (``accept_recovery_exit``).
     """
     if facts.decision_id.startswith(DRY_RUN_CLOSE_DECISION_PREFIX):
         return "run_end_close"
+    if facts.decision_id.startswith(SCHEDULED_END_DECISION_PREFIX):
+        return "scheduled_end"
     if facts.decision_id.startswith(_RECOVERY_DECISION_PREFIXES):
         return "recovery"
     return "decision"

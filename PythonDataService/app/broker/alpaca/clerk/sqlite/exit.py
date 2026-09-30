@@ -330,7 +330,8 @@ def accept_recovery_exit(
 
     Decision-id namespaces: ``recovery-flatten-<hex16>``,
     ``exit-redrive-<episode-hex12>-<n>``, ``dry-run-close-<hex16>`` (a Dry
-    Run's run-end close, ``dry_run_close``) (all colon-free; the idempotency
+    Run's run-end close, ``dry_run_close``), ``scheduled-end-<hex16>`` (the
+    sale at a bot's owner-scheduled end, ``scheduled_end``) (all colon-free; the idempotency
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
 

@@ -173,6 +173,27 @@ out and ends `EXIT_NOT_FLAT` -- and the close then sells what is left and
 clears that notice in the same pass. An EXIT whose order was already sent is
 never raced.
 
+**Amended 2026-09-29 (owner decision, #2607): the owner-scheduled end sells a
+dead run's shares.** Each bot may carry a one-time end the owner chose at
+Deploy and may change while it runs -- an instant, and SELL (the default) or
+KEEP. It is the bot's desired state, never a sealed term. The Clerk carries
+out every bot's end on its reconciliation pass, whether the bot is running or
+its run already died (`clerk/sqlite/scheduled_end.py`): the pass first commits
+Stop's own STOP for the bot's ACTIVE run (before any broker read) and asks the
+runner to stop the bot's process; the #2362 step cancels the run's working
+entries; for SELL, each holding is closed by one recovery EXIT under the
+`scheduled-end-<sha256(entry_order_ref)[:16]>` namespace, through the same
+exposure scan and driver as the Dry Run close (`ended_run_close.py`); then the
+end is recorded carried out. The sale goes out only as a market order inside
+the regular session: outside it the EXIT holds (`EXIT_MARKET_HOLD`,
+`SCHEDULED_END_WAITS_FOR_OPEN`, never re-priced as an extended-hours limit) and
+sells at the next open -- which is how an end missed while the Clerk was down
+is carried out when it is back. This is the one sale a dead run makes by
+itself; every other dead-run position keeps the rule above. On a `sim:`
+authority the end is a Stop and the Dry Run's run-end close does the sale; a
+Dry Run is never offered KEEP. An operator Stop ends the bot and its end with
+it: Stop does not sell, so no sale is left scheduled behind it.
+
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
 order to `execution_evidence_missing`, counting neither a pass nor a divergence.
