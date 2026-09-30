@@ -627,6 +627,36 @@ async def test_the_raw_stop_route_cancels_the_end_so_the_pass_at_the_end_sells_n
     assert record is not None and (record.desired_state, record.end) == (DesiredState.RUNNING, None)
 
 
+async def test_the_raw_stop_route_naming_another_run_leaves_the_running_ones_end(
+    repo: ClerkSqliteRepository, tmp_path: Path,
+) -> None:
+    """#2664 review: a raw Stop naming a run that is not the bot's active one -- a stale id, or
+    a lost-response retry arriving after a redeploy -- stops nothing of the running run, so it
+    cancels nothing of its end either: the pass at the end still sells."""
+    await _hold_ten(repo)
+    runner = _runner_registry(tmp_path / "runner", None)
+    desired = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", SID))
+    desired.set(DesiredState.RUNNING, updated_by="deploy", now_ms=repo.clock(), reason="deploy", end=_end("SELL").end)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_Market(), account_mode="paper")
+    app = FastAPI()
+    app.include_router(alpaca_clerk_sqlite.router)
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    set_bot_task_registry(runner)
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            stop = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+                json={"lifecycle_run_id": "an-earlier-run", "operator_reason": "operator stop"},
+            )
+    finally:
+        set_bot_task_registry(None)
+        set_active_clerk_runtime(None)
+
+    assert stop.status_code == 404
+    assert repo.active_run(SID) is not None
+    assert runner.pending_ends([SID]) == [ScheduledEnd(strategy_instance_id=SID, end=_end("SELL").end)]
+
+
 async def test_the_raw_stop_route_leaves_the_end_of_a_bot_this_account_does_not_run(
     repo: ClerkSqliteRepository, tmp_path: Path,
 ) -> None:
