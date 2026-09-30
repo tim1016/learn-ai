@@ -23,40 +23,32 @@ an already-authorized request acts.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.services.bot_binding_authority import (
-    DRY_RUN_RESTORING_SENTENCE,
-    SyntheticAccountRestoring,
-    UnboundDryRunAuthority,
-)
+from app.services.bot_binding_authority import UnboundDryRunAuthority
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner_errors import InvalidStrategyInstanceIdError, UnknownBotError
+from app.services.bot_start_admission import SyntheticAccountRestoring
 from app.services.broker_v2_panel.panel_errors import DryRunRestoringError, PanelUnavailableError
 
 
-def _translating_restoring() -> AbstractAsyncContextManager[None]:
-    """Translate the account layer's restoring answer into the panel's type.
+@asynccontextmanager
+async def _translating_restoring() -> AsyncIterator[None]:
+    """The account layer's restoring answer (#2684), in the panel's own type.
 
-    The one fail-fast check lives in the account layer (#2684):
-    ``_SyntheticAccount`` refuses an opening while another task restores it.
-    This is only the panel-side translation of that typed answer into the
-    roster's own error -- a roster of many bots can pass over the one still
-    being restored.
+    The one fail-fast check lives in the account layer: an opening of a
+    ``sim:`` account another task is restoring is refused at once. This only
+    translates it, so a roster of many bots can list the one still being
+    restored as its own row.
     """
-
-    @asynccontextmanager
-    async def _translate() -> AsyncIterator[None]:
-        try:
-            yield
-        except SyntheticAccountRestoring as exc:
-            raise DryRunRestoringError(str(exc), detail=DRY_RUN_RESTORING_SENTENCE[1]) from exc
-
-    return _translate()
+    try:
+        yield
+    except SyntheticAccountRestoring as exc:
+        raise DryRunRestoringError(str(exc), detail=exc.detail) from exc
 
 
 @asynccontextmanager

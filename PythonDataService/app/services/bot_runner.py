@@ -49,7 +49,6 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
-from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseHeld
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
 from app.broker.v2panel.action_policy import evaluate_archive
 from app.engine.live.bot_lifecycle_state import (
@@ -91,10 +90,8 @@ from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import (
     BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
-    DRY_RUN_ACCOUNT_HELD_SENTENCE,
     BindingAuthority,
     BindingAuthoritySelector,
-    DryRunAccountHeldElsewhere,
     UnboundDryRunAuthority,
 )
 from app.services.bot_binding_repository import (
@@ -166,9 +163,11 @@ from app.services.bot_runtime import (
     execute_bot_run,
 )
 from app.services.bot_start_admission import (
+    DRY_RUN_RESTORING_SENTENCE,
     AdmissionCustodyCut,
     AdmittedBotStart,
     BotStartAdmission,
+    DryRunAccountHeldElsewhere,
     DryRunRestorationState,
     MarketLivenessFactResolver,
     RecoveryEvaluationProbe,
@@ -498,9 +497,10 @@ class BotTaskRegistry:
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_report: BootRecoveryReport | None = None
         self._boot_recovery_failed = False
-        # Each Dry Run boot restores off the serving path (#2582), by bot,
-        # until its own restoration settles: absent once restored, and for
-        # every bot boot never had to restore. Start refuses the rest.
+        # Each Dry Run boot could not restore off the serving path (#2582), by
+        # bot: absent once restored, and for every bot boot never had to
+        # restore. Start refuses the rest. While one is still being restored,
+        # its account layer says so (``BindingAuthoritySelector.is_restoring``).
         self._dry_run_restorations: dict[str, DryRunRestorationState] = {}
         self._dry_run_restoration_task: asyncio.Task[None] | None = None
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
@@ -691,7 +691,7 @@ class BotTaskRegistry:
         # Start never waits on that restoration. An ``account_held`` mark is
         # re-checked, not just answered: if the other copy has let go, Start
         # itself completes the restoration and proceeds.
-        await self._answer_dry_run_restoration_at_start(strategy_instance_id)
+        await self._answer_dry_run_restoration_at_start(strategy_instance_id, recheck=True)
         # Graduation re-observes the complete stopped roster and appends the
         # boot-selection fence. No deploy may cross that exact interval.
         async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
@@ -749,9 +749,9 @@ class BotTaskRegistry:
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --
-        # Start never waits on that restoration. An ``account_held`` mark is
-        # re-checked, not just answered.
-        await self._answer_dry_run_restoration_at_start(strategy_instance_id)
+        # Start never waits on that restoration. A preview writes nothing:
+        # it reports an ``account_held`` mark as it stands, never re-checks it.
+        await self._answer_dry_run_restoration_at_start(strategy_instance_id, recheck=False)
         async with self._operation_lock(strategy_instance_id):
             try:
                 return await self._start_admission.preview(request)
@@ -1367,20 +1367,10 @@ class BotTaskRegistry:
         for sid in instances_with_recorded_desired_state(self._artifacts_root):
             # #2684: a Dry Run still being restored is that bot's wait alone.
             # Its operation lock is held by the restoration for as long as the
-            # lease wait lasts, and the restoration itself records the
-            # interrupted run's STOPPED intent when it settles -- so the
-            # lane-wide Stop answers at once instead of waiting the lease
-            # deadline out for it.
-            if self.dry_run_restoration_state(sid) == "restoring":
-                refused.append(
-                    _lane_stop_refusal(
-                        sid,
-                        None,
-                        "This Dry Run is still being restored after the Clerk restarted.",
-                        "Its restoration records the bot's stopped intent when it settles; "
-                        "wait up to a minute, then stop it again.",
-                    )
-                )
+            # lease wait lasts, so the lane-wide Stop answers at once instead
+            # of waiting the lease deadline out for it.
+            if self._authorities.is_restoring(sid):
+                refused.append(_lane_stop_refusal(sid, None, *DRY_RUN_RESTORING_SENTENCE))
                 continue
             try:
                 async with self._operation_lock(sid):
@@ -2287,64 +2277,44 @@ class BotTaskRegistry:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
 
-    async def _answer_dry_run_restoration_at_start(self, strategy_instance_id: str) -> None:
+    async def _answer_dry_run_restoration_at_start(self, strategy_instance_id: str, *, recheck: bool) -> None:
         """Answer Start for an unrestored Dry Run before the bot's operation lock (#2668, #2670).
 
         The restoration now holds that lock while it waits out a lease, and a
         Start that waited for it would wait out the lease too -- #2582's
         contract is the opposite: the refusal is immediate, translated the
         same way the admission flow translates it. It is the one place Start
-        answers one: both Start entries answer it before the lock, and a
-        restoration that has left ``restoring`` never returns to it.
+        answers one: both Start entries answer it before the lock.
 
-        An ``account_held`` mark is re-checked first (owner decision
-        2026-09-30): Start tries the restoration once more under the bot's
-        own operation lock, with a single lease attempt -- never the boot
+        With ``recheck`` -- Start itself, never its preview -- an
+        ``account_held`` mark is re-checked first (owner decision
+        2026-09-30): Start runs the bot's restoration once more under its own
+        operation lock, with a single lease attempt -- never the boot
         deadline, never the serving path, never another bot's lock. When the
         other copy has let go the mark clears and Start proceeds; when the
         lease is still held Start answers the one owner sentence at once, so
         Start and the panel agree for the same account state.
         """
         state = self.dry_run_restoration_state(strategy_instance_id)
-        if state == "account_held":
-            await self._recheck_held_dry_run_account(strategy_instance_id)
-            return
+        if recheck and state == "account_held":
+            state = await self._recheck_held_dry_run_account(strategy_instance_id)
         try:
             refuse_unrestored_dry_run(state)
         except StartAdmissionUnavailable as exc:
             raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
 
-    async def _recheck_held_dry_run_account(self, strategy_instance_id: str) -> None:
-        """Start's one re-check of an ``account_held`` Dry Run (#2670)."""
+    async def _recheck_held_dry_run_account(self, strategy_instance_id: str) -> DryRunRestorationState | None:
+        """Start's one re-check of an ``account_held`` Dry Run (#2670); where it stands after."""
         binding = self._read_binding(strategy_instance_id)
         if binding is None or binding.mode != "dry_run":
-            return
+            # Nothing Start could restore it through: refused as it stands.
+            return "account_held"
         async with self._operation_lock(strategy_instance_id):
-            if self.dry_run_restoration_state(strategy_instance_id) != "account_held":
-                # A concurrent Start's re-check or the restoration itself
-                # settled it; the mark is the gate, not this attempt.
-                return
-            authority = self._authority_for(binding)
-            try:
-                async with authority.restoring():
-                    await authority.ensure_recoverable(lease_wait_s=0.0)
-                    await self._repair_restored_dry_run(binding)
-            except (ExecutionLeaseHeld, DryRunAccountHeldElsewhere) as exc:
-                # Both forms of the same fact: the activation's open raises
-                # the raw store error, the selection's failure the typed one.
-                headline, detail = DRY_RUN_ACCOUNT_HELD_SENTENCE
-                raise RunAdmissionRefusedError(headline, detail=detail) from exc
-            except StartAdmissionUnavailable as exc:
-                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
-            del self._dry_run_restorations[strategy_instance_id]
-            logger.warning(
-                "A held Dry Run account was re-checked from Start and restored",
-                extra={
-                    "action": "start_recheck_restored_dry_run",
-                    "strategy_instance_id": strategy_instance_id,
-                    "account_id": f"{SIM_ACCOUNT_PREFIX}{strategy_instance_id}",
-                },
-            )
+            if self._dry_run_restorations.get(strategy_instance_id) != "account_held":
+                # A concurrent Start's re-check settled it; the mark is the
+                # gate, not this attempt.
+                return self.dry_run_restoration_state(strategy_instance_id)
+            return await self._restore_one(self._dry_run_restoration_for(binding), lease_wait_s=0.0)
 
     def _authority_for(self, binding: BrokerBotBinding):
         """Return the one typed custody/evidence authority for a binding."""
@@ -2404,11 +2374,13 @@ class BotTaskRegistry:
     def dry_run_restoration_state(self, strategy_instance_id: str) -> DryRunRestorationState | None:
         """Where boot's restoration of this Dry Run stands; ``None`` once restored (#2582).
 
-        The one read the panel uses to answer at once for a bot still being
-        restored (#2668) -- its account's runtime lock is held by the
-        restoration's lease wait -- and Start uses to refuse until the bot's
-        own restoration settles.
+        ``restoring`` is the account layer's own answer (#2684) -- the same
+        one every opening of the account gets at once -- so Start never
+        disagrees with a read about a bot still queued or being restored.
+        What a settled restoration could not do is the runner's record.
         """
+        if self._authorities.is_restoring(strategy_instance_id):
+            return "restoring"
         return self._dry_run_restorations.get(strategy_instance_id)
 
     def start_dry_run_restoration(self) -> asyncio.Task[None]:
@@ -2416,10 +2388,11 @@ class BotTaskRegistry:
 
         A quick restart meets its dead predecessor's execution lease on each
         Dry Run's account, and waiting those out inside the lifespan held the
-        real-money lane off the network. So each Dry Run is marked restoring
-        now -- Start refuses it until its own restoration settles -- and a
-        background task restores them one at a time: open its account,
-        waiting out a held lease, then give its runs the sweep's own repair.
+        real-money lane off the network. So each Dry Run's account is marked
+        restoring now (#2684) -- Start, Stop and every read of it are answered
+        at once until its own restoration settles -- and a background task
+        restores them one at a time: open its account, waiting out a held
+        lease, then give its runs the sweep's own repair.
 
         A Deploy that crashed between its budget commit and its binding
         record left a private ``sim:`` authority no binding indexes; those
@@ -2427,14 +2400,7 @@ class BotTaskRegistry:
         them through the recovery path instead of the next read doing it.
         """
         dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
-        restorations = [
-            _DryRunRestoration(
-                binding.strategy_instance_id,
-                partial(self._authority_for, binding),
-                partial(self._repair_restored_dry_run, binding),
-            )
-            for binding in dry_runs
-        ]
+        restorations = [self._dry_run_restoration_for(binding) for binding in dry_runs]
         restorations += [
             _DryRunRestoration(
                 orphan.strategy_instance_id,
@@ -2443,13 +2409,24 @@ class BotTaskRegistry:
             )
             for orphan in self._unbound_dry_run_authorities(bound={binding.strategy_instance_id for binding in dry_runs})
         ]
-        self._dry_run_restorations = dict.fromkeys(
-            (restoration.strategy_instance_id for restoration in restorations), "restoring"
-        )
+        self._dry_run_restorations = {}
         self._dry_run_restoration_task = asyncio.create_task(
             self._restore_dry_runs(restorations), name="dry-run-boot-restoration"
         )
+        # Marked before the task first runs, so no read or action ever sees
+        # a queued Dry Run as anything but restoring.
+        self._authorities.queue_for_restoration(
+            (restoration.strategy_instance_id for restoration in restorations), self._dry_run_restoration_task
+        )
         return self._dry_run_restoration_task
+
+    def _dry_run_restoration_for(self, binding: BrokerBotBinding) -> _DryRunRestoration:
+        """A bound Dry Run's restoration: its own authority, then the sweep's repair of its runs."""
+        return _DryRunRestoration(
+            binding.strategy_instance_id,
+            partial(self._authority_for, binding),
+            partial(self._repair_restored_dry_run, binding),
+        )
 
     def _unbound_dry_run_authorities(self, *, bound: set[str]) -> list[UnboundDryRunAuthority]:
         """Private ``sim:`` authorities a crash left with no binding (#2559).
@@ -2517,38 +2494,36 @@ class BotTaskRegistry:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
         for restoration in restorations:
-            sid = restoration.strategy_instance_id
+            async with self._operation_lock(restoration.strategy_instance_id):
+                await self._restore_one(restoration, lease_wait_s=max(0.0, deadline - loop.time()))
+
+    async def _restore_one(
+        self, restoration: _DryRunRestoration, *, lease_wait_s: float
+    ) -> DryRunRestorationState | None:
+        """Restore one Dry Run's own account, under its operation lock the caller holds; where it stands after.
+
+        Boot's restoration and Start's re-check of a held account both run
+        exactly this. The account is marked restoring by this task for as
+        long as it runs (#2684), so every other reader and action is answered
+        at once; the mark ends however it settles. Whatever stops it -- every
+        exception, including building its authority -- is logged with its
+        cause and is that bot's failure alone: ``account_held`` while another
+        live copy holds its account, ``not_restored`` for anything else.
+        """
+        sid = restoration.strategy_instance_id
+        with self._authorities.restoring(sid):
             try:
-                async with self._operation_lock(sid):
-                    authority = restoration.authority_for()
-                    # The one account-layer restoring mark (#2684): every
-                    # other reader and action on this account is answered at
-                    # once while this restoration holds it.
-                    async with authority.restoring():
-                        await authority.ensure_recoverable(
-                            lease_wait_s=max(0.0, deadline - loop.time())
-                        )
-                        interrupted = await restoration.repair()
-            except (ExecutionLeaseHeld, DryRunAccountHeldElsewhere) as exc:
-                self._dry_run_restorations[sid] = "account_held"
-                logger.error(
-                    "A Dry Run's simulated account could not be restored at boot: %s",
-                    exc,
-                    extra={
-                        "action": "boot_dry_run_restoration_failed",
-                        "strategy_instance_id": sid,
-                        "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
-                        "error": str(exc),
-                        "restoration": "account_held",
-                    },
-                    exc_info=True,
-                )
-                continue
+                authority = restoration.authority_for()
+                await authority.ensure_recoverable(lease_wait_s=lease_wait_s)
+                interrupted = await restoration.repair()
             except Exception as exc:
-                self._dry_run_restorations[sid] = "not_restored"
+                state: DryRunRestorationState = (
+                    "account_held" if isinstance(exc, DryRunAccountHeldElsewhere) else "not_restored"
+                )
+                self._dry_run_restorations[sid] = state
                 detail = exc.detail if isinstance(exc, StartAdmissionUnavailable) else None
                 logger.error(
-                    "A Dry Run's simulated account could not be restored at boot: %s%s",
+                    "A Dry Run's simulated account could not be restored: %s%s",
                     exc,
                     "" if detail is None else f" ({detail})",
                     extra={
@@ -2557,21 +2532,22 @@ class BotTaskRegistry:
                         "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
                         "error": str(exc),
                         "error_detail": detail,
-                        "restoration": self._dry_run_restorations[sid],
+                        "restoration": state,
                     },
                     exc_info=True,
                 )
-                continue
-            del self._dry_run_restorations[sid]
-            logger.info(
-                "A Dry Run's simulated account was restored at boot",
-                extra={
-                    "action": "boot_dry_run_restored",
-                    "strategy_instance_id": sid,
-                    "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
-                    "interrupted": list(interrupted),
-                },
-            )
+                return state
+        self._dry_run_restorations.pop(sid, None)
+        logger.info(
+            "A Dry Run's simulated account was restored",
+            extra={
+                "action": "boot_dry_run_restored",
+                "strategy_instance_id": sid,
+                "account_id": f"{SIM_ACCOUNT_PREFIX}{sid}",
+                "interrupted": list(interrupted),
+            },
+        )
+        return None
 
     async def _stop_interrupted_authority_run(
         self,

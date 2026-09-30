@@ -96,6 +96,9 @@ DRY_RUN_ACCOUNT_HELD_SENTENCE = (
     "This Dry Run's simulated account is still open in another running copy of this Clerk.",
     "Stop that copy, then start this bot again.",
 )
+#: The startup-failure reason code of that refusal: defined once, matched by
+#: the account layer that turns it into its one typed error.
+SYNTHETIC_CLERK_LEASE_HELD = "SYNTHETIC_CLERK_LEASE_HELD"
 
 
 class SyntheticOpening(Enum):
@@ -521,7 +524,7 @@ async def select_synthetic_clerk_runtime(
             # one owner sentence -- never the exception's message, which
             # carries an internal ``sim:`` id and the term "execution lease".
             return unavailable_runtime(
-                "SYNTHETIC_CLERK_LEASE_HELD",
+                SYNTHETIC_CLERK_LEASE_HELD,
                 account_id=account_id,
                 recovery=" ".join(DRY_RUN_ACCOUNT_HELD_SENTENCE),
                 activation_detected=True,

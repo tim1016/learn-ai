@@ -46,7 +46,8 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import bot_runner
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import BotTaskRegistry
-from app.services.bot_runner_errors import RunAdmissionRefusedError
+from app.services.bot_runner_errors import BotRunnerError, RunAdmissionRefusedError
+from app.services.bot_start_admission import SyntheticAccountRestoring
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.utils.timestamps import now_ms_utc
@@ -78,13 +79,23 @@ class _Lane:
         """The lifespan's own account boot recovery, as it awaits it before serving."""
         await self.registry.run_boot_recovery(recover=self.account.recover, reconcile=self.account.reconcile_once)
 
-    async def start_refusal(self) -> RunAdmissionRefusedError | None:
-        """What Start says for the Dry Run, or ``None`` when restoration no longer refuses it."""
+    async def start_refusal(self, sid: str = SID) -> RunAdmissionRefusedError | None:
+        """What Start's preview says for a Dry Run, or ``None`` when restoration no longer refuses it."""
         try:
             await self.registry.preview_start_admission(
-                broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="dry_run", exit_terms=TERMS,
+                broker="alpaca", strategy_instance_id=sid, symbol="SPY", mode="dry_run", exit_terms=TERMS,
             )
         except RunAdmissionRefusedError as refused:
+            return refused
+        return None
+
+    async def start(self, sid: str = SID) -> BotRunnerError | None:
+        """What Start itself -- never its preview -- says for a Dry Run; ``None`` when it launched."""
+        try:
+            await self.registry.deploy_with_admission(
+                broker="alpaca", strategy_instance_id=sid, symbol="SPY", mode="dry_run", exit_terms=TERMS,
+            )
+        except BotRunnerError as refused:
             return refused
         return None
 
@@ -152,7 +163,7 @@ async def test_the_account_boots_at_once_while_a_dry_run_s_account_is_still_held
         refused = await restarted_lane.start_refusal()
         assert refused is not None
         assert str(refused) == "This Dry Run is still being restored after the Clerk restarted."
-        assert refused.detail == "Wait up to a minute, then start it again."
+        assert refused.detail == "Wait up to a minute, then try again."
     finally:
         await restarted_lane.registry.stop_all()
         holder.close()
@@ -488,7 +499,6 @@ async def test_an_unbound_dry_run_can_only_be_read_or_restored(tmp_path: Path) -
         assert orphan is not None
         assert {name for name in dir(orphan) if not name.startswith("_")} == {
             "account_id", "strategy_instance_id", "runtime_for_projection", "ensure_recoverable",
-            "is_restoring", "restoring",
         }
         assert (orphan.account_id, orphan.strategy_instance_id) == ("sim:orphan-1", "orphan-1")
         assert registry.unbound_dry_run("never-deployed") is None
@@ -640,7 +650,8 @@ async def test_start_re_checks_a_held_dry_run_account_and_agrees_with_the_panel(
     sentence at once -- never the boot lease deadline -- and the panel's own
     refusal names the same state in the same words. Once the other copy lets
     go, Start itself completes the restoration, the mark clears, and Start no
-    longer says it: no restart, ever."""
+    longer says it: no restart, ever. Its preview only reports the mark: a
+    preview never restores anything (#2670 review)."""
     monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 0.3)
     holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
     try:
@@ -651,21 +662,26 @@ async def test_start_re_checks_a_held_dry_run_account_and_agrees_with_the_panel(
             await asyncio.sleep(0.05)
         assert restarted_lane.registry.dry_run_restoration_state(SID) == "account_held"
 
-        first = await restarted_lane.start_refusal()
+        first = await restarted_lane.start()
         assert first is not None
         assert "still open in another running copy of this Clerk" in str(first)
         assert "sim:" not in str(first)
         assert "execution lease" not in (first.detail or "")
 
         started_ms = now_ms_utc()
-        second = await restarted_lane.start_refusal()
+        second = await restarted_lane.start()
         assert now_ms_utc() - started_ms < 500, "a still-held answer must not wait the lease deadline"
         assert str(second) == str(first)
     finally:
         await restarted_lane.registry.stop_dry_run_restoration()
         holder.close()
 
-    third = await restarted_lane.start_refusal()
+    previewed = await restarted_lane.start_refusal()
+    assert previewed is not None and "another running copy" in str(previewed)
+    assert restarted_lane.registry.dry_run_restoration_state(SID) == "account_held", "a preview never restores"
+    assert get_clerk_runtime(SIM_ACCOUNT) is None, "a preview never opens the held account"
+
+    third = await restarted_lane.start()
     assert restarted_lane.registry.dry_run_restoration_state(SID) is None, "Start's re-check restored the account"
     assert third is None or "another running copy" not in str(third)
 
@@ -678,8 +694,7 @@ async def test_the_lane_wide_stop_never_waits_out_a_restoring_dry_run_s_lease(
     The restoration holds the bot's operation lock for as long as its lease
     wait lasts; the lane's Stop used to queue behind it, so one Dry Run's
     restoration held every Deploy and the lane's Stop. It is refused at once
-    with its own words now -- the restoration records the bot's stopped
-    intent when it settles."""
+    with its own words now."""
     monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
     restarted_lane.registry._desired_repo(SID).set(
         DesiredState.RUNNING, updated_by="test", now_ms=now_ms_utc(), reason="deploy"
@@ -711,8 +726,6 @@ async def test_every_account_reader_is_answered_at_once_during_a_restoration(
     account, every opening is refused at once -- the replay receipt's
     repository read, the fees read, any reader -- instead of queueing behind
     the restoration's lease wait."""
-    from app.services.bot_binding_authority import SyntheticAccountRestoring
-
     monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
     holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
     try:
@@ -727,3 +740,194 @@ async def test_every_account_reader_is_answered_at_once_during_a_restoration(
     finally:
         await restarted_lane.registry.stop_dry_run_restoration()
         holder.close()
+
+
+# ── #2670 review: one model of "restoring" in the account layer ──────────────
+
+RESTORING = "This Dry Run is still being restored after the Clerk restarted."
+
+
+async def test_a_dry_run_queued_behind_another_s_restoration_is_restoring_everywhere(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Boot restores its Dry Runs one at a time, and the one still queued is restoring too.
+
+    Both accounts are still held by the dead process, and the first bot's
+    restoration waits out its lease. The queued bot's account was once open
+    to any read: its panel opened no wait, met the held lease and told the
+    owner to stop "another running copy" that was not there -- while Start
+    said it was being restored -- and that one bot's refusal failed Home's
+    whole roster. Every bot boot is restoring now says so, at once, on its
+    panel and to Start, and the roster lists each as its own row.
+    """
+    from app.services.broker_v2_panel import panel_data_source
+
+    second_sid = "live-dry-dv-tsla-0928"
+    second = _dry_run_binding().model_copy(
+        update={"strategy_instance_id": second_sid, "sealed_account_id": f"sim:{second_sid}"}
+    )
+    previous = BotTaskRegistry(restarted_lane.artifacts_root, feed_resolver=lambda: None, boot_recovery_required=False)
+    previous._bindings.record_launch(second, launch_reason="deploy")
+    deployed = previous._authority_for(second)
+    await deployed.ensure_recoverable()
+    await deployed.release_if_unused()
+    registry = restarted_lane.registry
+
+    async def _route_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def _no_account_bots(_broker: str, _account_id: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(panel_data_source, "validate_account", _route_account)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", _no_account_bots)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: registry)
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
+    holders = [
+        _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000),
+        ClerkSqliteRepository.open(
+            account_id=f"sim:{second_sid}",
+            artifacts_root=restarted_lane.artifacts_root,
+            lease_owner="boot:another-process",
+            lease_ttl_ms=3_600_000,
+        ),
+    ]
+    try:
+        registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # one bot's restoration is inside its lease wait; the other is queued
+
+        for binding in (_dry_run_binding(), second):
+            sid = binding.strategy_instance_id
+            started_ms = now_ms_utc()
+            with pytest.raises(PanelUnavailableError) as read:
+                async with binding_clerk_runtime(registry, binding):
+                    pass
+            assert now_ms_utc() - started_ms < 500, f"{sid}'s panel waited on a restoration"
+            assert (str(read.value), read.value.http_status) == (RESTORING, 503), sid
+            for refused in (await restarted_lane.start(sid), await restarted_lane.start_refusal(sid)):
+                assert refused is not None and str(refused) == RESTORING, sid
+
+        rows = await panel_data_source.get_catalog("alpaca", "PA-TEST")
+        assert sorted((row.strategy_instance_id, row.status_label) for row in rows) == [
+            (SID, "Restoring"),
+            (second_sid, "Restoring"),
+        ]
+    finally:
+        await registry.stop_dry_run_restoration()
+        for holder in holders:
+            holder.close()
+
+
+async def test_a_dry_run_held_elsewhere_is_its_own_row_never_the_roster_s_failure(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run whose account another copy still holds is its own row on Home (#2582).
+
+    Its panel read refuses (the account cannot be opened), and that refusal
+    once escaped the roster and failed every bot's listing with it.
+    """
+    from app.services.broker_v2_panel import panel_data_source
+
+    async def _route_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def _no_account_bots(_broker: str, _account_id: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(panel_data_source, "validate_account", _route_account)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", _no_account_bots)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: restarted_lane.registry)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
+    try:
+        (row,) = await panel_data_source.get_catalog("alpaca", "PA-TEST")
+    finally:
+        holder.close()
+
+    assert (row.strategy_instance_id, row.status_label, row.exposure) == (SID, "Unavailable", None)
+    assert row.needs_attention
+    assert "still open in another running copy of this Clerk" in row.status_explanation
+
+
+async def test_a_replay_asked_for_during_a_restoration_is_unavailable_never_a_failed_receipt(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replay receipt asked for while its Dry Run is restored answers 503 and changes nothing.
+
+    It once wrote a durable ``replay_failed`` receipt, and no later boot
+    heals one: boot re-schedules only the ``pending`` receipts a dead
+    process owed.
+    """
+    from app.services.run_replay_proof import RunReplayUnavailableError
+
+    registry = restarted_lane.registry
+    registry._replay_proof.write_pending(_dry_run_binding(), "run-1")
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
+    try:
+        registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration is inside its lease wait
+
+        with pytest.raises(RunReplayUnavailableError) as unavailable:
+            await asyncio.wait_for(registry.generate_run_replay_receipt("alpaca", SID, "run-1"), timeout=1.0)
+    finally:
+        await registry.stop_dry_run_restoration()
+        holder.close()
+
+    assert (str(unavailable.value), unavailable.value.http_status) == (RESTORING, 503)
+    stored = registry.run_replay_receipt("alpaca", SID, "run-1")
+    assert stored is not None and stored.status == "pending"
+
+
+async def test_a_fee_read_during_a_restoration_says_unavailable_never_a_500(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bot's fees read while its Dry Run is restored is unavailable, in the one sentence.
+
+    The panel's refusal once escaped the fees route, which translates only
+    broker errors, as an unhandled 500.
+    """
+    from app.services.alpaca_fee_reconciliation import deployment_fee_attribution
+    from app.services.bot_runner import set_bot_task_registry
+
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
+    set_bot_task_registry(restarted_lane.registry)
+    try:
+        restarted_lane.registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration is inside its lease wait
+
+        view = await asyncio.wait_for(deployment_fee_attribution(SID), timeout=1.0)
+    finally:
+        set_bot_task_registry(None)
+        await restarted_lane.registry.stop_dry_run_restoration()
+        holder.close()
+
+    assert (view.available, view.rows) == (False, [])
+    assert view.messages == [f"{RESTORING} Wait up to a minute, then try again."]
+
+
+async def test_start_refuses_an_unbound_dry_run_held_elsewhere_at_once(
+    tmp_path: Path, booting: BotTaskRegistry, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An orphan boot could not restore because another copy holds it: Start says so.
+
+    Start's re-check has no binding to restore it through, and once let
+    Start carry on as though nothing were held.
+    """
+    await _crash_before_binding(tmp_path, "orphan-held")
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 0.3)
+    holder = ClerkSqliteRepository.open(
+        account_id="sim:orphan-held", artifacts_root=tmp_path, lease_owner="boot:another-process", lease_ttl_ms=60_000,
+    )
+    try:
+        await asyncio.wait_for(booting.start_dry_run_restoration(), timeout=10.0)
+        assert booting.dry_run_restoration_state("orphan-held") == "account_held"
+
+        with pytest.raises(RunAdmissionRefusedError) as refused:
+            await booting.deploy_with_admission(
+                broker="alpaca", strategy_instance_id="orphan-held", symbol="SPY", mode="dry_run", exit_terms=TERMS,
+            )
+    finally:
+        holder.close()
+
+    assert str(refused.value) == "This Dry Run's simulated account is still open in another running copy of this Clerk."

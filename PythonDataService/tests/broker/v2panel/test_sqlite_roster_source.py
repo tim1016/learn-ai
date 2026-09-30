@@ -656,8 +656,8 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
     assert restoring_row.exposure is None
     assert restoring_row.group == "dry_run"
     assert "still being restored" in restoring_row.status_explanation
-    (listed,) = [record for record in caplog.records if getattr(record, "action", None) == "catalog_dry_run_restoring_row"]
-    assert listed.strategy_instance_id == "dry-restoring"
+    (listed,) = [record for record in caplog.records if getattr(record, "action", None) == "catalog_dry_run_unreadable_row"]
+    assert (listed.strategy_instance_id, listed.restoring) == ("dry-restoring", True)
 
 
 @pytest.mark.asyncio
