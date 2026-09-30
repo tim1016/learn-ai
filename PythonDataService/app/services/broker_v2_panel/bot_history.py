@@ -70,6 +70,7 @@ from app.schemas.bot_history import (
     BotHistoryWorld,
 )
 from app.schemas.broker_bots import BotDutyOutcomeView
+from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_v2_panel.catalog_projection_service import (
     WORLD_LABELS,
@@ -131,6 +132,9 @@ _OUTCOME_HEADLINES: dict[str, str] = {
 _REASON_HEADLINES: dict[str, str] = {
     "FEED_DEATH": "Crashed because market data stopped",
     "SERVICE_SHUTDOWN": "Stopped when the service shut down",
+    # Recorded as a stop, since the compensation runs through the normal
+    # Stop, but nobody stopped it: its launch failed (#2559).
+    ACTIVATION_FAILED_STOP_REASON_CODE: "Failed to launch",
     **{code: "Stopped because its market data could not be used" for code in FEED_REFUSAL_REASON_CODES},
 }
 _FLATTENED_HEADLINE = "Stopped and flattened"

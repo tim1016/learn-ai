@@ -2106,6 +2106,28 @@ def test_a_crash_the_feed_caused_says_the_feed_stopped() -> None:
     assert "not a market-data" not in outcome.explanation
 
 
+def test_a_launch_that_failed_after_its_stop_reads_as_a_failed_launch_not_an_operator_stop() -> None:
+    """#2559 / #2661 review: the failed-launch compensation records a stop, but
+    the panel said "Stopped cleanly: ... an operator stop or a service shutdown"."""
+    status = _status(running=False).model_copy(
+        update={
+            "duty_outcome": BotDutyOutcomeView(
+                kind="STOPPED", reason_code="ACTIVATION_FAILED_AFTER_REGISTRATION", recorded_at_ms=_NOW,
+                run_id="run-1",
+            ),
+        }
+    )
+
+    outcome = _panel(status, _clerk_status(), []).health.duty_outcome
+
+    assert outcome is not None
+    assert outcome.label == "Failed to launch"
+    assert outcome.explanation == (
+        "The launch failed partway through, so the service ended the run. Nobody stopped it, and nothing is running."
+    )
+    assert "operator" not in outcome.explanation
+
+
 @pytest.mark.parametrize("reason_code", ["TypeError", "RuntimeError"])
 def test_crash_copy_is_source_neutral_and_not_a_market_data_verdict(
     reason_code: str,

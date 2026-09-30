@@ -247,6 +247,8 @@ def test_every_outcome_kind_has_its_own_words_and_an_unknown_one_still_reads() -
         ("CRASHED", "ValueError", False, "Crashed"),
         ("HALTED", "HALTED", False, "Halted"),
         ("FAILED_LAUNCH", "LAUNCH_FAILED", False, "Failed to launch"),
+        # #2559: the failed-launch compensation records a stop nobody made.
+        ("STOPPED", "ACTIVATION_FAILED_AFTER_REGISTRATION", False, "Failed to launch"),
         ("EXITED_UNVERIFIED", "INTERRUPTED_BY_RESTART", False, "Ended without a clean exit"),
     ],
 )

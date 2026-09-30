@@ -204,9 +204,6 @@ logger = logging.getLogger(__name__)
 
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
-#: The durable stop reason the failed-launch compensation records; the
-#: terminal reason code it asks for is ``ACTIVATION_FAILED_STOP_REASON_CODE``.
-_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON = "activation_failed_after_registration"
 _STOP_TIMEOUT_S = 5.0
 
 
@@ -778,7 +775,7 @@ class BotTaskRegistry:
                 _release_run_owner(run_owner)
             cleanup_proven = False
             try:
-                await commit_stop_before_task_cancel(binding, reason=_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON)
+                await commit_stop_before_task_cancel(binding, reason=ACTIVATION_FAILED_STOP_REASON_CODE)
                 cleanup_proven = True
             except Exception:
                 logger.error(
@@ -800,7 +797,7 @@ class BotTaskRegistry:
                         binding.broker,
                         binding.strategy_instance_id,
                         updated_by=_UPDATED_BY,
-                        reason=_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON,
+                        reason=ACTIVATION_FAILED_STOP_REASON_CODE,
                         clerk_stop_already_committed=True,
                         outcome_reason_code=ACTIVATION_FAILED_STOP_REASON_CODE,
                     )
@@ -1095,7 +1092,11 @@ class BotTaskRegistry:
         # ``outcome_reason_code`` names who ended the run (#2559): the
         # failed-launch compensation passes the activation-failure code, an
         # operator's stop keeps OPERATOR_STOP. It is an internal flag, never
-        # derived from operator-typed prose.
+        # derived from operator-typed prose. In trade mode the Clerk's custody
+        # proof below replaces it: that proof (flat, carryover kept, flatten
+        # required) drives the panel's next step, and one reason slot cannot
+        # carry both, so a trade-mode failed launch still reads as a stop
+        # (#2667).
         outcome = outcome_reason_code
         canary_rollback: CanaryRollbackDecision | None = None
         if broker == "alpaca" and managed.binding.mode == "trade":
