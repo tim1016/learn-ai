@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    UNFILLED_TERMINAL_STATES,
     fold_order_evidence,
     fold_submit_absence_void,
     fold_uncertain,
@@ -247,32 +248,6 @@ def accept_manual_order_cancellation(
     )
 
 
-def _append_source_canceled(
-    repo: ClerkSqliteRepository,
-    *,
-    order_ref: str,
-    source_effect: EffectOperationResource,
-    why: str,
-) -> None:
-    if source_effect.state in {"succeeded", "failed", "rejected"}:
-        return
-    facts = ManualOrderCancelResultFacts(outcome="CANCELED", why=why)
-    repo.append_transition(
-        TransitionInput(
-            command_id=source_effect.command_id,
-            effect_operation_id=source_effect.effect_operation_id,
-            order_ref=order_ref,
-            transition_kind="MANUAL_ORDER_CANCELED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="failed",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="MANUAL_ORDER_CANCELED",
-            facts_json=facts.to_facts_json(),
-        )
-    )
-
-
 def _append_source_terminal(
     repo: ClerkSqliteRepository,
     *,
@@ -280,8 +255,17 @@ def _append_source_terminal(
     source_effect: EffectOperationResource,
     why: str,
 ) -> None:
-    """Close a source leg when exact broker evidence proves a non-cancel terminal state."""
+    """Close a source leg when exact broker evidence proves a filled or replaced terminal state.
+
+    An unfilled ending (``canceled``, ``expired``, ``rejected``) is
+    ``fold_manual_order_ended_if_proven``'s alone (#2647): it ran while the
+    exact evidence was folded, and where it declined -- a fill the Clerk has
+    not recorded yet -- ending the leg here would drop that fill.
+    """
     if source_effect.state in {"succeeded", "failed", "rejected"}:
+        return
+    target = repo.order(order_ref)
+    if target is not None and (target.broker_state or "").lower() in UNFILLED_TERMINAL_STATES:
         return
     facts = ManualOrderCancelResultFacts(outcome="TARGET_TERMINAL", why=why)
     repo.append_transition(
@@ -410,7 +394,12 @@ async def _resolve_claimed_manual_order_cancellation(
         return
 
     def _fold_observed_and_decide_cancel() -> str | None:
-        """Fold exact evidence; return the broker order id to cancel, if any."""
+        """Fold exact evidence; return the broker order id to cancel, if any.
+
+        Folding the evidence ends an unfilled source order itself
+        (``fold_manual_order_ended_if_proven``); this records what the
+        cancellation proved.
+        """
         fold_order_evidence(
             repo,
             effect_operation_id=source_effect.effect_operation_id,
@@ -422,12 +411,6 @@ async def _resolve_claimed_manual_order_cancellation(
         assert refreshed_target is not None and refreshed_source is not None
         if _terminal(refreshed_target.broker_state):
             if refreshed_target.broker_state is not None and refreshed_target.broker_state.lower() == "canceled":
-                _append_source_canceled(
-                    repo,
-                    order_ref=refreshed_target.order_ref,
-                    source_effect=refreshed_source,
-                    why="Exact broker evidence proved the manual order canceled.",
-                )
                 _append_cancellation_result(
                     repo,
                     cancellation=cancellation,
@@ -518,12 +501,6 @@ async def _resolve_claimed_manual_order_cancellation(
         source_after = repo.effect_operation(source_effect.effect_operation_id)
         assert target_after is not None and source_after is not None
         if target_after.broker_state is not None and target_after.broker_state.lower() == "canceled":
-            _append_source_canceled(
-                repo,
-                order_ref=target_after.order_ref,
-                source_effect=source_after,
-                why="Exact broker evidence proved this durable cancel request canceled the manual order.",
-            )
             _append_cancellation_result(
                 repo,
                 cancellation=cancellation,

@@ -610,6 +610,47 @@ describe('AlpacaOrderEntryComponent', () => {
     setIntervalSpy.mockRestore();
   });
 
+  it('shows how Alpaca ended a manual leg in the words the Clerk wrote', async () => {
+    const endedTicket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'CANCELED',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [{
+        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        sequence_index: 0,
+        instruction_hash: 'hash',
+        instruction: { symbol: 'SPY', side: 'buy', quantity: 5, order_type: 'limit', limit_price: 99.9, time_in_force: 'gtc' },
+        state: 'CANCELED',
+        command: { command_id: 'cmd', state: 'failed', action: 'SUBMIT_MANUAL_ORDER', receipt_id: 'receipt:effect' },
+        effect: { effect_operation_id: 'effect', state: 'failed', kind: 'MANUAL_ORDER', terminal_receipt_id: 'receipt:effect' },
+        order: { order_ref: 'manual/operator/v1:abc', client_order_id: 'manual/operator/v1:abc', broker_order_id: 'broker', broker_state: 'canceled' },
+        cancellation: null,
+        ending: 'Cancelled at Alpaca with 3 of 5 shares filled.',
+      }],
+    };
+    const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(endedTicket);
+
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        fence: FENCE,
+        expectedAccountId: 'PA1',
+        manualTicketId: endedTicket.ticket_id,
+      },
+      providers: [
+        ...fakePickerWorld().providers,
+        {
+        provide: BrokersService,
+        useValue: { getSqliteManualOrderTicket },
+      }],
+    });
+
+    expect(await screen.findByText('Cancelled at Alpaca with 3 of 5 shares filled.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Cancel manual ticket/i })).toBeNull();
+  });
+
   it('stops polling a terminally uncertain SQLite ticket', async () => {
     const pausedTicket = {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
