@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.models.requests import CalculateIndicatorsRequest, IndicatorTableRequest
 from app.models.responses import CalculateIndicatorsResponse, IndicatorTableResponse
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     bar_minutes_for,
     indicator_table_params_to_entries,
     preprocess_and_calculate,
@@ -74,14 +75,10 @@ async def generate_indicator_table(request: IndicatorTableRequest):
             adx_length=request.adx_length,
         )
 
-        # Compute warm-up: the requested recipes' own windows, widened for
-        # the two chains whose convergence outlasts any single parameter —
-        # ADX's double Wilders smoothing and the RSI-then-MA chain.
-        max_lookback = max(
-            requested_indicator_warmup_lookback(indicator_entries),
-            request.adx_length * 2,
-            request.rsi_length + request.rsi_ma_length,
-        )
+        # The warm-up policy sizes the lead-in, ADX's double Wilder smoothing
+        # included (#2611). The RSI MA below is computed after the trim, so
+        # no lead-in reaches it.
+        max_lookback = requested_indicator_warmup_lookback(indicator_entries, INDICATOR_CONFIGS)
 
         # The lead-in and the window start come from the one resolver the
         # chart and the dataset export share (#2458).

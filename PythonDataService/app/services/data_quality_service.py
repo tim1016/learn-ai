@@ -16,6 +16,7 @@ import pandas as pd
 
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc, valid_session_minutes_ms_utc
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     calculate_dynamic_indicators,
     fetch_bars_chunked,
     resolve_indicator_window,
@@ -318,7 +319,7 @@ def step7_recompute_indicators(
 
     if indicator_entries:
         # Fetch warmup bars
-        max_lookback = requested_indicator_warmup_lookback(indicator_entries)
+        max_lookback = requested_indicator_warmup_lookback(indicator_entries, INDICATOR_CONFIGS)
         warmup_start = resolve_indicator_window(from_date, max_lookback=max_lookback, bar_minutes=1).fetch_from
         trim_ts = int(df["timestamp"].iloc[0])
 

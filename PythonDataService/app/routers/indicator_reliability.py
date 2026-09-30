@@ -46,6 +46,7 @@ from app.research.indicator_reliability import (
     get_indicator_category,
 )
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     bar_minutes_for,
     calculate_dynamic_indicators,
     fetch_bars_chunked,
@@ -180,9 +181,11 @@ async def calculate_indicator_reliability(
             )
 
         # Compute warmup period
-        max_lookback = requested_indicator_warmup_lookback(
-            [{"params": request.indicator_params}]
-        )
+        indicator_entry = {
+            "name": request.indicator_name,
+            "params": request.indicator_params,
+        }
+        max_lookback = requested_indicator_warmup_lookback([indicator_entry], INDICATOR_CONFIGS)
         window = resolve_indicator_window(
             request.from_date,
             max_lookback=max_lookback,
@@ -216,10 +219,6 @@ async def calculate_indicator_reliability(
         df = filter_session(df, "rth")
 
         # Calculate the indicator
-        indicator_entry = {
-            "name": request.indicator_name,
-            "params": request.indicator_params,
-        }
         df, column_meta = calculate_dynamic_indicators(df, [indicator_entry])
 
         if not column_meta:

@@ -30,6 +30,7 @@ from app.research.divergence.ingest import (
 from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     add_previous_close_column,
     bar_minutes_for,
     build_csv_bytes,
@@ -115,9 +116,7 @@ def _fetch_and_process(
     # too, keyed on this export's own bar length (#2458), so the two surfaces
     # warm the same indicator up on the same bars.
     max_lookback = (
-        requested_indicator_warmup_lookback(request.indicator_entries)
-        if request.warmup and request.indicator_entries
-        else 0
+        requested_indicator_warmup_lookback(request.indicator_entries, INDICATOR_CONFIGS) if request.warmup else 0
     )
     window = resolve_indicator_window(
         request.from_date,
