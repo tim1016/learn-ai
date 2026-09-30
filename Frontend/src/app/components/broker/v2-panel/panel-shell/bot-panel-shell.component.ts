@@ -40,7 +40,7 @@ import type {
   PanelActionResult,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
-import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type BotEndInput } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -76,6 +76,7 @@ import { TradesTodayListComponent } from '../bot-page/trades-today-list.componen
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotDetailsComponent } from '../bot-page/bot-details.component';
+import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import {
   flattenUnderway,
@@ -186,6 +187,7 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
     BotBannerComponent,
     BotDayChartComponent,
     BotDetailsComponent,
+    BotEndCardComponent,
     DeploymentBudgetComponent,
     RecentDecisionsListComponent,
     StrandedPositionWarningComponent,
@@ -524,6 +526,19 @@ export class BotPanelShellComponent {
   protected dismissActionReceipt(): void {
     this.actionReceipt.set(null);
   }
+
+  /**
+   * Change this bot's end (#2607), bound like every command this page sends
+   * to the lane the owner was shown (#2068). The end card renders a refusal
+   * it rejects with; the refreshed panel shows the new end.
+   */
+  protected readonly saveBotEnd = async (choice: BotEndInput): Promise<void> => {
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) throw new Error(verdict.message);
+    await this.panelSvc.editBotEnd(this.commandTarget(fencedTarget(this.target(), fence)), this.sid(), choice);
+    await this.liveStore.refresh();
+  };
 
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;

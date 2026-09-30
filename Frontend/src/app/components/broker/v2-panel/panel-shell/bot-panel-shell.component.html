@@ -76,6 +76,10 @@
       <app-flatten-fills [fills]="flattenFills()" />
     }
 
+    @if (panelData.end; as end) {
+      <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [save]="saveBotEnd" />
+    }
+
     <div class="bot-page__grid bot-page__grid--market">
       <app-bot-day-chart
         [symbol]="panelData.symbol"

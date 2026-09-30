@@ -12,7 +12,7 @@ import type {
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.component';
-import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
@@ -2274,6 +2274,49 @@ describe('BotPanelShellComponent', () => {
       expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
       expect.anything(), expect.anything(), null,
     );
+  });
+
+  it('changes the bot’s end as a command on the lane the owner was shown, then re-reads the panel (#2607)', async () => {
+    const end: BotEndView = {
+      end_at_ms: Date.UTC(2026, 8, 29, 19, 59),
+      end_action: 'SELL',
+      status: 'scheduled',
+      headline: 'Ends today 15:59 ET · sells',
+      explanation: 'At 15:59 ET today the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+      notice: null,
+      editable: true,
+    };
+    const getLiveSnapshot = vi.fn().mockResolvedValue(liveSnapshot({ ...PANEL, end }));
+    const editBotEnd = vi.fn().mockResolvedValue({ ...end, end_at_ms: null, status: 'no_end' });
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: { ...mockService, getLiveSnapshot, editBotEnd } },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+        { provide: directory.provide, useValue: directory.useValue },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const reads = getLiveSnapshot.mock.calls.length;
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Change end' }));
+    const editor = screen.getByRole('dialog', { name: 'Change this bot’s end' });
+    await userEvent.click(within(editor).getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    await userEvent.click(within(editor).getByRole('button', { name: 'Save end' }));
+
+    await vi.waitFor(() => expect(editBotEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4, idempotencyKey: expect.any(String) }),
+      'sid-001',
+      { end_at_ms: null, end_action: 'SELL' },
+    ));
+    await vi.waitFor(() => expect(getLiveSnapshot.mock.calls.length).toBeGreaterThan(reads));
   });
 
   describe('the one view (#2563)', () => {
