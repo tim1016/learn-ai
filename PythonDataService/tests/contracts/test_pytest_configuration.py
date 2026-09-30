@@ -95,6 +95,85 @@ def test_python_pr_shards_are_stable_complete_and_disjoint() -> None:
     }
 
 
+def test_python_pr_shards_balance_by_measured_duration() -> None:
+    from scripts.pytest_shard import assign_shards, hash_shard
+
+    durations = {
+        **{f"tests/test_ten.py::test_case[{index}]": 10.0 for index in range(12)},
+        **{f"tests/test_five.py::test_case[{index}]": 5.0 for index in range(12)},
+        **{f"tests/test_one.py::test_case[{index}]": 1.0 for index in range(12)},
+    }
+    unknown = [f"tests/test_new.py::test_case[{index}]" for index in range(7)]
+    nodeids = [*durations, *unknown]
+    assignments = assign_shards(nodeids, shard_count=4, durations=durations)
+
+    # Complete, disjoint, and independent of the collection order presented.
+    assert sorted(assignments) == sorted(nodeids)
+    assert set(assignments.values()) == {1, 2, 3, 4}
+    assert assignments == assign_shards(
+        list(reversed(nodeids)), shard_count=4, durations=durations
+    )
+    # Longest-first dealing equalizes the measured time exactly here.
+    loads = [0.0] * 4
+    for nodeid, shard in assignments.items():
+        loads[shard - 1] += durations.get(nodeid, 0.0)
+    assert loads == [48.0, 48.0, 48.0, 48.0]
+    # Tests missing from the durations file keep the stable hash shard.
+    for nodeid in unknown:
+        assert assignments[nodeid] == hash_shard(nodeid, shard_count=4)
+
+
+def test_committed_pr_shard_durations_drive_the_balance() -> None:
+    from scripts.pytest_shard import load_pr_shard_durations
+
+    durations = load_pr_shard_durations()
+
+    assert len(durations) >= 1000
+    assert all(duration > 0 for duration in durations.values())
+
+
+def test_run_fast_tests_reports_elapsed_time_to_the_ci_step_summary(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    import logging
+
+    from scripts.run_fast_tests import report_elapsed_seconds
+
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    with caplog.at_level(logging.INFO, logger="scripts.run_fast_tests"):
+        message = report_elapsed_seconds(
+            12.34, shard_index=5, shard_count=16, exceeded_budget=False
+        )
+
+    assert "shard 5/16" in message
+    assert "12.3s of the 120-second budget" in message
+    assert "(exceeded)" not in message
+    assert summary.read_text(encoding="utf-8") == f"{message}\n"
+    assert message in caplog.text
+
+
+def test_run_fast_tests_elapsed_report_covers_unsharded_and_exceeded_runs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from scripts.run_fast_tests import report_elapsed_seconds
+
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    message = report_elapsed_seconds(
+        121.4, shard_index=None, shard_count=None, exceeded_budget=True
+    )
+
+    assert "unsharded" in message
+    assert "121.4s" in message
+    assert "(exceeded)" in message
+    assert summary.read_text(encoding="utf-8") == f"{message}\n"
+
+
 def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
     ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
     frontend_config = FRONTEND_CI_CONFIG.read_text(encoding="utf-8")
@@ -103,8 +182,12 @@ def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
     )[0]
 
     assert "python-test-shard:" in ci_contents
-    assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]" in ci_contents
-    assert 'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/12"' in ci_contents
+    assert (
+        "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in ci_contents
+    )
+    assert (
+        'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"' in ci_contents
+    )
     assert "name: Frontend Test Shard ${{ matrix.shard }}/6" in frontend_job
     assert "shard: [1, 2, 3, 4, 5, 6]" in frontend_job
     assert 'TEST_SHARD_COUNT: "6"' in frontend_job
