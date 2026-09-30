@@ -91,7 +91,12 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
         end_ms=service.et_midnight_ms(END) + DAY_MS,
         min_trades=1,
     )
-    created = await service.create(service.prepare_launch(spec, job_id=None, roots=[lake]))
+    # ``prepare_launch`` is blocking lake-admission work; production routers
+    # run it through ``to_thread.run_sync`` (grid_search.py), and the lake
+    # admission probe refuses an event-loop caller outright.
+    created = await service.create(
+        await asyncio.to_thread(service.prepare_launch, spec, job_id=None, roots=[lake])
+    )
     stored = service.GridSearchSpec.from_request_dict(created.request)
     candidate = next(iter(expand_grid([StrategyGridConfig(strategy_key="sma_crossover", param_ranges=dict(stored.param_ranges))], ["SPY"])))
     table = created.receipt["interval_table"]

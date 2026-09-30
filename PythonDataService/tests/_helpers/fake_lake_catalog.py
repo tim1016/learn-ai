@@ -627,9 +627,16 @@ def seeded_lake_catalog(monkeypatch):
     """A committed catalog for explicit file seeds, not an admission bypass."""
     receipts = {}
     token = _fixture_publications.set(receipts)
+    real_init_pool = catalog_client.init_pool
 
     async def init_pool():
-        return None
+        # Receipts are faked below, but the pool must stay real when a
+        # database is configured: app.research.persistence.db shares
+        # catalog_client's pool for its own writes, so stubbing init_pool
+        # out entirely makes every research-DB write in a seeded test
+        # fail with "pool not initialized" (#2619).
+        if settings.POSTGRES_URL:
+            await real_init_pool()
 
     async def has_receipt(root_id, mode, relative, digest, size):
         return receipts.get((root_id, mode, relative)) == (digest, size)
