@@ -161,10 +161,13 @@
               [fields]="end"
               (fieldsChange)="setEndFields($event)"
               [keepOffered]="keepOffered()"
+              [endAtMs]="deployEnd()?.end_at_ms ?? null"
               [end]="shownEnd()"
               [refusal]="endRefusal()"
-              [followsDefault]="ticket().end === null"
-              (useDefault)="setEndFields(null)"
+              [checking]="endPreview.isLoading()"
+              [unchecked]="endPreview.error() !== undefined"
+              [offerDefault]="ticket().end !== null || endRefusal() !== null"
+              (useDefault)="useDefaultEnd()"
             />
           }
         </app-deploy-step>

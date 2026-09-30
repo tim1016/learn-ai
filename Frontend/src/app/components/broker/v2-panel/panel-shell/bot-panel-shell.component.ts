@@ -152,6 +152,9 @@ const FLATTEN_NOT_OFFERED = {
     + 'Nothing was sent.',
 } as const;
 
+/** Why a change of a bot's end was not sent: another command on it is on its way. */
+const ACTION_ALREADY_PENDING_MESSAGE = 'Another command on this bot is on its way. Nothing was sent; try again once it settles.';
+
 /** The command each flatten step sends, named on a refusal's receipt. */
 const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_id']>> = {
   reconcile: 'reconcile_now',
@@ -528,16 +531,29 @@ export class BotPanelShellComponent {
   }
 
   /**
-   * Change this bot's end (#2607), bound like every command this page sends
-   * to the lane the owner was shown (#2068). The end card renders a refusal
-   * it rejects with; the refreshed panel shows the new end.
+   * Change this bot's end (#2607): a command like every other this page
+   * sends — bound to the lane the owner was shown (#2068), one at a time
+   * (`actionPending`, which also holds the end card's Change still, so it
+   * never races a Stop), a stale-generation refusal refreshing the lane, and
+   * the panel re-read whatever the answer. The end card renders the refusal
+   * it rejects with; the re-read panel shows the new end.
    */
   protected readonly saveBotEnd = async (choice: BotEndInput): Promise<void> => {
+    if (this.actionPending()) throw new Error(ACTION_ALREADY_PENDING_MESSAGE);
     const fence = this.openFence();
     const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
     if (!verdict.ok) throw new Error(verdict.message);
-    await this.panelSvc.editBotEnd(this.commandTarget(fencedTarget(this.target(), fence)), this.sid(), choice);
-    await this.liveStore.refresh();
+    this.actionPending.set(true);
+    try {
+      await this.panelSvc.editBotEnd(this.commandTarget(fencedTarget(this.target(), fence)), this.sid(), choice);
+    } catch (error) {
+      this.refreshLaneIfStale(deriveActionRejection(error, 'This bot’s end could not be changed.'));
+      throw error;
+    } finally {
+      // Never rejects: the live store keeps a failed read as its error state.
+      await this.liveStore.refresh();
+      this.actionPending.set(false);
+    }
   };
 
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
@@ -592,19 +608,12 @@ export class BotPanelShellComponent {
       const rejection = this.describeRejection(error, action);
       const receipt = this.errorReceipt(error, action, rejection);
       ownership.deliverOutcome(receipt);
-      // A stale-generation refusal means the fence the operator was shown is
-      // provably wrong; refresh so the next action is minted against a lane
-      // they have actually seen (#2068).
-      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
-        void this.fleetDirectory.refresh().catch(() => {
-          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
-        });
-      }
+      this.refreshLaneIfStale(rejection);
       // The rejection is always pre-execution (see runBotAction's doc), so the
       // operator's last-seen panel state is now stale relative to whatever
       // changed underneath it — refresh the current backend decision.
       //
-      // No .catch() here, unlike fleetDirectory.refresh() above: BotPanelLiveStore.refresh()
+      // No .catch() here, unlike the directory refresh in refreshLaneIfStale: BotPanelLiveStore.refresh()
       // catches internally and stores the failure as error state (it never rejects), while
       // FleetDirectoryService.refresh() deliberately does reject — this asymmetry is correct,
       // not an oversight.
@@ -682,11 +691,7 @@ export class BotPanelShellComponent {
         return;
       case 'failed':
         ownership.deliverOutcome(this.refusalReceipt(FLATTEN_STEP_ACTIONS[outcome.step], outcome.rejection));
-        if (outcome.rejection.reasonCode === 'clerk_binding_generation_conflict') {
-          void this.fleetDirectory.refresh().catch(() => {
-            this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
-          });
-        }
+        this.refreshLaneIfStale(outcome.rejection);
         return;
     }
   }
@@ -1026,6 +1031,19 @@ export class BotPanelShellComponent {
       message,
       remediation: null,
     };
+  }
+
+  /**
+   * A stale-generation refusal means the fence the owner was shown is
+   * provably wrong: refresh the directory so the next command is minted
+   * against a lane they have actually seen (#2068), and say so if even that
+   * read fails.
+   */
+  private refreshLaneIfStale(rejection: ActionRejection): void {
+    if (rejection.reasonCode !== 'clerk_binding_generation_conflict') return;
+    void this.fleetDirectory.refresh().catch(() => {
+      this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+    });
   }
 
   /** The one place the fallback failure message is built, so a caller that

@@ -10,6 +10,7 @@ import type {
 import {
   DEPLOY_VIEW,
   LIVE_DEPLOY_VIEW,
+  scheduledEndView,
 } from '../../../src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
 import type {
   AccountMoneyView,
@@ -319,24 +320,24 @@ const EXIT_STEPS_SUMMARY =
   + 'Next regular open (Tue Sep 22 09:30 ET): cancel the unfilled Clerk-priced limit, confirm cancellation, '
   + 'then sell the remaining quantity at market. A confirmed halt holds exits.';
 
-/** `bot_end.resolved_bot_end_view` at `NOW_MS` (09:53 ET, Mon Sep 21): today's close minus a minute (#2607). */
+/** `bot_end.resolved_bot_end_view` at `NOW_MS` (09:53 ET, Mon Sep 21): that session's close minus a minute (#2607). */
 export const WALK_DEFAULT_END = {
   end_at_ms: 1_790_020_740_000,
   end_action: 'SELL',
   status: 'scheduled',
-  headline: 'Ends today 15:59 ET · sells',
-  explanation: 'At 15:59 ET today the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+  headline: 'Ends Mon Sep 21, 15:59 ET · sells',
+  explanation: 'At Mon Sep 21, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
   notice: null,
   editable: true,
 } satisfies BotEndView;
 
-/** `bot_end.bot_end_view` for a stopped bot: a Stop cancels its planned end sale (#2607). */
+/** `bot_end.bot_end_view` for a stopped bot: a Stop cancels its end, and nothing is sold at it (#2607). */
 export const NO_END_STOPPED = {
   end_at_ms: null,
   end_action: 'SELL',
   status: 'no_end',
   headline: 'No end scheduled',
-  explanation: 'This bot is not running, and no end is scheduled for it.',
+  explanation: 'This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it.',
   notice: null,
   editable: false,
 } satisfies BotEndView;
@@ -344,23 +345,23 @@ export const NO_END_STOPPED = {
 /** Deployment Validation's registry note (`registry.py`, #2607). */
 export const DV_EXPERIMENTAL_NOTICE = 'Experimental validation only — not a trading strategy';
 
-/** The end check's answer: the default end's words for it, else the chosen end and action. */
+/** The app's 422 for an explicit `end: null` (`bot_end.refuse_explicit_null_end`), as its validation handler sends it. */
+const EXPLICIT_NULL_END_422 = {
+  detail: [{
+    type: 'value_error',
+    loc: ['body', 'end'],
+    msg: 'Value error, end may not be null: omit it for the default end (the session close minus one minute), '
+      + 'or send {"end_at_ms": null, "end_action": "SELL"} for no end',
+    input: null,
+    ctx: { error: {} },
+    url: 'https://errors.pydantic.dev/2.5/v/value_error',
+  }],
+};
+
+/** The end check's answer in the backend's words: an omitted end is the default end. */
 function endPreview(request: BotEndPreviewRequest): BotEndView {
-  const end = request.end ?? WALK_DEFAULT_END;
-  if (end.end_at_ms === WALK_DEFAULT_END.end_at_ms && end.end_action === 'SELL') return WALK_DEFAULT_END;
-  if (end.end_at_ms === null) {
-    return {
-      ...WALK_DEFAULT_END, end_at_ms: null, status: 'no_end', headline: 'No end · runs until you stop it',
-      explanation: 'This bot has no end time. It runs until you stop it.',
-    };
-  }
-  const keeps = end.end_action === 'KEEP';
-  return {
-    ...WALK_DEFAULT_END,
-    end_at_ms: end.end_at_ms,
-    end_action: keeps ? 'KEEP' : 'SELL',
-    headline: `Ends at the chosen minute · ${keeps ? 'keeps its shares' : 'sells'}`,
-  };
+  const end = request.end ?? { end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'SELL' };
+  return scheduledEndView(end, { dryRun: request.execution_mode === 'dry_run' });
 }
 
 const PAPER_DEPLOY_VIEW = {
@@ -722,7 +723,8 @@ export class OwnerWalkWorld {
       }
       if (method === 'POST' && path === `${scope}/bots/admission`) return json(admission(deploy));
       if (method === 'POST' && path === `${scope}/bots/end-preview`) {
-        return json(endPreview(request.postDataJSON() as BotEndPreviewRequest));
+        const body = request.postDataJSON() as BotEndPreviewRequest | { readonly end: null };
+        return body.end === null ? json(EXPLICIT_NULL_END_422, 422) : json(endPreview(body));
       }
       if (method === 'POST' && path === `${scope}/bots`) {
         const body = request.postDataJSON() as Enveloped<DeploySubmissionBody>;
@@ -847,10 +849,8 @@ export class OwnerWalkWorld {
   /** A running bot's end, changed on its page (#2607); any other phase is a walk bug. */
   private editEnd(choice: Enveloped<BotEndInput>): BotEndView | null {
     if (this.phase !== 'running') return null;
-    this.botEnd = endPreview({
-      execution_mode: 'paper',
-      end: { end_at_ms: choice.end_at_ms, end_action: choice.end_action },
-    });
+    // `bot_end.bot_end_view` for a running bot: the words its check gives the same end.
+    this.botEnd = scheduledEndView({ end_at_ms: choice.end_at_ms, end_action: choice.end_action });
     this.surfaceVersion += 1;
     return this.botEnd;
   }

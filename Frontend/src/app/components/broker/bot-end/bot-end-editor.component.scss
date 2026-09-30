@@ -26,6 +26,14 @@
   input { @include filled-field; }
 }
 
+// Under the time field, in its column: the minute it names in market time.
+.bot-end-editor__market {
+  grid-column: 2;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
 .bot-end-editor__error {
   margin: 0;
   color: var(--bear);

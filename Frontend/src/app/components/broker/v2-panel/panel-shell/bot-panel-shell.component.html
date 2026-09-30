@@ -77,7 +77,7 @@
     }
 
     @if (panelData.end; as end) {
-      <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [save]="saveBotEnd" />
+      <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [locked]="actionPending()" [save]="saveBotEnd" />
     }
 
     <div class="bot-page__grid bot-page__grid--market">

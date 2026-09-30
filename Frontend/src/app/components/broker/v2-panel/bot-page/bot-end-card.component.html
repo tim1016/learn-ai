@@ -1,37 +1,18 @@
-<section class="bot-end" aria-labelledby="bot-end-title">
+<section class="bot-end" [attr.aria-labelledby]="titleId">
   <div class="bot-end__head">
-    <h3 id="bot-end-title">End</h3>
+    <h3 [id]="titleId">End</h3>
     @if (end().editable) {
-      <button type="button" class="bot-end__change" popovertarget="bot-end-editor" (click)="prepare()">Change end</button>
+      <button type="button" class="bot-end__change" [attr.popovertarget]="editor.id" [disabled]="busy()" (click)="prepare()">Change end</button>
     }
   </div>
-  <p class="bot-end__headline">{{ end().headline }}</p>
-  @if (end().end_at_ms; as endAtMs) {
-    <p class="bot-end__time">
-      <app-timestamp-display [value]="endAtMs" mode="local" granularity="time" /> your time ·
-      <app-timestamp-display [value]="endAtMs" mode="et" granularity="time" />
-    </p>
-  }
-  <p class="bot-end__explanation">{{ end().explanation }}</p>
-  @if (end().notice; as notice) { <p class="bot-end__notice">{{ notice }}</p> }
+  <app-bot-end-summary [end]="end()" [endAtMs]="end().end_at_ms" detailed />
 </section>
 
-<!-- Over the page, never in it: a panel poll never rewrites what the owner types. -->
-<div #popover id="bot-end-editor" class="bot-end__editor" popover role="dialog" aria-labelledby="bot-end-editor-title" (toggle)="onToggle($event)">
-  <header>
-    <h3 id="bot-end-editor-title">Change this bot’s end</h3>
-    <button type="button" popovertarget="bot-end-editor" popovertargetaction="hide">Cancel</button>
-  </header>
-  <app-bot-end-editor [(fields)]="fields" [keepOffered]="keepOffered()" [locked]="saving()" />
+<app-bot-end-popover #editor heading="Change this bot’s end" closeLabel="Cancel" [(fields)]="fields" [keepOffered]="keepOffered()" [locked]="busy()">
   @if (refusal(); as refused) {
-    <div class="bot-end__refusal" role="alert">
-      <p><strong>{{ refused.message }}</strong></p>
-      @if (refused.why) { <p>{{ refused.why }}</p> }
-      @if (refused.nextAction) { <p>Next: {{ refused.nextAction }}</p> }
-      @if (refused.reasonCode; as code) { <p class="bot-end__code">{{ code | receiptLabel }}</p> }
-    </div>
+    <app-bot-end-refusal class="bot-end__refusal" [refusal]="refused" announce />
   }
-  <button type="button" class="bot-end__save" [disabled]="saving()" [attr.aria-busy]="saving()" (click)="submit()">
+  <button type="button" class="bot-end__save" [disabled]="busy()" [attr.aria-busy]="saving()" (click)="submit()">
     {{ saving() ? 'Saving…' : 'Save end' }}
   </button>
-</div>
+</app-bot-end-popover>

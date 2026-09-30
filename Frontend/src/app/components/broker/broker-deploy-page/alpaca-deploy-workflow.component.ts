@@ -60,13 +60,8 @@ import {
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
 import { extractServerMessage } from '../operation-error';
-import {
-  botEndFields,
-  botEndInput,
-  botEndRefusal,
-  type BotEndFields,
-  type BotEndRefusal,
-} from '../bot-end/bot-end-fields';
+import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
+import { deriveActionRejection, type ActionRejection } from '../v2-panel/lib/panel-action-outcome';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployConfirmStepComponent,
@@ -251,6 +246,12 @@ interface FrozenDeployCommand {
 /** A Deploy's settings as sent: always with the end on screen and a reviewed budget. */
 type DeploySettings = DeployBotBody & { end: BotEndInput; budget: DeploymentBudgetInput };
 type DeploySubmission = DeploySubmissionBody & { end: BotEndInput; budget: DeploymentBudgetInput };
+
+/** The backend's answer to the Deploy form's end check (#2607): its words
+ * for the end, or its refusal of it. */
+type EndCheckAnswer =
+  | { readonly kind: 'view'; readonly view: BotEndView }
+  | { readonly kind: 'refused'; readonly refusal: ActionRejection };
 
 /**
  * Deploy (PRD #2560 D8/D9): four steps on one page — What → How → Money →
@@ -638,14 +639,14 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly endFields = computed<BotEndFields | null>(() => {
     const own = this.ticket().end;
     if (own !== null) return own;
-    const defaultEnd = this.currentView()?.default_end;
-    return defaultEnd ? botEndFields(defaultEnd) : null;
+    const view = this.currentView();
+    return view === null ? null : botEndFields(view.default_end);
   });
 
   /** The end a Deploy sends — always the one on screen, its action included,
    * "no end" as an explicit null — or `null` while its date or time is not
    * a real wall clock yet. */
-  private readonly deployEnd = computed(() => {
+  protected readonly deployEnd = computed(() => {
     const fields = this.endFields();
     return fields === null ? null : botEndInput(fields, this.keepOffered());
   });
@@ -660,62 +661,58 @@ export class AlpacaDeployWorkflowComponent {
     return { target: this.deployTarget(this.accountId().trim()), body };
   }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
 
-  /** The check's last answer and the request it answered. Kept on screen
-   * while a newer check runs, so the column never blinks between edits; a
-   * refusal blocks the Deploy only while it answers the end now on screen. */
-  private readonly endAnswer = signal<{
-    request: string;
-    view: BotEndView | null;
-    refusal: BotEndRefusal | null;
-    refused: boolean;
-  } | null>(null);
-
+  /**
+   * The check of the end on screen. Its value is only ever the answer for the
+   * current check: a new end, world or account starts a new one, and until it
+   * answers there is none, so no earlier end's words or refusal can stand
+   * beside the end the Deploy would send. The backend's refusal of the end
+   * (400) is an answer; a check that could not be read is the resource's
+   * error, and holds nothing — the Deploy checks the end again, and refuses
+   * it in the same words.
+   */
   protected readonly endPreview = resource({
     params: () => this.endCheck(),
-    loader: async ({ params, abortSignal }) => {
-      const request = canonicalJson(params);
+    loader: async ({ params }): Promise<EndCheckAnswer> => {
       try {
-        const view = await this.panelService.previewBotEnd(params.target, params.body);
-        if (!abortSignal.aborted) this.endAnswer.set({ request, view, refusal: null, refused: false });
-        return view;
+        return { kind: 'view', view: await this.panelService.previewBotEnd(params.target, params.body) };
       } catch (error) {
-        // Only the backend's refusal of this end (400) blocks the Deploy. A
-        // check that could not be read blocks nothing: the Deploy checks the
-        // end again, and refuses it in the same words.
-        if (!abortSignal.aborted) {
-          this.endAnswer.set({
-            request,
-            view: null,
-            refusal: botEndRefusal(error, 'This end could not be checked. Deploy checks it again.'),
-            refused: error instanceof HttpErrorResponse && error.status === 400,
-          });
+        if (error instanceof HttpErrorResponse && error.status === 400) {
+          return { kind: 'refused', refusal: deriveActionRejection(error, 'This end was refused.') };
         }
         throw error;
       }
     },
   });
 
-  /** The backend's words for the end on screen. */
-  protected readonly shownEnd = computed(() =>
-    this.endAnswer()?.view ?? (this.ticket().end === null ? this.currentView()?.default_end ?? null : null));
-  protected readonly endRefusal = computed(() => this.endAnswer()?.refusal ?? null);
-
-  private readonly endRefused = computed(() => {
+  private readonly endAnswer = computed(() => (this.endPreview.hasValue() ? this.endPreview.value() : null));
+  /** The backend's words for exactly the end the Deploy would send. */
+  protected readonly shownEnd = computed(() => {
     const answer = this.endAnswer();
-    const check = this.endCheck();
-    return answer !== null && answer.refused && check !== undefined && answer.request === canonicalJson(check);
+    return answer?.kind === 'view' ? answer.view : null;
+  });
+  /** The backend's refusal of exactly that end. */
+  protected readonly endRefusal = computed(() => {
+    const answer = this.endAnswer();
+    return answer?.kind === 'refused' ? answer.refusal : null;
   });
 
-  /** What the end still needs, in the owner's words, or `null`. */
+  /** What the end still needs in How, in the owner's words, or `null`. */
   private readonly endMissing = computed<string | null>(() => {
     if (this.deployEnd() === null) return 'Needs an end time';
-    if (this.endRefused()) return 'Check its end';
+    if (this.endRefusal() !== null) return 'Check its end';
     return null;
   });
 
   protected setEndFields(fields: BotEndFields | null): void {
     this.clearAdmission();
     this.ticket.update((ticket) => ({ ...ticket, end: fields }));
+  }
+
+  /** Back to this account's default end, read afresh: the one the page
+   * opened with may have passed while it stood open. */
+  protected useDefaultEnd(): void {
+    this.setEndFields(null);
+    this.deployView.reload();
   }
 
   // ── Steps ─────────────────────────────────────────────────────────────────
@@ -856,6 +853,11 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.endMissing() !== null) {
       return { canSubmit: false, guidance: 'Fix this bot’s end in How.' };
+    }
+    // Only an end its check has answered is deployed: until then the words on
+    // screen could be an earlier end's.
+    if (this.endPreview.isLoading()) {
+      return { canSubmit: false, guidance: 'Checking this bot’s end…' };
     }
     if (this.admissionIsStale()) {
       return { canSubmit: false, guidance: 'Refresh the Deploy checks before deploying.' };

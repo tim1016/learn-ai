@@ -1,44 +1,28 @@
 <section class="deploy-end" [attr.aria-labelledby]="titleId">
   <div class="deploy-end__head">
     <h3 class="deploy-end__title" [id]="titleId">End · changeable later</h3>
-    <button type="button" class="deploy-end__change" [attr.popovertarget]="editorId" aria-label="Change this bot’s end">Change</button>
+    <button type="button" class="deploy-end__change" [attr.popovertarget]="editor.id" aria-label="Change this bot’s end">Change</button>
   </div>
   @if (refusal(); as refused) {
     <p class="deploy-end__refusal" role="alert">
       <strong>{{ refused.message }}</strong>
       @if (refused.reasonCode; as code) { <span class="deploy-end__code">{{ code | receiptLabel }}</span> }
     </p>
-  } @else if (end(); as shown) {
-    <p class="deploy-end__headline" role="status">{{ shown.headline }}</p>
-    @if (shown.end_at_ms !== null) {
-      <p class="deploy-end__local">
-        <app-timestamp-display [value]="shown.end_at_ms" mode="local" granularity="time" /> your time ·
-        <app-timestamp-display [value]="shown.end_at_ms" mode="et" granularity="time" />
-      </p>
-    }
-    @if (shown.notice) { <p class="deploy-end__notice">{{ shown.notice }}</p> }
+  } @else if (checking()) {
+    <p class="deploy-end__state" role="status">Checking its end…</p>
+  } @else if (unchecked()) {
+    <p class="deploy-end__state" role="status">This end could not be checked. Deploy checks it again.</p>
   }
+  <app-bot-end-summary [end]="end()" [endAtMs]="endAtMs()" />
 </section>
 
-<!-- Over the page, never in the column: opening it never makes How taller. -->
-<div [id]="editorId" class="deploy-end__editor" popover role="dialog" [attr.aria-labelledby]="editorTitleId" (toggle)="onToggle($event)">
-  <header>
-    <h3 [id]="editorTitleId">This bot’s end</h3>
-    <button type="button" [attr.popovertarget]="editorId" popovertargetaction="hide">Done</button>
-  </header>
-  <app-bot-end-editor [(fields)]="fields" [keepOffered]="keepOffered()" />
-  <div class="deploy-end__answer">
-    @if (refusal(); as refused) {
-      <p><strong>{{ refused.message }}</strong></p>
-      @if (refused.why) { <p>{{ refused.why }}</p> }
-      @if (refused.nextAction) { <p>Next: {{ refused.nextAction }}</p> }
-    } @else if (end(); as shown) {
-      <p><strong>{{ shown.headline }}</strong></p>
-      <p>{{ shown.explanation }}</p>
-      @if (shown.notice) { <p class="deploy-end__notice">{{ shown.notice }}</p> }
-    }
-  </div>
-  @if (!followsDefault()) {
+<app-bot-end-popover #editor heading="This bot’s end" [(fields)]="fields" [keepOffered]="keepOffered()">
+  @if (refusal(); as refused) {
+    <app-bot-end-refusal class="deploy-end__answer" [refusal]="refused" />
+  } @else if (end(); as shown) {
+    <div class="deploy-end__answer"><app-bot-end-summary [end]="shown" detailed /></div>
+  }
+  @if (offerDefault()) {
     <button type="button" class="deploy-end__default" (click)="useDefault.emit()">Use the default end</button>
   }
-</div>
+</app-bot-end-popover>

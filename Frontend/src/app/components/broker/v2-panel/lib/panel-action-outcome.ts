@@ -36,6 +36,11 @@ export interface ActionRejection {
   /** When the refused thing can next be tried — a closed session's next open —
    * when the backend said. */
   readonly availableAtMs?: number | null;
+  /** What to do next, in the backend's words — the panel's `next_action`,
+   * then the fleet's `next_step` — else the pinned fleet copy's next step, for
+   * a surface that says "why" and "next" apart (#2607, a bot's end). Set by
+   * `deriveActionRejection`; `why` keeps its own precedence. */
+  readonly nextAction?: string | null;
 }
 
 /** Parses a rejected `runBotAction` call's outcome, message, and remediation. */
@@ -83,7 +88,14 @@ export function deriveActionRejection(error: unknown, fallbackMessage: string): 
               ? formatReceiptLabel(reasonCode)
               : null,
     reasonCode,
+    nextAction: proseOf(detail, 'next_action') ?? proseOf(detail, 'next_step') ?? knownRefusal?.nextStep ?? null,
   };
+}
+
+/** A refusal body's backend-authored sentence under `key`, or `null` when it sent none. */
+function proseOf(detail: Record<string, unknown> | null, key: string): string | null {
+  const value = detail?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 export interface ActionOutcomeToast {

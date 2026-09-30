@@ -148,7 +148,9 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // Deployment Validation says it is no trading strategy; its end is the
     // account's default, in the backend's words (#2607).
     await expect(step(page, 'What').getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
-    await expect(page.getByRole('region', { name: 'End · changeable later' })).toContainText(WALK_DEFAULT_END.headline);
+    const deployEnd = page.getByRole('region', { name: 'End · changeable later' });
+    await expect(deployEnd).toContainText(WALK_DEFAULT_END.headline);
+    await expect(deployEnd).toContainText('15:59:00 ET');
 
     // Money: the account's bar as it stands, then a NEW slice carved from
     // free to deploy once the server has previewed the typed amount.
@@ -211,7 +213,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // ── Stop, asked in the Clerk's own words, as the bot page asks it. ───────
     await row.getByRole('button', { name: `Stop ${WALKED_BOT}` }).click();
     const askStop = page.getByRole('dialog', { name: 'Stop this bot?' });
-    await expect(askStop).toContainText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.');
+    await expect(askStop).toContainText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account. Its scheduled end is cancelled: nothing is sold at the end time.');
     await expect(askStop.getByRole('button', { name: 'Cancel' })).toBeFocused();
     await askStop.getByRole('button', { name: 'Stop bot decisions' }).click();
     const stopOutcome = home.getByRole('status').filter({ hasText: STOP_MESSAGE });
@@ -433,11 +435,15 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await end.getByRole('button', { name: 'Change end' }).click();
     const editor = page.getByRole('dialog', { name: 'Change this bot’s end' });
     await expect(editor.getByLabel('End date')).toBeFocused();
+    // The time is typed in the owner's own zone, with the market's beside it.
+    await expect(editor.getByText(/^Market time/)).toHaveText('Market time 15:59:00 ET');
     await editor.getByRole('radio', { name: 'Keep its shares' }).check();
     await editor.getByRole('button', { name: 'Save end' }).click();
 
     await expect(editor).toBeHidden();
-    await expect(end).toContainText('keeps its shares');
+    // `bot_end.bot_end_view`'s words for the kept end, read back from the panel.
+    await expect(end).toContainText('Ends Mon Sep 21, 15:59 ET · keeps its shares');
+    await expect(end).toContainText('At Mon Sep 21, 15:59 ET the Clerk stops the bot and cancels its working orders. It keeps its shares.');
     const [put] = world.commandsTo(`/bots/${WALKED_BOT}/end`);
     expect(put.method).toBe('PUT');
     expect(put.body).toMatchObject({ end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'KEEP' });
