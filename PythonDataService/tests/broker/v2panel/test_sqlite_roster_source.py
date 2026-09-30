@@ -564,8 +564,31 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
 
     class _SyntheticFacade:
         account_id = "sim:dry-spy"
-        repository = SimpleNamespace(deployment_budget=lambda sid: None)
+        repository = SimpleNamespace(deployment_budget=lambda sid: {"committed_cents": 200_000})
 
+    sealed_row = BotCatalogView(
+        strategy_instance_id="dry-spy",
+        strategy_key="deployment_validation",
+        strategy_label="Deployment Validation",
+        broker="alpaca",
+        account_id="sim:dry-spy",
+        symbol="SPY",
+        mode="trade",
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        running=True,
+        status_label="Working",
+        status_explanation="The Dry Run's sealed simulator.",
+        exposure={},
+        fills_today=0,
+        realized_pnl_today=0.0,
+        open_pnl=0.0,
+        day_pnl=0.0,
+        last_activity_at_ms=None,
+        needs_attention=False,
+        group="dry_run",
+        world_label="DRY RUN · simulated cash",
+    )
     restoring = SimpleNamespace(strategy_instance_id="dry-restoring", mode="dry_run")
     restored = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
     facade = _SyntheticFacade()
@@ -588,11 +611,8 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
     async def real_catalog(_broker: str, _account_id: str) -> list[object]:
         return []
 
-    async def synthetic_catalog(_broker: str, _facade: _SyntheticFacade) -> list[SimpleNamespace]:
-        return [SimpleNamespace(
-            strategy_instance_id="dry-spy",
-            model_copy=lambda *, update: SimpleNamespace(strategy_instance_id="dry-spy", **update),
-        )]
+    async def synthetic_catalog(_broker: str, _facade: _SyntheticFacade) -> list[BotCatalogView]:
+        return [sealed_row]
 
     monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
