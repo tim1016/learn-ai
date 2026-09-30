@@ -3,18 +3,21 @@
 Since #2550 a restart never resumes a run: boot recovery
 (:meth:`SqliteAlpacaClerkFacade.recover`) stops every run it finds ACTIVE
 (``service_restart_recovery``), and trading again takes a new Deploy under a
-fresh bot identity. So each crash point asks one question of the stopped
-run's order: does recovery book what the broker did, without sending anything
-twice, and does it keep a new entry off the account while that is unknown?
+fresh bot identity. So each crash point asks of the stopped run's order:
+does recovery book what the broker did without sending anything twice, and
+does it keep the account from buying on top of a fill it has not booked? A
+still-working order does not block the next Deploy's bot (#1793): it counts
+against that bot's cash instead.
 
 Each test crashes the Clerk by closing its SQLite handle mid-flight, reopens
 the same file the way a new process does, and runs boot recovery against a
 broker double that holds what the broker did while the process was down.
+Closing the handle releases the execution lease; a lease a killed process
+leaves behind is ``test_repository.py::test_expired_lease_allows_a_new_process_to_take_over``.
 """
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +33,9 @@ from app.broker.alpaca.clerk.sqlite.stopped_run_entries import entries_owed_a_ca
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.utils.timestamps import Clock, now_ms_utc
-from tests._helpers.session_clock import pin_wall_clock_at
+from tests._helpers.session_clock import IN_SESSION_DAY, pin_wall_clock_at, pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
@@ -44,7 +47,7 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _leg,
     _position,
 )
-from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding
+from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _order
 from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
     _facade,
     _OpenOrdersBroker,
@@ -98,6 +101,36 @@ def _reopen(
     return repo, SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=read, trade=trade)
 
 
+class _BrokerWhileDown(_OpenOrdersBroker):
+    """Alpaca as a restarted Clerk finds it: some orders ended while the process was down.
+
+    An ended order leaves the open-orders list and is answered by the exact
+    lookup only, as Alpaca answers a filled or expired order.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_submit.set()
+        self.ended: dict[str, BrokerOrder] = {}
+        self.positions: list[BrokerPosition] = []
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        return list(self.positions)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        if client_order_id in self.ended:
+            return self.ended[client_order_id]
+        return await super().get_order_by_client_order_id(client_order_id)
+
+    def end(self, order_ref: str, **update: Any) -> None:
+        self.ended[order_ref] = self.open.pop(order_ref).model_copy(update=update)
+
+    def fill(self, order_ref: str, *, price: float) -> None:
+        order = self.open[order_ref]
+        self.end(order_ref, status="filled", filled_quantity=order.quantity, filled_avg_price=price,
+                 filled_at_ms=20, updated_at_ms=20, observed_at_ms=20)
+
+
 def _unresolved(repo: ClerkSqliteRepository) -> int:
     return len(repo.reconcilable_effect_operations(subject_id=bot_subject_id(SID)))
 
@@ -109,27 +142,31 @@ async def test_sent_but_unrecorded_working_entry_is_found_and_cancelled_never_re
     clock = _clock_at(1_700_000_000_000)
     order_ref, effect_id = _crash_holding_the_send_claim(tmp_path, clock)
     clock.advance(31_000)
-    working = _broker_order(order_ref, order_id=f"bo-{order_ref}", status="new")
-    trade = _FakeTrade(lookup_result=working)
-    repo, facade = _reopen(tmp_path, clock=clock, read=_FakeRead(orders=[working]), trade=trade)
+    broker = _BrokerWhileDown()
+    # Stamped like every order the double answers for, so its cancel evidence is newer.
+    broker.open[order_ref] = _order(order_ref, _leg())
+    repo, facade = _reopen(tmp_path, clock=clock, read=broker, trade=broker)
     try:
         await facade.recover()
 
         # The run is retired. The open-orders snapshot needs no claim, so it
         # books the broker id at once; the dead process's claim defers the
-        # exact lookup and the cancel.
+        # cancel. The next Deploy's bot may still enter (see module docstring).
         assert repo.active_run(SID) is None
-        assert repo.order(order_ref).broker_order_id == f"bo-{order_ref}"  # type: ignore[union-attr]
-        assert trade.lookup_calls == [] and trade.cancel_calls == []
+        assert repo.order(order_ref).broker_order_id == f"broker-{order_ref}"  # type: ignore[union-attr]
+        assert broker.cancellations == []
         assert _unresolved(repo) == 1
         assert admit_new_exposure(repo, strategy_instance_id=SID).reason_code == "ENTER_IN_PROGRESS"
+        assert admit_new_exposure(repo, strategy_instance_id=NEXT_DEPLOY_SID).allowed
 
         clock.advance(DEFAULT_CLAIM_TTL_MS + 1)
-        await facade.reconcile_once()
+        assert await facade.reconcile_once() == "clean"
 
-        assert trade.cancel_calls == [f"bo-{order_ref}"]
-        assert trade.submit_calls == []
-        assert repo.effect_operation(effect_id).state == "in_progress"  # type: ignore[union-attr]
+        assert broker.cancellations == [f"broker-{order_ref}"]
+        assert broker.submissions == []
+        assert repo.order(order_ref).broker_state == "canceled"  # type: ignore[union-attr]
+        assert repo.effect_operation(effect_id).state == "failed"  # type: ignore[union-attr]
+        assert _unresolved(repo) == 0
     finally:
         repo.close()
 
@@ -188,47 +225,19 @@ async def test_recorded_but_unsent_entry_is_voided_never_sent(tmp_path: Path) ->
         assert trade.lookup_calls == []
         assert _unresolved(repo) == 1
         assert admit_new_exposure(repo, strategy_instance_id=SID).reason_code == "ENTER_IN_PROGRESS"
+        assert admit_new_exposure(repo, strategy_instance_id=NEXT_DEPLOY_SID).allowed
 
         clock.advance(DEFAULT_CLAIM_TTL_MS + 1)
         await facade.reconcile_once()
 
         assert trade.lookup_calls == [order_ref]
         assert trade.submit_calls == []
+        assert trade.cancel_calls == []
         assert repo.effect_operation(effect_id).state == "failed"  # type: ignore[union-attr]
         assert any(t["summary_code"] == "ORDER_SUBMIT_FAILED_ABSENT" for t in repo.transitions_for_order(order_ref))
         assert _unresolved(repo) == 0
     finally:
         repo.close()
-
-
-class _BrokerWhileDown(_OpenOrdersBroker):
-    """Alpaca as a restarted Clerk finds it: some orders ended while the process was down.
-
-    An ended order leaves the open-orders list and is answered by the exact
-    lookup only, as Alpaca answers a filled or expired order.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.release_submit.set()
-        self.ended: dict[str, BrokerOrder] = {}
-        self.positions: list[BrokerPosition] = []
-
-    async def list_positions(self) -> list[BrokerPosition]:
-        return list(self.positions)
-
-    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
-        if client_order_id in self.ended:
-            return self.ended[client_order_id]
-        return await super().get_order_by_client_order_id(client_order_id)
-
-    def end(self, order_ref: str, **update: Any) -> None:
-        self.ended[order_ref] = self.open.pop(order_ref).model_copy(update=update)
-
-    def fill(self, order_ref: str, *, price: float) -> None:
-        order = self.open[order_ref]
-        self.end(order_ref, status="filled", filled_quantity=order.quantity, filled_avg_price=price,
-                 filled_at_ms=20, updated_at_ms=20, observed_at_ms=20)
 
 
 def _stop_reasons(repo: ClerkSqliteRepository) -> list[str]:
@@ -334,12 +343,14 @@ async def test_a_restart_the_next_session_books_the_day_entry_alpaca_expired_and
 ) -> None:
     """Crash point 5: a DAY entry half-filled, then expired at the close while the process was down.
 
-    The filled share stays the ended bot's and nothing sells it: a dead run
+    The session boundary reaches recovery only through what it did to the
+    order: Alpaca expired the DAY entry at the close. The filled share stays
+    the ended bot's and nothing sells it, even the next morning: a dead run
     warns and never exits on its own (#2411, #2504). An owner-set end that fell
     due while down is the one sale a restart makes, covered by
     ``test_scheduled_end.py::test_an_end_missed_while_the_clerk_was_down_sells_at_the_next_open_never_after_hours``.
     """
-    pin_wall_clock_at(monkeypatch, session_open_ms_utc(date(2026, 9, 25)) + 60_000)
+    pin_wall_clock_in_session(monkeypatch)
     broker = _BrokerWhileDown()
     repo, facade = _facade(tmp_path, broker)
     order_ref = await _working_enter(facade, quantity=2)
@@ -349,7 +360,7 @@ async def test_a_restart_the_next_session_books_the_day_entry_alpaca_expired_and
     broker.positions = [_position("SPY", quantity=1.0)]
 
     # 08:00 ET on the next trading day, before its open.
-    pin_wall_clock_at(monkeypatch, session_open_ms_utc(date(2026, 9, 28)) - 90 * 60_000)
+    pin_wall_clock_at(monkeypatch, session_open_ms_utc(next_trading_day(IN_SESSION_DAY)) - 90 * 60_000)
     restarted, clerk = _reopen(tmp_path, read=broker, trade=broker)
     try:
         await clerk.recover()
