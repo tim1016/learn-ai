@@ -21,13 +21,15 @@ from decimal import Decimal
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine, BacktestResult
+from app.engine.engine import BacktestEngine, BacktestResult, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode
 from app.engine.strategy.base import Strategy
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.lean_sidecar import trading_calendar
+from tests._helpers.bot_runner.ema_parity import EMA_LAST_BAR_ENTER_DAY, lean_cell_bars
 
 _MINUTE_MS = 60_000
 _BUCKET_MS = 15 * _MINUTE_MS
@@ -228,4 +230,55 @@ def test_the_lean_profile_still_fills_a_closing_bar_enter_at_the_next_open() -> 
     (entry,) = result.order_events
     assert entry.filled_at_ms == next_open_ms + _MINUTE_MS
     assert entry.fill_price == day_two[0].open
+    assert result.closing_bar_skips == []
+
+
+# QQQ's retained LEAN input (the cross-engine golden cell), whose first
+# sealed-EMA ENTER is decided on 2026-02-03's closing bar. The same bars drive
+# the live runner's refusal of that ENTER (``test_trade_bot_last_bar_enter.py``).
+_QQQ_CELL = "QQQ_W3mo_2026-02-02_to_2026-04-30"
+_QQQ_CELL_FIRST_DAY = date(2026, 2, 2)
+
+
+def _run_sealed_ema_on_qqq(fill_model: FillModel) -> BacktestResult:
+    """The registered EMA program over the QQQ cell, through the session after its closing-bar ENTER."""
+    through_day = trading_calendar.next_trading_day(EMA_LAST_BAR_ENTER_DAY)
+    bars = [
+        TradeBar(
+            symbol=bar.symbol, start_ms=bar.start_ms, end_ms=bar.end_ms, open=bar.open, high=bar.high,
+            low=bar.low, close=bar.close, volume=bar.volume,
+        )
+        for bar in lean_cell_bars(
+            _QQQ_CELL, symbol="QQQ", stop_after_ms=trading_calendar.session_close_ms_utc(through_day) - _MINUTE_MS
+        )
+    ]
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    strategy = registration.build(registration.param_schema(symbol="QQQ"))
+    pin_strategy_window(strategy, _QQQ_CELL_FIRST_DAY, through_day)
+    return _run(strategy, bars, fill_model)
+
+
+@pytest.mark.parametrize("fill_mode", _NON_LEAN_MODES)
+def test_the_sealed_emas_closing_bar_enter_on_a_golden_cell_produces_no_trade(fill_mode: FillMode) -> None:
+    close_ms = trading_calendar.session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY)
+    next_open_ms = trading_calendar.session_open_ms_utc(trading_calendar.next_trading_day(EMA_LAST_BAR_ENTER_DAY))
+
+    result = _run_sealed_ema_on_qqq(FillModel(mode=fill_mode))
+
+    # Nothing entered at the close or on the next session's opening minutes:
+    # the program's later trades are its own fresh decisions.
+    entries = [event.filled_at_ms for event in result.order_events if event.direction is Direction.LONG]
+    assert all(filled_at_ms > next_open_ms + _BUCKET_MS for filled_at_ms in entries)
+    assert [(skip.bar_close_ms, skip.intent) for skip in result.closing_bar_skips] == [
+        (close_ms, SignalIntentKind.ENTER)
+    ]
+
+
+def test_the_lean_profile_fills_the_same_golden_enter_at_the_next_open() -> None:
+    next_open_ms = trading_calendar.session_open_ms_utc(trading_calendar.next_trading_day(EMA_LAST_BAR_ENTER_DAY))
+
+    result = _run_sealed_ema_on_qqq(FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=True))
+
+    entry = result.order_events[0]
+    assert (entry.direction, entry.filled_at_ms) == (Direction.LONG, next_open_ms + _MINUTE_MS)
     assert result.closing_bar_skips == []
