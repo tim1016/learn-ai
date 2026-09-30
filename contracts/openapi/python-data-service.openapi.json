@@ -15881,8 +15881,11 @@
             "enum": [
               "ON_DUTY",
               "STOPPED",
+              "HALTED",
               "CRASHED",
-              "EXITED_UNVERIFIED"
+              "FAILED_LAUNCH",
+              "EXITED_UNVERIFIED",
+              "RETIRED"
             ],
             "title": "Kind",
             "type": "string"

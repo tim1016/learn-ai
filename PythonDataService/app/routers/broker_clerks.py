@@ -49,6 +49,7 @@ from app.services.fleet_bot_history import (
     account_less_gap,
     lane_refusal,
     merge_bot_history,
+    unknown_lane_gap,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -332,6 +333,8 @@ async def aggregate_broker_clerks_bot_history(
             accounts[lane_clerk_id] = confirmed
         else:
             account_less.append(account_less_gap("alpaca", lane_clerk_id))
+    if clerk_id is not None and not accounts and not account_less:
+        account_less.append(unknown_lane_gap("alpaca", clerk_id))
     aggregate = await service.aggregate_lane_reads_async(
         [
             ("alpaca", lane_clerk_id, partial(read_lane, lane_clerk_id, account_id))

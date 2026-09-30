@@ -35,11 +35,16 @@ DesiredState = Literal["RUNNING", "STOPPED"]
 DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "STOPPED"})
 
 # ── Duty-outcome kinds (§7.2) ────────────────────────────────────────────────
-# The typed terminal duty facts a bot records on exit (bot_runner exit taxonomy)
-# plus the not-yet-exited sentinel the panel shows while a bot is on duty.
-DutyOutcomeKind = Literal["ON_DUTY", "STOPPED", "CRASHED", "EXITED_UNVERIFIED"]
+# The typed terminal duty facts a bot records on exit (bot_runner exit taxonomy,
+# ``schemas.bot_lifecycle.BotDutyOutcomeKind``, which a contract test holds this
+# to) plus the not-yet-exited sentinel the panel shows while a bot is on duty.
+# The one outcome vocabulary (#2615): the panel and History word each kind
+# from its copy below.
+DutyOutcomeKind = Literal[
+    "ON_DUTY", "STOPPED", "HALTED", "CRASHED", "FAILED_LAUNCH", "EXITED_UNVERIFIED", "RETIRED",
+]
 DUTY_OUTCOME_KINDS: Final[frozenset[str]] = frozenset(
-    {"ON_DUTY", "STOPPED", "CRASHED", "EXITED_UNVERIFIED"}
+    {"ON_DUTY", "STOPPED", "HALTED", "CRASHED", "FAILED_LAUNCH", "EXITED_UNVERIFIED", "RETIRED"}
 )
 
 # ── Hold reasons (§7.3) ──────────────────────────────────────────────────────
@@ -197,8 +202,9 @@ class OperatorCopy:
         self.explanation = explanation
 
 
-# ``STOPPED`` is both a desired state and a duty-outcome kind. Its duty-outcome
-# copy is keyed ``STOPPED_OUTCOME`` so the two senses never collide.
+# ``STOPPED`` is both a desired state and a duty-outcome kind, and ``RETIRED``
+# both a phase and one. Their duty-outcome copy is keyed ``STOPPED_OUTCOME``
+# and ``RETIRED_OUTCOME`` so the two senses never collide.
 OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     # Phases
     "OFF_DUTY": OperatorCopy(
@@ -217,17 +223,27 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     "STOPPED": OperatorCopy(
         "Stopped", "The operator wants this bot idle. Exposure is left untouched."
     ),
-    # Duty outcomes
+    # Duty outcomes: how a run ended, in the owner's words (#2574, #2615). A
+    # reason with words of its own says more (``outcome_copy``).
     "STOPPED_OUTCOME": OperatorCopy(
-        "Stopped cleanly", "The bot exited on an operator stop or a service shutdown."
+        "Stopped by you", "You stopped the bot. It evaluates no bars and places no orders."
     ),
+    "HALTED": OperatorCopy("Halted", "The bot was halted, which ended its run."),
     "CRASHED": OperatorCopy(
         "Crashed",
         "The bot exited on an unhandled runtime error. This terminal outcome is not a market-data health verdict.",
     ),
+    "FAILED_LAUNCH": OperatorCopy(
+        "Failed to launch",
+        "The launch failed partway through, so the service ended the run. Nobody stopped it, and nothing is running.",
+    ),
     "EXITED_UNVERIFIED": OperatorCopy(
-        "Exited unverified",
+        "Ended without a clean exit",
         "The bot's task ended without a clean stop. Its final state is not confirmed.",
+    ),
+    "RETIRED_OUTCOME": OperatorCopy(
+        "Retired before its end was recorded",
+        "The bot was cleared before how its last run ended was recorded.",
     ),
     # Hold reasons
     "NO_HOLD": OperatorCopy(
@@ -360,9 +376,15 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
 }
 
+
+def duty_outcome_copy_key(kind: str) -> str:
+    """Map a duty-outcome kind to its copy key (disambiguates ``STOPPED`` and ``RETIRED``)."""
+    return f"{kind}_OUTCOME" if kind in {"STOPPED", "RETIRED"} else kind
+
+
 # The full set of codes the panel can emit — used by the snapshot + copy-coverage
-# tests. ``STOPPED_OUTCOME`` is the disambiguated duty-outcome copy key for the
-# ``STOPPED`` duty-outcome kind.
+# tests. ``STOPPED_OUTCOME`` and ``RETIRED_OUTCOME`` are the disambiguated
+# duty-outcome copy keys for the ``STOPPED`` and ``RETIRED`` kinds.
 ALL_VOCABULARY_CODES: Final[frozenset[str]] = (
     PHASES
     | DESIRED_STATES
@@ -372,7 +394,7 @@ ALL_VOCABULARY_CODES: Final[frozenset[str]] = (
     | frozenset(STATION_IDS)
     | STATION_STATES
     | frozenset(ACTION_IDS)
-    | {"CRASHED", "EXITED_UNVERIFIED", "STOPPED_OUTCOME"}
+    | frozenset(duty_outcome_copy_key(kind) for kind in DUTY_OUTCOME_KINDS - {"ON_DUTY"})
 )
 
 
@@ -399,7 +421,3 @@ def hold_reason_for(*, active: bool, stored_code: str | None) -> HoldReason:
         return "NO_HOLD"
     return HOLD_REASON_BY_STORED_CODE.get(stored_code or "", "UNKNOWN_HOLD")
 
-
-def duty_outcome_copy_key(kind: str) -> str:
-    """Map a duty-outcome kind to its copy key (disambiguates ``STOPPED``)."""
-    return "STOPPED_OUTCOME" if kind == "STOPPED" else kind

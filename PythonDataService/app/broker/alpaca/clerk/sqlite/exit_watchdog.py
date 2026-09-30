@@ -49,7 +49,6 @@ the same property, so it holds too if it meets the close.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -77,6 +76,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     EXIT_REDRIVE_DECISION_PREFIX,
+    redrive_episode_token,
     regular_session_sale_waits_for_open,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -251,7 +251,7 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         remaining = repo.position(sid, cause.symbol)
         if not position_quantity_is_nonzero(remaining):
             continue
-        token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+        token = redrive_episode_token(episode["uncertainty_id"])
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
         stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
         opposite = opposite_side_after_refusal(

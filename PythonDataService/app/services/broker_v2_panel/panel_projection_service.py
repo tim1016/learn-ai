@@ -26,11 +26,9 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
     ActionId,
     copy_for,
-    duty_outcome_copy_key,
     hold_reason_for,
 )
 from app.engine.strategy.registry import strategy_experimental_notice
-from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
@@ -56,19 +54,17 @@ from app.schemas.run_admission import (
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
-from app.services.bot_end import SCHEDULED_END_REASON_CODE
-from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
     channel_state,
     evaluate_channel_health,
 )
 from app.services.broker_v2_panel.feed_continuity_projection import (
-    WARMUP_REFUSAL_COPY,
     build_feed_continuity,
     build_startup_join,
     build_warmup_join,
 )
+from app.services.broker_v2_panel.outcome_copy import outcome_card_copy
 from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
@@ -83,53 +79,6 @@ from app.services.source_bar_ledger import (
     RetainedStartupJoin,
     RetainedWarmupJoin,
 )
-
-_STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
-    "STOPPED_FLAT": (
-        "Stopped flat",
-        "The runtime is stopped and the Clerk proved zero attributed exposure.",
-    ),
-    "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE": (
-        "Stopped with approved carryover",
-        "The runtime is stopped and exact attributed exposure is preserved by a durable checkpoint.",
-    ),
-    "STOP_REQUIRES_FLATTEN": (
-        "Stopped; flatten required",
-        "The runtime is stopped with attributed exposure. Use Flatten to resolve that exposure.",
-    ),
-    "STOPPED_CUSTODY_UNPROVABLE": (
-        "Stopped; custody unprovable",
-        "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
-    ),
-    SCHEDULED_END_REASON_CODE: (
-        "Ended at its scheduled time",
-        "The Clerk stopped the bot at the end you set. Its end shows whether it sells or keeps its shares.",
-    ),
-    IMPOSSIBLE_SOURCE_BAR: (
-        "Refused: impossible source bar",
-        "The market-data feed delivered a bar that cannot be real -- a non-finite or "
-        "non-positive price, a high below its low, a print outside the bar's range, or a "
-        "negative volume -- so the run was stopped rather than allowed to decide on it. "
-        "This is a data-quality refusal, not a market verdict: nothing about the strategy "
-        "changed. Check IB Gateway's connection and market-data farm health, then deploy again "
-        "once its bars arrive clean.",
-    ),
-    **WARMUP_REFUSAL_COPY,
-    # A crash the market-data feed caused says so (hurdle H29): the generic
-    # crash copy disclaims any market-data verdict, which here is the cause.
-    "FEED_DEATH": (
-        "Crashed: market data stopped",
-        "The IBKR market-data feed stopped delivering bars, so the run ended rather "
-        "than decide without them.",
-    ),
-    # The failed-launch compensation runs through the normal Stop, so the kind
-    # is a stop; the words say nobody stopped it (#2559).
-    ACTIVATION_FAILED_STOP_REASON_CODE: (
-        "Failed to launch",
-        "The launch failed partway through, so the service ended the run. "
-        "Nobody stopped it, and nothing is running.",
-    ),
-}
 
 
 def compute_revision(
@@ -174,13 +123,9 @@ def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
     outcome = status.duty_outcome
     if outcome is None:
         return None
-    copy = copy_for(duty_outcome_copy_key(outcome.kind))
-    label, explanation = _STOP_OUTCOME_COPY.get(
-        outcome.reason_code,
-        (copy.label, copy.explanation),
-    )
+    label, explanation = outcome_card_copy(outcome.kind, outcome.reason_code)
     return DutyOutcomeView(
-        kind=outcome.kind,  # type: ignore[arg-type]
+        kind=outcome.kind,
         reason_code=outcome.reason_code,
         label=label,
         explanation=explanation,

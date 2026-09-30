@@ -14838,7 +14838,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "ON_DUTY" | "STOPPED" | "CRASHED" | "EXITED_UNVERIFIED";
+            kind: "ON_DUTY" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
             /** Label */
             label: string;
             /** Reason Code */

@@ -34,13 +34,24 @@ transaction counts read). An accepted flatten that sold nothing -- refused by
 the broker, or a limit that expired unsent -- is not a flatten. Nor is a
 partial one: a flatten whose order sold part of the position and was then
 cancelled or expired, or is still working, leaves the bot holding the rest,
-so the run reads as stopped, not flattened.
+so the run reads as stopped, not flattened -- unless the stuck-EXIT
+watchdog's re-drive of that flatten then sold the rest (#2615). A re-drive
+carries on the EXIT its episode names (``redrive_episode_token``), so one
+that sold for an owner's flatten -- directly, or re-driving an earlier
+re-drive of it -- finishes that flatten, at the flatten's own acceptance.
+
+A custody file no running Clerk has opened since a schema upgrade -- a Live
+account's retired Shadow world, a Dry Run from before one -- keeps its old
+schema. It is read through the Clerk's own chained migrations applied to a
+private in-memory copy (``read_custody_history``), so the file is never
+written; one no migration reaches is ``CustodySchemaUnreadable`` (#2615).
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -51,14 +62,23 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.budget_projection import (
     BotResult,
     BudgetFees,
+    RevisionMemo,
+    bot_results_from_fills,
     bots_holding_money,
-    project_bot_results,
+    query_only_snapshot,
 )
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
-from app.broker.alpaca.clerk.sqlite.exit_resolution import OWNER_FLATTEN_DECISION_PREFIXES
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    OWNER_FLATTEN_DECISION_PREFIXES,
+    redrive_episode_token,
+    redriven_episode_token,
+)
+from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
 from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
+from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, is_upgradable_to_current, migrate_schema
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
 
 #: The broker's order states each order count reads. Lower-cased: Alpaca's
 #: own spelling ("canceled") is the stored one.
@@ -157,12 +177,13 @@ def project_custody_history(
 
     Formula: transactions = |effective fills| (per run: those whose order's
       effect operation names the run); orders = order rows by provenance,
-      bucketed by broker state; result = ``project_bot_results``; fees = the
-      fee reconciler's per-subject total.
+      bucketed by broker state; result = ``bot_results_from_fills`` over the
+      same fills; fees = the fee reconciler's per-subject total.
     Reference: https://github.com/tim1016/learn-ai/issues/2574; money
       semantics are PRD #2540's, unchanged.
     Canonical implementation: this composition; the counts reuse
-      ``effective_fill_records`` and the money ``project_bot_results``.
+      ``effective_fill_records`` and the money ``project_bot_results``'
+      ``bot_results_from_fills``, over the one fill read.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_bot_history.py.
     """
     account_id = str(conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0])
@@ -196,10 +217,11 @@ def project_custody_history(
     fills_by_run: dict[str, int] = {}
     #: Effect operations whose own order filled and whose effective fill the Clerk holds.
     sold_effects: set[str] = set()
-    for fill in effective_fill_records(conn, account_id=account_id, strategy_instance_ids=sids):
+    # A fill's subject is its order's bot's own: the effect operation's
+    # subject trigger admits no other.
+    fills = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=sids)
+    for fill in fills:
         sid, run_id = order_runs[fill.order_ref]
-        if fill.sid != bot_subject_id(sid):
-            continue
         fills_by_bot[sid] = fills_by_bot.get(sid, 0) + 1
         if run_id is not None:
             fills_by_run[run_id] = fills_by_run.get(run_id, 0) + 1
@@ -241,7 +263,7 @@ def project_custody_history(
     money_unavailable = fees_unavailable
     if fees is not None and money_unavailable is None:
         try:
-            results = project_bot_results(conn, fees=fees, strategy_instance_ids=sids)
+            results = bot_results_from_fills(fills, fees=fees, strategy_instance_ids=sids)
         except BudgetUnavailable as exc:
             money_unavailable = str(exc)
 
@@ -279,26 +301,85 @@ def is_owner_flatten_decision(durable_decision_id: str) -> bool:
     return decision_id_from_durable(durable_decision_id).startswith(OWNER_FLATTEN_DECISION_PREFIXES)
 
 
+@dataclass(frozen=True)
+class _AcceptedExit:
+    strategy_instance_id: str
+    accepted_at_ms: int
+    #: As stored (``decision_id_from_durable`` reads it back).
+    durable_decision_id: str
+
+    @property
+    def redriven_episode_token(self) -> str | None:
+        return redriven_episode_token(decision_id_from_durable(self.durable_decision_id))
+
+
 def _owner_flatten_instants(
     conn: sqlite3.Connection, *, sold_effects: set[str]
 ) -> dict[str, tuple[int, ...]]:
-    """When each bot's owner-flatten EXITs that sold (``sold_effects``) were accepted.
+    """When each bot's owner flattens that sold were accepted.
 
-    The instant is the EXIT's own acceptance; an owner flatten outside
-    ``sold_effects`` -- refused, expired unsent, only partly filled -- is no
-    flatten at all (module doc).
+    A flatten sold when its own EXIT is in ``sold_effects``, or a re-drive of
+    it is (module doc). The instant is the owner flatten's own acceptance; an
+    owner flatten nothing sold for -- refused, expired unsent, only partly
+    filled and never re-driven -- is no flatten at all.
     """
+    exits = {
+        str(row["effect_operation_id"]): _AcceptedExit(
+            str(row["strategy_instance_id"]), int(row["created_at_ms"]), str(row["decision_id"]),
+        )
+        for row in conn.execute(
+            "SELECT e.effect_operation_id, e.strategy_instance_id, e.created_at_ms, "
+            "json_extract(t.facts_json, '$.decision_id') AS decision_id "
+            "FROM effect_operations e JOIN custody_transitions t "
+            "ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = 'EXIT_ACCEPTED' "
+            "WHERE e.kind = 'EXIT' AND e.strategy_instance_id IS NOT NULL"
+        )
+    }
+    redriven = _redriven_exits(conn, tokens={
+        token for effect_id in sold_effects & exits.keys()
+        if (token := exits[effect_id].redriven_episode_token) is not None
+    })
+
+    def owner_flatten(effect_id: str, seen: frozenset[str]) -> str | None:
+        """The owner flatten this EXIT carries out: itself, or the one its episode re-drives."""
+        accepted = exits[effect_id]
+        if is_owner_flatten_decision(accepted.durable_decision_id):
+            return effect_id
+        for origin in redriven.get(accepted.redriven_episode_token or "", ()):
+            if origin in exits and origin not in seen and (found := owner_flatten(origin, seen | {origin})):
+                return found
+        return None
+
     flattens: dict[str, list[int]] = {}
-    for row in conn.execute(
-        "SELECT e.effect_operation_id, e.strategy_instance_id, e.created_at_ms, "
-        "json_extract(t.facts_json, '$.decision_id') AS decision_id "
-        "FROM effect_operations e JOIN custody_transitions t "
-        "ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = 'EXIT_ACCEPTED' "
-        "WHERE e.kind = 'EXIT' AND e.strategy_instance_id IS NOT NULL"
-    ):
-        if row["effect_operation_id"] in sold_effects and is_owner_flatten_decision(str(row["decision_id"])):
-            flattens.setdefault(str(row["strategy_instance_id"]), []).append(int(row["created_at_ms"]))
+    for effect_id in sold_effects & exits.keys():
+        origin = owner_flatten(effect_id, frozenset({effect_id}))
+        if origin is not None:
+            flattens.setdefault(exits[origin].strategy_instance_id, []).append(exits[origin].accepted_at_ms)
     return {sid: tuple(instants) for sid, instants in flattens.items()}
+
+
+def _redriven_exits(conn: sqlite3.Connection, *, tokens: set[str]) -> dict[str, tuple[str, ...]]:
+    """For each re-drive episode token asked about, the EXITs its episode names.
+
+    An ``EXIT_NOT_FLAT`` episode's evidence is the stuck EXIT's order; a
+    re-drive decided under its token carries that EXIT on. Only the episodes
+    a sold re-drive names are read.
+    """
+    if not tokens:
+        return {}
+    effect_of_order = {
+        str(row["order_ref"]): str(row["effect_operation_id"])
+        for row in conn.execute("SELECT order_ref, effect_operation_id FROM orders")
+    }
+    redriven: dict[str, tuple[str, ...]] = {}
+    for row in conn.execute(
+        "SELECT uncertainty_id, facts_json FROM uncertainties WHERE reason_code = ?", (EXIT_NOT_FLAT_REASON_CODE,),
+    ):
+        token = redrive_episode_token(str(row["uncertainty_id"]))
+        if token in tokens:
+            refs = UncertaintyRaisedFacts.from_facts_json(str(row["facts_json"])).evidence_refs
+            redriven[token] = tuple(effect_of_order[ref] for ref in refs if ref in effect_of_order)
+    return redriven
 
 
 def read_custody_history(
@@ -307,6 +388,7 @@ def read_custody_history(
     now_ms: int,
     fee_evidence_checked_at_ms: int | None,
     strategy_instance_ids: Sequence[str] | None = None,
+    memo: RevisionMemo[CustodyHistory] | None = None,
 ) -> CustodyHistory:
     """``project_custody_history`` on its own query-only snapshot of a custody file.
 
@@ -314,22 +396,57 @@ def read_custody_history(
     must not hold up trading. ``fee_evidence_checked_at_ms`` is the owning
     process's fee-evidence freshness (``None`` for a file no running Clerk
     owns: a real account's fees are then unknown, while a simulated one's
-    need no broker evidence). Blocking work: callers on the event loop run
-    it in a worker thread.
+    need no broker evidence). A ``memo`` answers again at an unchanged
+    custody revision without projecting (``RevisionMemo``). Blocking work:
+    callers on the event loop run it in a worker thread.
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
-    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    with query_only_snapshot(db_path) as snapshot:
+        revision = int(snapshot.execute("SELECT control_revision FROM control_meta WHERE id = 1").fetchone()[0])
+        key = (revision, None if strategy_instance_ids is None else tuple(strategy_instance_ids))
+        cached = None if memo is None else memo.get(key)
+        if cached is not None:
+            return cached
+        with _at_current_schema(snapshot) as conn:
+            fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
+            history = project_custody_history(
+                conn, fees=fees if fees.known else None, strategy_instance_ids=strategy_instance_ids,
+                fees_unavailable=None if fees.known else "Fee evidence is unresolved: " + "; ".join(fees.unresolved),
+            )
+    if memo is not None and history.money_unavailable is None:
+        memo.put(key, history)
+    return history
+
+
+class CustodySchemaUnreadable(Exception):
+    """A custody file keeps a schema no registered migration brings to this build's."""
+
+    def __init__(self, schema_version: int) -> None:
+        super().__init__(f"custody schema_version={schema_version}; this build reads {SCHEMA_VERSION}")
+        self.schema_version = schema_version
+
+
+@contextmanager
+def _at_current_schema(snapshot: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """``snapshot`` at this build's schema: itself, or a private copy migrated to it (module doc).
+
+    The copy is taken inside the snapshot's read transaction, so it is the
+    same revision, and the Clerk's own ``migrate_schema`` brings it forward.
+    """
+    version = int(snapshot.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0])
+    if version == SCHEMA_VERSION:
+        yield snapshot
+        return
+    if version > SCHEMA_VERSION or not is_upgradable_to_current(version):
+        raise CustodySchemaUnreadable(version)
+    copy = sqlite3.connect(":memory:")
     try:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("BEGIN")
-        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
-        if fees.known:
-            return project_custody_history(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
-        return project_custody_history(
-            conn, fees=None, strategy_instance_ids=strategy_instance_ids,
-            fees_unavailable="Fee evidence is unresolved: " + "; ".join(fees.unresolved),
-        )
+        snapshot.backup(copy)
+        copy.row_factory = sqlite3.Row
+        migrate_schema(copy, from_version=version)
+        copy.execute("PRAGMA query_only = ON")
+        copy.execute("BEGIN")
+        yield copy
     finally:
-        conn.close()
+        copy.close()
