@@ -31,6 +31,9 @@ import {
   committedReceipt,
   uncommittedClaim,
   type BotDeployPrefill,
+  type BotEndInput,
+  type BotEndPreviewRequest,
+  type BotEndView,
   type BudgetDeployReceipt,
   type DeployBotBody,
   type DeployBotStrategy,
@@ -57,6 +60,13 @@ import {
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
 import { extractServerMessage } from '../operation-error';
+import {
+  botEndFields,
+  botEndInput,
+  botEndRefusal,
+  type BotEndFields,
+  type BotEndRefusal,
+} from '../bot-end/bot-end-fields';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployConfirmStepComponent,
@@ -86,6 +96,7 @@ import {
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
+import { DeployEndSectionComponent } from './deploy-end-section.component';
 import { DeployStepComponent, type DeployStepStatus } from './deploy-step.component';
 import { DEPLOY_WORLDS } from './deploy-world';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
@@ -195,6 +206,7 @@ function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
     executionMode: ticket.executionMode,
     allowCarryover: ticket.allowCarryover,
     parameters: ticket.parameters,
+    end: ticket.end,
   };
 }
 
@@ -236,7 +248,9 @@ interface FrozenDeployCommand {
   readonly target: ResourceTarget;
 }
 
-type DeploySubmission = DeploySubmissionBody & { budget: DeploymentBudgetInput };
+/** A Deploy's settings as sent: always with the end on screen and a reviewed budget. */
+type DeploySettings = DeployBotBody & { end: BotEndInput; budget: DeploymentBudgetInput };
+type DeploySubmission = DeploySubmissionBody & { end: BotEndInput; budget: DeploymentBudgetInput };
 
 /**
  * Deploy (PRD #2560 D8/D9): four steps on one page — What → How → Money →
@@ -260,6 +274,7 @@ type DeploySubmission = DeploySubmissionBody & { budget: DeploymentBudgetInput }
   imports: [
     DeployBindingStripComponent,
     DeployConfirmStepComponent,
+    DeployEndSectionComponent,
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
@@ -612,6 +627,97 @@ export class AlpacaDeployWorkflowComponent {
       : `Exit allowance ${terms.exit_allowance_bps} bps, band ${terms.band_multiple}×, spread cap ${terms.spread_cap_bps} bps · fixed for this bot’s life`;
   });
 
+  // ── End (#2607) ───────────────────────────────────────────────────────────
+
+  /** A Dry Run always sells at its end, so Keep is offered only to a bot
+   * that trades the account's money. */
+  protected readonly keepOffered = computed(() => this.ticket().executionMode !== 'dry_run');
+
+  /** The end on screen: the owner's, or this account's default end, which
+   * the Deploy view authors, until they change it. */
+  protected readonly endFields = computed<BotEndFields | null>(() => {
+    const own = this.ticket().end;
+    if (own !== null) return own;
+    const defaultEnd = this.currentView()?.default_end;
+    return defaultEnd ? botEndFields(defaultEnd) : null;
+  });
+
+  /** The end a Deploy sends — always the one on screen, its action included,
+   * "no end" as an explicit null — or `null` while its date or time is not
+   * a real wall clock yet. */
+  private readonly deployEnd = computed(() => {
+    const fields = this.endFields();
+    return fields === null ? null : botEndInput(fields, this.keepOffered());
+  });
+
+  /** The backend's check of that end, for the world chosen in How — or,
+   * before one is, this account's own broker world, which the check treats
+   * the same. */
+  private readonly endCheck = computed(() => {
+    const end = this.deployEnd();
+    if (end === null || this.currentView() === null) return undefined;
+    const body: BotEndPreviewRequest = { execution_mode: this.ticket().executionMode ?? this.brokerMode(), end };
+    return { target: this.deployTarget(this.accountId().trim()), body };
+  }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
+
+  /** The check's last answer and the request it answered. Kept on screen
+   * while a newer check runs, so the column never blinks between edits; a
+   * refusal blocks the Deploy only while it answers the end now on screen. */
+  private readonly endAnswer = signal<{
+    request: string;
+    view: BotEndView | null;
+    refusal: BotEndRefusal | null;
+    refused: boolean;
+  } | null>(null);
+
+  protected readonly endPreview = resource({
+    params: () => this.endCheck(),
+    loader: async ({ params, abortSignal }) => {
+      const request = canonicalJson(params);
+      try {
+        const view = await this.panelService.previewBotEnd(params.target, params.body);
+        if (!abortSignal.aborted) this.endAnswer.set({ request, view, refusal: null, refused: false });
+        return view;
+      } catch (error) {
+        // Only the backend's refusal of this end (400) blocks the Deploy. A
+        // check that could not be read blocks nothing: the Deploy checks the
+        // end again, and refuses it in the same words.
+        if (!abortSignal.aborted) {
+          this.endAnswer.set({
+            request,
+            view: null,
+            refusal: botEndRefusal(error, 'This end could not be checked. Deploy checks it again.'),
+            refused: error instanceof HttpErrorResponse && error.status === 400,
+          });
+        }
+        throw error;
+      }
+    },
+  });
+
+  /** The backend's words for the end on screen. */
+  protected readonly shownEnd = computed(() =>
+    this.endAnswer()?.view ?? (this.ticket().end === null ? this.currentView()?.default_end ?? null : null));
+  protected readonly endRefusal = computed(() => this.endAnswer()?.refusal ?? null);
+
+  private readonly endRefused = computed(() => {
+    const answer = this.endAnswer();
+    const check = this.endCheck();
+    return answer !== null && answer.refused && check !== undefined && answer.request === canonicalJson(check);
+  });
+
+  /** What the end still needs, in the owner's words, or `null`. */
+  private readonly endMissing = computed<string | null>(() => {
+    if (this.deployEnd() === null) return 'Needs an end time';
+    if (this.endRefused()) return 'Check its end';
+    return null;
+  });
+
+  protected setEndFields(fields: BotEndFields | null): void {
+    this.clearAdmission();
+    this.ticket.update((ticket) => ({ ...ticket, end: fields }));
+  }
+
   // ── Steps ─────────────────────────────────────────────────────────────────
 
   /**
@@ -648,7 +754,7 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (ticket.sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) return 'Needs a valid size';
     if (this.exitTerms() === null) return 'Needs exit terms';
-    return null;
+    return this.endMissing();
   });
   protected readonly howComplete = computed(() => this.howMissing() === null);
 
@@ -680,7 +786,8 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly howSummary = computed(() => {
     const mode = this.selectedExecutionMode()?.label ?? 'Where it trades is not chosen';
-    return `${mode} · ${this.quantityLabel()} · ${this.exitsSummary()}`;
+    const end = this.shownEnd();
+    return `${mode} · ${this.quantityLabel()} · ${this.exitsSummary()}${end === null ? '' : ` · ${end.headline}`}`;
   });
 
   // ── Deploy again ──────────────────────────────────────────────────────────
@@ -746,6 +853,9 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.exitTerms() === null) {
       return { canSubmit: false, guidance: 'Set this bot’s exit allowance, band multiple and spread cap in How.' };
+    }
+    if (this.endMissing() !== null) {
+      return { canSubmit: false, guidance: 'Fix this bot’s end in How.' };
     }
     if (this.admissionIsStale()) {
       return { canSubmit: false, guidance: 'Refresh the Deploy checks before deploying.' };
@@ -1438,13 +1548,12 @@ export class AlpacaDeployWorkflowComponent {
     const view = this.currentView();
     const strategy = this.selectedStrategy();
     const mode = this.ticket().executionMode;
-    const budget = this.validBudget();
-    if (!view || !strategy || mode === null || budget === null || !this.canSubmit()) return;
+    const settings = this.submissionSettings();
+    if (!view || !strategy || mode === null || settings === null || !this.canSubmit()) return;
 
     this.submitting.set(true);
     this.submitError.set(null);
     this.admissionDecision.set(null);
-    const settings = { ...this.deployBody(this.ticket(), strategy, mode), budget };
     const submission = this.submissionFor(settings);
     const commandTarget = this.commandTargetFor(submission, view.account_id);
     let refused = false;
@@ -1632,7 +1741,7 @@ export class AlpacaDeployWorkflowComponent {
    * key still unsettled are refused by the backend and send the owner to its
    * status read — never to a second bot beside one that may have started.
    */
-  private submissionFor(settings: DeployBotBody & { budget: DeploymentBudgetInput }): DeploySubmission {
+  private submissionFor(settings: DeploySettings): DeploySubmission {
     const replaces = this.replaces();
     return {
       ...settings,
@@ -1682,13 +1791,25 @@ export class AlpacaDeployWorkflowComponent {
     );
   }
 
-  /** The settings and reviewed budget on screen are still the ones sent. */
-  private submissionStillCurrent(submitted: DeployBotBody & { budget: DeploymentBudgetInput }): boolean {
+  /**
+   * What a Deploy sends now: the settings, the end on screen (#2607) and the
+   * reviewed budget, or `null` while any is missing. The end rides the
+   * Deploy but never the money's preview: it is the owner's schedule, not a
+   * term the budget review or consent binds.
+   */
+  private submissionSettings(): DeploySettings | null {
     const strategy = this.selectedStrategy();
     const mode = this.ticket().executionMode;
-    if (!strategy || mode === null) return false;
-    return canonicalJson({ ...this.deployBody(this.ticket(), strategy, mode), budget: this.validBudget() })
-      === canonicalJson(submitted);
+    const end = this.deployEnd();
+    const budget = this.validBudget();
+    if (strategy === null || mode === null || end === null || budget === null) return null;
+    return { ...this.deployBody(this.ticket(), strategy, mode), end, budget };
+  }
+
+  /** The settings, end and reviewed budget on screen are still the ones sent. */
+  private submissionStillCurrent(submitted: DeploySettings): boolean {
+    const current = this.submissionSettings();
+    return current !== null && canonicalJson(current) === canonicalJson(submitted);
   }
 
   protected symbolError(): string | null {

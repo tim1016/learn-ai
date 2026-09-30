@@ -8,7 +8,45 @@
  * compilation.
  */
 
-import type { DeployBotView } from '../v2-panel/lib/broker-v2-panel.service';
+import type { BotEndPreviewRequest, BotEndView, DeployBotView } from '../v2-panel/lib/broker-v2-panel.service';
+
+/** The end a Deploy that names none gets — one minute before the next
+ * close, 15:59 ET — worded as the backend words it
+ * (`bot_end.resolved_bot_end_view`, #2607). */
+export const DEFAULT_END: BotEndView = {
+  end_at_ms: Date.UTC(2023, 10, 15, 20, 59),
+  end_action: 'SELL',
+  status: 'scheduled',
+  headline: 'Ends tomorrow 15:59 ET · sells',
+  explanation: 'At 15:59 ET tomorrow the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+  notice: null,
+  editable: true,
+};
+
+/** The end check's answer for `request`, in the shape the backend words it:
+ * the default end's words for the default end, "no end" for no end, and
+ * otherwise the chosen instant and action. */
+export function previewedEnd(request: BotEndPreviewRequest): BotEndView {
+  const end = request.end;
+  if (end === null || end === undefined) return DEFAULT_END;
+  if (end.end_at_ms === null) {
+    return {
+      ...DEFAULT_END,
+      end_at_ms: null,
+      status: 'no_end',
+      headline: 'No end · runs until you stop it',
+      explanation: 'This bot has no end time. It runs until you stop it.',
+    };
+  }
+  const action = end.end_action ?? 'SELL';
+  if (end.end_at_ms === DEFAULT_END.end_at_ms && action === 'SELL') return DEFAULT_END;
+  return {
+    ...DEFAULT_END,
+    end_at_ms: end.end_at_ms,
+    end_action: action,
+    headline: `Ends at the chosen minute · ${action === 'KEEP' ? 'keeps its shares' : 'sells'}`,
+  };
+}
 
 export const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   strategy_key: 'deployment_validation',
@@ -23,6 +61,8 @@ export const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   admissible_modes: ['dry_run', 'paper'],
   override_explanation: null,
   blocked_explanation: null,
+  // Verbatim from its registry entry (`registry.py`, #2607).
+  experimental_notice: 'Experimental validation only — not a trading strategy',
 };
 
 export const EMA_STRATEGY: DeployBotView['strategies'][number] = {
@@ -74,6 +114,7 @@ export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = 
 
 export const DEPLOY_VIEW: DeployBotView = {
   default_exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
+  default_end: DEFAULT_END,
   broker: 'alpaca',
   account_id: 'PA9',
   account_mode: 'paper',

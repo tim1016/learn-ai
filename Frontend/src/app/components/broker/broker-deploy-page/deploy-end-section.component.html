@@ -1,0 +1,44 @@
+<section class="deploy-end" [attr.aria-labelledby]="titleId">
+  <div class="deploy-end__head">
+    <h3 class="deploy-end__title" [id]="titleId">End · changeable later</h3>
+    <button type="button" class="deploy-end__change" [attr.popovertarget]="editorId" aria-label="Change this bot’s end">Change</button>
+  </div>
+  @if (refusal(); as refused) {
+    <p class="deploy-end__refusal" role="alert">
+      <strong>{{ refused.message }}</strong>
+      @if (refused.reasonCode; as code) { <span class="deploy-end__code">{{ code | receiptLabel }}</span> }
+    </p>
+  } @else if (end(); as shown) {
+    <p class="deploy-end__headline" role="status">{{ shown.headline }}</p>
+    @if (shown.end_at_ms !== null) {
+      <p class="deploy-end__local">
+        <app-timestamp-display [value]="shown.end_at_ms" mode="local" granularity="time" /> your time ·
+        <app-timestamp-display [value]="shown.end_at_ms" mode="et" granularity="time" />
+      </p>
+    }
+    @if (shown.notice) { <p class="deploy-end__notice">{{ shown.notice }}</p> }
+  }
+</section>
+
+<!-- Over the page, never in the column: opening it never makes How taller. -->
+<div [id]="editorId" class="deploy-end__editor" popover role="dialog" [attr.aria-labelledby]="editorTitleId" (toggle)="onToggle($event)">
+  <header>
+    <h3 [id]="editorTitleId">This bot’s end</h3>
+    <button type="button" [attr.popovertarget]="editorId" popovertargetaction="hide">Done</button>
+  </header>
+  <app-bot-end-editor [(fields)]="fields" [keepOffered]="keepOffered()" />
+  <div class="deploy-end__answer">
+    @if (refusal(); as refused) {
+      <p><strong>{{ refused.message }}</strong></p>
+      @if (refused.why) { <p>{{ refused.why }}</p> }
+      @if (refused.nextAction) { <p>Next: {{ refused.nextAction }}</p> }
+    } @else if (end(); as shown) {
+      <p><strong>{{ shown.headline }}</strong></p>
+      <p>{{ shown.explanation }}</p>
+      @if (shown.notice) { <p class="deploy-end__notice">{{ shown.notice }}</p> }
+    }
+  </div>
+  @if (!followsDefault()) {
+    <button type="button" class="deploy-end__default" (click)="useDefault.emit()">Use the default end</button>
+  }
+</div>

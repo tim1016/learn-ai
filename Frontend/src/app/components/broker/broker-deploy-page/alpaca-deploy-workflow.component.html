@@ -125,8 +125,10 @@
             (quantityBlur)="touchQuantity()"
             (carryoverAllowedChange)="setCarryover($event)"
           />
-          <fieldset class="deploy-exit-terms">
-            <legend>Exit terms · fixed for this bot’s life</legend>
+          <fieldset class="deploy-exit-terms" aria-labelledby="deploy-exit-terms-title">
+            <!-- The steps' "i" sits on the legend's row, not a row of its own: How must fit one screen. -->
+            <legend><span id="deploy-exit-terms-title">Exit terms · fixed for this bot’s life</span>
+              <button type="button" class="deploy-exit-terms__steps-open" popovertarget="deploy-exit-steps" aria-label="What each exit step does">i</button></legend>
             <div class="deploy-exit-terms__fields">
               <label>
                 <span>Exit allowance<span class="sr-only"> (bps)</span></span>
@@ -145,8 +147,26 @@
               <p>This account has no defaults for new bots, so these start empty.
                 <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
             }
-            <p class="deploy-exit-terms__steps">{{ view.exit_steps_summary }}</p>
           </fieldset>
+          <!-- Over the page, never in the column: opening it never makes How taller. -->
+          <div id="deploy-exit-steps" class="deploy-exit-steps" popover role="dialog" aria-labelledby="deploy-exit-steps-title">
+            <header>
+              <h3 id="deploy-exit-steps-title">What each exit step does</h3>
+              <button type="button" popovertarget="deploy-exit-steps" popovertargetaction="hide">Close</button>
+            </header>
+            <p>{{ view.exit_steps_summary }}</p>
+          </div>
+          @if (endFields(); as end) {
+            <app-deploy-end-section
+              [fields]="end"
+              (fieldsChange)="setEndFields($event)"
+              [keepOffered]="keepOffered()"
+              [end]="shownEnd()"
+              [refusal]="endRefusal()"
+              [followsDefault]="ticket().end === null"
+              (useDefault)="setEndFields(null)"
+            />
+          }
         </app-deploy-step>
       </li>
 
