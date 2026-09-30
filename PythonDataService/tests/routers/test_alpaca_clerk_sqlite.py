@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from dataclasses import fields
 from decimal import Decimal
 from pathlib import Path
@@ -1034,11 +1033,15 @@ async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
     repo = alpaca_clerk_sqlite._active_sqlite_facade(ACCOUNT_ID).repository
     real_get_command = repo.get_command
     entered = threading.Event()
+    release = threading.Event()
 
     def slow_get_command(command_id: str):
         if command_id == "cmd:slow":
             entered.set()
-            time.sleep(0.2)
+            # Held until the unrelated request has answered. A route that ran
+            # this read on the event loop would sit here for the whole timeout,
+            # so the slow request would be done before the unrelated one began.
+            release.wait(timeout=2.0)
         return real_get_command(command_id)
 
     monkeypatch.setattr(repo, "get_command", slow_get_command)
@@ -1047,18 +1050,17 @@ async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
         slow = asyncio.create_task(
             client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:slow")
         )
-        # Wait until the worker thread is actually inside the blocking sleep,
-        # rather than guessing a fixed handoff delay (flakes under load).
-        while not entered.is_set():
-            await asyncio.sleep(0.005)
-        began = time.monotonic()
-        unrelated = await client.get(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
-        )
-        unrelated_elapsed = time.monotonic() - began
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(0.005)
+            unrelated = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
+            )
 
-        assert unrelated.status_code == 404
-        assert unrelated_elapsed < 0.18  # completed before the slow call's 0.2s sleep ended
+            assert unrelated.status_code == 404
+            assert not slow.done()  # answered while the slow read was still held
+        finally:
+            release.set()
         assert (await slow).status_code == 404
 
 

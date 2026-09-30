@@ -94,11 +94,6 @@ class StrategyInfo(BaseModel):
     # True when a Pine v6 generator is registered for this strategy.
     # The frontend uses this to show/hide the Pine-download button.
     pine_available: bool = False
-    # ADR 0009 § 6 — the boundary that sizes this strategy. ``"policy"`` =
-    # set_holdings via live_config.sizing; ``"explicit"`` = strategy supplies
-    # its own quantity/contracts and the deploy form's sizing control is
-    # disabled + labelled "self-sized".
-    sizing_surface: Literal["policy", "explicit"] = "policy"
     # The LEAN trusted template that validates this strategy's execution
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
@@ -144,7 +139,6 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),
                 pine_available=reg.pine_generator is not None,
-                sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
                 strategy_category=reg.strategy_category,
                 experimental_notice=reg.experimental_notice,

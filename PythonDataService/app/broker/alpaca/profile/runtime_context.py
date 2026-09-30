@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     ENVELOPE_SETTINGS_FIELDS,
     RETIRED_ENVELOPE_FIELDS,
     LiveEnvelopeValues,
+    envelope_domain_violation,
 )
 from app.broker.alpaca.config import AlpacaSettings, alpaca_configuration_error_detail
 from app.broker.alpaca.profile.credentials import (
@@ -38,11 +39,6 @@ LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = (
     *(field for field, _ in ENVELOPE_SETTINGS_FIELDS),
     *RETIRED_ENVELOPE_FIELDS,
 )
-
-# The counts that must be stored as exactly ``int``; every other field is a
-# float. Pinned against the dataclass's own annotations by
-# ``tests/broker/alpaca/profile/test_runtime_context.py``.
-_INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(RETIRED_ENVELOPE_FIELDS)
 
 # What a revision with no live envelope hands ``AlpacaSettings``: every live
 # field explicitly ``None``, so a stale ``ALPACA_LIVE_*`` in the environment
@@ -94,8 +90,9 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float]:
 
     Checks the keys and the Python types on the way (contract §2.4), and keys
     the result by settings field so the caller does not walk the same pairing a
-    second time. A historical revision's two session counts are checked here
-    and carried into the envelope by the caller: no setting holds them (#2629).
+    second time. A historical revision's two session counts are type-checked
+    here and carried into the envelope by the caller, whose domain check
+    covers them: no setting holds them (#2629).
     """
     supplied = set(live_envelope)
     expected = set(LIVE_ENVELOPE_FIELDS)
@@ -115,11 +112,8 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float]:
     for field in RETIRED_ENVELOPE_FIELDS:
         if field not in live_envelope:
             continue
-        count = live_envelope[field]
-        if not is_exactly_int(count):
+        if not is_exactly_int(live_envelope[field]):
             raise RevisionIncomplete(f"its {field} is not stored as a whole number")
-        if count < 1:
-            raise RevisionIncomplete(f"its {field} is not at least 1")
     values: dict[str, float] = {}
     for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
         value = live_envelope[field]
@@ -277,16 +271,20 @@ def resolve_runtime_context(
         # detail below is the whole diagnostic a caller needs.
         raise RevisionIncomplete(alpaca_configuration_error_detail(exc)) from None
 
+    envelope = None if live_envelope is None else LiveEnvelopeValues(
+        **{field: getattr(settings, settings_field) for field, settings_field in ENVELOPE_SETTINGS_FIELDS},
+        **{field: live_envelope[field] for field in RETIRED_ENVELOPE_FIELDS if field in live_envelope},
+    )
+    # Settings already refused a current value out of its domain; this reaches
+    # the retired counts, which no setting holds.
+    violation = None if envelope is None else envelope_domain_violation(envelope)
+    if violation is not None:
+        raise RevisionIncomplete(f"its {violation}")
     return AlpacaRuntimeContext(
         default_exit_terms=default_exit_terms,
         settings=settings,
         credentials=credentials,
-        live_envelope=(
-            None if live_envelope is None else LiveEnvelopeValues(
-                **{field: getattr(settings, settings_field) for field, settings_field in ENVELOPE_SETTINGS_FIELDS},
-                **{field: live_envelope[field] for field in RETIRED_ENVELOPE_FIELDS if field in live_envelope},
-            )
-        ),
+        live_envelope=envelope,
         account_pin=account_pin,
         profile_id=profile_id,
         revision=revision,

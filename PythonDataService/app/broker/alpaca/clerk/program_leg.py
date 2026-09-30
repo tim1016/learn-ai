@@ -262,7 +262,7 @@ class ProgramLegPolicy:
 
     ``allowances`` is the pair this policy prices from — a plain value, so
     shaping a leg stays a pure function of its arguments. On the live world the
-    authority re-resolves it against the sealed envelope per decision
+    authority re-resolves it from the current live envelope per decision
     (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
     pair resolved here from the applied profile revision -- a paper revision's
     own pair, or a live revision's envelope -- is what a paper, ``sim:`` or

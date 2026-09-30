@@ -41731,15 +41731,6 @@
             "title": "Recency Supported",
             "type": "boolean"
           },
-          "sizing_surface": {
-            "default": "policy",
-            "enum": [
-              "policy",
-              "explicit"
-            ],
-            "title": "Sizing Surface",
-            "type": "string"
-          },
           "strategy_bars": {
             "$ref": "#/components/schemas/StrategyBarCadenceInfo"
           },

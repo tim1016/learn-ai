@@ -283,17 +283,6 @@ class StrategyRegistration:
     # complete Pine script. When present, the frontend can download the
     # script via ``GET /api/engine/strategies/{name}/pine``.
     pine_generator: Callable[[StrategyParamsBase], str] | None = None
-    # ADR 0009 § 6 — which boundary sizes this strategy.
-    # ``"policy"`` (default) — the execution boundary targets via
-    # ``set_holdings``;
-    # the deploy-form sizing selector is enabled, and
-    # ``live_config.sizing`` ∈ {FixedShares, FixedNotional, SetHoldings}
-    # governs the magnitude.
-    # ``"explicit"`` — the strategy supplies its own quantity/contracts
-    # (``market_order``, ``contracts_per_trade``, internal accounting); the
-    # deploy-form sizing selector is disabled + labelled "self-sized" and
-    # the required ``live_config.sizing`` is ``StrategyExplicit``.
-    sizing_surface: Literal["policy", "explicit"] = "policy"
     # Fields accepted only by non-Engine-Lab construction paths. They remain in
     # ``param_schema`` so the live runner can validate its internal injection,
     # but are hidden from ``GET /strategies`` and rejected by normal backtests.

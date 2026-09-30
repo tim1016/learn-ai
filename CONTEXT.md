@@ -73,10 +73,12 @@ is archived while the code it names still runs.
 - **Two bots on one symbol** — allowed. Each bot owns its orders, fills,
   position, FIFO result and budget, and its EXIT sells only its own shares. They
   share the account's cash and its one net broker position, so reconciliation
-  checks the total, not which bot a missing share belonged to. Alpaca refuses a
-  buy and a sell on one symbol while either is open, so a refused EXIT is re-sent
-  on the first pass after the other order ends, and Deploy warns when another bot
-  in the account already trades the symbol (#2469, #2622).
+  checks the total, not which bot a missing share belonged to. Alpaca's
+  wash-trade protection refuses an order that could trade against an open
+  opposite-side order on the same symbol, which is always true of the bots'
+  market orders. So a refused EXIT is re-sent on the first pass after the other
+  order ends, and Deploy warns when another bot in the account already trades
+  the symbol (#2469, #2622).
   _Avoid_: coexistence guard (retired with ADR 0009 §13)
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
@@ -797,7 +799,8 @@ The bullets below record the former IBKR live-sizing design for provenance; they
 are not current product authority. `LivePortfolio`, its pending-order boundary,
 and every registered IBKR submit path are gone. So are the policy adapter
 (`order_sizer.py`), the sizing-policy union, the audit-copy allow-list and the
-`LiveConfig` dataclass (#2602, #2609). The one piece of sizing math that remains,
+`LiveConfig` dataclass (#2602, #2609), and the registry's `sizing_surface` flag
+that no strategy set. The one piece of sizing math that remains,
 `LeanSetHoldingsSizing`, serves research and backtests only.
 
 - **live sizing policy** — the **canonical** sizing authority for a *live* bot:

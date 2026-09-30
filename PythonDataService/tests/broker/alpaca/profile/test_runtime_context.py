@@ -8,12 +8,13 @@ operator's ledger is sealed over that exact encoding.
 
 from __future__ import annotations
 
+import dataclasses
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import RETIRED_ENVELOPE_FIELDS, LiveEnvelopeValues
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
 from app.broker.alpaca.profile.errors import (
@@ -22,7 +23,6 @@ from app.broker.alpaca.profile.errors import (
     RevisionIncomplete,
 )
 from app.broker.alpaca.profile.runtime_context import (
-    _INTEGER_ENVELOPE_FIELDS,
     LIVE_ENVELOPE_FIELDS,
     PAPER_ALLOWANCE_SETTINGS_FIELDS,
     is_exactly_int,
@@ -430,14 +430,31 @@ def test_a_revision_cannot_supply_deployment_endpoints_or_a_clerk_directory(
         )
 
 
-def test_the_integer_envelope_fields_are_derived_from_the_dataclass() -> None:
-    # A hand-listed int/float split would drift silently the next time a field
-    # is added or retyped, and drift here changes the sha every historical
-    # arming record is sealed over.
-    assert frozenset(
-        {"shadow_sessions", "arming_max_sessions"}
-    ) == _INTEGER_ENVELOPE_FIELDS
-    assert set(LIVE_ENVELOPE_FIELDS) >= _INTEGER_ENVELOPE_FIELDS
+def test_the_whole_number_fields_are_the_dataclasses_integer_fields() -> None:
+    # The retired counts are the only fields type-checked as ``int``; a drift
+    # from the dataclass would change the sha every historical arming record
+    # is sealed over.
+    integer_fields = {
+        field.name for field in dataclasses.fields(LiveEnvelopeValues) if "int" in str(field.type)
+    }
+    assert integer_fields == set(RETIRED_ENVELOPE_FIELDS)
+    assert set(LIVE_ENVELOPE_FIELDS) >= integer_fields
+
+
+@pytest.mark.parametrize("field", RETIRED_ENVELOPE_FIELDS)
+def test_a_historical_session_count_below_one_is_refused(
+    field: str,
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    # No setting holds the retired counts, so the envelope's own domain table
+    # is what refuses one out of range.
+    with pytest.raises(RevisionIncomplete, match=f"its {field} is not at least 1"):
+        resolve_runtime_context(
+            endpoint_mode="live",
+            credential_slot="default",
+            live_envelope={**COMPLETE_ENVELOPE, field: 0},
+            environment=only_default_slot_injected,
+        )
 
 
 def test_an_endpoint_mode_that_is_neither_paper_nor_live_is_refused(

@@ -26183,12 +26183,6 @@ export interface components {
              * @default false
              */
             recency_supported?: boolean;
-            /**
-             * Sizing Surface
-             * @default policy
-             * @enum {string}
-             */
-            sizing_surface?: "policy" | "explicit";
             strategy_bars: components["schemas"]["StrategyBarCadenceInfo"];
             /**
              * Strategy Category

@@ -91,7 +91,7 @@ def test_valid_fix_elsewhere_blocker_constructs() -> None:
     assert blocker.primary_move.action.kind == "navigate"
 
 
-def test_terminal_blocker_accepts_a_remove_move() -> None:
+def test_terminal_blocker_accepts_a_primary_and_a_secondary_move() -> None:
     blocker = OperatorBlocker.for_host(
         condition_id="run_poisoned",
         scope="bot",
@@ -100,15 +100,19 @@ def test_terminal_blocker_accepts_a_remove_move() -> None:
         disposition="terminal",
         headline="Can't recover",
         detail="This run is poisoned and cannot be restarted safely.",
-        primary_move=OperatorMove(
-            label="Remove",
-            action=RemoveAction(kind="remove"),
-        ),
+        primary_move=_nav_move(),
+        secondary_moves=[
+            OperatorMove(
+                label="Remove",
+                action=RemoveAction(kind="remove"),
+            )
+        ],
         applies_to="run",
     )
 
     assert blocker.primary_move is not None
-    assert blocker.primary_move.action.kind == "remove"
+    assert blocker.primary_move.action.kind == "navigate"
+    assert blocker.secondary_moves[0].action.kind == "remove"
 
 
 def test_the_retired_retire_replace_move_is_rejected() -> None:
