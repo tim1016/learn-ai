@@ -95,6 +95,36 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
     assert "reset_authority" not in actions
 
 
+def _stop_confirmation(ctx: RecoveryPolicyContext):
+    (stop,) = (action for action in build_recovery_catalog(ctx) if action.action_id == "stop_bot_decisions")
+    assert stop.confirmation is not None
+    return stop.confirmation
+
+
+def test_stop_asks_by_the_bots_own_name_and_says_its_unused_cash_goes_back() -> None:
+    """#2634: two bots on one symbol are told apart by name, as Home lists them."""
+    confirmation = _stop_confirmation(_context())
+
+    assert confirmation.title == "Stop spy-bot?"
+    assert confirmation.explanation == (
+        "The bot stops making new decisions. A sale already sent can still go through. "
+        "Cash it isn't using goes back to the account. Its scheduled end is cancelled: "
+        "nothing is sold at the end time."
+    )
+    assert confirmation.confirm_label == "Stop bot decisions"
+
+
+def test_a_dry_runs_stop_never_says_the_accounts_money_moves() -> None:
+    """#2634: a Dry Run trades simulated cash, so nothing goes back to the account."""
+    confirmation = _stop_confirmation(_context(account_id="sim:spy-bot"))
+
+    assert confirmation.title == "Stop spy-bot?"
+    assert confirmation.explanation == (
+        "The bot stops making new decisions. A sale already sent can still go through. "
+        "Its scheduled end is cancelled: nothing is sold at the end time."
+    )
+
+
 def test_coverage_resolution_requires_one_exact_economic_replacement() -> None:
     conflict = ProjectedExecutionCoverageConflict(
         uncertainty_id="uncertainty:coverage-1",

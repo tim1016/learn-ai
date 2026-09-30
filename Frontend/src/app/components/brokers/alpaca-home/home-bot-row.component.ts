@@ -9,7 +9,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-ide
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
-import { HomeBotActionComponent } from './home-bot-action.component';
+import { HomeBotActionComponent, type StopPhase } from './home-bot-action.component';
 import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 
 /**
@@ -36,7 +36,7 @@ import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 export class HomeBotRowComponent {
   readonly entry = input.required<HomeBot>();
   readonly account = input.required<BoundAccountWorkspaceAddress>();
-  readonly pending = input(false);
+  readonly stopPhase = input<StopPhase | null>(null);
   readonly stopRequested = output<string>();
 
   protected readonly botLink = computed(

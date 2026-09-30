@@ -63,7 +63,7 @@
           </p>
         } @else {
           <app-home-bot-group
-            label="Bots" [entries]="botList()" [wall]="wall()" [account]="account()" [pendingSids]="pendingSids()"
+            label="Bots" [entries]="botList()" [wall]="wall()" [account]="account()" [stopPhases]="stopPhases()"
             [barsBySymbol]="wallStore.barsBySymbol()" [markersBySid]="wallStore.markersBySid()"
             (stopRequested)="stop($event)"
           />
@@ -80,7 +80,7 @@
           <span class="home__count">simulated cash · never uses this account's money</span>
         </header>
         <app-home-bot-group
-          label="Dry Run bots" [entries]="bots().dryRun" [wall]="wall()" [account]="account()" [pendingSids]="pendingSids()"
+          label="Dry Run bots" [entries]="bots().dryRun" [wall]="wall()" [account]="account()" [stopPhases]="stopPhases()"
           [barsBySymbol]="wallStore.barsBySymbol()" [markersBySid]="wallStore.markersBySid()"
           (stopRequested)="stop($event)"
         />

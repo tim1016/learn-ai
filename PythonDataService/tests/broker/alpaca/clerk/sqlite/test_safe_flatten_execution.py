@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
-from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan, SafeFlattenPlanLeg
@@ -349,6 +349,36 @@ async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_rech
     trade = _FakeTrade()
 
     with pytest.raises(SafeFlattenExecutionError, match="re-activated"):
+        await execute_safe_flatten_plan(
+            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(),
+            account_id=ACCOUNT_ID,
+            pricing=UNPRICEABLE_RECOVERY,
+        )
+
+    assert trade.submit_calls == []
+
+
+async def test_execute_safe_flatten_plan_refuses_a_symbol_an_exit_already_owns(
+    crashed_with_exposure,
+) -> None:
+    """#2642: an EXIT accepted after the plan was presented owns the reduction.
+
+    The flatten says so and sends nothing, rather than reporting no owned entry.
+    """
+    repo, _clock = crashed_with_exposure
+    entry_ref = await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    plan = await _reconciled_flatten_plan(repo)
+    accept_recovery_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        decision_id="recovery-other", entry_order_ref=entry_ref,
+    )
+    trade = _FakeTrade()
+
+    with pytest.raises(SafeFlattenExecutionError, match="An exit is already reducing SPY"):
         await execute_safe_flatten_plan(
             repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(),
             account_id=ACCOUNT_ID,
@@ -1263,8 +1293,6 @@ async def test_a_clerk_priced_quantity_change_folds_without_asking_the_operator(
     anything — nobody confirmed the price, and the next automatic re-drive
     prices the new quantity afresh."""
     from dataclasses import replace as _replace
-
-    from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit
 
     repo, _clock = crashed_with_exposure
     trade = _LookupOutageTrade()

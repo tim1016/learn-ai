@@ -1059,8 +1059,8 @@ async def execute_sqlite_panel_action(
             # Earlier legs of a multi-leg action may have applied
             # (safe_flatten submits leg 1 before leg 2 renews); the same-key
             # re-POST is still safe because execute_safe_flatten_plan
-            # re-filters on active_exit_for_order and refuses a second
-            # reduction of an already-exited entry. panel_data_source
+            # refuses a symbol an EXIT already owns
+            # (exit.newest_reducible_entry). panel_data_source
             # .run_action's ADR 0050 revival needs this ORIGINAL idempotency
             # key free for the operator's (or a cohort batch's same-key)
             # re-POST -- a ``failed`` burn here left a revived leg

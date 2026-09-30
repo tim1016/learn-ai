@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import (
     EnterSubmission,
+    EntrySubmissionRefusal,
     accept_enter,
     resolve_enter_submission,
     submit_accepted_enter,
@@ -861,7 +862,7 @@ def _refuse_before_contact(repo: ClerkSqliteRepository, accepted: EnterSubmissio
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
     fold_failed(
         repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
-        transition_kind="ENTER_SUBMISSION_REFUSED", summary_code="MARKET_LIVENESS_BLOCKED",
+        transition_kind="ENTER_SUBMISSION_REFUSED", summary_code="MARKET_CLOSED",
         reason="The Clerk refused the entry before contacting the broker.",
         why="The market closed before the order was sent.",
     )
@@ -1062,7 +1063,9 @@ async def test_a_budgeted_enter_that_never_reached_the_book_releases_its_claim_a
     else:
         await submit_accepted_enter(
             envelope_repo, accepted=accepted, leg=leg, trade=_FakeTradePort(),
-            before_submit=lambda: "The market closed before the order was sent.",
+            before_submit=lambda: EntrySubmissionRefusal(
+                summary_code="MARKET_CLOSED", why="The market closed before the order was sent.",
+            ),
         )
     effect = envelope_repo.effect_operation(accepted.effect_operation_id or "")
     assert effect is not None and effect.state == "failed"

@@ -11,9 +11,11 @@ import hashlib
 import hmac
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard
 
+from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
     ExecutionCoverageRecoveryDecision,
     coverage_resolution_decision,
@@ -127,14 +129,38 @@ class _Descriptor:
     label: str
     explanation: str
     mutation: bool
-    confirmation: RecoveryConfirmation | None
+    # Authored per subject: a confirmation may name the bot it acts on.
+    confirmation: Callable[[RecoveryPolicyContext], RecoveryConfirmation] | None
 
 
-def _confirmation(title: str, explanation: str, confirm_label: str) -> RecoveryConfirmation:
-    return RecoveryConfirmation(
+def _confirmation(
+    title: str, explanation: str, confirm_label: str
+) -> Callable[[RecoveryPolicyContext], RecoveryConfirmation]:
+    copy = RecoveryConfirmation(
         title=title,
         explanation=explanation,
         confirm_label=confirm_label,
+    )
+    return lambda _ctx: copy
+
+
+def _stop_confirmation(ctx: RecoveryPolicyContext) -> RecoveryConfirmation:
+    """Stop's confirmation, naming the bot the way Home's row does (#2634).
+
+    A Dry Run's cash is simulated, so it leaves out the sentence about cash
+    going back to the account: none of this account's money was set aside.
+    """
+    cash_back = () if is_synthetic_account_id(ctx.account_id) else (
+        "Cash it isn't using goes back to the account.",
+    )
+    return RecoveryConfirmation(
+        title="Stop this bot?" if ctx.strategy_instance_id is None else f"Stop {ctx.strategy_instance_id}?",
+        explanation=" ".join((
+            "The bot stops making new decisions. A sale already sent can still go through.",
+            *cash_back,
+            "Its scheduled end is cancelled: nothing is sold at the end time.",
+        )),
+        confirm_label="Stop bot decisions",
     )
 
 
@@ -227,13 +253,7 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
         label="Stop bot decisions",
         explanation="Stop the bot making new decisions. Stopping doesn't sell its shares.",
         mutation=True,
-        confirmation=_confirmation(
-            "Stop this bot?",
-            "The bot stops making new decisions. A sale already sent can still go through. "
-            "Cash it isn't using goes back to the account. Its scheduled end is cancelled: "
-            "nothing is sold at the end time.",
-            "Stop bot decisions",
-        ),
+        confirmation=_stop_confirmation,
     ),
     _Descriptor(
         action_id="open_custody_timeline",
@@ -965,7 +985,7 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                     and decision.available
                     else None
                 ),
-                confirmation=descriptor.confirmation,
+                confirmation=None if descriptor.confirmation is None else descriptor.confirmation(ctx),
                 next_step=decision.next_step,
                 concurrency_token=concurrency_token,
                 execution_ref=decision.execution_ref,

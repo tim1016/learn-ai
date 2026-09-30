@@ -1557,8 +1557,12 @@ async def test_resolve_enter_submission_fails_closed_when_operation_claimed_else
     assert len(trade.lookup_calls) == 0
 
 
-async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(repo: ClerkSqliteRepository) -> None:
-    from app.broker.alpaca.clerk.sqlite.enter import submit_accepted_enter
+@pytest.mark.parametrize("summary_code", ["MARKET_LIVENESS_BLOCKED", "MARKET_CLOSED"])
+async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(
+    repo: ClerkSqliteRepository, summary_code: str,
+) -> None:
+    """The refusal is filed under the reason that refused it (#2637)."""
+    from app.broker.alpaca.clerk.sqlite.enter import EntrySubmissionRefusal, submit_accepted_enter
 
     leg = _leg()
     accepted = accept_enter(
@@ -1567,8 +1571,8 @@ async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(r
     )
     trade = _FakeTrade()
 
-    def refuse() -> str:
-        return "Market data expired before submission."
+    def refuse() -> EntrySubmissionRefusal:
+        return EntrySubmissionRefusal(summary_code=summary_code, why="Market data expired before submission.")
 
     result = await submit_accepted_enter(
         repo, accepted=accepted, leg=leg, trade=trade, before_submit=refuse,
@@ -1579,8 +1583,10 @@ async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(r
     assert trade.lookup_calls == []
     transition = repo.transitions_for_order(accepted.order_ref)[-1]
     assert transition["transition_kind"] == "ENTER_SUBMISSION_REFUSED"
-    assert transition["summary_code"] == "MARKET_LIVENESS_BLOCKED"
-    assert "Clerk" in json.loads(transition["facts_json"])["reason"]
+    assert transition["summary_code"] == summary_code
+    facts = json.loads(transition["facts_json"])
+    assert "Clerk" in facts["reason"]
+    assert facts["why"] == "Market data expired before submission."
 
 
 def test_working_order_keeps_market_data_demand_until_failed(repo: ClerkSqliteRepository) -> None:
@@ -1611,7 +1617,7 @@ async def test_preflight_exception_is_a_known_local_refusal(repo: ClerkSqliteRep
     )
     trade = _FakeTrade()
 
-    def broken_guard() -> str | None:
+    def broken_guard() -> None:
         raise UnboundLocalError("test guard failed before contact")
 
     result = await submit_accepted_enter(

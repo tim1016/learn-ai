@@ -724,7 +724,7 @@ function deployPrefill(sid: string): BotDeployPrefill {
   };
 }
 
-const STOP_ACTION = fakeSqliteStopAction({ concurrency_token: 'stop-running' });
+const STOP_ACTION = fakeSqliteStopAction({ concurrency_token: 'stop-running' }, { sid: WALKED_BOT });
 const RECONCILE_ACTION = fakePanelAction('reconcile_now', {
   label: 'Reconcile now', explanation: 'Check this bot\'s position with Alpaca.', concurrency_token: 'reconcile-1',
 });

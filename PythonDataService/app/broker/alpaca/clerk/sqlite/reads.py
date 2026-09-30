@@ -818,8 +818,8 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
     """Every entry order whose immutable origin belongs to one strategy, least recently updated first.
 
     Ordered by ``updated_at_ms``, then ``order_ref`` -- not by submission: the
-    last is the entry updated last, which an ended bot's close is keyed on
-    (``ended_run_close.bot_holdings``).
+    last is the entry updated last, which every reduction is keyed on
+    (``exit.newest_reducible_entry``).
     """
     rows = conn.execute(
         "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "

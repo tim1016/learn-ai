@@ -7,12 +7,10 @@ bot's owner-scheduled end (``scheduled_end``, #2607). Both need the same two
 things, which live here once:
 
 * **What is owed** (:func:`bot_holdings`): every symbol the bot holds, with the
-  owned entry its close is keyed on -- the one updated last (``updated_at_ms``,
-  the order ``entry_orders_for_strategy`` reads them in). The close's decision id is
-  derived from that entry, so a re-run of the pass drives the same EXIT and
-  never sells twice, with no "close owed" record of its own to lose. A holding
-  whose entries another EXIT still owns is left to that EXIT: a second EXIT
-  would race it, and one already sent may have filled.
+  owned entry its close is keyed on (``exit.newest_reducible_entry``). The
+  close's decision id is derived from that entry, so a re-run of the pass
+  drives the same EXIT and never sells twice, with no "close owed" record of
+  its own to lose. A holding another EXIT already owns is left to that EXIT.
 * **Driving one close** (:func:`drive_close`): accept the recovery EXIT under
   intake, with no broker I/O, then resolve it outside intake like any EXIT.
   A run that re-activated before the capture, a held operation claim or a
@@ -32,13 +30,13 @@ from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
     accept_recovery_exit,
     exit_effect_operation_id,
+    newest_reducible_entry,
     resolve_accepted_exit,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import ExitSubmission
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.ports import BrokerTradePort
@@ -74,22 +72,18 @@ def bot_holdings(repo: ClerkSqliteRepository, strategy_instance_id: str, *, deci
         for symbol, quantity in repo.attributed_positions_for_strategy(strategy_instance_id).items()
         if position_quantity_is_nonzero(quantity)
     ]
-    if not held:
-        return []
-    owned_entries = repo.entry_orders_for_strategy(strategy_instance_id)
     holdings: list[Holding] = []
     for symbol in held:
-        entries = [order for order in owned_entries if entry_order_symbol(repo, order.order_ref).upper() == symbol]
-        if not entries:
+        target = newest_reducible_entry(repo, strategy_instance_id, symbol)
+        if target is None:
             continue
-        entry_order_ref = entries[-1].order_ref
-        decision_id = f"{decision_prefix}{hashlib.sha256(entry_order_ref.encode('utf-8')).hexdigest()[:16]}"
-        close = OwedClose(strategy_instance_id, symbol, entry_order_ref, decision_id)
+        decision_id = f"{decision_prefix}{hashlib.sha256(target.order_ref.encode('utf-8')).hexdigest()[:16]}"
+        close = OwedClose(strategy_instance_id, symbol, target.order_ref, decision_id)
         if repo.effect_operation(
             exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
         ) is not None:
             holdings.append(Holding(close, "closing"))
-        elif any(repo.active_exit_for_order(order.order_ref) is not None for order in entries):
+        elif target.exit_owned:
             holdings.append(Holding(close, "other_exit"))
         else:
             holdings.append(Holding(close, "owed"))

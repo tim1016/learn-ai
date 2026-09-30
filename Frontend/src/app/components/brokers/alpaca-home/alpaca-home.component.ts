@@ -43,6 +43,7 @@ import { actionOutcomeToast, deriveActionRejection } from '../../broker/v2-panel
 import { AlpacaAccountCardComponent } from '../alpaca-desk/alpaca-account-card.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaManualOrderHostComponent } from '../alpaca-desk/alpaca-manual-order-host.component';
+import type { StopPhase } from './home-bot-action.component';
 import { HomeAttentionComponent } from './home-attention.component';
 import { HomeBotGroupComponent } from './home-bot-group.component';
 import { homeBots } from './home-bots';
@@ -55,7 +56,7 @@ const CATALOG_POLL_MS = 5_000;
 
 /** A Stop's outcome, said where the keyboard lands after it. */
 interface Outcome {
-  readonly tone: 'success' | 'danger';
+  readonly tone: 'success' | 'info' | 'danger';
   readonly message: string;
 }
 
@@ -205,13 +206,12 @@ export class AlpacaHomeComponent {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  protected readonly pendingSids = signal<ReadonlySet<string>>(new Set());
+  /** Each bot whose Stop is in flight, and where it stands. One Stop is read
+   * at a time, since only one can be asked. */
+  protected readonly stopPhases = signal<ReadonlyMap<string, StopPhase>>(new Map());
   /** The Stop the owner is being asked to confirm, in its action's own words. */
   protected readonly stopAsk = signal<StopAsk | null>(null);
   protected readonly stopConfirmation = computed(() => this.stopAsk()?.action.confirmation ?? null);
-  /** A Stop's action is being read; the button stays enabled, and keeps the
-   * keyboard, until the owner is asked. */
-  private readingStop = false;
   protected readonly outcome = signal<Outcome | null>(null);
   protected readonly flattenOpen = signal(false);
   private readonly outcomeNotice = viewChild<ElementRef<HTMLElement>>('outcomeNotice');
@@ -315,16 +315,26 @@ export class AlpacaHomeComponent {
    * to it.
    */
   protected async stop(sid: string): Promise<void> {
-    if (this.pendingSids().has(sid) || this.stopAsk() !== null || this.readingStop) return;
-    this.readingStop = true;
-    try {
-      const ask = await this.readStop(sid);
-      if (ask === null) return;
-      if (ask.action.confirmation === null) await this.sendStop(ask);
-      else this.stopAsk.set(ask);
-    } finally {
-      this.readingStop = false;
+    // The bot's own button already shows its Stop in flight.
+    if (this.stopPhases().has(sid) || this.stopAsk() !== null) return;
+    const reading = [...this.stopPhases()].find(([, phase]) => phase === 'reading')?.[0];
+    if (reading !== undefined) {
+      this.announce({
+        tone: 'info',
+        message: `Still checking whether ${reading} can be stopped. Press Stop on ${sid} again after that.`,
+      });
+      return;
     }
+    this.setStopPhase(sid, 'reading');
+    let ask: StopAsk | null;
+    try {
+      ask = await this.readStop(sid);
+    } finally {
+      this.setStopPhase(sid, null);
+    }
+    if (ask === null) return;
+    if (ask.action.confirmation === null) await this.sendStop(ask);
+    else this.stopAsk.set(ask);
   }
 
   protected confirmStop(): void {
@@ -365,20 +375,25 @@ export class AlpacaHomeComponent {
   }
 
   private async sendStop({ sid, target, action }: StopAsk): Promise<void> {
-    this.pendingSids.update((current) => new Set(current).add(sid));
+    this.setStopPhase(sid, 'sending');
     try {
       const result = await this.panelService.runBotAction(target, sid, action);
       this.announce({ tone: 'success', message: result.message });
     } catch (error) {
       this.announceStopRefusal(sid, error);
     } finally {
-      this.pendingSids.update((current) => {
-        const next = new Set(current);
-        next.delete(sid);
-        return next;
-      });
+      this.setStopPhase(sid, null);
       this.refresh();
     }
+  }
+
+  private setStopPhase(sid: string, phase: StopPhase | null): void {
+    this.stopPhases.update((current) => {
+      const next = new Map(current);
+      if (phase === null) next.delete(sid);
+      else next.set(sid, phase);
+      return next;
+    });
   }
 
   private announceStopRefusal(sid: string, error: unknown): void {
