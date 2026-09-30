@@ -1058,19 +1058,49 @@ class BotTaskRegistry:
         updated_by: str,
         reason: str | None,
         clerk_stop_already_committed: bool,
-        at_its_end: bool = False,
     ) -> BotStatusView:
         """Serialized STOP implementation with terminal Clerk custody proof.
 
-        ``at_its_end``: the Clerk stopped the run at the bot's owner-set end
-        (#2607). The run's outcome says so, and the end is left for the Clerk
-        to record carried out. Every other Stop is the owner ending the bot
-        now, and ends its scheduled end with it: Stop doesn't sell, so no sale
-        may be left scheduled behind it.
+        The owner ending the bot now, so it ends the bot's scheduled end with
+        it (#2607): Stop doesn't sell, so no sale may be left scheduled behind
+        it. The stop at the end itself is :meth:`_stop_at_its_end`'s.
+        """
+        managed = await self._stop_process_locked(
+            broker,
+            strategy_instance_id,
+            updated_by=updated_by,
+            reason=reason,
+            clerk_stop_already_committed=clerk_stop_already_committed,
+            at_its_end=False,
+        )
+        if managed is not None:
+            outcome, canary_rollback = await self._prove_stop(managed.binding, at_its_end=False)
+            await self._record_stop(managed.binding, reason_code=outcome, canary_rollback=canary_rollback)
+        return self.status(broker, strategy_instance_id)
+
+    async def _stop_process_locked(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str,
+        reason: str | None,
+        clerk_stop_already_committed: bool,
+        at_its_end: bool,
+    ) -> ManagedBot | None:
+        """Stop's durable intent, fence and cancel + reap, under the bot's operation lock.
+
+        Returns the stopped bot, or ``None`` when its task did not end within
+        the timeout. ``at_its_end``: the Clerk stopped the run at the bot's
+        owner-set end (#2607), and the end is left for the Clerk to record
+        carried out. Every other stop cancels the end -- even when this runner
+        has no process left to stop.
         """
         self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is None or managed.task.done():
+            if not at_its_end:
+                self._cancel_end_locked(strategy_instance_id, updated_by=updated_by)
             raise UnknownBotError(
                 f"Bot '{strategy_instance_id}' is not running.",
                 detail="Only a running bot can be stopped; see its status for the last outcome.",
@@ -1106,8 +1136,7 @@ class BotTaskRegistry:
                     ),
                 ) from exc
         # Stop strategy evaluation before any network-bound custody work. The
-        # provisional terminal is replaced under this instance's operation lock
-        # once the Clerk returns a fresh proof.
+        # provisional terminal is replaced once the Clerk returns a fresh proof.
         managed.stop_reason_code = PROVISIONAL_STOP_REASON_CODE
         managed.task.cancel()
         _done, pending = await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
@@ -1121,7 +1150,7 @@ class BotTaskRegistry:
                     "timeout_s": _STOP_TIMEOUT_S,
                 },
             )
-            return self.status(broker, strategy_instance_id)
+            return None
         # Backstop for a coroutine that never entered supervision (cancelled
         # pre-start): _finalize is idempotent, so this is a no-op whenever the
         # supervisor already recorded the outcome.
@@ -1131,49 +1160,59 @@ class BotTaskRegistry:
             reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
         self._terminal.reap(strategy_instance_id, managed.binding.run_id)
-        outcome = "OPERATOR_STOP"
-        canary_rollback: CanaryRollbackDecision | None = None
-        if broker == "alpaca" and managed.binding.mode == "trade":
-            # At its end the Clerk's own pass is the proof: every bot on the
-            # default end stops in the same minute, and a reconcile each
-            # would be one whole account pass per bot (#2607).
-            prove = prove_end_stop_outcome if at_its_end else prove_terminal_stop_outcome
-            outcome = await prove(
-                managed.binding,
-                checkpoint_path=self._carryover_checkpoint_path(strategy_instance_id),
-                now_ms=self._now_ms,
-            )
-            # #1729 AC10: the rollback verdict is keyed off this run having
-            # been admitted as a Signal-Program-backed trade-mode instance
-            # (`program_build.state == "PROVEN"`, the same live-reproof
-            # `canary_gate_applies` checks at Deploy) -- never off
-            # current canary admission membership. A rollback plausibly
-            # *means* revoking the pairing in the activation ledger, so
-            # keying the verdict off present membership would
-            # read "not a canary" at exactly the moment it matters. This is
-            # an evidence record, not a gate: it never influences whether
-            # Stop proceeds, only what gets recorded once it has.
-            program_build_state = (
-                managed.binding.program_build.state
-                if managed.binding.program_build is not None
-                else "NOT_APPLICABLE"
-            )
-            if canary_gate_applies(
-                mode=managed.binding.mode, program_build_state=program_build_state
-            ):
-                canary_rollback = evaluate_canary_rollback(
-                    strategy_instance_id=strategy_instance_id,
-                    stop_outcome=outcome,
-                    evaluated_at_ms=self._now_ms(),
-                )
+        return managed
+
+    async def _prove_stop(
+        self, binding: BrokerBotBinding, *, at_its_end: bool
+    ) -> tuple[str, CanaryRollbackDecision | None]:
+        """A stopped run's custody outcome, and a canary's rollback verdict; ``OPERATOR_STOP`` unless it traded."""
+        if binding.broker != "alpaca" or binding.mode != "trade":
+            return "OPERATOR_STOP", None
+        # At its end the Clerk's own pass is the proof: every bot on the
+        # default end stops in the same minute, and a reconcile each would be
+        # one whole account pass per bot (#2607).
+        prove = prove_end_stop_outcome if at_its_end else prove_terminal_stop_outcome
+        outcome = await prove(
+            binding,
+            checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
+            now_ms=self._now_ms,
+        )
+        # #1729 AC10: the rollback verdict is keyed off this run having
+        # been admitted as a Signal-Program-backed trade-mode instance
+        # (`program_build.state == "PROVEN"`, the same live-reproof
+        # `canary_gate_applies` checks at Deploy) -- never off
+        # current canary admission membership. A rollback plausibly
+        # *means* revoking the pairing in the activation ledger, so
+        # keying the verdict off present membership would
+        # read "not a canary" at exactly the moment it matters. This is
+        # an evidence record, not a gate: it never influences whether
+        # Stop proceeds, only what gets recorded once it has.
+        program_build_state = (
+            binding.program_build.state if binding.program_build is not None else "NOT_APPLICABLE"
+        )
+        if not canary_gate_applies(mode=binding.mode, program_build_state=program_build_state):
+            return outcome, None
+        return outcome, evaluate_canary_rollback(
+            strategy_instance_id=binding.strategy_instance_id,
+            stop_outcome=outcome,
+            evaluated_at_ms=self._now_ms(),
+        )
+
+    async def _record_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None,
+    ) -> None:
+        """Replace the provisional stop with its proven outcome; then the run's receipt is owed and its authority released."""
         self._terminal.replace_provisional_stop(
-            managed.binding,
-            reason_code=SCHEDULED_END_REASON_CODE if at_its_end else outcome,
+            binding,
+            reason_code=reason_code,
             canary_rollback=canary_rollback,
         )
-        self._schedule_run_replay_receipt(managed.binding)
-        await self._authority_for(managed.binding).release_after_run_end()
-        return self.status(broker, strategy_instance_id)
+        self._schedule_run_replay_receipt(binding)
+        await self._authority_for(binding).release_after_run_end()
 
     async def stop_every_running_bot(self, *, updated_by: str, reason: str) -> LaneStopOutcome:
         """The operator's Stop, applied to every live task on this lane (#2268).
@@ -1435,6 +1474,48 @@ class BotTaskRegistry:
             )
         return record
 
+    async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
+        """The owner's Stop cancels the bot's scheduled end: nothing is sold at the end time.
+
+        The panel's Stop calls this before it commits the run's STOP, as
+        :meth:`stop` writes its STOPPED intent first: between that STOP and
+        the process stop, neither the end watch nor a Clerk pass may read the
+        end as still to be carried out. Durable in the bot's desired state, so
+        no restart revives it, and whether or not this runner has the bot's
+        process.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            self._cancel_end_locked(strategy_instance_id, updated_by=updated_by)
+
+    def _cancel_end_locked(self, strategy_instance_id: str, *, updated_by: str) -> None:
+        """Cancel the bot's pending end; a desired state that cannot be read has none to cancel.
+
+        While the file cannot be read no end is carried out
+        (``_desired_record_for_end``), so the Stop goes on -- its STOP is what
+        fences the bot -- and the broken file is said, loudly.
+        """
+        try:
+            cancelled = self._desired_repo(strategy_instance_id).cancel_end(
+                updated_by=updated_by, now_ms=self._now_ms()
+            )
+        except DesiredStateCorruptError as exc:
+            logger.error(
+                "A Stop could not cancel a bot's end: its desired state cannot be read, and no end is "
+                "carried out while it cannot",
+                extra={"action": "bot_end_cancel_unreadable", "strategy_instance_id": strategy_instance_id, "error": str(exc)},
+            )
+            return
+        if cancelled is not None:
+            logger.info(
+                "The owner's Stop cancelled a bot's scheduled end",
+                extra={
+                    "action": "bot_end_cancelled",
+                    "strategy_instance_id": strategy_instance_id,
+                    "end_at_ms": cancelled.end_at_ms,
+                    "end_action": cancelled.end_action,
+                },
+            )
+
     def stop_bot_at_its_end(self, strategy_instance_id: str, lifecycle_run_id: str) -> None:
         """The Clerk committed the run's STOP at its end: fence the bot now, stop its task next."""
         managed = self._bots.get(strategy_instance_id)
@@ -1465,13 +1546,21 @@ class BotTaskRegistry:
         )
 
     async def _stop_at_its_end(self, binding: BrokerBotBinding) -> None:
+        """Stop the process under the bot's lock, then wait for the proof with the lock released.
+
+        The proof waits up to ``END_STOP_PROOF_WAIT_S`` for the Clerk's pass.
+        Holding the bot's operation lock that long would hold a Deploy of the
+        bot -- which takes the process-wide graduation fence first -- and with
+        it every Deploy and the live cutover. The outcome is recorded under
+        the lock again, and only while the stopped run is still the bot's.
+        """
         sid = binding.strategy_instance_id
         try:
             async with self._operation_lock(sid):
                 managed = self._bots.get(sid)
                 if managed is None or managed.task.done() or managed.binding.run_id != binding.run_id:
                     return
-                await self._stop_locked(
+                stopped = await self._stop_process_locked(
                     binding.broker,
                     sid,
                     updated_by=_END_UPDATED_BY,
@@ -1479,6 +1568,18 @@ class BotTaskRegistry:
                     clerk_stop_already_committed=True,
                     at_its_end=True,
                 )
+                if stopped is None:
+                    return
+            _outcome, canary_rollback = await self._prove_stop(binding, at_its_end=True)
+            async with self._operation_lock(sid):
+                current = self._read_binding(sid)
+                if current is None or current.run_id != binding.run_id:
+                    logger.warning(
+                        "A later run of the bot began before its stop at its end was proven; the proof is not recorded",
+                        extra={"action": "bot_end_proof_superseded", "strategy_instance_id": sid, "run_id": binding.run_id},
+                    )
+                    return
+                await self._record_stop(binding, reason_code=SCHEDULED_END_REASON_CODE, canary_rollback=canary_rollback)
         except Exception:
             # Its own task, so nothing above it can report the failure. The
             # run is already stopped at the Clerk and fenced here; what failed
@@ -1525,36 +1626,38 @@ class BotTaskRegistry:
         for sid, managed in list(self._bots.items()):
             if managed.task.done() or sid in self._end_stop_tasks:
                 continue
-            pending = self._pending_end(sid)
-            if pending is None or pending.end_at_ms > now:
-                continue
-            await self._carry_out_due_end(managed, pending)
+            try:
+                pending = self._pending_end(sid)
+                if pending is None or pending.end_at_ms > now:
+                    continue
+                await self._carry_out_due_end(managed, pending)
+            except Exception as exc:
+                # Deliberately broad (#2363): one bot's failure -- its Clerk
+                # absent, its database locked -- is that bot's, said and
+                # retried on the next look; the watch still reaches the rest.
+                self._end_watch_failed(sid, exc)
         self._record_ends_of_stopped_dry_runs(now)
 
     async def _carry_out_due_end(self, managed: ManagedBot, pending: BotEnd) -> None:
         sid = managed.binding.strategy_instance_id
+        run_id = managed.binding.run_id
         authority = self._authority_for(managed.binding)
-        try:
-            active = authority.lifecycle_projector().run_is_active(
-                strategy_instance_id=sid, run_id=managed.binding.run_id,
-            )
-        except (StartAdmissionUnavailable, AlpacaLifecycleAuthorityUnavailableError) as exc:
-            self._end_watch_failed(sid, exc)
-            return
-        if not active:
+        projector = authority.lifecycle_projector()
+        if not projector.run_is_active(strategy_instance_id=sid, run_id=run_id):
+            # Only the Clerk's STOP at the end is the end's to finish here. Any
+            # other Stop stops the process itself and never keeps or carries
+            # out the end -- the owner's cancels it before its STOP commits.
+            if projector.run_stop_reason(strategy_instance_id=sid, run_id=run_id) != SCHEDULED_END_REASON:
+                return
             logger.warning(
                 "A bot's run was stopped at its end while its process still ran; stopping the process now",
-                extra={"action": "bot_end_process_restopped", "strategy_instance_id": sid, "run_id": managed.binding.run_id},
+                extra={"action": "bot_end_process_restopped", "strategy_instance_id": sid, "run_id": run_id},
             )
             self._start_stop_at_its_end(managed)
             return
         if managed.end_pass_asked_for_ms == pending.end_at_ms:
             return
-        try:
-            await authority.reconcile_for_end()
-        except Exception as exc:
-            self._end_watch_failed(sid, exc)
-            return
+        await authority.reconcile_for_end()
         self._end_watch_failures.pop(sid, None)
         managed.end_pass_asked_for_ms = pending.end_at_ms
 
@@ -1572,7 +1675,7 @@ class BotTaskRegistry:
             logger.debug("A bot's end still cannot be carried forward", extra=extra)
             return
         self._end_watch_failures[strategy_instance_id] = kind
-        message = "A bot's end has come but its Clerk could not run its pass; the watch asks again"
+        message = "A bot's end has come but could not be carried forward; the watch looks again"
         if isinstance(exc, (StartAdmissionUnavailable, AlpacaLifecycleAuthorityUnavailableError)):
             logger.warning(message, extra=extra)
         else:

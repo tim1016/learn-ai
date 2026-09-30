@@ -279,6 +279,27 @@ class DesiredStateRepo:
         assert record is not None
         return record
 
+    def cancel_end(self, *, updated_by: str, now_ms: int) -> BotEnd | None:
+        """Cancel the end still to be carried out, keeping the desired state and its reason; return it.
+
+        The owner's Stop (#2607). Nothing is written when no end is pending --
+        no record, no end, or one already carried out -- so a Stop of a bot
+        with no desired state leaves none behind.
+        """
+        cancelled: BotEnd | None = None
+
+        def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord | None:
+            nonlocal cancelled
+            cancelled = None if existing is None else existing.pending_end()
+            if existing is None or cancelled is None:
+                return None
+            return existing.model_copy(
+                update={"updated_at_ms": now_ms, "updated_by": updated_by, "end": None, "version": version}
+            )
+
+        self._read_modify_write(build)
+        return cancelled
+
     def mark_end_carried_out(
         self, end: BotEnd, *, updated_by: str, now_ms: int
     ) -> DesiredStateRecord | None:

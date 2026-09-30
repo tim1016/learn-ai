@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.bot_end import EXPLICIT_NULL_END, BotEnd, BotEndInput, BotEndPreviewRequest, RecordedEnd
+from app.services import bot_end as bot_end_service
 from app.services.bot_end import (
     BotEndRefused,
     bot_end_view,
@@ -186,6 +187,29 @@ def test_resolve_bot_end_refuses_a_date_the_calendar_does_not_cover(end_at_ms: i
     assert str(refused) == "The market calendar doesn't cover that date."
     assert refused.next_action == "Choose a date the market calendar covers."
     assert refused.http_status == 400
+
+
+def test_resolve_bot_end_reports_a_bug_as_a_bug_not_as_a_date_the_calendar_does_not_cover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2607 review: only the calendar's reads are refused as an uncovered date; a programming
+    error past them is not turned into a 400 blaming the owner's date."""
+
+    def broken(**_kwargs: object) -> None:
+        raise ValueError("a bug after the calendar answered")
+
+    monkeypatch.setattr(bot_end_service, "ResolvedBotEnd", broken)
+
+    with pytest.raises(ValueError, match="a bug after the calendar answered") as raised:
+        _resolve(_choose(_at(_WEDNESDAY, 14)), now_ms=_at(_WEDNESDAY, 10))
+    assert not isinstance(raised.value, BotEndRefused)
+
+
+def test_resolve_bot_end_names_the_year_of_a_day_in_another_year() -> None:
+    """#2607 review: a refusal about next year names its year, as ``when_words`` does."""
+    refused = _refusal(_choose(_at(date(2027, 1, 1), 12)), now_ms=_at(_WEDNESDAY, 10))
+
+    assert str(refused) == "The market is closed on Fri Jan 1 2027."
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["paper", "dry-run"])

@@ -27,7 +27,7 @@ its last run received. A future writer to that ledger outside a run would
 break the equivalence; the fill would then need pinning to the run's end.
 
 Each close is one recovery EXIT under ``DRY_RUN_CLOSE_DECISION_PREFIX``,
-keyed on the exposure's newest entry, so a re-run of the pass drives the same
+keyed on the exposure's entry updated last, so a re-run of the pass drives the same
 EXIT and never sells twice (``ended_run_close``, shared with the sale at a
 scheduled end). The EXIT machine sends it regardless of the
 session and binds it to the last delivered bar (``exit_resolution``). A close

@@ -37,8 +37,8 @@ which only the runner reads and writes. The runner and the Clerk share one
 process (``run_ownership``), so the runner installs its end schedule here
 once (:func:`install_bot_end_schedule`); a process with no runner installs
 none and ends nothing. Every step is idempotent and derived from durable
-facts -- the STOP is keyed on its run, each sale on the holding's newest
-entry -- so a pass that dies half-way is completed by the next one, and an
+facts -- the STOP is keyed on its run, each sale on the holding's entry
+updated last -- so a pass that dies half-way is completed by the next one, and an
 end found late (the Clerk was down) is carried out when the Clerk is back.
 
 A sale waiting for the open is also the owner's to know about: the lane's
@@ -65,8 +65,8 @@ from app.broker.alpaca.clerk.sqlite.ended_run_close import (
     drive_close,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    REGULAR_SESSION_SALE_WAITS_FOR_OPEN,
     SCHEDULED_END_DECISION_PREFIX,
+    SCHEDULED_END_WAITS_FOR_OPEN,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
@@ -352,7 +352,7 @@ def end_sales_waiting_for_open(repo: ClerkSqliteRepository) -> list[EndSaleWaiti
     """Every live bot's end sale waiting for the next regular open, read from the ledger (#2607).
 
     Waiting: the bot's EXIT is still active, its newest market hold is the
-    regular-session sale's (``REGULAR_SESSION_SALE_WAITS_FOR_OPEN``), and no
+    regular-session sale's (``SCHEDULED_END_WAITS_FOR_OPEN``), and no
     order of that EXIT has been sent. The sale's first send ends the wait,
     and the EXIT's end ends it too. Blocking: runs off the event loop.
     """
@@ -364,7 +364,7 @@ def end_sales_waiting_for_open(repo: ClerkSqliteRepository) -> list[EndSaleWaiti
             effect is None
             or hold is None
             or hold["effect_operation_id"] != effect.effect_operation_id
-            or hold["summary_code"] != REGULAR_SESSION_SALE_WAITS_FOR_OPEN
+            or hold["summary_code"] != SCHEDULED_END_WAITS_FOR_OPEN
         ):
             continue
         if any(

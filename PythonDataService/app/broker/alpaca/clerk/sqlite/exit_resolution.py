@@ -181,7 +181,7 @@ DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
 
 #: The hold of an EXIT that sells only inside the regular session, met
 #: outside it (``ExitAcceptedFacts.regular_session_only``, #2607).
-REGULAR_SESSION_SALE_WAITS_FOR_OPEN = "SCHEDULED_END_WAITS_FOR_OPEN"
+SCHEDULED_END_WAITS_FOR_OPEN = "SCHEDULED_END_WAITS_FOR_OPEN"
 
 
 def regular_session_sale_waits_for_open(now_ms: int) -> LegRefusal:
@@ -191,7 +191,7 @@ def regular_session_sale_waits_for_open(now_ms: int) -> LegRefusal:
     until the regular session opens (#2607).
     """
     return LegRefusal(
-        reason_code=REGULAR_SESSION_SALE_WAITS_FOR_OPEN,
+        reason_code=SCHEDULED_END_WAITS_FOR_OPEN,
         explanation=(
             "This sale is for a bot's scheduled end, which sells only in regular hours, and the market "
             "is closed. It waits for the next regular session and goes out at the open as a market order; "

@@ -246,10 +246,12 @@ async def prove_end_stop_outcome(
     comparison is this stop's proof. A reconcile of the stop's own would run
     one whole account pass per bot, and every bot on the default end stops in
     the same minute. So the stop reads the latest published pass
-    (``published_custody``) until one saw the bot's every transition -- the
-    pass that ended it, or the next sweep when the sale's fill landed after
-    -- and never reconciles itself. None within ``wait_s`` records the
-    custody unproven; the account's sweeps go on proving it.
+    (``published_custody``) until one saw the bot's every transition and no
+    longer lists any of its orders as working or unresolved -- the pass that
+    ended it, or the next sweep once the sale filled -- and never reconciles
+    itself. Past ``wait_s`` the latest pass is recorded as it stands -- a
+    sale still working is custody unproven -- and with none the custody is
+    unproven; the account's sweeps go on proving it.
     """
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
@@ -258,9 +260,10 @@ async def prove_end_stop_outcome(
     while True:
         clerk = get_alpaca_clerk()
         proof = None if clerk is None else await clerk.published_custody(sid)
-        if proof is not None:
+        expired = time.monotonic() >= deadline
+        if proof is not None and (expired or not (proof.working_order_refs or proof.unresolved_intent_refs)):
             return record_stop_outcome(binding, proof, checkpoint_path=checkpoint_path, now_ms=now_ms)
-        if time.monotonic() >= deadline:
+        if expired:
             logger.warning(
                 "A bot stopped at its end before any Clerk pass proved its custody",
                 extra={

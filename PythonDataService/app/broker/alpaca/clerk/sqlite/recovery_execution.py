@@ -186,6 +186,10 @@ async def execute_recovery_action(
             raise RecoveryExecutionError(
                 "The stop target does not match the run authorized by the presented action."
             )
+        # The owner's Stop sells nothing at the end time (#2607): its end is
+        # cancelled before the STOP commits, so nothing that runs between the
+        # STOP and the process stop reads the end as still to be carried out.
+        await _cancel_bot_end(strategy_instance_id)
         submission = await facade.stop_strategy_run(
             strategy_instance_id=strategy_instance_id,
             run_id=capability.execution_ref,
@@ -291,6 +295,21 @@ async def execute_recovery_action(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
         "it has no direct broker mutation"
     )
+
+
+async def _cancel_bot_end(strategy_instance_id: str) -> None:
+    """Cancel the bot's scheduled end through the registry that keeps it (``BotTaskRegistry.cancel_end``).
+
+    Whether or not the registry runs the bot's process. A process with no
+    registry installs no end schedule, so no end is carried out here
+    (``scheduled_end.install_bot_end_schedule``).
+    """
+    from app.services.bot_runner import get_bot_task_registry
+
+    registry = get_bot_task_registry()
+    if registry is None:
+        return
+    await registry.cancel_end(strategy_instance_id, updated_by="operator_recovery")
 
 
 async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None) -> None:

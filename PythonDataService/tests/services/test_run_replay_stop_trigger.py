@@ -65,8 +65,12 @@ def _body_calls(body: list, name: str) -> bool:
 
 def test_stop_locked_schedules_the_replay_receipt() -> None:
     """AST pin, same idiom as test_signal_program_mode_parity's stream check:
-    if Stop ever stops scheduling the receipt, this is the test that notices."""
-    assert _method_calls(BotTaskRegistry._stop_locked, "_schedule_run_replay_receipt")
+    if Stop ever stops scheduling the receipt, this is the test that notices.
+    Both stops -- the owner's and the one at the bot's end (#2607) -- record
+    through ``_record_stop``, which schedules it."""
+    assert _method_calls(BotTaskRegistry._record_stop, "_schedule_run_replay_receipt")
+    assert _method_calls(BotTaskRegistry._stop_locked, "_record_stop")
+    assert _method_calls(BotTaskRegistry._stop_at_its_end, "_record_stop")
 
 
 def test_supervise_schedules_the_replay_receipt_on_every_terminal_branch() -> None:

@@ -856,10 +856,18 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
     class _FakeRegistry:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
+            self.end_cancels: list[tuple[str, bool]] = []
 
         def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
             # A bot on the account's own authority, not a Dry Run's.
             return SimpleNamespace(mode="trade", broker=broker)
+
+        async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
+            # Whether the Clerk still held the run ACTIVE: the STOP had not committed yet.
+            repository = get_active_clerk_runtime().clerk.repository
+            self.end_cancels.append(
+                (strategy_instance_id, repository.active_run(strategy_instance_id) is not None)
+            )
 
         async def stop_after_durable_clerk_stop(
             self,
@@ -903,6 +911,8 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
     assert response.status_code == 200
     assert response.json()["applied"] is True
     assert fake_registry.stop_calls == [("alpaca", SID)]
+    # #2607: the owner's Stop cancels the bot's scheduled end before its STOP commits.
+    assert fake_registry.end_cancels == [(SID, True)]
 
 
 @pytest.mark.asyncio
@@ -917,10 +927,14 @@ async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> N
     class _RecordingRegistry:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
+            self.end_cancels: list[str] = []
 
         def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
             # A bot on the account's own authority, not a Dry Run's.
             return SimpleNamespace(mode="trade", broker=broker)
+
+        async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
+            self.end_cancels.append(strategy_instance_id)
 
         async def stop_after_durable_clerk_stop(
             self,
@@ -970,6 +984,8 @@ async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> N
     assert retry.json()["applied"] is False
     # The retry replayed the existing command AND re-drove quiescence.
     assert fake_registry.stop_calls == [("alpaca", SID), ("alpaca", SID)]
+    # The first attempt cancelled the end durably, before its STOP (#2607).
+    assert fake_registry.end_cancels == [SID]
 
 
 @pytest.mark.asyncio
