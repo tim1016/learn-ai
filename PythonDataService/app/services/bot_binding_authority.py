@@ -461,7 +461,16 @@ class BindingAuthoritySelector:
         activation = SyntheticActivationStore(self.artifacts_root).latest(
             synthetic_account_id_for_strategy(strategy_instance_id)
         )
-        return None if activation is None else self._synthetic(UnboundDryRunIdentity(strategy_instance_id))
+        return None if activation is None else self.unbound_dry_run(strategy_instance_id)
+
+    def unbound_dry_run(self, strategy_instance_id: str) -> SyntheticBindingAuthority:
+        """The authority of a Dry Run whose activation the caller already found.
+
+        Boot's enumeration lists the activations once and builds each orphan's
+        authority from that listing: a second read of the ledger here is a
+        second way for a bad ledger to fail boot (#2559).
+        """
+        return self._synthetic(UnboundDryRunIdentity(strategy_instance_id))
 
     def _synthetic(self, identity: BrokerBotBinding | UnboundDryRunIdentity) -> SyntheticBindingAuthority:
         return SyntheticBindingAuthority(

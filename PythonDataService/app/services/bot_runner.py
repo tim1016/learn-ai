@@ -43,7 +43,6 @@ from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import SIM_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
-    SyntheticActivationInvalid,
     SyntheticActivationStore,
     get_active_clerk_runtime,
 )
@@ -1766,14 +1765,18 @@ class BotTaskRegistry:
 
         Found by their own activations, skipped when a binding indexes them:
         those take the bound path above, which reads the freshest binding
-        rather than this boot-time snapshot. Runs before the restoration
-        task, so an unreadable ledger or binding is one logged skip -- never
-        a boot failure.
+        rather than this boot-time snapshot. Runs synchronously inside the
+        lifespan, before the restoration task, so -- like that task -- it is
+        an isolation boundary for every exception: an unreadable ledger or one
+        orphan that cannot be matched is a logged skip, never a lane that does
+        not start (#2582). Each orphan's authority is built from this one
+        listing; the ledger's own consistency is proven where the orphan is
+        opened, inside the restoration's per-bot boundary.
         """
         authorities: list[tuple[str, SyntheticBindingAuthority]] = []
         try:
             account_ids = SyntheticActivationStore(self._artifacts_root).account_ids()
-        except (OSError, ValidationError, ValueError, SyntheticActivationInvalid) as exc:
+        except Exception as exc:
             logger.error(
                 "Dry Run activations could not be listed at boot; unbound orphans wait for the next restart",
                 extra={"action": "boot_dry_run_activations_unreadable", "error": str(exc)},
@@ -1781,27 +1784,24 @@ class BotTaskRegistry:
             )
             return authorities
         for account_id in account_ids:
-            if not account_id.startswith(SIM_ACCOUNT_PREFIX):
-                continue
+            # The store admits only ``sim:`` accounts.
             sid = account_id.removeprefix(SIM_ACCOUNT_PREFIX)
             if sid in bound:
                 continue
             try:
                 if self._read_binding(sid) is not None:
                     continue
-            except (InvalidStrategyInstanceIdError, OSError, ValidationError, ValueError) as exc:
-                logger.warning(
+                authorities.append((sid, self._authorities.unbound_dry_run(sid)))
+            except Exception as exc:
+                logger.error(
                     "A Dry Run activation could not be matched to a binding at boot; it is skipped",
                     extra={
                         "action": "boot_dry_run_activation_unmatched",
                         "account_id": account_id,
                         "error": str(exc),
                     },
+                    exc_info=True,
                 )
-                continue
-            authority = self._authorities.for_unbound_dry_run(sid)
-            if authority is not None:
-                authorities.append((sid, authority))
         return authorities
 
     async def _restore_dry_runs(
