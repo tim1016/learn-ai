@@ -40,8 +40,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import SIM_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    SyntheticActivationStore,
     get_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
@@ -86,6 +88,7 @@ from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import (
     BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     BindingAuthoritySelector,
+    SyntheticBindingAuthority,
 )
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -118,6 +121,7 @@ from app.services.bot_registry_projection import (
     read_dry_run_activity,
 )
 from app.services.bot_run_evidence import (
+    ACTIVATION_FAILED_STOP_REASON_CODE,
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
 )
@@ -1082,7 +1086,14 @@ class BotTaskRegistry:
             reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
         self._terminal.reap(strategy_instance_id, managed.binding.run_id)
-        outcome = "OPERATOR_STOP"
+        # Why the run ended names who ended it (#2559): a launch that failed
+        # after its Clerk STOP is compensated through this same stop, but it
+        # is not an operator's stop, and run history must not say one ran.
+        outcome = (
+            ACTIVATION_FAILED_STOP_REASON_CODE
+            if reason == "activation_failed_after_registration"
+            else "OPERATOR_STOP"
+        )
         canary_rollback: CanaryRollbackDecision | None = None
         if broker == "alpaca" and managed.binding.mode == "trade":
             outcome = await prove_terminal_stop_outcome(
@@ -1722,17 +1733,57 @@ class BotTaskRegistry:
         now -- Start refuses it until its own restoration settles -- and a
         background task restores them one at a time: open its account,
         waiting out a held lease, then give its runs the sweep's own repair.
+
+        A Deploy that crashed between its budget commit and its binding
+        record left a private ``sim:`` authority no binding indexes; those
+        orphans join the same restoration (#2559), so a restart releases
+        them through the recovery path instead of the next read doing it.
         """
         dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
-        self._dry_run_restorations = dict.fromkeys(
-            (binding.strategy_instance_id for binding in dry_runs), "restoring"
+        restorations: list[tuple[str, SyntheticBindingAuthority, BrokerBotBinding | None]] = [
+            (binding.strategy_instance_id, self._authority_for(binding), binding) for binding in dry_runs
+        ]
+        restorations.extend(
+            (sid, authority, None)
+            for sid, authority in self._unbound_dry_run_authorities(
+                bound={binding.strategy_instance_id for binding in dry_runs}
+            )
         )
+        self._dry_run_restorations = dict.fromkeys((sid for sid, _authority, _binding in restorations), "restoring")
         self._dry_run_restoration_task = asyncio.create_task(
-            self._restore_dry_runs(dry_runs), name="dry-run-boot-restoration"
+            self._restore_dry_runs(restorations), name="dry-run-boot-restoration"
         )
         return self._dry_run_restoration_task
 
-    async def _restore_dry_runs(self, dry_runs: list[BrokerBotBinding]) -> None:
+    def _unbound_dry_run_authorities(
+        self, *, bound: set[str]
+    ) -> list[tuple[str, SyntheticBindingAuthority]]:
+        """Private ``sim:`` authorities a crash left with no binding (#2559).
+
+        Found by their own activations, skipped when a binding indexes them:
+        those take the bound path above, which reads the freshest binding
+        rather than this boot-time snapshot.
+        """
+        authorities: list[tuple[str, SyntheticBindingAuthority]] = []
+        for account_id in SyntheticActivationStore(self._artifacts_root).account_ids():
+            if not account_id.startswith(SIM_ACCOUNT_PREFIX):
+                continue
+            sid = account_id.removeprefix(SIM_ACCOUNT_PREFIX)
+            if sid in bound:
+                continue
+            try:
+                if self._read_binding(sid) is not None:
+                    continue
+            except InvalidStrategyInstanceIdError:
+                continue
+            authority = self._authorities.for_unbound_dry_run(sid)
+            if authority is not None:
+                authorities.append((sid, authority))
+        return authorities
+
+    async def _restore_dry_runs(
+        self, restorations: list[tuple[str, SyntheticBindingAuthority, BrokerBotBinding | None]]
+    ) -> None:
         """Restore each Dry Run under one lease deadline; one bot's failure is only its own.
 
         The dead process's leases all lapse within one lease lifetime of its
@@ -1743,14 +1794,18 @@ class BotTaskRegistry:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
-        for binding in dry_runs:
-            sid = binding.strategy_instance_id
-            authority = self._authority_for(binding)
+        for sid, authority, binding in restorations:
             try:
                 await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
-                interrupted = await self._boot_recovery.repair_restored_dry_run(
+                candidates = (
                     self._binding_recovery_candidates(binding).values()
+                    if binding is not None
+                    else [
+                        BotRecoveryCandidate(strategy_instance_id=candidate_sid, run_id=run_id, sqlite_active=True)
+                        for candidate_sid, run_id in authority.lifecycle_recovery_candidates()
+                    ]
                 )
+                interrupted = await self._boot_recovery.repair_restored_dry_run(candidates)
             except Exception as exc:
                 self._dry_run_restorations[sid] = (
                     "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"
