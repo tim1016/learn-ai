@@ -43,8 +43,9 @@ UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
 # truthfully (#2363). It is recorded durably by name and contained to itself,
 # so the stream keeps folding every other order instead of reconnecting forever.
 # ``withheld_order``: a frame about our own order missing its id, status,
-# symbol or side; nothing of it is applied, and its effect folds unknown
-# like a lost response (#2643).
+# symbol or side, or naming values the adapter could not read; nothing of
+# it is applied, and its effect folds unknown like a lost response (#2643,
+# #2648).
 TradeUpdateDisposition = Literal[
     "order_event", "unexplained_order", "unfoldable_order", "withheld_order"
 ]
@@ -200,8 +201,9 @@ class SqliteTradeUpdateEvidenceSink:
                 raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
 
             # Before the exact slice and the ack: a frame missing our order's
-            # id, status, symbol or side folds as a lost one, never as its
-            # evidence -- and never raises out of the sink (#2643).
+            # id, status, symbol or side, or naming values it could not read,
+            # folds as a lost one, never as its evidence -- and never raises
+            # out of the sink (#2643, #2648).
             if withhold_unnamed_order(
                 self._repo, effect_operation_id=owner.effect_operation_id, order=order
             ):
