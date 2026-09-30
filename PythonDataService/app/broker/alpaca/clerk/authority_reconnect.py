@@ -146,9 +146,21 @@ async def run_authority_reconnect(
             authority_generation=failure.authority_generation,
             db_identity_token=failure.db_identity_token,
         )
-        steps.install(final)
+        # Acknowledged like every other refusal an attempt installs (#2620):
+        # the binding receipt is where a pending Apply is recorded as refused.
+        # A second failure here must not leave the lane serving nothing.
         try:
-            await steps.boot(final)
+            acknowledged = await steps.acknowledge(final)
+        except Exception:
+            logger.exception(
+                "Acknowledging this Clerk's final reconnect refusal failed too; it is "
+                "installed unacknowledged",
+                extra={"action": "clerk_authority_reconnect_final_ack_failed", "account_id": failure.account_id},
+            )
+            acknowledged = final
+        steps.install(acknowledged)
+        try:
+            await steps.boot(acknowledged)
         except Exception:
             # Raised out of the task, this would surface only when shutdown
             # awaits it, and abort custody's teardown there. Start stays
@@ -211,15 +223,21 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     if repository is None:
         await steps.boot(acknowledged)
         return acknowledged
-    activation = repository.control_meta_snapshot()
+    # The activation identity is read inside the guard too (#2620): a
+    # control-meta read that raises is a failed composition of this attempt,
+    # not an escapee to the catch-all — which would install the final
+    # refusal without retiring the authority it just installed, leaving its
+    # lease and consumer open.
+    activation = None
     try:
+        activation = repository.control_meta_snapshot()
         await steps.boot(acknowledged)
     except Exception as exc:
         refusal = compose_failure_refusal(
             exc,
-            account_id=activation.account_id,
-            authority_generation=activation.authority_generation,
-            db_identity_token=activation.db_identity_token,
+            account_id=repository.account_id,
+            authority_generation=None if activation is None else activation.authority_generation,
+            db_identity_token=None if activation is None else activation.db_identity_token,
         )
         logger.error(
             "This Clerk's account authority installed, but its boot recovery failed; it is "
@@ -227,9 +245,10 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
             exc,
             extra={
                 "action": "clerk_authority_reconnect_boot_failed",
-                "account_id": activation.account_id,
+                "account_id": repository.account_id,
                 "error": str(exc),
                 "reconnecting": refusal.reconnecting,
+                "identity_read": activation is not None,
             },
             exc_info=True,
         )

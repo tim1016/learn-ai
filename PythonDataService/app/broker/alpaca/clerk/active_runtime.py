@@ -614,8 +614,8 @@ def compose_failure_refusal(
     exc: BaseException,
     *,
     account_id: str,
-    authority_generation: int,
-    db_identity_token: str,
+    authority_generation: int | None,
+    db_identity_token: str | None,
 ) -> ActiveClerkRuntime:
     """The one refusal for a composition that raised, on either side of the live fork.
 
@@ -624,6 +624,11 @@ def compose_failure_refusal(
     itself; every other failure is the startup's, and its copy says it is
     final and what ends it. Both sides carried the same six-keyword call with
     the same ternary, which is how the two sentences would have drifted.
+
+    ``authority_generation`` and ``db_identity_token`` are ``None`` only when
+    the control-meta read itself is what raised (#2620): the refusal then
+    carries the account and says what happened, without inventing an
+    identity it could not read.
     """
     transient = transient_startup_failure(exc)
     if transient is not None:

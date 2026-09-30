@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     unavailable_runtime,
 )
 from app.broker.alpaca.clerk.authority_reconnect import (
+    RECONNECT_FAILED,
     AuthoritySteps,
     ReconnectCounters,
     run_authority_reconnect,
@@ -632,6 +633,53 @@ async def test_a_reconnected_authority_whose_boot_fails_otherwise_is_retired_and
     assert "boot recovery could not project a bot" in logged.getMessage()
 
 
+async def test_a_control_meta_read_that_raises_retires_the_authority_it_just_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2620: the identity read sat outside the composition guard, so its own
+    failure escaped to the catch-all, which installed the final refusal
+    without retiring the authority the attempt had just installed — its
+    execution lease and consumer stayed open. It is a failed composition like
+    any other: retire, then refuse."""
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    assert at_boot.startup_failure is not None
+
+    # Arm the failure only once selection has answered, so the attempt's own
+    # identity read is the one that raises — selection reads the snapshot too.
+    armed = False
+    real_snapshot = ClerkSqliteRepository.control_meta_snapshot
+
+    def unreadable(self: ClerkSqliteRepository) -> object:
+        if armed:
+            raise RuntimeError("control meta could not be read")
+        return real_snapshot(self)
+
+    monkeypatch.setattr(ClerkSqliteRepository, "control_meta_snapshot", unreadable)
+
+    async def select_then_arm() -> ActiveClerkRuntime:
+        nonlocal armed
+        runtime = await select()
+        armed = True
+        return runtime
+
+    root = _CompositionRoot(select_then_arm)
+
+    final = await _reconnect(at_boot, root)
+
+    assert root.names() == ["acknowledge", "install", "install", "retire", "boot"]
+    assert root.events[3] == ("retire", root.events[1][1])  # the installed authority is closed
+    _next_process_can_take_the_lease(tmp_path)  # retired means its lease is free
+    assert final.reconnecting is False
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
+    assert final.startup_failure.account_id == LIVE_ACCT
+    assert final.startup_failure.authority_generation is None  # nothing invents an unread identity
+    assert final.startup_failure.db_identity_token is None
+    assert "control meta could not be read" in final.startup_failure.recovery
+    assert root.events[-1] == ("boot", final)
+
+
 async def test_a_retired_authority_reconnecting_keeps_its_line_on_home_and_its_panels(tmp_path: Path) -> None:
     """Between its retirement and the next attempt the account is reconnecting, never gone from Home.
 
@@ -651,7 +699,39 @@ async def test_a_retired_authority_reconnecting_keeps_its_line_on_home_and_its_p
     assert reconnecting.reconnecting is True
     line = await _what_the_owner_sees(reconnecting, activation=at_boot.startup_failure)
     assert (line.condition_id, line.severity) == ("account:authority-reconnecting", "warning")
+    assert line.action.destination == "settings"  # order records answer 503 while reconnecting (#2620)
     _next_process_can_take_the_lease(tmp_path)
+
+
+async def test_a_reconnecting_lane_whose_account_read_failed_keeps_a_home_line() -> None:
+    """#2620: the account-identity read failing is the most common outage
+    shape, and its refusal carries no activation evidence — Home showed
+    nothing at all. The reconnecting line shows anyway."""
+    set_active_clerk_runtime(reconnecting_refusal(_unreachable(), account_id=None))
+
+    attention = await lane_attention_read()
+
+    [line] = attention.items
+    assert line.condition_id == "account:authority-reconnecting"
+    assert line.severity == "warning"
+    assert line.action.destination == "settings"
+
+
+async def test_a_reconnect_that_ended_final_keeps_a_home_line_without_activation_evidence() -> None:
+    """#2620: the catch-all copies the activation evidence of the refusal the
+    attempt started from, so a reconnect that began at the account read ends
+    final with none — and Home used to go silent on that path too."""
+    set_active_clerk_runtime(unavailable_runtime(
+        RECONNECT_FAILED,
+        account_id=None,
+        recovery="Its reconnect to Alpaca failed. Restart the Clerk once that is fixed.",
+    ))
+
+    attention = await lane_attention_read()
+
+    [line] = attention.items
+    assert line.condition_id == "account:authority-failed:CLERK_RECONNECT_FAILED"
+    assert line.severity == "blocking"
 
 
 async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
@@ -668,8 +748,11 @@ async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
 
     final = await _reconnect(unreachable, root)
 
-    # Boot recovery runs for the final refusal too, so Start reads a finished report.
-    assert root.names() == ["install", "boot"]
+    # Acknowledged like every refusal an attempt installs (#2620: a pending
+    # Apply is recorded as refused), then installed; boot recovery runs for
+    # the final refusal too, so Start reads a finished report.
+    assert root.names() == ["acknowledge", "install", "boot"]
+    assert root.events[0] == ("acknowledge", final)
     assert root.events[-1] == ("boot", final)
     assert get_active_clerk_runtime() is final
     assert final.reconnecting is False
@@ -704,7 +787,11 @@ async def test_a_reconnect_that_breaks_while_retiring_boots_its_final_refusal_an
 
     final = await _reconnect(at_boot, root)
 
-    assert root.names() == ["acknowledge", "install", "boot", "install", "retire", "install", "boot"]
+    assert root.names() == [
+        "acknowledge", "install", "boot",  # the failed boot recovery
+        "install", "retire",  # its refusal replaces the authority before it closes
+        "acknowledge", "install", "boot",  # the catch-all's final refusal, acknowledged (#2620)
+    ]
     assert root.events[-1] == ("boot", final)
     assert final.startup_failure is not None
     assert "the trade-updates consumer would not stop" in final.startup_failure.recovery
@@ -732,7 +819,7 @@ async def test_a_final_refusal_whose_boot_recovery_also_fails_ends_the_reconnect
 
     final = await _reconnect(reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT), root)
 
-    assert root.names() == ["install", "boot"]
+    assert root.names() == ["acknowledge", "install", "boot"]
     assert get_active_clerk_runtime() is final
     assert final.reconnecting is False
     (logged,) = [
