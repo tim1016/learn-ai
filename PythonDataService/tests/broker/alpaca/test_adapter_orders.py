@@ -101,16 +101,20 @@ def test_an_order_missing_its_fill_count_reads_as_zero_filled(
 
 
 @pytest.mark.parametrize("filled_qty", [True, False])
-def test_a_boolean_fill_count_is_refused_not_read_as_a_quantity(
+def test_a_boolean_fill_count_never_reads_as_a_quantity(
     load_alpaca_fixture: AlpacaFixtureLoader,
     filled_qty: bool,
 ) -> None:
     # ``payload.get("filled_qty") or 0`` once turned ``false`` into a quiet 0.0
-    # while ``true`` became one filled share (#2606).
+    # while ``true`` became one filled share (#2606). A boolean now marks the
+    # row unreadable (#2648): it never becomes a quantity, and the row's blank
+    # status is the Clerk's containment signal (#2643).
     payload = {**load_alpaca_fixture("orders", "orders.json")[1], "filled_qty": filled_qty}
 
-    with pytest.raises(TypeError, match="not a boolean"):
-        from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+    order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+    assert order.filled_quantity == 0.0
+    assert order.status == ""
 
 
 def test_fill_latency_is_unknown_until_both_broker_clocks_exist(
@@ -222,50 +226,88 @@ class _OrdersClient:
         return self.payloads
 
 
-@pytest.mark.parametrize(
-    ("shape", "cause_type"),
-    [
-        pytest.param("boolean-fill-count", TypeError, id="boolean-fill-count"),
-        pytest.param("unparseable-submitted-at", ValueError, id="unparseable-submitted-at"),
-        pytest.param("non-object-row", AttributeError, id="non-object-row"),
-    ],
-)
 async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     load_alpaca_fixture: AlpacaFixtureLoader,
-    shape: str,
-    cause_type: type[Exception],
 ) -> None:
-    """A malformed row once escaped as a raw KeyError/TypeError/ValueError (#2627)."""
+    """A row that is not even an object once escaped as a raw error (#2627).
+
+    There is no order to contain under any id, so the answer stays unavailable
+    evidence. A row with unreadable *values* is no longer this path: it maps
+    degraded and the Clerk contains it alone (#2648).
+    """
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
-    rows: dict[str, list[object]] = {
-        "boolean-fill-count": [{**open_order, "filled_qty": True}],
-        "unparseable-submitted-at": [{**open_order, "submitted_at": "yesterday"}],
-        "non-object-row": [open_order, None],
-    }
-    broker = AlpacaBroker(client=_OrdersClient(rows[shape]))  # type: ignore[arg-type]
+    broker = AlpacaBroker(client=_OrdersClient([open_order, None]))  # type: ignore[arg-type]
 
     with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
         await broker.list_orders(status="open", limit=500)
 
     assert info.value.http_status == 503
     assert info.value.detail is not None
-    assert cause_type.__name__ not in info.value.detail
-    assert isinstance(info.value.__cause__, cause_type)
+    assert TypeError.__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, TypeError)
+
+
+# One order's unreadable value -> what the degraded row reads as. A boolean
+# never becomes a quantity (#2606) and ``"false"`` never becomes ``True``
+# (#2643); the blank status is the per-order containment signal (#2643,
+# #2648).
+_UNREADABLE_ORDER_VALUE_SHAPES: dict[str, dict[str, object]] = {
+    "boolean-fill-count": {"filled_qty": True},
+    "unparseable-submitted-at": {"submitted_at": "yesterday"},
+    "unparseable-created-at": {"created_at": "not-a-time"},
+    "boolean-quantity": {"qty": False},
+    "non-numeric-limit-price": {"limit_price": "one dollar"},
+    "non-boolean-extended-hours": {"extended_hours": "false"},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_UNREADABLE_ORDER_VALUE_SHAPES))
+async def test_one_order_with_unreadable_values_maps_degraded_and_the_clerk_contains_it(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    shape: str,
+) -> None:
+    """One row a value of which will not parse once refused every other order in the answer (#2648).
+
+    That refusal held the account stale with no reductions (#2363). The row
+    now maps degraded -- no status, unreadable values absent -- and the rest
+    of the answer maps fully, exactly as missing text already does (#2643).
+    """
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+    poisoned = {**open_order, "id": "bad-order", **_UNREADABLE_ORDER_VALUE_SHAPES[shape]}
+    broker = AlpacaBroker(client=_OrdersClient([poisoned, open_order]))  # type: ignore[arg-type]
+
+    degraded, readable = await broker.list_orders(status="open", limit=500)
+
+    assert degraded.order_id == "bad-order"
+    assert degraded.status == ""
+    assert degraded.filled_quantity == 0.0
+    assert degraded.extended_hours is False
+    assert degraded.events == []
+    assert readable.order_id == open_order["id"]
+    assert readable.status == open_order["status"]
+    with pytest.raises(ExternalOrderObservationError, match="status must be non-empty"):
+        _observation_from_broker_order(degraded)
 
 
 @pytest.mark.parametrize("flag", ["false", "true", 0, 1], ids=repr)
-async def test_broker_refuses_an_extended_hours_flag_that_is_not_a_boolean(
+async def test_a_non_boolean_extended_hours_flag_maps_degraded_never_true(
     load_alpaca_fixture: AlpacaFixtureLoader,
     flag: object,
 ) -> None:
-    """``bool("false")`` once read a regular-hours order as extended-hours (#2643)."""
+    """``bool("false")`` once read a regular-hours order as extended-hours (#2643).
+
+    A non-boolean flag now reads absent and marks the row unreadable (#2648):
+    never ``True``, and the row's blank status is the Clerk's containment
+    signal.
+    """
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
     broker = AlpacaBroker(client=_OrdersClient([{**open_order, "extended_hours": flag}]))  # type: ignore[arg-type]
 
-    with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
-        await broker.list_orders(status="open", limit=500)
+    mapped = await broker.list_orders(status="open", limit=500)
 
-    assert isinstance(info.value.__cause__, TypeError)
+    [degraded] = mapped
+    assert degraded.extended_hours is False
+    assert degraded.status == ""
 
 
 _ABSENT = object()

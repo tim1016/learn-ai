@@ -1064,6 +1064,147 @@ async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
         repo.close()
 
 
+async def test_a_live_order_with_unreadable_values_is_contained_and_the_stream_keeps_folding(
+    tmp_path: Path,
+) -> None:
+    """A boolean fill count once failed the order mapping on the live stream (#2648).
+
+    That was a parse error -- the frame's evidence was dropped and the stream
+    marked unhealthy -- while the same row on the orders read refused the
+    whole answer. The row now maps degraded, with no status, and the order is
+    contained to itself under its id; the next frame for our own order folds.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    unreadable = {
+        **base,
+        "id": "unreadable-live-1",
+        "client_order_id": "alpaca-console:unreadable-1",
+        "status": "new",
+        "filled_qty": True,
+    }
+    owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame("new", unreadable)
+            yield _trade_update_frame("fill", owned, execution_id="exec-live-2", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 0
+        assert consumer.counters.unfoldable_orders >= 1
+        assert _unfoldable_evidence_refs(repo) == ["unreadable-live-1"]
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+    finally:
+        repo.close()
+
+
+_UNREADABLE_OWN_ORDER_VALUES = [
+    pytest.param({"filled_qty": True}, id="boolean-fill-count"),
+    pytest.param({"submitted_at": "yesterday"}, id="unparseable-timestamp"),
+    pytest.param({"extended_hours": "false"}, id="non-boolean-extended-hours"),
+]
+
+
+@pytest.mark.parametrize("unreadable", _UNREADABLE_OWN_ORDER_VALUES)
+async def test_a_frame_for_our_own_order_with_unreadable_values_is_withheld_and_the_next_folds(
+    tmp_path: Path,
+    unreadable: dict[str, object],
+) -> None:
+    """A value this app cannot parse once failed the frame's order mapping (#2648).
+
+    Read degraded -- no status -- the answer about our own order is withheld
+    like a lost one (#2643): nothing of it is recorded, the effect folds
+    ``unknown``, and the next readable frame folds its fill.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    unreadable_owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "2",
+        "filled_qty": "2",
+        "filled_avg_price": "101.0",
+        "status": "partially_filled",
+        **unreadable,
+    }
+    readable_owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame(
+                "partial_fill", unreadable_owned, execution_id="exec-unreadable", price="101.0", qty="2"
+            )
+            yield _trade_update_frame("fill", readable_owned, execution_id="exec-readable", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 0
+        assert consumer.counters.withheld_orders >= 1
+        assert repo.fills_for_order(order_ref) and len(repo.fills_for_order(order_ref)) == 1
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        order = repo.order(order_ref)
+        assert order is not None and order.broker_order_id == "broker-order-1"
+    finally:
+        repo.close()
+
+
 _UNNAMED_OWN_ORDER_TEXT = [
     pytest.param({"order_id": ""}, id="id-less"),
     pytest.param({"status": ""}, id="statusless"),
