@@ -359,6 +359,7 @@ async def select_synthetic_clerk_runtime(
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     simulation_initial_cash: Decimal | None = None,
     projection_only: bool = False,
+    run_startup_recovery: bool = True,
 ) -> ActiveClerkRuntime:
     """Recover one explicit synthetic account without consulting Alpaca.
 
@@ -368,6 +369,11 @@ async def select_synthetic_clerk_runtime(
     samples simulated financial state or starts its observation cadence.
     The execution-lease wait is a single attempt unless the caller asks for
     one; boot asks, because a restart meets its dead predecessor's lease.
+
+    ``run_startup_recovery=False`` opens the store without its mutating
+    startup pass: nothing retired, nothing reconciled, no custody transition
+    appended (#2559). For reads that must stay reads -- an unbound Dry Run
+    orphan's receipt -- while boot's restoration owns the repair.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -472,7 +478,8 @@ async def select_synthetic_clerk_runtime(
             await envelope_sync.tick()
             envelope_sync.start()
         sweep.start_lease_heartbeat()
-        await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
+        if run_startup_recovery:
+            await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
     except BaseException as exc:
         # A cancelled opening -- boot's Dry Run restoration interrupted by
         # shutdown (#2582) -- releases its lease and heartbeat like a failed one.

@@ -15,6 +15,7 @@ from app.schemas.broker_v2_panel import PanelActionRequest
 from app.schemas.run_admission import StartRuntimeAdmissionFact
 from app.services import bot_runner
 from app.services.bot_clerk_lifecycle import ActiveClerkUnavailableError
+from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import BotTaskRegistry, RunAdmissionRefusedError
 from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
 from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry
@@ -106,6 +107,12 @@ async def test_unrecorded_launch_stops_and_reaps_the_task_it_started(
         assert _SID not in registry._bots
         assert clerk.stopped_runs == [registry.binding_for_control('alpaca', _SID).run_id]
         assert registry.status('alpaca', _SID).running is False
+        # #2559: run history names the failed launch, not an operator's stop —
+        # the compensation runs through the normal Stop, but nobody stopped it.
+        lifecycle = registry._lifecycle_repo(_SID).read()
+        assert lifecycle is not None and lifecycle.duty_outcome is not None
+        assert lifecycle.duty_outcome.reason_code == ACTIVATION_FAILED_STOP_REASON_CODE
+        assert lifecycle.duty_outcome.reason_code != "OPERATOR_STOP"
     finally:
         await registry.stop_all()
         set_alpaca_clerk(None)

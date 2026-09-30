@@ -210,7 +210,9 @@ class UnboundDryRunIdentity:
     runner records the binding, so a crash between the two leaves this
     identity as the only index. It carries no consent: its authority is only
     ever opened for a projection of sealed custody, never to activate, admit
-    or launch.
+    or launch -- and that projection runs **without** the store's mutating
+    startup recovery, so a read of an orphan appends no custody transition
+    (#2559). Boot's restoration is what opens it for repair.
     """
 
     strategy_instance_id: str
@@ -280,7 +282,14 @@ class SyntheticBindingAuthority(BindingAuthority):
     async def runtime_for_projection(self) -> AsyncIterator[ActiveClerkRuntime]:
         async with self.runtime_access.hold():
             was_active = get_clerk_runtime(self.account_id) is not None
-            runtime = await self._runtime(projection_only=True)
+            runtime = await self._runtime(
+                projection_only=True,
+                # An unbound orphan is only ever read here, and a read must
+                # not retire its run or reconcile its account (#2559); a
+                # bound bot's read keeps the recovery pass, whose published
+                # verdict its money views project (#1776).
+                run_startup_recovery=not isinstance(self.binding, UnboundDryRunIdentity),
+            )
             try:
                 yield runtime
             finally:
@@ -357,11 +366,18 @@ class SyntheticBindingAuthority(BindingAuthority):
             async with admission(self.binding.strategy_instance_id) as snapshot:
                 yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
 
-    async def _runtime(self, *, projection_only: bool = False, lease_wait_s: float = 0.0) -> ActiveClerkRuntime:
+    async def _runtime(
+        self, *, projection_only: bool = False, lease_wait_s: float = 0.0, run_startup_recovery: bool = True,
+    ) -> ActiveClerkRuntime:
         async with self.runtime_access.hold():
-            return await self._runtime_locked(projection_only=projection_only, lease_wait_s=lease_wait_s)
+            return await self._runtime_locked(
+                projection_only=projection_only, lease_wait_s=lease_wait_s,
+                run_startup_recovery=run_startup_recovery,
+            )
 
-    async def _runtime_locked(self, *, projection_only: bool, lease_wait_s: float) -> ActiveClerkRuntime:
+    async def _runtime_locked(
+        self, *, projection_only: bool, lease_wait_s: float, run_startup_recovery: bool = True,
+    ) -> ActiveClerkRuntime:
         existing = get_clerk_runtime(self.account_id)
         if existing is not None:
             if not projection_only:
@@ -392,6 +408,7 @@ class SyntheticBindingAuthority(BindingAuthority):
             execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
             simulation_initial_cash=(None if projection_only or self.binding.budget_consent is None else Decimal(self.binding.budget_consent.committed_cents) / 100),
             projection_only=projection_only,
+            run_startup_recovery=run_startup_recovery,
         )
         if runtime.clerk is not None:
             register_clerk_runtime(runtime)
