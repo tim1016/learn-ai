@@ -189,6 +189,10 @@ async def execute_recovery_action(
         # The owner's Stop sells nothing at the end time (#2607): its end is
         # cancelled before the STOP commits, so nothing that runs between the
         # STOP and the process stop reads the end as still to be carried out.
+        # Should the STOP then fail, the bot runs on with no end: the end is
+        # the owner's, and they asked to Stop -- they are told the Stop
+        # failed, and the bot runs until they Stop it again. Nothing restores
+        # the end: a restored SELL end would sell what the owner meant to keep.
         await _cancel_bot_end(strategy_instance_id)
         submission = await facade.stop_strategy_run(
             strategy_instance_id=strategy_instance_id,

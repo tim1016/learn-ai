@@ -777,6 +777,30 @@ async def test_stop_after_start_succeeds(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_refuses_the_reason_reserved_for_the_clerks_stop_at_a_bots_end(api: FastAPI) -> None:
+    """#2607 review: ``scheduled_end`` is the Clerk's own reason for its STOP at a bot's end,
+    and the runner reads a run stopped with it as the end's to carry out -- keeping a SELL end
+    pending. An operator's Stop naming it is refused, and nothing is committed under it."""
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        refused = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "scheduled_end"},
+        )
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "operator stop"},
+        )
+        assert refused.status_code == 422
+        assert refused.json()["detail"]["reason"] == "reserved_operator_reason"
+        assert stop.status_code == 202
+        assert stop.json()["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_http(
     api: FastAPI,
 ) -> None:

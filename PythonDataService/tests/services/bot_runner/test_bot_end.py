@@ -256,6 +256,44 @@ async def test_a_crash_leaves_the_end_for_the_clerk_to_carry_out(tmp_path: Path)
     assert view.editable is True
 
 
+async def test_the_lane_wide_stop_cancels_the_end_a_crash_kept(tmp_path: Path) -> None:
+    """#2607 review: a crash records STOPPED and keeps the end for the Clerk. The lane-wide
+    Stop -- installation migration's stop-all, lane retirement, the budget cutover -- is the
+    operator's Stop, so it ends that end too, though the intent it finds is already STOPPED:
+    the end moves with the volume, and the new host's Clerk would sell at the end time."""
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom")), now_ms=_Clock())
+    await _deploy(registry)
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    crashed_reason = _desired_json(tmp_path)["reason"]
+
+    outcome = await registry.stop_every_running_bot(updated_by="inkant", reason="lane_stop_all")
+
+    assert registry.pending_ends([_SID]) == []
+    assert _desired_json(tmp_path)["end"] is None
+    # The intent was STOPPED already: it keeps the crash's record, and the receipt lists no change.
+    assert (_desired_json(tmp_path)["desired_state"], _desired_json(tmp_path)["reason"]) == ("STOPPED", crashed_reason)
+    assert (outcome.intent_stopped, outcome.refused) == ((), ())
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
+
+
+async def test_the_lane_wide_stop_cancels_the_end_of_an_idle_bot_that_never_stopped(tmp_path: Path) -> None:
+    """An idle bot whose intent still says RUNNING (a restart that never resumed it) is recorded
+    STOPPED by the lane-wide Stop, and its end is cancelled with it."""
+    registry = _registry(tmp_path, None, now_ms=_Clock())
+    DesiredStateRepo(stable_desired_state_path(tmp_path, "bot-idle")).set(
+        DesiredState.RUNNING, updated_by="earlier-operator", now_ms=_T0, reason="deploy", end=_END,
+    )
+
+    outcome = await registry.stop_every_running_bot(updated_by="inkant", reason="lane_stop_all")
+
+    assert registry.pending_ends(["bot-idle"]) == []
+    desired = _desired_json(tmp_path, "bot-idle")
+    assert (desired["desired_state"], desired["reason"], desired["end"]) == ("STOPPED", "lane_stop_all", None)
+    assert [(bot.strategy_instance_id, bot.previous_desired_state) for bot in outcome.intent_stopped] == [
+        ("bot-idle", "RUNNING")
+    ]
+
+
 class _PanelFacade:
     """The account facade as the panel's Stop drives it, with the end watch looking right after its STOP.
 
@@ -356,6 +394,24 @@ async def test_an_operators_stop_of_a_bot_whose_process_is_gone_cancels_its_end(
     assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
 
 
+async def test_an_operators_stop_with_no_process_records_the_same_stop_as_the_lane_wide_one(tmp_path: Path) -> None:
+    """Every operator Stop makes one record: a bot this runner has no process for, whose intent
+    still says RUNNING, is recorded STOPPED with its end cancelled; a bot it never deployed is
+    given no desired state."""
+    registry = _registry(tmp_path, None, now_ms=_Clock())
+    DesiredStateRepo(stable_desired_state_path(tmp_path, "bot-idle")).set(
+        DesiredState.RUNNING, updated_by="earlier-operator", now_ms=_T0, reason="deploy", end=_END,
+    )
+
+    for sid in ("bot-idle", "never-deployed"):
+        with pytest.raises(UnknownBotError):
+            await registry.stop_after_durable_clerk_stop("alpaca", sid, updated_by="operator_recovery", reason="op")
+
+    desired = _desired_json(tmp_path, "bot-idle")
+    assert (desired["desired_state"], desired["reason"], desired["end"]) == ("STOPPED", "op", None)
+    assert DesiredStateRepo(stable_desired_state_path(tmp_path, "never-deployed")).read() is None
+
+
 async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -368,7 +424,9 @@ async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
 
     await registry.cancel_end(_SID, updated_by="operator_recovery")
 
-    assert "bot_end_cancel_unreadable" in [getattr(record, "action", None) for record in caplog.records]
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_unreadable"]
+    # A repaired file would carry its end out after all: the repair must clear it.
+    assert "clear its end when repairing the file" in said.getMessage()
 
 
 def test_cancelling_the_end_of_a_bot_with_no_desired_state_writes_none(tmp_path: Path) -> None:
@@ -675,11 +733,13 @@ async def test_a_stop_at_its_end_waits_for_its_proof_without_holding_the_bots_op
     assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "SCHEDULED_END")
 
 
-async def test_a_stop_at_its_end_records_no_proof_over_a_later_run_of_the_bot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-) -> None:
-    """While the stop waited for its proof with the lock released, a later run of the bot was
-    launched: the proof is the stopped run's, and is not recorded over the later one."""
+async def _stopped_at_its_end_awaiting_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[BotTaskRegistry, _EndClerk, BrokerBotBinding, list[str]]:
+    """A trading bot the Clerk stopped at its end, its stop waiting for its proof with the lock released.
+
+    The last element lists the runs whose outcome was projected over the bot's current one.
+    """
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     clock = _Clock()
     registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
@@ -690,18 +750,56 @@ async def test_a_stop_at_its_end_records_no_proof_over_a_later_run_of_the_bot(
     clock.move_to(_END.end_at_ms)
     await registry.carry_out_due_ends()
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
-    recorded: list[str] = []
+    projected: list[str] = []
     monkeypatch.setattr(
         registry._terminal, "replace_provisional_stop",
-        lambda binding, **_kwargs: recorded.append(binding.run_id),
+        lambda binding, **_kwargs: projected.append(binding.run_id),
     )
+    return registry, clerk, stopped, projected
+
+
+async def test_a_stop_at_its_end_proven_after_a_later_run_began_is_recorded_as_the_stopped_runs_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2607 review: while the stop waited for its proof with the lock released, a later run of
+    the bot was launched. The proof is the stopped run's: it is recorded under that run's id --
+    its receipt, and the replay receipt it owes -- where it used to leave the run provisional for
+    good, and nothing is projected over the later run."""
+    caplog.set_level(logging.INFO, logger="app.services.bot_runner")
+    registry, clerk, stopped, projected = await _stopped_at_its_end_awaiting_proof(tmp_path, monkeypatch)
+    owed: list[str] = []
+    monkeypatch.setattr(registry, "_schedule_run_replay_receipt", lambda binding: owed.append(binding.run_id))
 
     registry._bindings.record_launch(stopped.model_copy(update={"run_id": "a-later-run"}), launch_reason="deploy")
     clerk.published = True
     await asyncio.gather(*registry._end_stop_tasks.values())
 
-    assert recorded == []
+    receipt = registry._bindings.read_outcome(_SID, stopped.run_id)
+    assert receipt is not None and (receipt.kind, receipt.reason_code) == ("STOPPED", "SCHEDULED_END")
+    assert owed == [stopped.run_id]
+    assert projected == []
+    assert registry._bindings.read_outcome(_SID, "a-later-run") is None
     assert "bot_end_proof_superseded" in [getattr(record, "action", None) for record in caplog.records]
+
+
+async def test_a_stop_at_its_end_whose_registration_is_gone_says_its_outcome_stays_provisional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No later run began: the bot's registration is gone while its proof was awaited. That is
+    said as it is -- not as "a later run began" -- and so is what it leaves: the stopped run's
+    outcome stays provisional."""
+    registry, clerk, stopped, projected = await _stopped_at_its_end_awaiting_proof(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(registry, "_read_binding", lambda _sid: None)
+    clerk.published = True
+    await asyncio.gather(*registry._end_stop_tasks.values())
+
+    assert projected == []
+    assert registry._bindings.read_outcome(_SID, stopped.run_id) is None
+    actions = [getattr(record, "action", None) for record in caplog.records]
+    assert "bot_end_proof_superseded" not in actions
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_proof_unrecorded"]
+    assert "stays provisional" in said.getMessage()
 
 
 # ── a stopped Dry Run's end ──────────────────────────────────────────────────

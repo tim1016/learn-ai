@@ -65,6 +65,7 @@ from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
     ExecutionCoverageResolutionUnavailable,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON
 from app.broker.contract.errors import BrokerError, UnknownBrokerError
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.broker.contract.registry import get_broker_registry
@@ -344,6 +345,21 @@ async def stop_run(
 ) -> CommandResponse:
     """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
     caller-supplied, exactly like Start (corrective foundation slice)."""
+    if body.operator_reason == SCHEDULED_END_REASON:
+        # The Clerk's own reason for its STOP at a bot's end (#2607): the
+        # runner reads a run stopped with it as the end's to carry out, so an
+        # operator's Stop naming it would leave the bot's end -- a sale --
+        # pending behind it.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "reserved_operator_reason",
+                "message": (
+                    f"'{SCHEDULED_END_REASON}' is reserved for the Clerk's stop at a bot's end; "
+                    "give this Stop another reason."
+                ),
+            },
+        )
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
