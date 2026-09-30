@@ -366,14 +366,18 @@ async def stop_run(
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
-    if await asyncio.to_thread(repo.strategy_instance, strategy_instance_id) is not None:
+    active = await asyncio.to_thread(repo.active_run, strategy_instance_id)
+    if active is not None and active.lifecycle_run_id == body.lifecycle_run_id:
         # An operator's Stop sells nothing at the end time (#2664): the bot's
         # end is cancelled before its STOP commits, exactly as the panel's
         # Stop cancels it, so no Clerk pass between the two sells a SELL end.
-        # Should the STOP then be refused, the end stays cancelled: the
-        # operator asked to Stop. A bot this authority has no registration
-        # for -- a Dry Run's -- is refused below, its end untouched. This Stop
-        # does not stop the bot's process in the runner; the panel's Stop does.
+        # Only a Stop of the bot's active run cancels it: one naming another
+        # run -- a stale id, or a lost-response retry after a redeploy -- stops
+        # nothing of the running run and is refused or replayed below, its
+        # end untouched (a retry of this Stop finds its end already
+        # cancelled). A Dry Run's bot has no run on this authority, so its end
+        # is untouched too. This Stop does not stop the bot's process in the
+        # runner; the panel's Stop does.
         await cancel_bot_end(strategy_instance_id, updated_by="operator_runs_stop")
     try:
         submission = await asyncio.to_thread(
