@@ -3,10 +3,9 @@
 The original account-rooted JSONL bytes and versioned seals remain evidence.
 Only an explicit budget-authority cutover changes authorization; this reader
 cannot mint a grant, renew it, revoke it or translate one into a bot budget.
-Its readers are the one-time exit-terms upgrade
-(``sqlite/runtime.py::SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms``) and
-the entry-allowance resolver (``program_leg._sealed_allowances``); nothing
-judges permission against it (#2629).
+Its one reader is the one-time exit-terms upgrade
+(``sqlite/runtime.py::SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms``);
+nothing judges permission or prices a leg against it (#2629).
 """
 
 from __future__ import annotations

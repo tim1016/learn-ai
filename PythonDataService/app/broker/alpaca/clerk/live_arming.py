@@ -9,9 +9,7 @@ reader of the past still needs:
 * the record shapes, verified exactly as they were sealed, so an old
   ``live_arming.jsonl`` still loads (``live_arming_ledger.py``) -- the one-time
   exit-terms upgrade prices a legacy bot from its own newest arming
-  (``sqlite/runtime.py::SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms``),
-  and ``program_leg._sealed_allowances`` still reads the newest arming's
-  entry allowance;
+  (``sqlite/runtime.py::SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms``);
 * the reason codes, so ``blocked`` receipts recorded under them still read as
   transient refusals (``sqlite/uncertainty.py``) rather than as drift.
 
@@ -355,9 +353,8 @@ def _validate_disarmed(record: LiveDisarmRecord) -> None:
 def latest_arming(records: Sequence[LedgerRecord]) -> LiveArmingRecord | None:
     """The newest arming record among ``records``, ignoring revocations (R10).
 
-    A disarm row carries no envelope, which is why it is skipped: both of its
-    readers -- the exit-terms upgrade and ``program_leg._sealed_allowances`` --
-    want the newest sealed values.
+    A disarm row carries no envelope, which is why it is skipped: its reader,
+    the exit-terms upgrade, wants the newest sealed values.
     """
     armings = [row for row in records if isinstance(row, LiveArmingRecord)]
     return armings[-1] if armings else None

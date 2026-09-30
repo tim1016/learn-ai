@@ -1,13 +1,14 @@
 """Where an extended-session leg's allowance comes from (ADR 0060; plan §0 D3).
 
-The rule under test: **exits price from the newest armed record's sealed
-envelope**, fall back to the effective revision when no armed record is
-readable, and are never blocked by a broker-configuration refusal.
+The rule under test: an authority composes its allowances from the effective
+revision's live envelope, else from its settings, and is never blocked by a
+broker-configuration refusal. A historical arming prices nothing (#2629): a
+``sim:`` Dry Run bound to a live account prices from that account's current
+envelope, not from the newest arming it once had.
 
-Before this, ``ExtendedHoursAllowances.from_environment()`` read the process
-settings, so an operator who raised ``ALPACA_LIVE_XH_EXIT_BPS`` and restarted
-changed *exit* pricing without the arming ceremony that is the only act allowed
-to make a new live limit binding.
+Before ADR 0060, ``ExtendedHoursAllowances.from_environment()`` read the
+process settings, so an operator who raised ``ALPACA_LIVE_XH_EXIT_BPS`` and
+restarted changed pricing without applying a revision.
 """
 
 from __future__ import annotations
@@ -57,9 +58,10 @@ _ACCOUNT = "9LIVE0001"
 _SID = "ema-live-1"
 _ARMED_AT_MS = 1_757_000_000_000
 
-# The seal and the revision differ in exactly the two bps fields, so a passing
-# assertion can only be explained by *which document* was read.
-_SEALED = LiveEnvelopeValues(
+# The historical arming and the revision differ in exactly the two bps
+# fields, so a passing assertion can only be explained by *which document* was
+# read.
+_ARMED = LiveEnvelopeValues(
     loss_fraction=0.05,
     loss_usd=5_000.0,
     shadow_sessions=1,
@@ -67,9 +69,8 @@ _SEALED = LiveEnvelopeValues(
     xh_entry_bps=10.0,
     xh_exit_bps=20.0,
 )
-_REVISION = replace(_SEALED, xh_entry_bps=77.0, xh_exit_bps=99.0)
+_REVISION = replace(_ARMED, xh_entry_bps=77.0, xh_exit_bps=99.0)
 
-_SEALED_ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20"))
 _REVISION_ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("77"), exit_bps=Decimal("99"))
 
 
@@ -117,7 +118,7 @@ def _bind(
     return context
 
 
-def _arm(clerk_dir: Path, envelope: LiveEnvelopeValues = _SEALED, *, instance: str = _SID) -> None:
+def _arm(clerk_dir: Path, envelope: LiveEnvelopeValues = _ARMED, *, instance: str = _SID) -> None:
     LiveArmingLedger(clerk_dir, live_account_id=_ACCOUNT).append(
         LiveArmingRecord.create(
             live_account_id=_ACCOUNT,
@@ -162,66 +163,20 @@ class _ExtendedHoursReadPort:
         )
 
 
-def test_the_sealed_envelope_outranks_the_effective_revision(tmp_path: Path) -> None:
-    """The whole decision: what the operator *armed* prices the leg."""
-    _bind(clerk_dir=tmp_path)
-    _arm(tmp_path)
-
-    assert resolve_extended_hours_allowances() == _SEALED_ALLOWANCES
-
-
-def test_the_newest_arming_reseals_both_allowances(tmp_path: Path) -> None:
-    _bind(clerk_dir=tmp_path)
-    _arm(tmp_path)
-    _arm(tmp_path, replace(_SEALED, xh_entry_bps=30.0, xh_exit_bps=40.0), instance="ema-live-2")
-
-    assert resolve_extended_hours_allowances() == ExtendedHoursAllowances(
-        entry_bps=Decimal("30"), exit_bps=Decimal("40")
-    )
-
-
-def test_a_disarm_does_not_unseal_the_allowance(tmp_path: Path) -> None:
-    """A disarm row carries no envelope, so it never becomes the pricing document."""
-    _bind(clerk_dir=tmp_path)
-    _arm(tmp_path)
-    LiveArmingLedger(tmp_path, live_account_id=_ACCOUNT).append_disarm_fixture(
-        _SID, disarmed_at_ms=_ARMED_AT_MS + 1_000
-    )
-
-    assert resolve_extended_hours_allowances() == _SEALED_ALLOWANCES
-
-
 def test_the_effective_revision_prices_when_no_arming_exists(tmp_path: Path) -> None:
     _bind(clerk_dir=tmp_path)
 
     assert resolve_extended_hours_allowances() == _REVISION_ALLOWANCES
 
 
-def test_an_unpinned_revision_has_no_account_whose_seal_to_read(tmp_path: Path) -> None:
-    """Without an observed account there is no ledger to consult; the revision decides."""
+def test_a_historical_arming_never_prices_a_leg(tmp_path: Path) -> None:
+    """#2629: the newest arming used to outrank the revision here, the last
+    place arming still had an effect. Now the account's current envelope wins,
+    whatever its ledger holds."""
+    _bind(clerk_dir=tmp_path)
     _arm(tmp_path)
-    _bind(clerk_dir=tmp_path, account_pin=None)
 
     assert resolve_extended_hours_allowances() == _REVISION_ALLOWANCES
-
-
-def test_an_unreadable_arming_ledger_never_blocks_pricing(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A damaged ledger is reported loudly and falls through — it does not raise."""
-    _bind(clerk_dir=tmp_path)
-    ledger = LiveArmingLedger(tmp_path, live_account_id=_ACCOUNT)
-    ledger.path.parent.mkdir(parents=True, exist_ok=True)
-    ledger.path.write_text("this is not a sealed arming row\n")
-
-    with caplog.at_level(logging.ERROR):
-        allowances = resolve_extended_hours_allowances()
-
-    assert allowances == _REVISION_ALLOWANCES
-    assert any(
-        record.__dict__.get("action") == "extended_hours_allowances_seal_unreadable"
-        for record in caplog.records
-    )
 
 
 def test_a_refused_binding_never_propagates_out_of_pricing() -> None:
@@ -241,7 +196,7 @@ def test_a_refused_binding_never_propagates_out_of_pricing() -> None:
 def test_a_refused_binding_refuses_an_exit_as_a_typed_leg_refusal() -> None:
     """The Clerk turns this into a rejected receipt; a ``BrokerUnbound`` would kill the task.
 
-    With no seal, revision or settings there is no number. The binding's
+    With no revision or settings there is no number. The binding's
     named refusal survives composition — for an EXIT as much as an ENTER. What must never happen is the configuration refusal
     escaping as itself: a number nobody chose must not bound real money either
     (ADR 0059 D4).
@@ -263,8 +218,8 @@ def test_a_refused_binding_refuses_an_exit_as_a_typed_leg_refusal() -> None:
     assert refused.value.reason_code == BROKER_UNCONFIGURED
 
 
-def test_an_exit_leg_is_anchored_by_the_sealed_allowance_not_the_revision(tmp_path: Path) -> None:
-    """End to end: the sealed 20 bps prices the exit, not the revision's 99 bps."""
+def test_an_exit_leg_is_anchored_by_the_revision_not_a_historical_arming(tmp_path: Path) -> None:
+    """End to end: the revision's 99 bps prices the exit, not the arming's 20 bps."""
     _bind(clerk_dir=tmp_path)
     _arm(tmp_path)
     policy = ProgramLegPolicy.from_read_port(_ExtendedHoursReadPort())
@@ -279,11 +234,12 @@ def test_an_exit_leg_is_anchored_by_the_sealed_allowance_not_the_revision(tmp_pa
 
     assert shape.order_type is OrderType.LIMIT
     assert shape.extended_hours is True
-    # 20 bps below 100.00, floored to the penny tick; 99 bps would be 99.01.
-    assert shape.limit_price == pytest.approx(99.80, abs=1e-9)
+    # 99 bps below 100.00, floored to the penny tick; the arming's 20 bps
+    # would be 99.80.
+    assert shape.limit_price == pytest.approx(99.01, abs=1e-9)
 
 
-def test_an_entry_leg_is_anchored_by_the_sealed_allowance_too(tmp_path: Path) -> None:
+def test_an_entry_leg_is_anchored_by_the_revision_too(tmp_path: Path) -> None:
     _bind(clerk_dir=tmp_path)
     _arm(tmp_path)
     policy = ProgramLegPolicy.from_read_port(_ExtendedHoursReadPort())
@@ -296,8 +252,8 @@ def test_an_entry_leg_is_anchored_by_the_sealed_allowance_too(tmp_path: Path) ->
         policy=policy,
     ).shape
 
-    # 10 bps above 100.00; the revision's 77 bps would be 100.77.
-    assert shape.limit_price == pytest.approx(100.10, abs=1e-9)
+    # 77 bps above 100.00; the arming's 10 bps would be 100.10.
+    assert shape.limit_price == pytest.approx(100.77, abs=1e-9)
 
 
 def test_the_process_environment_only_answers_when_nothing_has_bound(
@@ -308,7 +264,7 @@ def test_the_process_environment_only_answers_when_nothing_has_bound(
     Raising ``ALPACA_LIVE_XH_EXIT_BPS`` and restarting reaches pricing only
     while no binding has been attempted at all — the pre-ADR-0060 world this
     resolution's last step preserves. A bound worker answers from its revision,
-    and an armed one from its seal; neither reads the environment again.
+    and a historical arming changes nothing; neither reads the environment again.
     """
     monkeypatch.setenv("ALPACA_API_KEY_ID", "fixture-key-not-a-real-credential")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "fixture-secret-not-a-real-credential")
@@ -324,7 +280,7 @@ def test_the_process_environment_only_answers_when_nothing_has_bound(
     assert resolve_extended_hours_allowances() == _REVISION_ALLOWANCES
 
     _arm(tmp_path)
-    assert resolve_extended_hours_allowances() == _SEALED_ALLOWANCES
+    assert resolve_extended_hours_allowances() == _REVISION_ALLOWANCES
 
 
 def test_from_read_port_takes_the_resolver_as_a_seam() -> None:

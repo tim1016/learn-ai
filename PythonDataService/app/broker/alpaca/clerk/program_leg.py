@@ -21,7 +21,7 @@ Manual Flatten and the watchdog's re-drive of a refused exit price their own
 after-hours limit (``recovery_reduction``).
 
 Which allowance the policy carries is decided by the authority, not here.
-Entry keeps the existing profile/arming policy; EXIT reads the owning bot's
+Entry prices from the effective profile revision; EXIT reads the owning bot's
 immutable terms through ``exit_policy_for_instance`` (ADR 0045). This module
 is a pure function of the policy it is handed.
 """
@@ -32,7 +32,6 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -45,9 +44,6 @@ from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
 
-if TYPE_CHECKING:
-    from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
-
 logger = logging.getLogger(__name__)
 
 # How a policy learns its allowances. Injected as a callable so a test can
@@ -55,57 +51,14 @@ logger = logging.getLogger(__name__)
 # and so the one production resolver below is named in exactly one place.
 type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]
 
-# Why the two resolution steps below import inside their function bodies, and
-# why the context above is a ``TYPE_CHECKING`` name. ``active_binding``, the
-# arming ledger and ``AlpacaRuntimeContext`` all reach
-# ``clerk.live_envelope``, which reaches the ``clerk.sqlite`` package, whose
-# ``repository`` imports ``clerk.live_envelope`` straight back -- and
+# Why the two resolution steps below import inside their function bodies:
+# ``active_binding`` reaches ``clerk.live_envelope``, which reaches the
+# ``clerk.sqlite`` package, whose ``repository`` imports
+# ``clerk.live_envelope`` straight back -- and
 # ``active_runtime`` imports *this* module before it imports anything under
 # ``clerk.sqlite``. A module-level import here therefore lands on a
 # half-initialised ``live_envelope``. Both resolvers run at authority
 # composition, never at import, so the deferral costs one dict lookup.
-
-
-def _sealed_allowances(context: AlpacaRuntimeContext, strategy_instance_id: str | None = None) -> ExtendedHoursAllowances | None:
-    """The newest **armed** record's allowances, or ``None`` when there are none to read.
-
-    Reuses the ledger's own reader and ``live_arming.latest_arming`` -- the
-    canonical "newest arming, ignoring revocations" (R10). A disarm row
-    carries no envelope, which is exactly why ``latest_arming`` skips it.
-    Pricing only: nothing here grants or checks permission (#2629).
-
-    The account comes from the binding's ``account_pin``: the revision's own
-    observed account, never a value composed here. Absent (a paper or
-    unverified revision), there is no account whose seal to read.
-
-    Nothing raises out of here. A pin that is not a real account id, a ledger
-    that will not verify and a store that will not read are each "not this
-    source" -- logged at error level, because an EXIT must never be blocked by
-    a broker-configuration problem (plan §0 D3).
-    """
-    from app.broker.alpaca.clerk.live_arming import latest_arming
-    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
-
-    account_id = context.account_pin
-    if account_id is None:
-        return None
-    try:
-        ledger = LiveArmingLedger(context.settings.clerk_dir, live_account_id=account_id)
-        armed = latest_arming(ledger.records() if strategy_instance_id is None else ledger.records_for(strategy_instance_id))
-    except (ValueError, OSError):
-        # ``LiveArmingInvalid`` is a ``ValueError``, and so are the account-id
-        # and path-containment refusals the ledger's constructor raises.
-        logger.error(
-            "the arming ledger cannot seal an extended-hours allowance; "
-            "the effective revision decides instead",
-            extra={
-                "action": "extended_hours_allowances_seal_unreadable",
-                "live_account_id": account_id,
-            },
-            exc_info=True,
-        )
-        return None
-    return None if armed is None else ExtendedHoursAllowances.from_envelope(armed.envelope)
 
 
 def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
@@ -239,17 +192,15 @@ def legacy_recovery_pricing(allowances: ExtendedHoursAllowances) -> ExtendedHour
 
 
 def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | LegRefusal:
-    """Entry composition keeps the confirmed envelope precedence.
+    """The allowances an authority composes with: the effective live envelope, else settings.
 
+    A historical arming prices nothing (#2629): a ``sim:`` Dry Run bound to a
+    live account prices its entries from that account's current envelope.
     Registered EXITs replace these defaults with their immutable instance terms.
-    The upgrade path reads only that instance's seal or the effective revision.
     """
     from app.broker.alpaca.active_binding import get_active_alpaca_binding
 
     context = get_active_alpaca_binding()
-    sealed = None if context is None else _sealed_allowances(context)
-    if sealed is not None:
-        return sealed
     if context is not None and context.live_envelope is not None:
         return ExtendedHoursAllowances.from_envelope(context.live_envelope)
     stamped = _settings_allowances()
@@ -265,8 +216,8 @@ class ProgramLegPolicy:
     authority re-resolves it from the current live envelope per decision
     (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
     pair resolved here from the applied profile revision -- a paper revision's
-    own pair, or a live revision's envelope -- is what a paper, ``sim:`` or
-    never-armed authority prices from.
+    own pair, or a live revision's envelope -- is what a paper or ``sim:``
+    authority prices from.
     """
 
     window: ExtendedHoursWindow | None

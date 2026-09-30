@@ -48,10 +48,11 @@ are deleted. A version-1 account still refuses every ENTER under
   (`ARMING_ADMISSION_REASON_CODES`, still transient in `sqlite/uncertainty.py`).
 - `PythonDataService/app/broker/alpaca/clerk/live_arming_ledger.py` — the
   read-only reader of `<clerk_dir>/accounts/arming/<live_account_id>/live_arming.jsonl`.
-- Its two readers: the one-time exit-terms upgrade
+- Its one reader: the one-time exit-terms upgrade
   (`SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms`), which prices a bot
-  armed before exit terms existed from its own newest arming, and the entry
-  allowance resolver (`program_leg._sealed_allowances`).
+  armed before exit terms existed from its own newest arming. The entry
+  allowance resolver no longer reads it: a `sim:` Dry Run bound to a live
+  account prices its entries from that account's current envelope.
 
 The sections below describe the retired design.
 
