@@ -230,7 +230,7 @@ class DesiredStateRepo:
         updated_by: str,
         now_ms: int,
         reason: str | None = None,
-        end: BotEnd | None | Literal[_EndUnchanged.UNCHANGED] = END_UNCHANGED,
+        end: BotEnd | Literal[_EndUnchanged.UNCHANGED] | None = END_UNCHANGED,
     ) -> DesiredStateRecord:
         """Read-modify-write the desired state under a single lock,
         bumping ``version`` from the prior record (or starting at 1).
