@@ -375,6 +375,9 @@ class SyntheticBroker:
             None,
         )
 
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return next((order for order in self._latest_orders() if order.order_id == order_id), None)
+
     def _latest_orders(self) -> list[BrokerOrder]:
         return [] if self._ledger is None else self._ledger.latest_orders()
 

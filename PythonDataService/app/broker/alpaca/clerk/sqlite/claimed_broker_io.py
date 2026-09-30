@@ -118,6 +118,30 @@ class ClaimedBrokerIO:
         self._renew()
         return observed
 
+    async def observe_broker_order(
+        self, broker_order_id: str
+    ) -> BrokerOrder | BrokerError | None:
+        """Exact evidence for one broker order id, or a value-domain error (#2656).
+
+        The broker-id twin of :meth:`observe_exact`, with the same shape so a
+        caller folds a failed read as uncertainty instead of letting it
+        escape: it follows a manual order's Alpaca replacement chain, whose
+        later members carry no client order id of ours. An answer naming
+        another order is an error, never evidence.
+        """
+        self._renew()
+        try:
+            observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
+        except BrokerError as exc:
+            self._renew()
+            return exc
+        self._renew()
+        if observed is not None and observed.order_id != broker_order_id:
+            return BrokerError(
+                f"broker returned order_id={observed.order_id!r}, expected {broker_order_id!r}"
+            )
+        return observed
+
     async def observe_exact(
         self, client_order_id: str
     ) -> BrokerOrder | BrokerError | None:

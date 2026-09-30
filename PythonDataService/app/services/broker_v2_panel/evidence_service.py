@@ -239,6 +239,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Manual order filled",
         "The Account Clerk recorded complete exact fill coverage for the manual order.",
     ),
+    "MANUAL_ORDER_REPLACED": (
+        "Manual order replaced at Alpaca",
+        "Alpaca replaced the manual order; the Clerk now follows its replacement.",
+    ),
     "MANUAL_ORDER_TERMINAL": (
         "Manual order terminal",
         "The Account Clerk recorded the manual order's terminal broker state.",

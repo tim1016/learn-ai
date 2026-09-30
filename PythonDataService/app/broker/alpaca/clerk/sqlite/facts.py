@@ -39,6 +39,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.broker.alpaca.adapter import parse_order_link_id
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
@@ -1068,6 +1069,28 @@ class ManualOrderCancelResultFacts:
         return cls(**json.loads(facts_json))
 
 
+@dataclass(frozen=True)
+class ManualOrderReplacedFacts:
+    """One proven link of a manual order's Alpaca replacement chain (#2656).
+
+    ``replaces`` is the broker order id the leg followed until this link --
+    the fold applies the advance only when that is still the chain head, so
+    replays and out-of-order links can never move the head backwards.
+    ``replaced_by`` is the new head, always a followable broker order id
+    (:func:`followable_broker_order_id`).
+    """
+
+    replaces: str
+    replaced_by: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderReplacedFacts:
+        return cls(**json.loads(facts_json))
+
+
 def _require_finite_positive(value: float, *, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be a number")
@@ -1326,6 +1349,31 @@ def validate_manual_order_cancel_accepted_facts(facts: ManualOrderCancelAccepted
 def validate_manual_order_cancel_result_facts(facts: ManualOrderCancelResultFacts) -> None:
     if facts.outcome not in {"CANCELED", "TARGET_TERMINAL"} or not facts.why:
         raise ValueError("manual cancellation result has an unsupported outcome")
+
+
+def followable_broker_order_id(value: object) -> str | None:
+    """The broker order id a manual replacement link may follow, else ``None`` (#2656).
+
+    The adapter's own link-id reader decides (:func:`parse_order_link_id`):
+    the broker-id read that follows a link refuses anything but a UUID
+    before it leaves the process, so a link to one would fail on every pass.
+    The Clerk asks it of every successor it records -- a ``replaced_by`` and
+    a new order's own id alike.
+    """
+    try:
+        return parse_order_link_id(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_manual_order_replaced_facts(facts: ManualOrderReplacedFacts) -> None:
+    """Reject a malformed replacement link before transition admission (#2656)."""
+    if not isinstance(facts.replaces, str) or not facts.replaces.strip():
+        raise ValueError("manual order replacement replaces must be a non-empty broker order id")
+    if followable_broker_order_id(facts.replaced_by) != facts.replaced_by:
+        raise ValueError("manual order replacement replaced_by must be a followable broker order id")
+    if facts.replaces == facts.replaced_by:
+        raise ValueError("a replacement link cannot point at the order it replaces")
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

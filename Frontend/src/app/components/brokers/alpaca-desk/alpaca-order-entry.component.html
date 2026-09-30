@@ -87,6 +87,9 @@
               @if (leg.ending; as ending) {
                 <dd>{{ ending }}</dd>
               }
+              @if (leg.replacement_note; as replacementNote) {
+                <dd>{{ replacementNote }}</dd>
+              }
               @if (leg.effect?.terminal_receipt_id; as receipt) {
                 <div>Terminal receipt <code>{{ receipt }}</code></div>
               }

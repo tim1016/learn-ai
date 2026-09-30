@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.config import BROKER_ID
@@ -388,6 +389,25 @@ def _order_quantity(value: Any) -> float | None:
     return quantity
 
 
+def parse_order_link_id(value: Any) -> str | None:
+    """Parse a replacement-link order id (``replaced_by``/``replaces``, #2656).
+
+    ``None`` or blank text is no link. Anything else must be an Alpaca order
+    id -- a UUID string -- because the broker-id read that follows a link
+    (``GET /v2/orders/{order_id}``) refuses any other spelling before the
+    request leaves the process, on every pass. A non-string is refused
+    (``TypeError``), never ``str()``-coerced; a string that is not a UUID is
+    refused (``ValueError``).
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"Alpaca order link id must be a string, got {type(value).__name__}")
+    text = value.strip()
+    UUID(text)
+    return text
+
+
 def _read_or_absent[T](
     payload: Mapping[str, Any],
     unreadable: dict[str, str],
@@ -423,11 +443,13 @@ def from_alpaca_order(
     one bad order must not refuse every other order: that answer holds the
     account stale with no reductions, the exit freeze #2363 exists to end.
 
-    Its values -- quantities, prices, timestamps and ``extended_hours`` --
-    read the same way (#2648): a value that cannot be parsed (a boolean or
-    non-numeric count, a non-finite or out-of-range number, a negative
-    quantity, an unparseable time, a non-boolean flag) reads absent and is
-    named in ``unreadable_fields``. The broker's own status is kept, so the
+    Its values -- quantities, prices, timestamps, ``extended_hours`` and
+    the replacement links ``replaced_by``/``replaces`` -- read the same way
+    (#2648): a value that cannot be parsed (a boolean or non-numeric count,
+    a non-finite or out-of-range number, a negative quantity, an unparseable
+    time, a non-boolean flag, a link id that is not a UUID string) reads
+    absent and is named in ``unreadable_fields``, so an unreadable link is
+    never followed (#2656). The broker's own status is kept, so the
     order's lifecycle stays visible and a change in it is still activity.
     The Clerk contains such a row, or one missing its text, on its own: a
     foreign order is recorded unfoldable (#2363/#2643), and an answer about
@@ -454,6 +476,8 @@ def from_alpaca_order(
     filled_at_ms = read("filled_at", opt_rfc3339_to_ms)
     canceled_at_ms = read("canceled_at", opt_rfc3339_to_ms)
     expired_at_ms = read("expired_at", opt_rfc3339_to_ms)
+    replaced_by = read("replaced_by", parse_order_link_id)
+    replaces = read("replaces", parse_order_link_id)
     if unreadable:
         logger.warning(
             "An Alpaca order row carried values this app could not parse; the row is marked unreadable",
@@ -486,6 +510,8 @@ def from_alpaca_order(
         filled_at_ms=filled_at_ms,
         canceled_at_ms=canceled_at_ms,
         expired_at_ms=expired_at_ms,
+        replaced_by=replaced_by,
+        replaces=replaces,
         events=[] if unreadable else _order_events(payload),
         observed_at_ms=_observed(observed_at_ms),
         fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),

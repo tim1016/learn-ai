@@ -32,6 +32,7 @@ class _Broker:
     def __init__(self) -> None:
         self.account_calls = 0
         self.submit_calls = 0
+        self.broker_id_lookups: list[str] = []
 
     async def get_account(self) -> object:
         self.account_calls += 1
@@ -40,6 +41,10 @@ class _Broker:
     async def submit(self, _leg: BrokerOrderLeg, *, client_order_id: str) -> object:
         self.submit_calls += 1
         return client_order_id
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> object:
+        self.broker_id_lookups.append(order_id)
+        return order_id
 
 
 async def test_reentrant_intake_tracks_task_ownership_and_dynamic_scope_depth() -> None:
@@ -118,6 +123,21 @@ async def test_guarded_ports_allow_unrelated_unfenced_task() -> None:
     await holder
 
     assert broker.account_calls == 1
+
+
+async def test_guarded_trade_port_forwards_the_broker_id_lookup_only_unfenced() -> None:
+    """The lookup a replaced manual order is followed by (#2656) crosses the real guard."""
+    fence = ReentrantAsyncLock()
+    broker = _Broker()
+    _read, trade = guard_broker_ports(read=broker, trade=broker, intake=fence)
+
+    async with fence:
+        with pytest.raises(BrokerCallUnderIntakeError, match="get_order_by_broker_order_id"):
+            await trade.get_order_by_broker_order_id("broker-order-b")
+    assert broker.broker_id_lookups == []
+
+    assert await trade.get_order_by_broker_order_id("broker-order-b") == "broker-order-b"
+    assert broker.broker_id_lookups == ["broker-order-b"]
 
 
 def test_guarded_ports_are_explicitly_async_protocol_complete() -> None:
