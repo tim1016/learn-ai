@@ -69,6 +69,25 @@ def test_deterministic_for_same_input() -> None:
     assert a == b
 
 
+def test_monotone_series_predictions_carry_no_last_bit_noise() -> None:
+    """A monotone up-series has zero losses, so every warmed RSI is exactly
+    100 in real arithmetic and every warmed prediction exactly 0.5.
+
+    pandas' ``ewm`` returns 100.00000000000001 / 99.99999999999999 on some
+    platforms (observed: macOS arm64), which leaked ``0.4999999999999999``
+    into the rows and made ``prediction_set_hash`` platform-dependent — the
+    same artifact hashed differently on the daily-CI runner than where its
+    fixture was recorded (#2619). The rule quantizes predictions to 12
+    decimal places (rule_version 1.1) so the artifact bytes, and therefore
+    the hash, are platform-independent.
+    """
+    closes = [100.0 + i * 0.1 for i in range(30)]
+    timestamps_ms = [1714521600000 + i * 15 * 60_000 for i in range(30)]
+    rows = compute_rsi_14_centered_predictions(closes, timestamps_ms)
+
+    assert {r["prediction"] for r in rows} <= {0.0, 0.5}
+
+
 def test_row_shape() -> None:
     closes = [100.0]
     timestamps_ms = [0]
