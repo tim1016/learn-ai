@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,11 +24,14 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
+from app.broker.contract.models import BrokerActivity
 from app.services.alpaca_live_envelope import clear_loss_hold
+from app.services.broker_v2_panel.budget_deploy import _broker_figures
 from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_authority_fixtures import compose_live
@@ -249,3 +253,79 @@ async def test_no_hold_is_reported_not_invented(
 async def test_paper_uses_the_same_guarded_hold_surface(paper_runtime: ActiveClerkRuntime) -> None:
     assert paper_runtime.envelope_sync is not None
     assert (await clear_loss_hold(paper_runtime, now_ms=NOW_MS)).outcome == "no_hold"
+
+
+# The limit the half-cent day breaches: min(0.05 × 10_000.70, 3.00) = 3.00.
+_HALF_CENT_ENVELOPE = LiveEnvelopeValues(
+    loss_fraction=0.05, loss_usd=3.0, xh_entry_bps=10.0, xh_exit_bps=10.0
+)
+
+
+class _DepositedBroker(_LiveBroker):
+    """A 10_000.015 equity over a 10_000.70 close, with 1.10 and 2.20 deposited.
+
+    The broker reports its equity as its own float — ``10_000.015``, not
+    ``cash + unrealized`` re-derived here — exactly as a real account read
+    does. The exact day is then −3.985, a half-cent tie, while the float the
+    loss rule compares lands at −3.98500000000131, so a ``:.2f`` of it reads
+    −3.99 against the exact half-even cent −3.98 (#2612).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(now_ms=NOW_MS, cash=10_000.70, unrealized=-0.685)
+
+    async def get_account(self) -> Any:
+        return (await super().get_account()).model_copy(update={"equity": 10_000.015})
+
+    async def list_activities(self, **_kwargs: Any) -> list[BrokerActivity]:
+        return [
+            BrokerActivity(
+                broker="alpaca",
+                activity_id=f"deposit-{index}",
+                activity_type="CSD",
+                category=None,
+                symbol=None,
+                side=None,
+                quantity=None,
+                price=None,
+                net_amount=amount,
+                occurred_at_ms=NOW_MS,
+                observed_at_ms=NOW_MS,
+            )
+            for index, amount in enumerate((1.10, 2.20))
+        ]
+
+
+async def test_the_refusal_names_the_same_cent_deploys_today_pnl_shows(tmp_path: Path) -> None:
+    """One half-cent day, two screens, one figure (#2612).
+
+    The refusal's day figure is rendered through the money boundary from the
+    same exact ``Decimal`` formula Deploy's "today P&L" uses, so both screens
+    name the same cent. On master the message formatted the rule's float with
+    ``:.2f`` and read −3.99 while Deploy read −3.98.
+    """
+    runtime = await compose_live(
+        tmp_path,
+        _DepositedBroker(),
+        now_ms=NOW_MS,
+        live_state_root=tmp_path / "runner",
+        live_envelope_values=_HALF_CENT_ENVELOPE,
+    )
+    try:
+        assert runtime.authority_kind == "sqlite", runtime.startup_failure
+        assert runtime.envelope_sync is not None
+        complete_fee_evidence(runtime.sqlite_repository)
+        assert await runtime.envelope_sync.tick() == "hold_raised"
+
+        refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
+
+        assert refused.outcome == "refused"
+        assert refused.reason_code == "LIVE_ENVELOPE_LOSS_HOLD_STANDS"
+        assert "Day P&L -3.98 USD is still at or below the 3.00 USD loss limit" in refused.detail
+
+        observation = runtime.envelope_sync.display_observation(NOW_MS)
+        assert observation is not None
+        deploy_figures = _broker_figures(runtime.sqlite_repository, observation)
+        assert deploy_figures["today_pnl_usd"] == "-3.98"
+    finally:
+        await runtime.close()

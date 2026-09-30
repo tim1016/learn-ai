@@ -674,7 +674,7 @@
           "hold_loss_limit_usd": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
@@ -26225,6 +26225,7 @@
       },
       "LossHoldClearOutcome": {
         "additionalProperties": false,
+        "description": "The guarded loss-hold clear's outcome.\n\n``day_pnl_usd`` and ``loss_limit_usd`` are the loss rule's floats \u2014 the\nbytes the rule compared and the seal recorded. They are machine figures\nthat no client renders as money: the dollars the owner reads live in\n``detail``, authored in Python through the money boundary (#2612), so a\ncent never depends on a browser's float formatting.",
         "properties": {
           "day_pnl_usd": {
             "anyOf": [

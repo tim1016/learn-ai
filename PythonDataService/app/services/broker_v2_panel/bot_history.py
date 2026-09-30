@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.account_authority import (
     shadow_account_id_for_live_account,
     synthetic_account_id_for_strategy,
 )
-from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.money import display_dollars, dollars
 from app.broker.alpaca.clerk.sqlite.bot_history import (
     BotFacts,
     CustodyHistory,
@@ -389,7 +389,7 @@ def _orders(counts: OrderCounts) -> BotHistoryOrders:
 
 
 def _usd(amount: Decimal | None) -> str | None:
-    return None if amount is None else dollars(display_cents(amount))
+    return None if amount is None else display_dollars(amount)
 
 
 __all__ = ["account_bot_history", "compose_bots", "outcome_headline"]

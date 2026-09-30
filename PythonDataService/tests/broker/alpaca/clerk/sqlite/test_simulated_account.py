@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
-from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.money import display_dollars
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
@@ -270,7 +270,7 @@ def test_simulated_equity_and_open_pnl_are_exact_fifo_at_a_whole_cent_boundary(t
     assert f(observation.unrealized_pl_usd) == open_pnl
     # The retained baseline behind today's P&L is exact too.
     assert f(retained.equity_usd) == equity
-    assert dollars(display_cents(retained.equity_usd)) == "1000.01"
+    assert display_dollars(retained.equity_usd) == "1000.01"
 
 
 @pytest.mark.parametrize("world", ["dry_run", "shadow"])
@@ -323,7 +323,7 @@ def test_simulated_open_pnl_values_the_retained_close_itself(tmp_path: Path) -> 
     finally:
         repo.close()
     assert observation.unrealized_pl_usd == close - 100
-    assert dollars(display_cents(observation.unrealized_pl_usd)) == "0.01"
+    assert display_dollars(observation.unrealized_pl_usd) == "0.01"
 
 
 def test_future_simulated_fill_cannot_enter_a_current_valuation(shadow: ShadowContext) -> None:
