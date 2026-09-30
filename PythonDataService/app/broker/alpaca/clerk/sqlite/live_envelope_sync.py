@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import (
     DayPnl,
     day_pnl_window_start_ms,
     observed_day_pnl,
+    reading_covers_executions,
     risk_evidence_ready,
     risk_fill_sequence,
 )
@@ -65,8 +66,20 @@ logger = logging.getLogger(__name__)
 
 type Sleep = Callable[[float], Awaitable[None]]
 EnvelopeSyncAction = Literal[
-    "observed", "hold_raised", "hold_stands", "unknown", "read_failed", "mode_disagreed"
+    "observed", "hold_raised", "hold_stands", "superseded", "unknown", "read_failed", "mode_disagreed"
 ]
+# How an ENTER's wait for an account reading ends (#2623): a reading covering
+# every recorded execution was taken; the account could not be read; no such
+# reading could land by the ENTER's time limit; or reading stopped -- this sync
+# is stopping, or the ENTER no longer wants one.
+EntryReadingOutcome = Literal["covered", "unread", "out_of_time", "stopped"]
+# What one shared reading found: an execution recorded while the broker was
+# read ``superseded`` it.
+_SharedReadingOutcome = Literal["covered", "superseded", "unread"]
+# The fewest seconds between two readings taken for waiting ENTERs. Each
+# reading is three broker requests; this keeps a busy account's back-to-back
+# fills from spending Alpaca's request allowance.
+DEFAULT_ENTRY_READING_INTERVAL_S = 1.0
 
 # What each verdict says to an operator, and how loudly. The three warnings
 # are the ones that change what the account will accept.
@@ -74,6 +87,7 @@ _ACTION_MESSAGES: dict[EnvelopeSyncAction, str] = {
     "observed": "live envelope observed the account",
     "hold_raised": "live envelope raised the loss hold",
     "hold_stands": "live envelope loss hold still stands",
+    "superseded": "live envelope reading was overtaken by an execution; entries wait for a newer one",
     "unknown": "live envelope cannot judge the account; every ENTER is refused",
     "read_failed": "live envelope could not read the account; the observation will age out",
     "mode_disagreed": "live envelope read a broker mode that no longer agrees; every ENTER is refused",
@@ -104,6 +118,10 @@ class EnvelopeReading:
     policy_revision: int | None = None
     daily_loss_exempt: bool = False
     fee_evidence_complete: bool = True
+    # An execution was recorded after the reads were issued, so this reading
+    # cannot judge the account (``reading_covers_executions``). It is not
+    # published; the one before it stays, for admission to refuse as behind.
+    superseded: bool = False
 
     @property
     def breached(self) -> bool | None:
@@ -115,6 +133,11 @@ class EnvelopeReading:
             return None
         breached = loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
         return True if breached else False if self.fee_evidence_complete else None
+
+
+class _Tick(NamedTuple):
+    action: EnvelopeSyncAction
+    reading: EnvelopeReading | None
 
 
 @dataclass(frozen=True)
@@ -253,6 +276,7 @@ class LiveEnvelopeSync:
         instance_seals: InstanceSeals | None = None,
         simulation: SimulatedAccountProjection | None = None,
         custody_read: BrokerReadPort | None = None,
+        entry_reading_interval_s: float = DEFAULT_ENTRY_READING_INTERVAL_S,
     ) -> None:
         if repo.account_id.startswith(("sim:", "shadow:")) and simulation is None:
             raise ValueError("Simulated custody requires its own cash and marked-risk projection")
@@ -295,6 +319,12 @@ class LiveEnvelopeSync:
         self._observed_account_id: str | None = None
         self._last_reading: EnvelopeReading | None = None
         self._observation_lock = asyncio.Lock()
+        # The reading in flight for waiting ENTERs; every ENTER that asks
+        # while it runs shares it instead of issuing its own (#2623). The
+        # next one starts no sooner than the interval after the last began.
+        self._entry_reading: asyncio.Task[_SharedReadingOutcome] | None = None
+        self._entry_reading_started_ms: int | None = None
+        self._entry_reading_interval_ms = round(entry_reading_interval_s * 1000)
 
     async def observe(self) -> EnvelopeReading:
         """Serialize account reads and publish their verdict under the custody fence.
@@ -401,14 +431,18 @@ class LiveEnvelopeSync:
                 values, last_equity_usd=observation.last_equity_usd,
             ),
         )
-        if reading.day_pnl is not None and observation.risk_fill_sequence != risk_fill_sequence(self._repo):
+        if reading.day_pnl is not None and not reading_covers_executions(self._repo, observation):
             # New executions can make the observed equity/cash snapshot stale.
             # Refresh it before authorizing further exposure.
-            reading = replace(reading, day_pnl=replace(reading.day_pnl, cash_flows_known=False))
+            reading = replace(reading, superseded=True, day_pnl=replace(reading.day_pnl, cash_flows_known=False))
         if reading.breached is False:
             self.envelope.publish(observation)
-        else:
+        elif not reading.superseded:
             self.envelope.withdraw()
+        # A reading overtaken by an execution leaves the one before it
+        # published (#2623): that one is older still, so admission refuses it
+        # as behind executions -- the refusal an ENTER waits out -- and it can
+        # admit nothing, because every commitment re-runs that watermark rule.
         self._last_reading = reading
         return reading
 
@@ -633,30 +667,123 @@ class LiveEnvelopeSync:
         it with a later tick's numbers would churn the control revision and
         overwrite the evidence the operator is reading.
         """
+        return (await self._judged_tick()).action
+
+    async def _judged_tick(self) -> _Tick:
+        """One tick: the verdict acted on, and the reading judged -- ``None`` when none was taken."""
         try:
             reading = await self.observe()
         except BrokerAccountModeDisagreement as exc:
             # The common observation boundary already withdrew every copy
             # of the invalid evidence under the same fence as policy Apply.
-            return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
+            return _Tick(self._acted("mode_disagreed", {"why": exc.detail or str(exc)}), None)
         except BrokerEvidenceUnavailable as exc:
-            return self._acted("unknown", {"why": str(exc), "cause": _cause_text(exc)})
+            return _Tick(self._acted("unknown", {"why": str(exc), "cause": _cause_text(exc)}), None)
         except BrokerError as exc:
             # Not a verdict on the mode either way: a failed read leaves a
             # standing disagreement standing, and the observation ages out.
-            return self._acted("read_failed", {"why": str(exc)})
+            return _Tick(self._acted("read_failed", {"why": str(exc)}), None)
         with self._repo._write_lock:
             # An Apply can finish during the broker read. Rejudge inside the
             # same fence as ENTER before raising the durable cause.
             reading = self._evaluate_observation(reading.observation, now_ms=self._repo.clock())
-            if self._hold_stands():
-                return self._acted("hold_stands", {} if reading.breached is not None else {"why": "the account is also unjudgeable", **_unknown_detail(reading)})
-            if reading.breached is None:
-                return self._acted("unknown", _unknown_detail(reading))
-            outcome = self._raise_loss_hold(reading)
-            if outcome is None:
-                return self._acted("observed", _observed_detail(reading))
-            return self._acted("hold_raised", {"outcome": outcome})
+            return _Tick(self._act_on(reading), reading)
+
+    def _act_on(self, reading: EnvelopeReading) -> EnvelopeSyncAction:
+        if self._hold_stands():
+            return self._acted("hold_stands", {} if reading.breached is not None else {"why": "the account is also unjudgeable", **_unknown_detail(reading)})
+        if reading.superseded:
+            # Not a warning: nothing is wrong with the account, and the
+            # entries it refuses wait for a newer reading (#2623).
+            return self._acted("superseded", {})
+        if reading.breached is None:
+            return self._acted("unknown", _unknown_detail(reading))
+        outcome = self._raise_loss_hold(reading)
+        if outcome is None:
+            return self._acted("observed", _observed_detail(reading))
+        return self._acted("hold_raised", {"outcome": outcome})
+
+    async def read_for_entry(self, *, until_ms: int, wanted: Callable[[], bool]) -> EntryReadingOutcome:
+        """Wait for a reading covering every recorded execution, for an ENTER refused without one (#2623).
+
+        Rather than leave the ENTER to the next cadence tick, read now --
+        through the cadence's own judgement, so the reading is published and
+        logged exactly as a tick's is. Every waiting ENTER shares the reading
+        in flight, and a new one starts no sooner than the entry-reading
+        interval after the last one began, so back-to-back fills cannot spend
+        Alpaca's request allowance. An execution recorded while the broker is
+        read supersedes that reading, and the wait goes on.
+
+        The ENTER's time limit is judged here and nowhere else: no reading
+        starts at or after ``until_ms``, the wait for one in flight is cut off
+        there, and one that lands after it does not count.
+
+        ``covered`` -- judge the ENTER again, against what the reading
+        published. ``unread`` -- the account could not be read.
+        ``out_of_time`` -- no covering reading landed by ``until_ms``.
+        ``stopped`` -- this sync is stopping, or ``wanted`` answered False
+        before another reading started (the ENTER's run stopped).
+        """
+        while True:
+            if self._stopped:
+                return "stopped"
+            reading = self._entry_reading
+            if reading is None or reading.done():
+                now_ms = self._repo.clock()
+                start_ms = now_ms if self._entry_reading_started_ms is None else max(
+                    now_ms, self._entry_reading_started_ms + self._entry_reading_interval_ms
+                )
+                if start_ms >= until_ms:
+                    return "out_of_time"
+                if start_ms > now_ms:
+                    await self._sleep((start_ms - now_ms) / 1000)
+                    continue
+                if not wanted():
+                    return "stopped"
+                self._entry_reading_started_ms = now_ms
+                reading = self._entry_reading = asyncio.create_task(
+                    self._take_entry_reading(), name="alpaca-live-envelope-entry-reading"
+                )
+            try:
+                # Shielded: one waiter's timeout or cancellation must not cancel
+                # the reading every other waiting ENTER shares.
+                outcome = await asyncio.wait_for(
+                    asyncio.shield(reading), timeout=max(0.0, (until_ms - self._repo.clock()) / 1000)
+                )
+            except TimeoutError:
+                return "out_of_time"
+            except asyncio.CancelledError:
+                # ``stop()`` cancelled the shared reading, not this waiter.
+                current = asyncio.current_task()
+                if reading.cancelled() and (current is None or not current.cancelling()):
+                    return "stopped"
+                raise
+            if self._stopped:
+                return "stopped"
+            if self._repo.clock() > until_ms:
+                return "out_of_time"
+            if outcome != "superseded":
+                return outcome
+
+    async def _take_entry_reading(self) -> _SharedReadingOutcome:
+        try:
+            tick = await self._judged_tick()
+        except Exception:
+            # Every waiting ENTER shares this reading. A fault no verdict maps
+            # ends their waits as unread, each ENTER refused with a receipt --
+            # as ``run`` keeps the cadence alive -- never a crash in every bot.
+            logger.exception(
+                "live envelope could not take a reading for waiting entries",
+                extra={
+                    "action": "live_envelope_entry_reading_failed",
+                    "account_id": self._repo.account_id,
+                    "observed_account_id": self._observed_account_id,
+                },
+            )
+            return "unread"
+        if tick.reading is None:
+            return "unread"
+        return "superseded" if tick.reading.superseded else "covered"
 
     def _noted_non_finite(self, fields: tuple[str, ...]) -> bool:
         """Log a changed non-finite verdict, and say whether one stands.
@@ -748,12 +875,21 @@ class LiveEnvelopeSync:
             self._task = asyncio.create_task(self.run(), name="alpaca-live-envelope-sync")
 
     async def stop(self) -> None:
+        """End the cadence and any reading taken for waiting entries; their waits end ``stopped``."""
         self._stopped = True
-        task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        for task in (self._task, self._entry_reading):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        self._task = self._entry_reading = None
 
 
-__all__ = ["EnvelopeReading", "EnvelopeSyncAction", "InstanceSeals", "LiveEnvelopeSync"]
+__all__ = [
+    "DEFAULT_ENTRY_READING_INTERVAL_S",
+    "EntryReadingOutcome",
+    "EnvelopeReading",
+    "EnvelopeSyncAction",
+    "InstanceSeals",
+    "LiveEnvelopeSync",
+]

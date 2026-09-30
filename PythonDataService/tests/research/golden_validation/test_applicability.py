@@ -260,6 +260,7 @@ def test_current_recorded_conventions_preserve_the_review_revision() -> None:
         "schema_version": 1, "data_contract": "fixture_identity/v1",
         "statistics_basis": "marked_equity_curve/v1",
         "daily_return_convention": "initial_capital_first_session/v1",
+        "closing_bar_convention": "skip_closing_bar/v1",
     }}
     current = replace(dossier, validation_case=case)
     assert current.evidence_applicability.status == "current"

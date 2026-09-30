@@ -189,9 +189,10 @@ class ValidatedPaperAllowances:
 
     Owner decisions 2026-09-25: Start of a regular-hours run refuses until the
     bot has an exit allowance, and so does a Resume of a flat run. Holding
-    Resume requires Flatten first (ADR 0045). The bot's EXIT on the
-    day's last bar reaches the broker after the close as an after-hours limit
-    priced off the decision bar's close. A live revision carries the pair
+    Resume requires Flatten first (ADR 0045). The exit allowance prices the
+    bot's exits outside the session: a manual Flatten, the watchdog's re-drive
+    of a refused exit, and an exit that reaches the broker after the close. A
+    live revision carries the pair
     inside its six-value envelope, sealed at arming; a paper revision has no
     envelope to carry it, so it carries these two and nothing else — never a
     loss limit or a session count, which bound real money only.

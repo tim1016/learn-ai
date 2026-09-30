@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -89,7 +88,7 @@ def _decision_clock(bar: RetainedSourceBar | None) -> Clock:
     return lambda: end_ms
 
 
-def _binding(*, use_rth: bool) -> BrokerBotBinding:
+def _binding(*, use_rth: bool, account_id: str = ACCOUNT_ID) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=SID,
         exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal(),
@@ -100,7 +99,7 @@ def _binding(*, use_rth: bool) -> BrokerBotBinding:
         mode="trade",
         quantity=1,
         carryover_policy="FORBID",
-        sealed_account_id=ACCOUNT_ID,
+        sealed_account_id=account_id,
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id=RUN_ID,
         created_at_ms=1,
@@ -137,17 +136,20 @@ async def _enter(
     send_delay_ms: int = 0,
     order_transitions: list[dict] | None = None,
     clock: Clock | None = None,
+    account_id: str = ACCOUNT_ID,
+    authority_kind: str = "sqlite",
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt.
 
     ``send_delay_ms`` puts the Clerk's clock that long after the decision bar's
     close, as ``_exit``'s does; ``clock`` replaces that clock outright.
     ``order_transitions``, when given, collects the custody transitions of the
-    ENTER's order before the repository closes.
+    ENTER's order before the repository closes. ``account_id`` and
+    ``authority_kind`` name the authority (a Dry Run's is ``sim:``/synthetic).
     """
     decision_clock = _decision_clock(retained_source_bar)
     repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID,
+        account_id=account_id,
         artifacts_root=tmp_path,
         clock=clock if clock is not None else lambda: decision_clock() + send_delay_ms,
     )
@@ -156,12 +158,13 @@ async def _enter(
         repo=repo,
         read=_FakeReadPort(),
         trade=trade,
+        authority_kind=authority_kind,
         account_mode="paper",
         program_leg_policy=policy,
         stream_health=stream_health,
         live_envelope=live_envelope,
     )
-    binding = _binding(use_rth=use_rth)
+    binding = _binding(use_rth=use_rth, account_id=account_id)
     await facade.register_strategy_run(binding)
     try:
         receipt = await facade.execute_for_instance(
@@ -370,51 +373,6 @@ async def test_an_exit_decision_at_session_close_is_rejected_before_broker_conta
     assert trade.submitted_legs == []
 
 
-_EARLY_CLOSE_DAY = date(2026, 11, 27)  # the day after Thanksgiving: NYSE closes at 13:00
-
-
-@pytest.mark.parametrize(
-    ("bar", "label"),
-    [
-        (_bar(16, 0, phase="RTH"), "the 15:59 bar, decided at the 16:00 close"),
-        (
-            _bar(13, 0, phase="RTH", day=_EARLY_CLOSE_DAY),
-            "the 12:59 bar of an early-close day, decided at its 13:00 close",
-        ),
-    ],
-)
-async def test_a_regular_hours_exit_decided_on_the_last_bar_goes_out_as_an_after_hours_limit(
-    tmp_path: Path, bar: RetainedSourceBar, label: str
-) -> None:
-    """#2440 (owner decision #2431): the day's last EXIT is never queued for the next open.
-
-    A regular-hours run's last bar closes *at* the regular close, so its EXIT
-    reaches the Clerk a few seconds after the session has ended. A market DAY
-    leg sent then is queued by Alpaca for the next regular open. The leg is
-    instead the extended-hours shape an extended run would send at that
-    instant: a DAY limit flagged for extended hours, the decision bar's close
-    less the exit allowance. The close is the canonical calendar's, so an
-    early-close day's 13:00 is treated exactly like 16:00.
-    """
-    trade, state, explanation = await _exit(
-        tmp_path,
-        use_rth=True,
-        policy=_EXTENDED_POLICY,
-        retained_source_bar=bar,
-        send_delay_ms=2_000,
-    )
-
-    assert state is not EffectOperationState.REJECTED, explanation
-    (leg,) = trade.submitted_legs
-    assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours, leg.side.value) == (
-        OrderType.LIMIT,
-        TimeInForce.DAY,
-        99.80,  # floor_tick(100.00 × (1 − 20 / 10⁴))
-        True,
-        "sell",
-    ), label
-
-
 async def test_a_regular_hours_exit_decided_inside_the_session_keeps_the_market_day_leg(
     tmp_path: Path,
 ) -> None:
@@ -435,43 +393,6 @@ async def test_a_regular_hours_exit_decided_inside_the_session_keeps_the_market_
         None,
         False,
     )
-
-
-@pytest.mark.parametrize(
-    ("decided_at", "warned"),
-    [
-        pytest.param((15, 30), False, id="mid-session-the-market-leg-goes-out-as-decided"),
-        pytest.param((16, 0), True, id="after-the-close-an-after-hours-price-is-needed"),
-    ],
-)
-async def test_a_regular_hours_exit_warns_it_is_unpriced_only_when_a_price_is_needed(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-    decided_at: tuple[int, int],
-    warned: bool,
-) -> None:
-    """#2440 review: ``regular_hours_exit_unpriced`` means an after-hours price was needed and missing.
-
-    With no retained decision bar the EXIT can never be shaped as an
-    after-hours limit, so it always carries ``unpriced``. Mid-session that is
-    no warning — the market leg goes out as decided — and the warning used to
-    fire on every such EXIT anyway. It fires only when the market leg cannot
-    be sent at the send instant.
-    """
-    decided_at_ms = to_ms_utc(datetime(_DAY.year, _DAY.month, _DAY.day, *decided_at, tzinfo=_ET))
-
-    with caplog.at_level(logging.WARNING):
-        await _exit(
-            tmp_path,
-            use_rth=True,
-            policy=_EXTENDED_POLICY,
-            retained_source_bar=None,
-            decided_at_ms=decided_at_ms,
-            send_delay_ms=2_000,
-        )
-
-    unpriced = [r for r in caplog.records if getattr(r, "action", None) == "regular_hours_exit_unpriced"]
-    assert [r.reason_code for r in unpriced] == (["EXTENDED_ANCHOR_UNAVAILABLE"] if warned else [])
 
 
 @pytest.mark.parametrize(
@@ -887,6 +808,32 @@ async def test_a_last_bar_market_enter_on_a_clerk_clock_running_behind_is_refuse
         policy=_EXTENDED_POLICY,
         retained_source_bar=_last_bar(day),
         clock=lambda: close_ms - 1_200,
+    )
+
+    assert trade.submitted_legs == []
+    assert state is EffectOperationState.REJECTED
+    assert explanation == f"MARKET_CLOSED: {_MARKET_ENTRY_AFTER_THE_CLOSE}"
+
+
+async def test_a_dry_runs_synthetic_authority_refuses_a_market_enter_that_would_reach_the_broker_after_the_close(
+    tmp_path: Path,
+) -> None:
+    """#2596 on the ``sim:`` Clerk: its own calendar, not a broker clock, refuses the late ENTER.
+
+    Neither runner sends a closing-bar decision any more (#2607), so this is
+    the backstop behind that screen for the sandbox: a market ENTER the Clerk
+    reads 0.6 s after the close could only reach the broker after it.
+    """
+    close_ms = session_close_ms_utc(_DAY)
+
+    trade, state, explanation = await _enter(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_last_bar(_DAY),
+        clock=lambda: close_ms + 600,
+        account_id="sim:spy-bot",
+        authority_kind="synthetic",
     )
 
     assert trade.submitted_legs == []

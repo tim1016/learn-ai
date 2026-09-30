@@ -28,6 +28,13 @@
   dd { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 }
 
+// The same-symbol warning runs on after the trade instead of starting its
+// own block, so it costs the column one short line (#2581, #2622).
+.confirm-step__caution {
+  color: var(--warn);
+  font-size: var(--fs-xs);
+}
+
 .confirm-step__blockers,
 .confirm-step__refusal {
   display: grid;

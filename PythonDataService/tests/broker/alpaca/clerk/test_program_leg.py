@@ -55,17 +55,35 @@ def _bar(hour: int, minute: int, *, close: str = "100.00", day: date = _DAY) -> 
     )
 
 
-def test_rth_binding_enter_is_always_a_market_day_leg() -> None:
-    shape = shape_program_leg(
-        side=OrderSide.BUY,
-        purpose=EffectPurpose.ENTER,
-        use_rth=True,
-        decision_bar=_bar(16, 0),
-        policy=_POLICY,
+_HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: NYSE closes at 13:00
+
+
+@pytest.mark.parametrize(("side", "purpose"), [(OrderSide.BUY, EffectPurpose.ENTER), (OrderSide.SELL, EffectPurpose.EXIT)])
+@pytest.mark.parametrize(
+    "decision_bar",
+    [
+        pytest.param(_bar(15, 30), id="inside-the-session"),
+        pytest.param(_bar(16, 0), id="the-closing-bar"),
+        pytest.param(_bar(13, 0, day=_HALF_DAY), id="a-half-days-closing-bar"),
+        pytest.param(None, id="no-retained-bar"),
+    ],
+)
+def test_a_regular_hours_leg_is_always_a_market_day_leg(
+    side: OrderSide, purpose: EffectPurpose, decision_bar: RetainedSourceBar | None
+) -> None:
+    """ENTER and EXIT alike, whatever bar decided them (#2607).
+
+    Neither runner sends a decision on the closing bar, so a regular-hours run
+    has no program leg to price after the close. An EXIT that nonetheless
+    reaches the broker after the close -- a delayed send -- is re-priced by the
+    send-time rule in ``sqlite/exit_resolution.py``, not shaped here.
+    """
+    program_leg = shape_program_leg(
+        side=side, purpose=purpose, use_rth=True, decision_bar=decision_bar, policy=_POLICY
     )
 
-    assert shape == ProgramLeg(regular_session_shape(OrderSide.BUY))
-    leg = shape.shape.apply(symbol="SPY", quantity=3.0)
+    assert program_leg == ProgramLeg(regular_session_shape(side))
+    leg = program_leg.shape.apply(symbol="SPY", quantity=3.0)
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
         OrderType.MARKET,
         TimeInForce.DAY,
@@ -125,60 +143,30 @@ def test_extended_binding_outside_the_regular_session_is_a_marketable_day_limit(
     assert program_leg.valid_until_ms == _at(*valid_until)
 
 
-def test_a_regular_hours_exit_decided_at_the_close_takes_the_extended_shape() -> None:
-    """#2440: the 15:59 bar closes at 16:00, which is POST in the declared window.
-
-    A market DAY leg sent then is queued by Alpaca for the next open, so the
-    EXIT is shaped exactly as an extended run's decision at that instant: a
-    DAY limit flagged for extended hours at the bar's close less the exit
-    allowance, sendable until the declared close.
-    """
-    program_leg = shape_program_leg(
-        side=OrderSide.SELL,
-        purpose=EffectPurpose.EXIT,
-        use_rth=True,
-        decision_bar=_bar(16, 0),
-        policy=_POLICY,
-    )
-
-    assert program_leg == ProgramLeg(
-        LegShape(
-            order_type=OrderType.LIMIT,
-            time_in_force=TimeInForce.DAY,
-            limit_price=99.80,  # floor_tick(100.00 × (1 − 20 / 10⁴))
-            extended_hours=True,
-            side=OrderSide.SELL,
-        ),
-        valid_until_ms=_at(20, 0),
-    )
-
-
-def test_an_early_close_day_moves_the_regular_hours_exit_boundary_to_its_calendar_close() -> None:
+def test_an_extended_leg_decided_at_a_half_days_close_is_bounded_by_its_after_hours_close() -> None:
     """The close is the canonical calendar's, never a 16:00 literal: 13:00 on a half-day.
 
     So is the after-hours close the leg is bounded by (#2440 review): 17:00 on
     that half-day, not the declared window's 20:00 — Alpaca's after-hours ends
     with the calendar's, and a leg sent at 18:00 would reach no session.
     """
-    black_friday = date(2026, 11, 27)
-
     at_close = shape_program_leg(
         side=OrderSide.SELL,
         purpose=EffectPurpose.EXIT,
-        use_rth=True,
-        decision_bar=_bar(13, 0, day=black_friday),
+        use_rth=False,
+        decision_bar=_bar(13, 0, day=_HALF_DAY),
         policy=_POLICY,
     )
     inside = shape_program_leg(
         side=OrderSide.SELL,
         purpose=EffectPurpose.EXIT,
-        use_rth=True,
-        decision_bar=_bar(12, 59, day=black_friday),
+        use_rth=False,
+        decision_bar=_bar(12, 59, day=_HALF_DAY),
         policy=_POLICY,
     )
 
     assert (at_close.shape.order_type, at_close.shape.extended_hours) == (OrderType.LIMIT, True)
-    assert at_close.valid_until_ms == _at(17, 0, day=black_friday)
+    assert at_close.valid_until_ms == _at(17, 0, day=_HALF_DAY)
     assert inside == ProgramLeg(regular_session_shape(OrderSide.SELL))
 
 
@@ -194,51 +182,6 @@ def test_an_extended_leg_decided_after_a_half_days_after_hours_close_is_refused(
             policy=_POLICY,
         )
     assert refused.value.reason_code == "SESSION_CLOSED_AT_DECISION"
-
-
-@pytest.mark.parametrize(
-    ("bar", "policy", "unpriced"),
-    [
-        pytest.param(_bar(15, 59), _POLICY, None, id="decided-inside-the-session"),
-        pytest.param(None, _POLICY, "EXTENDED_ANCHOR_UNAVAILABLE", id="no-retained-bar"),
-        pytest.param(
-            _bar(16, 0),
-            ProgramLegPolicy(window=None, allowances=_ALLOWANCES),
-            "SESSION_CLOSED_AT_DECISION",
-            id="no-declared-window",
-        ),
-        pytest.param(
-            _bar(16, 0),
-            ProgramLegPolicy(window=_WINDOW, allowances=None),
-            "EXTENDED_HOURS_ALLOWANCE_UNSET",
-            id="no-exit-allowance",
-        ),
-    ],
-)
-def test_a_regular_hours_exit_that_cannot_take_the_extended_shape_keeps_the_regular_leg(
-    bar: RetainedSourceBar | None, policy: ProgramLegPolicy, unpriced: str | None
-) -> None:
-    """Nothing here refuses a regular-hours EXIT — a refused EXIT would never reduce.
-
-    Inside the session the market leg is right. At the close without a window
-    or an allowance to price the extended shape — or with no retained bar to
-    tell — the regular leg is kept and says why on ``unpriced``, which the
-    Clerk logs loudly (#2440 review, B-4); the send-time rule in
-    ``exit_resolution`` then re-prices or refuses it after the close, through
-    ``EXIT_NOT_FLAT``, rather than a rejected receipt leaving the position with
-    nothing but a decision record.
-    """
-    leg = shape_program_leg(
-        side=OrderSide.SELL,
-        purpose=EffectPurpose.EXIT,
-        use_rth=True,
-        decision_bar=bar,
-        policy=policy,
-    )
-
-    assert leg.shape == regular_session_shape(OrderSide.SELL)
-    assert leg.valid_until_ms is None
-    assert (None if leg.unpriced is None else leg.unpriced.reason_code) == unpriced
 
 
 @pytest.mark.parametrize(

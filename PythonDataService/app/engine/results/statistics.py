@@ -395,7 +395,10 @@ def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
     daily_values: dict[date, float] = {}
     for point in points:
         date_key = ny_datetime(point.timestamp_ms).date()
-        daily_values[date_key] = point.equity
+        # The engine's equity snapshots carry exact-Decimal money (#2550);
+        # this module's outputs are float-domain analysis, so coerce here
+        # rather than mixing Decimal into the return-series arithmetic.
+        daily_values[date_key] = float(point.equity)
     return list(daily_values.values())
 
 
@@ -583,7 +586,13 @@ def compute_portfolio_statistics(
     backtest covered. If omitted, Sharpe/Sortino/Calmar fall back to
     annualizing against the trade count — which is less meaningful but
     avoids returning None unnecessarily.
+
+    Money inputs may arrive as ``Decimal`` (the engine's exact-money result,
+    #2550) or ``float``; they are coerced once at this boundary because every
+    statistic below is float-domain.
     """
+    initial_cash = float(initial_cash)
+    final_equity = float(final_equity)
     net_profit = final_equity - initial_cash
     net_profit_pct = (net_profit / initial_cash) if initial_cash > 0 else 0.0
 
@@ -672,6 +681,10 @@ def summarize(
     All float fields are sanitized to None if non-finite (inf/-inf/NaN)
     so the result is JSON-serializable by FastAPI/Pydantic unchanged.
     """
+    # Same Decimal-money boundary as ``compute_portfolio_statistics``: the
+    # metric returns below reuse ``initial_cash`` directly.
+    initial_cash = float(initial_cash)
+    final_equity = float(final_equity)
     ts = compute_trade_statistics(trades)
     ps = compute_portfolio_statistics(
         initial_cash=initial_cash,

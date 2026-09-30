@@ -66,6 +66,8 @@ export class DeployConfirmStepComponent {
   readonly botNameNote = input<string | null>(null);
   readonly strategyLabel = input<string | null>(null);
   readonly trades = input.required<string>();
+  /** The backend's warning that other bots in this account already trade the symbol; never a block. */
+  readonly sameSymbolNote = input<string | null>(null);
   /** The external account number; `null` for Dry Run, whose cash is its own. */
   readonly accountNumber = input<string | null>(null);
   readonly exits = input.required<string>();

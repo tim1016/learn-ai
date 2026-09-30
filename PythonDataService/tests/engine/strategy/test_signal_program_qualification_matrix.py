@@ -136,7 +136,7 @@ def test_validated_settings_corpus_has_a_pinned_trace_root(key: str) -> None:
                     )
                 )
         strategy = registration.build(registration.param_schema(**entry["settings"]))
-        BacktestEngine(InMemoryDataReader(minute_bars)).run(strategy)
+        BacktestEngine.for_decision_identity(InMemoryDataReader(minute_bars)).run(strategy)
         assert strategy.signal_program is not None
         assert len(strategy.signal_program.session.traces) == entry["trace_count"]
         assert trace_root(strategy.signal_program.session.traces) == entry["trace_root"]

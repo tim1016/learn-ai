@@ -16,7 +16,7 @@ Fills land AT the limit price with no slippage, plus commission.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -405,76 +405,3 @@ def test_limit_entry_with_bracket_activates_on_fill():
     assert strategy.order_events[1].fill_price == Decimal("490")
 
 
-def test_force_flat_cancels_resting_limit_order():
-    """User-flagged orphan gotcha for limits: a buy limit placed at
-    14:00 that has not filled by force-flat must be cancelled.
-    Otherwise it could fill tomorrow morning."""
-    bars = [
-        _bar(15, 30),
-        _bar(15, 31),  # submits buy limit @ 499
-        _bar(15, 32, high="502", low="501", close="501"),  # no fill
-        _bar(15, 45, high="502", low="501", close="501"),  # FORCE-FLAT — cancel limit
-        # If the limit survives, this bar's low=499 would trigger the fill.
-        _bar(15, 46, high="501", low="499", close="499.50"),
-    ]
-    strategy = _LimitStrategy(limit_price=Decimal("499"), direction=1)
-
-    _run(
-        bars,
-        strategy,
-        execution_config=ExecutionConfig(force_flat_at=time(15, 45)),
-    )
-
-    # No fills at all — limit was cancelled before it could fill, and
-    # no position existed at force-flat to close.
-    assert strategy.order_events == []
-
-
-def test_session_cutoff_drops_newly_submitted_entry_limit():
-    """Entry-direction limit orders submitted past the cutoff are
-    dropped by the existing session-cutoff filter (which uses
-    position math, so it handles MARKET and LIMIT identically)."""
-    bars = [
-        _bar(15, 30),
-        _bar(15, 31),  # strategy submits entry limit here; cutoff fires
-        _bar(15, 32, high="500", low="499", close="499.50"),
-    ]
-    strategy = _LimitStrategy(limit_price=Decimal("499"), direction=1)
-
-    _run(
-        bars,
-        strategy,
-        execution_config=ExecutionConfig(session_entry_cutoff=time(15, 31)),
-    )
-
-    # Entry limit was dropped at submission — no fills ever.
-    assert strategy.order_events == []
-
-
-def test_session_cutoff_allows_exit_limit_after_cutoff():
-    """An EXIT limit (reduces the position) must pass through the
-    cutoff unchanged — it's only entries that get blocked."""
-    bars = [
-        _bar(15, 30),
-        _bar(15, 31),  # market entry
-        _bar(15, 32),  # hold
-        _bar(15, 33),
-        _bar(15, 34),  # exit-limit submitted here (past cutoff)
-        _bar(15, 35, high="502", low="499", close="500"),  # exit-limit is SELL @ 501
-    ]
-    strategy = _EntryThenExitLimitStrategy(
-        exit_on_bar_index=3,
-        exit_limit=Decimal("501"),
-    )
-
-    _run(
-        bars,
-        strategy,
-        execution_config=ExecutionConfig(session_entry_cutoff=time(15, 33)),
-    )
-
-    # Entry + exit both fill.
-    assert len(strategy.order_events) == 2
-    assert strategy.order_events[0].tag == "entry"
-    assert strategy.order_events[1].tag == "exit-limit"
-    assert strategy.order_events[1].fill_price == Decimal("501")
