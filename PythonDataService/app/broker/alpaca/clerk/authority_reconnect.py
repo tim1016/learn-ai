@@ -164,7 +164,8 @@ async def run_authority_reconnect(
         except Exception:
             # Raised out of the task, this would surface only when shutdown
             # awaits it, and abort custody's teardown there. Start stays
-            # refused either way: no sweep report means no Start.
+            # refused either way -- no sweep report means no Start -- and
+            # says a restart is needed, since no sweep follows (#2620).
             logger.exception(
                 "Boot recovery failed for this Clerk's final refusal too; Start stays refused "
                 "until the Clerk restarts",

@@ -962,6 +962,36 @@ async def test_no_boot_report_while_the_account_reconnects_still_says_the_reconn
     assert "boot recovery sweep" not in fact.next_step
 
 
+@pytest.mark.parametrize("account_reconnecting", [False, True])
+async def test_a_failed_boot_sweep_says_restart_unless_a_reconnect_reruns_it(account_reconnecting: bool) -> None:
+    """#2620 review: no sweep follows one that raised, except a reconnect's.
+
+    Not reconnecting, only a restart helps and the copy says so; while the
+    lane reconnects, the reconnect story still wins -- it reruns the sweep.
+    """
+    fact = await resolve_start_runtime_fact(
+        strategy_instance_id=_SID,
+        observed_at_ms=_ANCHOR_MS,
+        boot_recovery_required=True,
+        boot_recovery_report=None,
+        boot_recovery_failed=True,
+        unresolved_intents_probe=None,
+        account_reconnecting=account_reconnecting,
+    )
+
+    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
+    assert fact.next_step is not None
+    assert "boot recovery sweep" not in fact.next_step
+    if account_reconnecting:
+        assert "No restart is needed." in fact.next_step
+    else:
+        assert fact.explanation == "This account's Clerk has not checked this bot's last run."
+        assert fact.next_step == (
+            "This Clerk did not start: its boot recovery failed. It will not retry on its own; "
+            "restart the Clerk once that is fixed."
+        )
+
+
 async def test_degraded_boot_report_names_a_few_bots_and_counts_the_rest() -> None:
     """The refusal an operator reads must stay legible for a large roster."""
     fact = await _boot_gate_fact(_boot_report(*(f"bot-{index}" for index in range(7))))

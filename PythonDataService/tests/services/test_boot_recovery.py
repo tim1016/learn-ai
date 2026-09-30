@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.account_authority import (
     shadow_account_id_for_live_account,
     synthetic_account_id_for_strategy,
 )
+from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -297,6 +298,30 @@ async def test_a_rerun_boot_sweep_that_fails_closes_the_gate_its_first_run_opene
 
     with pytest.raises(BootRecoveryIncompleteError):
         await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+
+async def test_a_boot_sweep_that_failed_says_restart_not_wait(tmp_path: Path) -> None:
+    """#2620 review: nothing reruns a sweep that raised but a reconnect.
+
+    A reconnect's final refusal whose boot recovery raised leaves no report,
+    and the lane is not reconnecting, so no sweep is coming; Start used to
+    say "Wait for the boot recovery sweep before Start." all the same.
+    """
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    async def fail_recovery() -> None:
+        raise RuntimeError("authority unavailable")
+
+    with pytest.raises(BootAuthorityPreparationError, match="recover"):
+        await registry.run_boot_recovery(recover=fail_recovery)
+
+    with pytest.raises(BootRecoveryIncompleteError) as refused:
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    decision = refused.value.admission_decision
+    assert decision is not None
+    assert decision.next_step == terminal_startup_recovery("its boot recovery failed")
+    assert "restart the Clerk" in decision.next_step
 
 
 async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Path) -> None:

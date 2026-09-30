@@ -433,12 +433,13 @@ class BotTaskRegistry:
         # recovery sweep has run, and none while recovery left an uncertain
         # outcome (the probe re-evaluates per deploy, so a later resolution
         # unblocks without a restart). The sweep's report is the gate fact:
-        # absent means pending; present means complete, or degraded when it
-        # names bots no lifecycle authority could project. Tests that do not
-        # exercise recovery opt out explicitly with
-        # ``boot_recovery_required=False``.
+        # absent means pending -- or failed, when the last sweep raised; present
+        # means complete, or degraded when it names bots no lifecycle
+        # authority could project. Tests that do not exercise recovery opt out
+        # explicitly with ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_report: BootRecoveryReport | None = None
+        self._boot_recovery_failed = False
         # Each Dry Run boot restores off the serving path (#2582), by bot,
         # until its own restoration settles: absent once restored, and for
         # every bot boot never had to restore. Start refuses the rest.
@@ -854,6 +855,7 @@ class BotTaskRegistry:
             observed_at_ms=observed_at_ms,
             boot_recovery_required=self._boot_recovery_required,
             boot_recovery_report=self._boot_recovery_report,
+            boot_recovery_failed=self._boot_recovery_failed,
             unresolved_intents_probe=self._unresolved_intents_probe,
             recovery_evaluation=self._recovery_evaluation,
             account_reconnecting=primary is not None and primary.reconnecting,
@@ -1308,11 +1310,18 @@ class BotTaskRegistry:
         # answer an earlier sweep gave: a reconnected account authority runs
         # this again (#2582), and Start must not read the Clerk-less report.
         self._boot_recovery_report = None
-        report = await self._boot_recovery.run(
-            recover=recover,
-            reconcile=reconcile,
-            unresolved_intents_probe=unresolved_intents_probe,
-        )
+        self._boot_recovery_failed = False
+        try:
+            report = await self._boot_recovery.run(
+                recover=recover,
+                reconcile=reconcile,
+                unresolved_intents_probe=unresolved_intents_probe,
+            )
+        except Exception:
+            # Nothing reruns a sweep that raised but a reconnect, so Start
+            # stops saying "wait" for one (#2620).
+            self._boot_recovery_failed = True
+            raise
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
         self._boot_recovery_report = report
