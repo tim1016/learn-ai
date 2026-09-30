@@ -20,5 +20,8 @@ tbody tr:hover { background: rgba($accent, .05); }
 footer { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .7rem 1rem; color: $text-muted; font-size: .65rem; }
 footer button { padding: .42rem .65rem; border: 1px solid $border; border-radius: 6px; background: $bg-elevated; color: $text-secondary; cursor: pointer; }
 .empty-state { margin: 0; padding: 2rem; color: $text-muted; text-align: center; }
+.closing-bar { border-top: 1px solid $border; }
+.closing-bar h3 { margin: 0; padding: .9rem 1rem .3rem; font-size: .8rem; }
+.closing-bar p { margin: 0; padding: 0 1rem .7rem; color: $text-muted; font-size: .65rem; }
 
 @media (max-width: 760px) { header, footer { align-items: flex-start; flex-direction: column; } }

@@ -41,8 +41,6 @@ const CASE: GoldenValidation = {
         compatibility_profile: "us-equity-raw-ibkr-v1",
         warmup_from_date: null,
         slippage_per_share: 0,
-        session_entry_cutoff: null,
-        force_flat_at: null,
         limit_penetration: 0,
         source_ref: "references/lean/ema-crossover.py",
       },

@@ -173,9 +173,9 @@ def build_html(r: dict) -> str:
   <li>It never attaches <code>take_profit_price</code> or
     <code>stop_loss_price</code> &mdash; so the bracket-watcher code path is
     dormant.</li>
-  <li>It does not configure <code>session_entry_cutoff</code> or
-    <code>force_flat_at</code> &mdash; so the session wrapper's cancellation
-    logic is dormant.</li>
+  <li>It does not configure the session wrapper's entry cutoff or
+    force-flat &mdash; so its cancellation logic is dormant. (Both were
+    later removed as unused wall-clock settings, #2607.)</li>
   <li>It uses <code>SIGNAL_BAR_CLOSE</code> fills with a default $1/order
     commission and zero slippage &mdash; so the <code>ExecutionConfig</code>
     defaults must produce byte-identical output to a pre-PR-1
@@ -373,7 +373,7 @@ def build_html(r: dict) -> str:
     <td><code>test_intrabar_resolver.py</code> (14 tests, pure-function)</td></tr>
   <tr><td>Engine-managed bracket watcher</td>
     <td><code>test_bracket_exits.py</code> (5 tests, synthetic bars)</td></tr>
-  <tr><td>Session entry cutoff &amp; force-flat</td>
+  <tr><td>Session entry cutoff &amp; force-flat (removed in #2607)</td>
     <td><code>test_session_wrapper.py</code> (12 tests, including
     NEXT_BAR_OPEN orphan-fill cancellation and bracket clearing)</td></tr>
   <tr><td>Resting limit orders with penetration rule</td>
@@ -448,8 +448,8 @@ def build_html(r: dict) -> str:
     the unbracketed version. This turns the realism layer from "shipped
     infrastructure" into "measured reduction in win-rate bias."</li>
   <li><strong>Wire the new <code>EngineBacktestRequest</code> fields into
-    the Angular Engine Lab form.</strong> Slippage, session cutoff,
-    force-flat, and limit penetration are exposed on the API but not in
+    the Angular Engine Lab form.</strong> Slippage and limit penetration
+    (the session cutoff and force-flat were removed in #2607) are exposed on the API but not in
     the UI; users cannot flip them without hitting Swagger directly.</li>
   <li><strong>(Deferred, as previously agreed) PR 5: bar magnifier.</strong>
     1-minute intrabar replay for TP/SL ambiguity. Only worth building if

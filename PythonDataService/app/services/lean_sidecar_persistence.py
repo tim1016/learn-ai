@@ -35,6 +35,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
@@ -54,7 +55,6 @@ from app.services.lean_statistics_adapter import (
     _parse_ratio,
 )
 from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
-from app.utils.session_anchors import persisted_execution_configuration
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -582,12 +582,9 @@ def build_persist_payload(
     execution_config_json = (
         json.dumps(
             persisted_execution_configuration(
-                evaluation_start=start_date,
                 compatibility_profile=COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
                 warmup_from_date=None,
                 slippage_per_share=0.0,
-                session_entry_cutoff=None,
-                force_flat_at=None,
                 limit_penetration=0.0,
             ),
             sort_keys=True,

@@ -1232,28 +1232,6 @@ class SqliteAlpacaClerkFacade:
                     explanation=exc.explanation,
                     next_step=exc.next_step,
                 )
-            if program_leg.unpriced is not None and not market_leg_sendable(self._repo.clock()):
-                # Loud, as an extended run's refusal is, but not a refusal: a
-                # refused EXIT would never reduce. The send-time rule re-prices
-                # this market leg off the live touch if it is sent after the
-                # close, or folds it for the operator (#2440 review). Only
-                # when that price is needed now: mid-session the market leg
-                # goes out as decided, and a missing after-hours anchor there
-                # is no warning (#2440 review).
-                logger.warning(
-                    "a regular-hours EXIT has no after-hours price; its market leg is "
-                    "judged again when it is sent",
-                    extra={
-                        "action": "regular_hours_exit_unpriced",
-                        "account_id": self._repo.account_id,
-                        "strategy_instance_id": strategy_instance_id,
-                        "decision_id": decision_id,
-                        "reason_code": program_leg.unpriced.reason_code,
-                        "decision_bar_close_ms": (
-                            None if retained_source_bar is None else retained_source_bar.end_ms
-                        ),
-                    },
-                )
             if purpose is EffectPurpose.ENTER:
                 # The EXIT branch threads ``shape`` into the reducing order's
                 # durable facts instead; building a leg it discards would be a

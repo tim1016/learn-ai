@@ -73,6 +73,7 @@ function run(): BacktestRunDetail {
     metricDocumentation: [],
     notes: null,
     tradesTruncated: false,
+    closingBarSkips: [],
     parityVerdicts: [{
       id: 1,
       status: "diverged",

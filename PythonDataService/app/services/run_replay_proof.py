@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASO
 from app.broker.alpaca.paths import safe_path_component
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
@@ -349,6 +350,12 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         # delivery allowance (#2303/#2345). Wall-clock lateness is live-only;
         # a replay cannot see it.
         DECISION_LATE_REASON_CODE,
+        # bot_trade_strategy._refused_on_the_closing_bar: a decision on the
+        # session's closing bar is never sent (#2607). Unlike the codes above,
+        # whether a bucket is the closing bar is a fact of its close, so the
+        # classifier re-checks it (``_blocked_divergence``) rather than
+        # trusting the label.
+        CLOSING_BAR_REASON_CODE,
         # app/services/market_liveness.py — every liveness fact reason that can
         # block an ENTER at the pre-Clerk gate. MARKET_TRADABLE is deliberately
         # absent: it never blocks.
@@ -401,7 +408,7 @@ class RunFidelityDivergence:
 # journal cannot distinguish from real drift, so it is only a verdict on a
 # complete journal.
 _CONTENT_DRIFT_REASONS: frozenset[str] = frozenset(
-    {"TRACE_DIGEST_MISMATCH", "DECISION_MISMATCH", "UNRECOGNIZED_BLOCK_REASON"}
+    {"TRACE_DIGEST_MISMATCH", "DECISION_MISMATCH", "UNRECOGNIZED_BLOCK_REASON", "CLOSING_BAR_MISAPPLIED"}
 )
 
 
@@ -425,6 +432,40 @@ class RunFidelityResult:
     # (digest-less legacy rows fall back to intent-kind comparison).
     digest_verified_count: int
     divergences: tuple[RunFidelityDivergence, ...]
+
+
+def _blocked_divergence(*, eval_id: str, bar_close_ms: int, reason_code: str, staged: str) -> RunFidelityDivergence:
+    """Classify a live ``blocked`` receipt for a bucket whose intent the replay staged too."""
+    if reason_code == CLOSING_BAR_REASON_CODE and not is_closing_bar(bar_close_ms):
+        classification, reason, detail = (
+            "drift",
+            "CLOSING_BAR_MISAPPLIED",
+            "The live receipt refused this bucket as the session's closing bar, "
+            "but the calendar's close for its session is a different instant.",
+        )
+    elif reason_code in EXPECTED_LIVE_GATE_REASON_CODES:
+        classification, reason, detail = (
+            "expected_live_effect",
+            reason_code,
+            "The shared math staged this intent; a live-only gate "
+            "(liveness, pause, closing bar, or Clerk refusal) durably refused it.",
+        )
+    else:
+        classification, reason, detail = (
+            "drift",
+            "UNRECOGNIZED_BLOCK_REASON",
+            f"Blocked reason {reason_code!r} is not in the closed "
+            "live-only-gate set; refusing to classify it as expected.",
+        )
+    return RunFidelityDivergence(
+        evaluation_id=eval_id,
+        bar_close_ms=bar_close_ms,
+        classification=classification,
+        reason_code=reason,
+        replay_staged=staged,
+        live_outcome="blocked",
+        detail=detail,
+    )
 
 
 class _RunReplayFeed:
@@ -666,37 +707,16 @@ async def run_fidelity_over_bars(
             # A blocked row is cross-checked, never trusted on presence: the
             # replay staged the intent (guaranteed by this branch), the digest
             # matched (checked above when present), and the reason must be a
-            # known live-only gate -- anything else is drift, fail closed.
-            if record.reason_code in EXPECTED_LIVE_GATE_REASON_CODES:
-                divergences.append(
-                    RunFidelityDivergence(
-                        evaluation_id=eval_id,
-                        bar_close_ms=evaluation.decision_bar_close_ms,
-                        classification="expected_live_effect",
-                        reason_code=record.reason_code,
-                        replay_staged=staged,
-                        live_outcome=record.outcome,
-                        detail=(
-                            "The shared math staged this intent; a live-only gate "
-                            "(liveness, pause, or Clerk refusal) durably refused it."
-                        ),
-                    )
+            # known live-only gate that fits the bucket -- anything else is
+            # drift, fail closed.
+            divergences.append(
+                _blocked_divergence(
+                    eval_id=eval_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    reason_code=record.reason_code,
+                    staged=staged,
                 )
-            else:
-                divergences.append(
-                    RunFidelityDivergence(
-                        evaluation_id=eval_id,
-                        bar_close_ms=evaluation.decision_bar_close_ms,
-                        classification="drift",
-                        reason_code="UNRECOGNIZED_BLOCK_REASON",
-                        replay_staged=staged,
-                        live_outcome=record.outcome,
-                        detail=(
-                            f"Blocked reason {record.reason_code!r} is not in the closed "
-                            "live-only-gate set; refusing to classify it as expected."
-                        ),
-                    )
-                )
+            )
         else:
             divergences.append(
                 RunFidelityDivergence(
