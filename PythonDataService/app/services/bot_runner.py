@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import SIM_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    SyntheticActivationInvalid,
     SyntheticActivationStore,
     get_active_clerk_runtime,
 )
@@ -203,6 +204,9 @@ logger = logging.getLogger(__name__)
 
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
+#: The durable stop reason the failed-launch compensation records; the
+#: terminal reason code it asks for is ``ACTIVATION_FAILED_STOP_REASON_CODE``.
+_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON = "activation_failed_after_registration"
 _STOP_TIMEOUT_S = 5.0
 
 
@@ -774,7 +778,7 @@ class BotTaskRegistry:
                 _release_run_owner(run_owner)
             cleanup_proven = False
             try:
-                await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+                await commit_stop_before_task_cancel(binding, reason=_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON)
                 cleanup_proven = True
             except Exception:
                 logger.error(
@@ -796,8 +800,9 @@ class BotTaskRegistry:
                         binding.broker,
                         binding.strategy_instance_id,
                         updated_by=_UPDATED_BY,
-                        reason="activation_failed_after_registration",
+                        reason=_ACTIVATION_FAILED_AFTER_REGISTRATION_REASON,
                         clerk_stop_already_committed=True,
+                        outcome_reason_code=ACTIVATION_FAILED_STOP_REASON_CODE,
                     )
                 except Exception:
                     logger.error(
@@ -1022,6 +1027,7 @@ class BotTaskRegistry:
         updated_by: str,
         reason: str | None,
         clerk_stop_already_committed: bool,
+        outcome_reason_code: str = "OPERATOR_STOP",
     ) -> BotStatusView:
         """Serialized STOP implementation with terminal Clerk custody proof."""
         self._confined_instance_dir(strategy_instance_id)
@@ -1086,14 +1092,11 @@ class BotTaskRegistry:
             reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
         self._terminal.reap(strategy_instance_id, managed.binding.run_id)
-        # Why the run ended names who ended it (#2559): a launch that failed
-        # after its Clerk STOP is compensated through this same stop, but it
-        # is not an operator's stop, and run history must not say one ran.
-        outcome = (
-            ACTIVATION_FAILED_STOP_REASON_CODE
-            if reason == "activation_failed_after_registration"
-            else "OPERATOR_STOP"
-        )
+        # ``outcome_reason_code`` names who ended the run (#2559): the
+        # failed-launch compensation passes the activation-failure code, an
+        # operator's stop keeps OPERATOR_STOP. It is an internal flag, never
+        # derived from operator-typed prose.
+        outcome = outcome_reason_code
         canary_rollback: CanaryRollbackDecision | None = None
         if broker == "alpaca" and managed.binding.mode == "trade":
             outcome = await prove_terminal_stop_outcome(
@@ -1762,10 +1765,21 @@ class BotTaskRegistry:
 
         Found by their own activations, skipped when a binding indexes them:
         those take the bound path above, which reads the freshest binding
-        rather than this boot-time snapshot.
+        rather than this boot-time snapshot. Runs before the restoration
+        task, so an unreadable ledger or binding is one logged skip -- never
+        a boot failure.
         """
         authorities: list[tuple[str, SyntheticBindingAuthority]] = []
-        for account_id in SyntheticActivationStore(self._artifacts_root).account_ids():
+        try:
+            account_ids = SyntheticActivationStore(self._artifacts_root).account_ids()
+        except (OSError, ValidationError, ValueError, SyntheticActivationInvalid) as exc:
+            logger.error(
+                "Dry Run activations could not be listed at boot; unbound orphans wait for the next restart",
+                extra={"action": "boot_dry_run_activations_unreadable", "error": str(exc)},
+                exc_info=True,
+            )
+            return authorities
+        for account_id in account_ids:
             if not account_id.startswith(SIM_ACCOUNT_PREFIX):
                 continue
             sid = account_id.removeprefix(SIM_ACCOUNT_PREFIX)
@@ -1774,7 +1788,15 @@ class BotTaskRegistry:
             try:
                 if self._read_binding(sid) is not None:
                     continue
-            except InvalidStrategyInstanceIdError:
+            except (InvalidStrategyInstanceIdError, OSError, ValidationError, ValueError) as exc:
+                logger.warning(
+                    "A Dry Run activation could not be matched to a binding at boot; it is skipped",
+                    extra={
+                        "action": "boot_dry_run_activation_unmatched",
+                        "account_id": account_id,
+                        "error": str(exc),
+                    },
+                )
                 continue
             authority = self._authorities.for_unbound_dry_run(sid)
             if authority is not None:
@@ -1791,21 +1813,24 @@ class BotTaskRegistry:
         it passes is another live process's. Whatever stops one Dry Run --
         this is the isolation boundary, so it is every exception -- is logged
         with its cause and refuses that bot's Start alone.
+
+        An unbound orphan needs no candidate repair: its full recovery inside
+        ``ensure_recoverable`` is what retires the run and fails the command
+        (#2559); the sweep's own repair is the bound path's, whose fallback
+        candidate comes from the binding.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
         for sid, authority, binding in restorations:
             try:
                 await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
-                candidates = (
-                    self._binding_recovery_candidates(binding).values()
+                interrupted = (
+                    await self._boot_recovery.repair_restored_dry_run(
+                        self._binding_recovery_candidates(binding).values()
+                    )
                     if binding is not None
-                    else [
-                        BotRecoveryCandidate(strategy_instance_id=candidate_sid, run_id=run_id, sqlite_active=True)
-                        for candidate_sid, run_id in authority.lifecycle_recovery_candidates()
-                    ]
+                    else ()
                 )
-                interrupted = await self._boot_recovery.repair_restored_dry_run(candidates)
             except Exception as exc:
                 self._dry_run_restorations[sid] = (
                     "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"
