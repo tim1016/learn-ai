@@ -9,7 +9,7 @@
 
 **Partially superseded 2026-09-12:** [ADR 0062](0062-broker-clerk-fleet-control-plane.md) replaces only Decision 5's "one worker per installation … no `worker_id` column and no workers table" clause — the cross-installation multi-worker mechanism this ADR explicitly deferred and named so it would be designed rather than discovered. Worker identity now lives in the fleet registry as a durable `worker_key` bound to one clerk, and one-writer-per-account is enforced broker-qualified across volumes by the fleet assignment fence. Everything else here stands **per clerk**: each clerk volume keeps its own profiles database and its own installation selection row, and configuration stays on the Clerk volume.
 
-**Amended 2026-09-25 (#2440, owner decision):** a **paper** revision may carry its own two extended-hours allowances, `xh_entry_bps` and `xh_exit_bps`, with no live envelope. The owner decided that Start of a regular-hours run refuses until the account has an exit allowance, and so does a Resume of a flat run (the holding-Resume bypass was superseded by PRD #2504 on 2026-09-25: flatten first because carry-over is disabled) — that run's last-bar EXIT goes out after the close as an after-hours limit priced from it — and without this a regular-hours paper lane had nothing the configuration page could set. The pair is user-owned broker configuration under Decision 1 and takes effect only through Decision 4's Apply, like every revision value. It follows Decision 6's storage rules — `REAL` columns, one validated type (`ValidatedPaperAllowances`, beside `ValidatedLiveEnvelope`, sharing its bps domain), and **omitted** from the revision's content hash when absent, so every revision already saved keeps its sha. It is not an envelope value: never sealed, never part of `LiveEnvelopeValues`, and never stored beside a live envelope — a live revision's pair stays inside its six values, and a paper revision holding the six cannot also carry the pair. It is stored as two additive columns (profiles schema v3) rather than by relaxing the six-way envelope CHECK, which SQLite can change only by rebuilding a table that `installation_selection` holds foreign keys into. Contract §2.3 and [`alpaca-extended-hours.md`](../../references/alpaca-extended-hours.md) carry the detail.
+**Amended 2026-09-25 (#2440, owner decision):** a **paper** revision may carry its own two extended-hours allowances, `xh_entry_bps` and `xh_exit_bps`, with no live envelope. The owner decided that Start of a regular-hours run refuses until the account has an exit allowance, and so does a Resume of a flat run (the holding-Resume bypass was superseded by PRD #2504 on 2026-09-25: flatten first because carry-over is disabled) — that run's last-bar EXIT goes out after the close as an after-hours limit priced from it (since #2607 that EXIT is not sent — the closing-bar rule sets it aside — and the allowance prices the run's other exits outside the session: a manual Flatten, the watchdog's re-drive of a refused exit, an exit that reaches the broker after the close) — and without this a regular-hours paper lane had nothing the configuration page could set. The pair is user-owned broker configuration under Decision 1 and takes effect only through Decision 4's Apply, like every revision value. It follows Decision 6's storage rules — `REAL` columns, one validated type (`ValidatedPaperAllowances`, beside `ValidatedLiveEnvelope`, sharing its bps domain), and **omitted** from the revision's content hash when absent, so every revision already saved keeps its sha. It is not an envelope value: never sealed, never part of `LiveEnvelopeValues`, and never stored beside a live envelope — a live revision's pair stays inside its six values, and a paper revision holding the six cannot also carry the pair. It is stored as two additive columns (profiles schema v3) rather than by relaxing the six-way envelope CHECK, which SQLite can change only by rebuilding a table that `installation_selection` holds foreign keys into. Contract §2.3 and [`alpaca-extended-hours.md`](../../references/alpaca-extended-hours.md) carry the detail.
 
 **Exit lifecycle amendment (2026-09-25, PRD #2504):**
 [ADR 0045's exit obligation lifecycle](0045-exposure-lifecycle-closure.md#exit-obligation-lifecycle-amendment-2026-09-25-prd-2504)
@@ -249,3 +249,24 @@ configuration for recovery and historical verification.
 selections, a new four-field revision survives reopen, the database refuses two
 simultaneous representations, and the current document is immutable. Historical
 seal tests continue to verify original record digests; no golden hash is updated.
+
+
+### 2026-09-29 amendment — an ENTER behind the account reading waits (#2623)
+
+Owner decision: the execution watermark above stays, and the daily loss limit
+keeps working from Alpaca's readings alone; no Clerk-side loss figure is added.
+What changes is the ENTER it refuses. When the watermark refuses an ENTER
+(executions were recorded after the last reading), the Clerk keeps it, reads
+the account at once outside its intake fence instead of waiting for the 15 s
+cadence, and judges the whole decision again. That refusal, and a reading an
+execution overtakes, leave the last reading published: every commitment re-runs
+the watermark, so it can admit nothing, and every other ENTER meets the same
+refusal and waits on the same shared reading instead of being dropped as
+unobserved. The wait ends when a covering reading lands, or, as a recorded
+refusal naming which, when the run is stopped, the account cannot be read, no
+covering reading lands within the decision's delivery allowance (its bar's close
+plus 20 s — including a reading overtaken with no time left for another), or
+the Clerk shuts down. Every other refusal still drops the ENTER. Stop keeps the
+race it always had between closing the bot's decision gate and committing
+through the intake fence; the wait changes which ENTERs can be in that window,
+not the window. The mechanics are in `docs/references/alpaca-live-envelope.md`.

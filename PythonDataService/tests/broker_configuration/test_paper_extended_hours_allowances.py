@@ -1,8 +1,8 @@
 """A paper revision's own extended-hours allowances (#2440, owner decision 2026-09-25).
 
-A regular-hours run's EXIT on the day's last bar reaches the broker after the
-close as an after-hours limit priced off the decision bar's close less the exit
-allowance, so a regular-hours run's Start refuses
+A regular-hours run's exits outside the session -- a manual Flatten, the
+watchdog's re-drive of a refused exit, an EXIT delayed past the close -- go out
+as after-hours limits priced by the exit allowance, so a regular-hours run's Start refuses
 ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until the account has one, and so does its
 Resume when the run is flat. Holding Resume requires Flatten first. Live seals the
 pair in its envelope at arming; a paper revision had nowhere to hold it, which
@@ -640,7 +640,7 @@ async def _apply_and_bind(
         pytest.param(SYNTHETIC_CAPABILITIES, id="sim-authority"),
     ],
 )
-async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_its_last_exit(
+async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_an_after_hours_exit(
     clerk_dir: Path, clock: FrozenClock, capabilities: BrokerCapabilities
 ) -> None:
     bound = await _apply_and_bind(clerk_dir, clock, pair=_PAIR)
@@ -656,24 +656,24 @@ async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_its_l
     admission = extended_hours_admission_fact(use_rth=True, policy=policy, exit_terms=ExitTerms(exit_allowance_bps=7.25 if policy.allowances else None, band_multiple=2, spread_cap_bps=50, provenance="backfilled"), observed_at_ms=1_000)
     assert admission.state == "NOT_REQUESTED"
 
-    # The 15:59-16:00 bar is decided at 16:00: after the close, so the EXIT is
-    # an after-hours limit 7.25 bps under the close — floored to the tick.
+    # An extended run's EXIT decided at 16:00 is an after-hours limit 7.25 bps
+    # under the close — floored to the tick. The same pair prices a
+    # regular-hours run's exits outside the session.
     sell = shape_program_leg(
         side=OrderSide.SELL,
         purpose=EffectPurpose.EXIT,
-        use_rth=True,
+        use_rth=False,
         decision_bar=_bar(16, 0),
         policy=policy,
     )
     cover = shape_program_leg(
         side=OrderSide.BUY,
         purpose=EffectPurpose.EXIT,
-        use_rth=True,
+        use_rth=False,
         decision_bar=_bar(16, 0),
         policy=policy,
     )
 
-    assert sell.unpriced is None
     assert sell.shape.order_type is OrderType.LIMIT
     assert sell.shape.extended_hours is True
     assert sell.shape.limit_price == pytest.approx(99.92, abs=1e-9)  # floor(99.9275)
@@ -687,18 +687,10 @@ async def test_without_the_pair_the_gate_refuses_and_names_the_profile_field(
 
     policy = ProgramLegPolicy.from_read_port(_ReadPort(ALPACA_PAPER_CAPABILITIES))
     admission = extended_hours_admission_fact(use_rth=True, policy=policy, exit_terms=ExitTerms(exit_allowance_bps=7.25 if policy.allowances else None, band_multiple=2, spread_cap_bps=50, provenance="backfilled"), observed_at_ms=1_000)
-    leg = shape_program_leg(
-        side=OrderSide.SELL,
-        purpose=EffectPurpose.EXIT,
-        use_rth=True,
-        decision_bar=_bar(16, 0),
-        policy=policy,
-    )
 
     assert policy.allowances is None
     # A regular-hours run's own state: Start refuses it with the shared refusal.
     assert admission.state == "EXIT_ALLOWANCE_UNSET"
-    assert leg.unpriced == EXTENDED_HOURS_ALLOWANCE_UNSET
     # The operator is sent to the field that fixes it, on the page that has it.
     next_step = EXTENDED_HOURS_ALLOWANCE_UNSET.next_step
     assert "broker configuration page" in next_step

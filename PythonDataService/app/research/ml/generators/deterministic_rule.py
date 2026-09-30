@@ -18,7 +18,17 @@ import pandas as pd
 import pandas_ta as ta  # type: ignore[import-untyped]
 
 RULE_ID = "rsi_14_centered"
-RULE_VERSION = "1.0"
+RULE_VERSION = "1.1"
+
+# Predictions are quantized to this many decimal places. pandas' ``ewm``
+# kernel emits last-bit noise that varies by platform (observed RSI
+# 100.00000000000001 / 99.99999999999999 on macOS arm64 for a series whose
+# exact RSI is 100), which made ``prediction_set_hash`` differ between the
+# machine that recorded the fixture and the daily-CI runner (#2619). The
+# prediction domain is [-0.5, 0.5]; 1e-12 is far below any signal the rule
+# encodes, so snapping there keeps the math and makes the artifact bytes
+# platform-independent.
+_PREDICTION_QUANTIZATION_DP = 12
 
 
 def compute_rsi_14_centered_predictions(
@@ -80,7 +90,12 @@ def compute_rsi_14_centered_predictions(
             prediction = 0.0
         else:
             # Clamp to [-0.5, 0.5] to guard against floating-point overshoot
-            # (e.g. RSI=100.0000...0001 from Wilder smoothing accumulation).
-            prediction = max(-0.5, min(0.5, float(rsi_val) / 100.0 - 0.5))
+            # (e.g. RSI=100.0000...0001 from Wilder smoothing accumulation),
+            # then quantize: the emitted value must not depend on which
+            # platform's ``ewm`` kernel ran (see _PREDICTION_QUANTIZATION_DP).
+            prediction = round(
+                max(-0.5, min(0.5, float(rsi_val) / 100.0 - 0.5)),
+                _PREDICTION_QUANTIZATION_DP,
+            )
         rows.append({"timestamp_ms": int(ts), "symbol": symbol, "prediction": prediction})
     return rows

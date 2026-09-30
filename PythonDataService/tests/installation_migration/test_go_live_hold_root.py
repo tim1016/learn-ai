@@ -35,6 +35,7 @@ from app.services.bot_runner_errors import LANE_GO_LIVE_HOLD_UNREADABLE, LANE_GO
 from app.services.go_live_hold import GO_LIVE_HOLD_MARKER, GoLiveHoldMarker, go_live_marker_bytes
 from app.services.lane_go_live import lane_go_live_hold, lane_go_live_hold_root
 from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.installation_migration._support import (
     LIVE_VOLUME,
     PAPER_VOLUME,
@@ -177,7 +178,7 @@ async def test_a_combined_lane_holds_though_its_artifacts_root_is_elsewhere(
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", exit_terms=DEPLOY_EXIT_TERMS)
 
     assert refused.value.reason_code == LANE_GO_LIVE_PENDING
 
@@ -197,7 +198,7 @@ async def test_a_process_that_cannot_resolve_its_clerk_volume_refuses_starts(
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", exit_terms=DEPLOY_EXIT_TERMS)
 
     assert refused.value.reason_code == LANE_GO_LIVE_HOLD_UNREADABLE
 
@@ -218,7 +219,7 @@ async def test_a_never_migrated_clerk_volume_is_not_held(
     assert lane_go_live_hold().held is False
     # The hold does not answer; a later gate does.
     with pytest.raises(BotRunnerError) as later:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", exit_terms=DEPLOY_EXIT_TERMS)
     assert later.value.reason_code not in (LANE_GO_LIVE_PENDING, LANE_GO_LIVE_HOLD_UNREADABLE)
     assert "go-live" not in str(later.value)
 

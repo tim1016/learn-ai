@@ -44,6 +44,7 @@ from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
 from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
+from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -987,6 +988,189 @@ async def test_gap_replay_contains_an_unfoldable_closed_order_and_keeps_folding_
             reduction_intent=ReductionIntent(symbol="SPY", side="sell", quantity=5.0),
         )
         assert reduce.allowed is True, reduce
+    finally:
+        repo.close()
+
+
+def _trade_update_frame(event: str, order: dict[str, object], **extra: object) -> str:
+    return json.dumps(
+        {
+            "stream": "trade_updates",
+            "data": {"event": event, "timestamp": "2023-11-14T22:13:21Z", "order": order, **extra},
+        }
+    )
+
+
+async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
+    tmp_path: Path,
+) -> None:
+    """An id-less order once failed the adapter on the live stream (#2643).
+
+    That was a parse error: the frame's evidence was dropped and the stream
+    marked unhealthy. The order is now contained to itself under the
+    anonymous-order sentinel, and the next frame for our own order folds.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    id_less = {**base, "id": None, "client_order_id": "alpaca-console:anon-1", "status": "new"}
+    owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame("new", id_less)
+            yield _trade_update_frame("fill", owned, execution_id="exec-live-1", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 0
+        assert consumer.counters.unfoldable_orders >= 1
+        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        reduce = decide_capability(
+            repo,
+            capability=Capability.REDUCE,
+            strategy_instance_id=STRATEGY_INSTANCE_ID,
+            reduction_intent=ReductionIntent(symbol="SPY", side="sell", quantity=5.0),
+        )
+        assert reduce.allowed is True, reduce
+    finally:
+        repo.close()
+
+
+_UNNAMED_OWN_ORDER_TEXT = [
+    pytest.param({"order_id": ""}, id="id-less"),
+    pytest.param({"status": ""}, id="statusless"),
+    pytest.param({"symbol": ""}, id="symbolless"),
+    pytest.param({"side": ""}, id="sideless"),
+]
+
+
+@pytest.mark.parametrize("unnamed", _UNNAMED_OWN_ORDER_TEXT)
+async def test_a_frame_for_our_own_order_missing_its_identity_text_is_withheld_as_unknown(
+    tmp_path: Path,
+    unnamed: dict[str, str],
+) -> None:
+    """Read blank, a frame's missing text would become our order's evidence (#2643).
+
+    The acknowledgement keeps the first broker id it sees, so a blank id
+    would be the order's id for ever; the fill takes the frame's symbol and
+    side, so a blank symbol credited the bot a fill in no instrument and a
+    blank side raised out of the sink. The frame is withheld like a lost one
+    instead: nothing about it is recorded, and the order's effect folds
+    ``unknown`` so the sweep's exact lookup recovers it.
+    """
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    try:
+        kind = await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=order_ref,
+            event=BrokerOrderEvent(
+                event_type="partial_fill",
+                occurred_at_ms=1_700_000_000_050,
+                price=100.25,
+                quantity=2.0,
+                execution_id="exec-unnamed",
+            ),
+            event_key="exec:exec-unnamed",
+            order=_owned_order(order_ref).model_copy(update=unnamed),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert kind == "withheld_order"
+        order = repo.order(order_ref)
+        assert order is not None and order.broker_order_id is None
+        kinds = [row["transition_kind"] for row in repo.transitions_for_order(order_ref)]
+        assert "ORDER_SUBMIT_UNCERTAIN" in kinds
+        assert "ORDER_SUBMIT_ACKED" not in kinds and "EXECUTION_SLICE_FILLED" not in kinds
+        assert repo.fills_for_order(order_ref) == []
+        assert repo.attributed_positions_by_symbol() == {}
+        effect = repo.effect_operation(order.effect_operation_id)
+        assert effect is not None and effect.state == "unknown"
+    finally:
+        repo.close()
+
+
+async def test_a_live_sideless_fill_for_our_own_order_is_withheld_not_a_reconnect(
+    tmp_path: Path,
+) -> None:
+    """A blank-side fill once raised out of the evidence sink (#2643).
+
+    The sink sits outside the stream's parse guard, so the stream reconnected
+    -- and a closed order re-fed on every reconnect would loop for ever, the
+    account-wide exit freeze #2363 exists to end. It is withheld and counted.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    sideless = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "side": "",
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame("fill", sideless, execution_id="exec-sideless", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.withheld_orders == 1
+        assert consumer.counters.parse_errors == 0
+        assert repo.fills_for_order(order_ref) == []
+        order = repo.order(order_ref)
+        assert order is not None and order.broker_order_id is None
+        effect = repo.effect_operation(order.effect_operation_id)
+        assert effect is not None and effect.state == "unknown"
     finally:
         repo.close()
 

@@ -27,18 +27,22 @@ committed in the repo.
 - **The Clerk handles that refusal poorly today:**
   - it reads the refusal as bad credentials;
   - a refused ENTER kept its cash claim forever (fixed by #2553);
-  - a refused EXIT is re-sent automatically, but late. In the regular session
-    it goes out 120 s after the refusal. Outside it, the retry waits for the next
-    session: a 17:00 refusal is retried at 04:00 the next morning.
+  - a refused EXIT was re-sent automatically, but late: 120 s after the
+    refusal in the regular session, and at the next session outside it (a
+    17:00 refusal was retried at 04:00 the next morning). Since #2622 it is
+    re-sent on the first pass after the other order ends, in any session
+    (section 2).
   - The EXIT escalates to `EXIT_STUCK` only if the other bot's order is still
     working through 8 minutes of regular-session retries: 10 minutes after a
-    regular-session refusal. Then automatic retries stop.
+    regular-session refusal. Then automatic retries stop. #2622 left this
+    unchanged.
 - **Day trading and settlement no longer constrain this.** Alpaca says the
   pattern-day-trader rule no longer applies, and it removed the rule's fields
   from the account object (a changelog entry dated 2026-07-06 by its URL). All
   Alpaca accounts are margin accounts.
 - **A2 (#2441) is fixed on master.** A second, stricter gate now also refuses
-  every ENTER after any bot's fill until cash is re-read.
+  every ENTER after any bot's fill until cash is re-read; since #2623 that ENTER
+  waits for the re-read instead of being dropped.
 
 ## 1. How shares and fills are attributed
 
@@ -107,12 +111,16 @@ for example when shares were sold outside the Clerk.
   ("Executions changed after the last account reading") until the next reading.
   [code] `clerk/sqlite/risk_admission.py:92-94`, added by `b920c799` / `78ca2b40`
   (#2543, #2566).
-- **The refused ENTER is dropped.** The runtime returns a rejected receipt
-  [code] `clerk/sqlite/runtime.py:1164-1168`, and the bot discards that decision
-  [code] `services/bot_trade_strategy.py:1029-1038`.
+- **The refused ENTER waits for that reading (#2623).** At `79c79f22` it was
+  dropped: the runtime returned a rejected receipt and the bot discarded the
+  decision. Since the owner's decision of 2026-09-29 the Clerk reads the account
+  at once and judges the ENTER again, while the decision is still on time (its
+  bar's close plus 20 s). Any other refusal still drops it.
+  [code] `clerk/sqlite/runtime.py` (`_execute_effect`),
+  `clerk/sqlite/live_envelope_sync.py` (`read_for_entry`)
 - **Two bots deciding on the same bar:** once the first bot's fill is recorded,
-  the second bot's entry is refused rather than delayed.
-  [test] `test_one_bots_fill_refuses_the_other_bots_entry_until_the_next_account_reading`
+  the second bot's entry waits for the next reading, then enters.
+  [test] `test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_reading`
 
 ## 2. Wash trades at Alpaca
 
@@ -222,53 +230,97 @@ The findings below describe the code before that change.
 The stuck-EXIT watchdog then re-sends it on its own. All paths below are in
 [code] `clerk/sqlite/exit_watchdog.py` unless stated.
 
-- **First it lets the refusal settle.** Until the policy's re-drive age has
-  passed (120 s, `uncertainty_policies.py:280`), every pass is a hold
-  (`:216,233-235`).
+- **A refusal behind an opposite-side order waits only for that side (#2622,
+  owner decision 2026-09-29).** When the refusal's `opposite_open_order_refs`
+  is not empty, the watchdog asks the same #2621 read
+  (`open_opposite_side_orders`) whether any order is still open on the other
+  side of the symbol (`opposite_side_after_refusal`).
+  - While one is, every pass is a hold, `EXIT_OTHER_ORDER_WORKING`: A's page
+    says the Clerk sends the exit once no such order is open, and names no
+    time.
+  - On the first pass after none is, the exit is ready at once, in any
+    session: no settle age, and no wait for the next session.
+  - It waits for the whole other side of the symbol, not only the order the
+    refusal named: an opposite order opened since would refuse the re-send
+    again. [test]
+    `test_a_refused_exit_is_not_sent_into_another_buy_opened_since_the_refusal`
+  - An exit ready at once can still be held back by other Clerk work. A
+    re-drive refused before the refusal has settled for the re-drive age
+    (120 s) is a hold, so failure time starts where it always has. [test]
+    `test_an_exit_ready_at_once_never_starts_its_escalation_clock_early`
+  - When its open orders cannot be read, the watchdog logs it and keeps the
+    ordinary timing. [test]
+    `test_a_refused_exit_keeps_the_ordinary_timing_when_the_open_orders_cannot_be_read`
+- **Otherwise it first lets the refusal settle.** Until the policy's re-drive
+  age has passed (120 s, `uncertainty_policies.py`), every pass is a hold,
+  `RECOVERY_RETRY_WAIT`. A refusal with no opposite-side order open keeps this
+  timing.
 - **Then it waits for the symbol to go quiet.** It re-sends only when neither the
   Clerk nor the broker has another order working on the symbol and the broker
-  quantity equals the bots' total (`:403-432,459-473`).
+  quantity equals the bots' total (`_accept_admissible_redrive`,
+  `clerk_work_in_flight`, which ignores side).
 - **Waiting on another order is a hold outside the regular session.** Inside
-  it, that wait is a failure (`:306`, `market_leg_sendable`). Failure time adds
-  up only across back-to-back regular-session failure passes
-  (`exit_recovery.py:79-96`).
+  it, past the settle age, that wait is a failure (`market_leg_sendable`).
+  Failure time adds up only across back-to-back regular-session failure passes
+  (`exit_recovery.py`).
 
 What that means for a wash-trade refusal:
 
 - **Regular session, the ordinary case.** B's market buy fills a moment after
   A's sell is refused (the recorded paper fill took 0.772 s). The watchdog
-  re-sends A's full market sell on its first pass at least 120 s after the
-  refusal; in the test that is 120 s exactly. Nothing escalates. [test]
-  `test_a_refused_exit_is_sent_again_two_minutes_later_once_the_other_bots_buy_fills`
-- **Outside the regular session, a refused limit waits for the next session.**
-  - A refused after-hours limit is not retried in the session it was priced
-    for, even once B's order has filled (`:240-245`).
-  - A's page names the next try. With an exit allowance that is 04:00 the next
-    morning; without one it is the 09:30 open
-    (`recovery_reduction.py:752-767`). At 04:00 A's sell goes out as a
-    pre-market limit.
-  - Every pass is a hold, so nothing escalates.
-  - [test] `test_a_refused_after_hours_exit_waits_for_the_next_session_and_never_escalates`
-    (refused at 17:00).
-  - A pre-market refusal waits for the 09:30 open. Existing test
+  re-sends A's full market sell on the first pass after B's buy ends, not
+  120 s later; while B's buy still works, each pass holds. Nothing
+  escalates. [test]
+  `test_a_refused_exit_is_sent_again_on_the_first_pass_after_the_other_bots_buy_ends`
+- **Outside the regular session, the same, in the session A's leg was priced
+  for.** A 17:00 after-hours limit refused while B's buy works goes out again
+  as an after-hours limit on the first pass after B's buy fills, not at 04:00
+  the next morning. Every pass is a hold, so nothing escalates.
+  - [test] `test_a_refused_after_hours_exit_is_sent_again_in_the_same_session_once_the_other_bots_buy_fills`
+  - Deploy starts regular-session bots only, so no program ENTER is sent
+    outside the regular session. The case that happens is the owner's own
+    manual buy limit, which can rest for hours: A's exit waits for it, then
+    goes out on the first pass after the order ends. That holds however it
+    ends: the owner cancels it through the Clerk or in Alpaca's own website,
+    a DAY limit expires, or Alpaca rejects it after accepting it. Alpaca's
+    ending ends the manual order's effect too (#2647), by its `trade_updates`
+    frame or by the next sweep, so the Clerk no longer counts it as work in
+    flight.
+    - [test] `test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_the_clerk_cancels_it`
+    - [test] `test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca`
+      (both routes)
+    - [test] `test_manual_order_ended_at_broker.py::test_a_manual_limit_alpaca_ends_unfilled_ends_its_effect_and_bots_may_enter_again`
+      (a cancel at Alpaca, an expiry and a rejection each end the manual
+      effect, on both routes)
+  - A refusal with no opposite-side order open still waits for the next
+    session outside the regular one. Existing test
     `test_exit_send_session.py::test_failed_extended_limit_waits_for_next_eligible_session_without_chasing`
     shows this for a pre-market limit the broker rejected after accepting it.
+- **A refusal with no opposite-side order open keeps the 120 s settle wait**,
+  whether Alpaca refused for another reason or the opposite order was placed
+  outside the Clerk. [test]
+  `test_a_refused_exit_with_no_opposite_order_open_is_sent_again_after_the_120_s_settle_wait`
 - **Escalation needs the other order to keep working into the regular session.**
   If B's order is still working after the 120 s wait, each regular-session pass
-  is a failure. After 480 s of them (120 s × 4) the watchdog raises `EXIT_STUCK`
-  (`:364-371`), 600 s after the refusal. Automatic re-drives stop and the owner
-  must flatten.
+  is a failure. After 480 s of them (120 s × 4) the watchdog raises `EXIT_STUCK`,
+  600 s after the refusal. Automatic re-drives stop and the owner must flatten.
+  #2622 left this unchanged.
   - In the test, B's buy stays `new` for ten regular-session minutes. No second
     order is sent, and the episode names "work in flight that could fill under
     it".
   - [test] `test_a_refused_exit_escalates_only_if_the_other_bots_order_keeps_working_eight_regular_session_minutes`
   - The same budget applies from 09:30 to an earlier refusal whose retry waited
-    for the open, if the other order (for example an extended-hours limit) is
-    still working then.
-- **Net effect.** A wash-trade refusal delays the other bot's exit: by two
-  minutes in the regular session, or to the next session outside it. It
-  becomes a task for the owner only when the opposite order keeps working
-  through 8 minutes of regular-session retries.
+    for the open, if the other order (for example the owner's resting limit)
+    is still working then.
+- **Net effect.** A wash-trade refusal delays the other bot's exit only until
+  the opposite order ends, in any session. It becomes a task for the owner
+  only when the opposite order keeps working through 8 minutes of
+  regular-session retries.
+- **Deploy warns.** The Deploy review says, in one line under Trades, which
+  other bot in the account already trades the chosen symbol ("Also traded
+  here by <bot>", the rest counted), as a warning, never a refusal
+  (`budget_deploy.same_symbol_note`). A refused ENTER is still dropped (owner
+  decision 2026-09-29).
 
 ## 3. Pattern day trading, the intraday margin rule and settlement
 
@@ -396,6 +448,12 @@ or the next session), and escalation when B's order keeps working through
    same session. Nothing is sent to be refused. Escalation stays as today.
 3. **Exits come first.** A cancels B's working ENTER, then sells.
 
+**Owner decision (2026-09-29, #2622): retry within seconds, plus a Deploy
+warning.** Neither option 2 as filed nor option 3 was chosen. A's refused exit
+is sent again on the first pass after the opposite order ends, in any session,
+and Deploy warns when another bot in the account already trades the symbol.
+A refused ENTER stays dropped, and escalation is unchanged (section 2).
+
 ## 6. Follow-ups (drafted; numbers filled in by the orchestrator)
 
 - **Follow-up A went into #2553** (comment on that issue): a refused or rejected
@@ -403,8 +461,8 @@ or the next session), and escalation when B's order keeps working through
   claim query. It has landed; the two cases now pass.
 - **#2621:** Alpaca's order-level 403 reads as a credentials failure, and
   its code is dropped.
-- **#2622:** check another bot's opposite working order before sending
-  (the owner decision above).
+- **#2622:** the owner decision above: a refused exit is re-sent once the
+  opposite order ends, and Deploy warns about another bot on the symbol.
 - **#2623:** one bot's fill refuses the other bots' entries until the next
   reading, and the decision is lost (owner decision).
 - **#2624:** remove the pattern-day-trader and day-trading-buying-power
@@ -426,7 +484,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-37 passed
+46 passed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -436,8 +494,10 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
   `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
   from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
 - **The former xfails.** The file carried strict xfails for #2621 (the error
-  mapping) and the two #2553 cash-claim cases. Each passed once its issue
-  landed, and its mark was removed.
+  mapping), the two #2553 cash-claim cases, and the two #2647 cases of a
+  manual buy limit cancelled at Alpaca (by the sweep and by its
+  `trade_updates` frame). Each passed once its issue landed, and its mark was
+  removed.
 
 ## Sources
 

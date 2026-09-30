@@ -52,7 +52,8 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
+from app.research.backtest_runs.evidence_provenance import ClosingBarSkipRecord, RunEvidenceProvenance
+from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_backtest import (
@@ -76,7 +77,7 @@ from app.services.parity_companion import (
     new_parity_group_id,
 )
 from app.services.run_verdict_service import compute_run_verdict
-from app.utils.session_anchors import et_day_end_ms, et_midnight_ms, persisted_execution_configuration
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
@@ -655,8 +656,6 @@ def _execute_engine_backtest_core(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
         slippage_per_share=Decimal(str(request.slippage_per_share)),
-        session_entry_cutoff=request.session_entry_cutoff,
-        force_flat_at=request.force_flat_at,
         limit_penetration=Decimal(str(request.limit_penetration)),
     )
     engine = _build_backtest_engine(
@@ -1051,6 +1050,15 @@ def _aggregate_backtest_response(
             statistics_basis="marked_equity_curve/v1",
             daily_return_convention="initial_capital_first_session/v1",
             data_availability_hash=lake_manifest,
+            closing_bar_convention=result.closing_bar_convention,
+            closing_bar_skips=tuple(
+                ClosingBarSkipRecord(
+                    bar_close_ms=skip.bar_close_ms,
+                    intent=skip.intent.value,
+                    close_price=float(skip.close_price),
+                )
+                for skip in result.closing_bar_skips
+            ),
         ),
         success=True,
         strategy_name=request.strategy_name,
@@ -1139,7 +1147,7 @@ def _persist_and_dispatch_companion(
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
-        execution_config=_persisted_execution_config(request, evaluation_start=date.fromisoformat(resolved_configuration.start_date))
+        execution_config=_persisted_execution_config(request)
         | ({"corporate_action_versions": response.corporate_action_versions} if response.corporate_action_versions else {}),
     )
     response.study_id = save.run_id
@@ -1167,15 +1175,12 @@ def _persist_and_dispatch_companion(
     return response
 
 
-def _persisted_execution_config(request: EngineBacktestRequest, *, evaluation_start: date) -> dict[str, Any]:
+def _persisted_execution_config(request: EngineBacktestRequest) -> dict[str, Any]:
     """Freeze execution settings through the shared Python/LEAN receipt seam."""
     return persisted_execution_configuration(
-        evaluation_start=evaluation_start,
         compatibility_profile=request.compatibility_profile,
         warmup_from_date=request.warmup_from_date,
         slippage_per_share=request.slippage_per_share,
-        session_entry_cutoff=request.session_entry_cutoff,
-        force_flat_at=request.force_flat_at,
         limit_penetration=request.limit_penetration,
     )
 

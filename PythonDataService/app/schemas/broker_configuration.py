@@ -116,8 +116,9 @@ class PaperXhAllowancesPayload(BaseModel):
     decision bar's close for a leg placed as the program decides, and the live
     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
     or the send-time re-price of an exit sent after its session. A
-    regular-hours run's EXIT on the day's last bar goes out after the close
-    as such a limit, so Start of a regular-hours run refuses
+    regular-hours run's exits outside the session -- a manual Flatten, the
+    watchdog's re-drive of a refused exit, an exit that reaches the broker
+    after the close -- are such limits, so Start of a regular-hours run refuses
     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
     never carried into a new deployment; resolving it requires Flatten before
     a fresh Deploy (#2504).

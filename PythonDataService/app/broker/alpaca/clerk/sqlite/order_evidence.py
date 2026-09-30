@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
+    ManualOrderCancelResultFacts,
     OrderFillObservedFacts,
     OrderSubmitAckedFacts,
     OrderSubmitFailedFacts,
@@ -32,7 +33,10 @@ from app.broker.alpaca.clerk.sqlite.folds import (
     order_observation_advances,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
+from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
+    manual_order_ending_copy,
+    manual_order_has_exact_terminal_coverage,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     OrderResource,
@@ -44,7 +48,10 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
-from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    UNFILLED_TERMINAL_STATES,
+    OrderProjectionReadError,
+)
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -86,17 +93,6 @@ def submit_absence_grace_ms() -> int:
 #: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
 TOTAL_PRICE_CONFLICT_ATOL = 0.01
 
-UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
-"""Terminal broker states that, with no recorded execution, are proven
-unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
-terminal snapshot can truthfully precede its execution slice on the
-websocket.
-
-Lives here rather than in either domain module because both read it: EXIT
-falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
-``ENTER_UNFILLED`` on it (#2006, the same ruling mirrored).
-"""
-
 
 __all__ = [
     "TOTAL_PRICE_CONFLICT_ATOL",
@@ -110,6 +106,7 @@ __all__ = [
     "fold_entry_never_accepted",
     "fold_execution_price_conflict",
     "fold_failed",
+    "fold_manual_order_ended_if_proven",
     "fold_order_acknowledgement",
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
@@ -121,6 +118,7 @@ __all__ = [
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
+    "withhold_unnamed_order",
 ]
 
 
@@ -240,6 +238,8 @@ def fold_order_evidence(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if simulated_authority:
         _fold_simulated_execution_evidence(
             repo,
@@ -601,6 +601,11 @@ def fold_order_acknowledgement(
     accidentally re-deriving another fill from ``order.filled_quantity``.
     ``fold_order_evidence`` above remains the explicitly labelled recovery
     path for sources that have no execution identity.
+
+    Every route that observes an order reaches this fold, so a manual order's
+    broker outcome is settled here too: a proven complete fill ends it
+    ``MANUAL_ORDER_FILLED``, and a proven unfilled remainder ends it through
+    :func:`fold_manual_order_ended_if_proven`.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -694,6 +699,97 @@ def fold_order_acknowledgement(
                 facts_json=canonicalize({}),
             )
         )
+    fold_manual_order_ended_if_proven(repo, order_ref=order_ref)
+
+
+def fold_manual_order_ended_if_proven(repo: ClerkSqliteRepository, *, order_ref: str) -> None:
+    """End a manual order the broker ended with its remainder unfilled (#2647).
+
+    The owner can cancel a Clerk manual order in Alpaca's own website, a DAY
+    limit expires at the close, and Alpaca can reject an order it accepted.
+    The acknowledgement records that ending on the order, but only a cancel
+    sent through the Clerk or a complete fill used to end the
+    ``MANUAL_ORDER`` effect, so it stayed ``in_progress`` for ever: every
+    bot's ``NEW_EXPOSURE`` was refused as ``MANUAL_ORDER_OUTSTANDING`` and a
+    bot's refused exit was held as Clerk work in flight on the symbol.
+
+    This is the one fold that ends it, on the manual-order terminal kinds the
+    cancellation path already used: ``MANUAL_ORDER_CANCELED`` for a cancel,
+    ``MANUAL_ORDER_TERMINAL`` for an expiry or a rejection. Their folds keep
+    the manual ticket in step. The ``why`` is the owner's copy from
+    ``manual_order_completion.manual_order_ending_copy``, which covers every
+    state gated on below (checked at import), so writing it cannot raise
+    mid-fold. A cancel sent through the Clerk ends the order here too,
+    because its exact lookup is folded through this acknowledgement before
+    it records its own result.
+
+    **Keyed on the order, never on a carrier.** A Clerk fold ends the effect
+    its transition is nested under, and an observation route may hand the
+    acknowledgement another effect. This takes only the order and appends
+    under the effect that owns it, so it cannot end anything else.
+
+    **Proof from the Clerk's own records**, so a stale or out-of-order
+    snapshot cannot end it early and a later observation of the same order,
+    in any state, can still end it:
+
+    - the order projection's broker state is one of
+      ``UNFILLED_TERMINAL_STATES``; terminal projections never regress, so
+      this is the ending the Clerk accepted;
+    - the recorded fills cover the broker's governing cumulative. A partial
+      fill keeps its shares and only the remainder ends, but a fill the
+      Clerk has not recorded yet must not be dropped: the sweep's worklist
+      keeps a short order until its exact lookup records the fill (#2305),
+      and ending the effect first would take it off that list for ever.
+
+    **Once.** Only a nonterminal ``MANUAL_ORDER`` effect ends, so a replayed
+    frame, the next sweep and a later Clerk cancel find it ended. The check
+    and the append share the repository write lock: the websocket and the
+    sweep's exact lookup fold on different threads, and two deliveries of
+    one ending still append it once.
+    """
+    with repo._write_lock:
+        order = repo.order(order_ref)
+        broker_state = (order.broker_state or "").lower() if order is not None else ""
+        if order is None or broker_state not in UNFILLED_TERMINAL_STATES:
+            return
+        owner = repo.effect_operation(order.effect_operation_id)
+        if (
+            owner is None
+            or owner.kind != "MANUAL_ORDER"
+            or owner.state not in NONTERMINAL_EFFECT_STATES
+            or repo.order_fills_short_of_broker_cumulative(order_ref)
+        ):
+            return
+        why = manual_order_ending_copy(repo, order=order)
+        canceled = broker_state == "canceled"
+        repo.append_transition(
+            TransitionInput(
+                command_id=owner.command_id,
+                effect_operation_id=owner.effect_operation_id,
+                order_ref=order_ref,
+                broker_order_id=order.broker_order_id,
+                broker_state=order.broker_state,
+                transition_kind="MANUAL_ORDER_CANCELED" if canceled else "MANUAL_ORDER_TERMINAL",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="failed",
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="MANUAL_ORDER_CANCELED" if canceled else "MANUAL_ORDER_TARGET_TERMINAL",
+                facts_json=ManualOrderCancelResultFacts(
+                    outcome="CANCELED" if canceled else "TARGET_TERMINAL",
+                    why=why,
+                ).to_facts_json(),
+            )
+        )
+    logger.info(
+        "Alpaca ended a manual order with its remainder unfilled",
+        extra={
+            "action": "manual_order_ended_at_broker",
+            "order_ref": order_ref,
+            "effect_operation_id": owner.effect_operation_id,
+            "broker_state": broker_state,
+        },
+    )
 
 
 def fold_enter_unfilled_if_proven(
@@ -763,8 +859,9 @@ def fold_enter_unfilled_if_proven(
 
     The remaining conditions:
 
-    - **ENTER only.** CANCEL and MANUAL_ORDER reach their own outcomes through
-      ``manual_order_cancellation`` and the manual ticket.
+    - **ENTER only.** A MANUAL_ORDER's unfilled ending is
+      :func:`fold_manual_order_ended_if_proven`; a CANCEL reaches its own
+      outcome through ``manual_order_cancellation``.
     - **Still nonterminal**, which is also what makes the fold idempotent: a
       poll, the reconciliation sweep and a trade-update frame all re-deliver
       the same dead order, and the second delivery finds it already ``failed``.
@@ -871,8 +968,11 @@ def fold_order_submission_response(
     observation, so withholding it would create a filled order with no
     durable position attribution. That port capability — never the
     aggregate's own spelling — is what routes the fold to the simulated
-    exact path (#2178).
+    exact path (#2178). A response missing its broker order id, status,
+    symbol or side folds as a lost one (:func:`withhold_unnamed_order`).
     """
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if trade_port_folds_simulated_evidence(trade):
         fold_order_evidence(
             repo,
@@ -923,6 +1023,55 @@ def fold_uncertain(
             facts_json=facts.to_facts_json(),
         )
     )
+
+
+def withhold_unnamed_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+) -> bool:
+    """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
+
+    Nothing of it can be folded: the acknowledgement keeps the first broker
+    order id it sees, so a blank one would be this order's broker identity
+    for ever; a blank status is no lifecycle state; and both fill folds take
+    the answer's symbol and side, so a blank symbol would credit a fill in
+    no instrument and a blank side is refused by the fills table, raising
+    out of the sweep or the stream. It is treated exactly like a lost
+    response -- nothing recorded, the effect folded ``unknown`` -- so the
+    sweep's exact lookup by ``client_order_id`` recovers the order once the
+    broker names it. The order type and time in force are not withheld: no
+    fold of our own order reads them. Every entrance of evidence about our
+    own order asks this first; a foreign order is contained by the
+    external-order fold. Returns whether the answer was withheld.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("broker order id", order.order_id),
+            ("status", order.status),
+            ("symbol", order.symbol),
+            ("side", order.side),
+        )
+        if not value.strip()
+    ]
+    if not missing:
+        return False
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
+    logger.warning(
+        "A broker answer about the Clerk's own order was incomplete and was withheld",
+        extra={
+            "action": "unnamed_order_evidence_withheld",
+            "order_ref": order_ref,
+            "effect_operation_id": effect_operation_id,
+            "missing": missing,
+        },
+    )
+    fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
+    return True
 
 
 @dataclass(frozen=True)

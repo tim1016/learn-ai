@@ -126,6 +126,21 @@ def test_late_decision_is_judged_against_the_one_allowance(
     assert (late.lateness_ms, late.allowance_ms) == (allowance_ms + 1, allowance_ms)
 
 
+@pytest.mark.parametrize("policy", [None, _policy(_RTH)])
+def test_a_decision_is_valid_until_the_last_instant_it_is_not_late(
+    monkeypatch: pytest.MonkeyPatch, policy: ContinuityPolicy | None
+) -> None:
+    """#2623: the time limit an ENTER waiting on an account reading carries is the lateness boundary."""
+    close_ms = session_open_ms_utc(_RTH_DAY) + 60_000
+    until_ms = fcp.decision_valid_until_ms(policy, close_ms)
+
+    _pin_wall_clock(monkeypatch, until_ms)
+    assert fcp.late_decision(policy, close_ms) is None
+
+    _pin_wall_clock(monkeypatch, until_ms + 1)
+    assert fcp.late_decision(policy, close_ms) is not None
+
+
 # --- G-2: the extended session's final minute ------------------------------
 
 
@@ -265,6 +280,17 @@ async def test_a_decision_inside_its_allowance_still_reaches_the_clerk(
 
 
 @pytest.mark.asyncio
+async def test_an_on_time_entry_tells_the_clerk_how_long_it_stays_on_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2623: an ENTER the Clerk holds for an account reading is dropped once it would be late."""
+    clerk, _receipts, close_ms = await _run_rth_enter(tmp_path, monkeypatch, lateness_ms=0)
+
+    (enter,) = clerk.calls
+    assert enter["decision_evidence"].decision_valid_until_ms == close_ms + DELIVERY_ALLOWANCE_MS
+
+
+@pytest.mark.asyncio
 async def test_a_late_exit_still_reaches_the_clerk_and_carries_its_lateness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -304,6 +330,8 @@ async def test_a_late_exit_still_reaches_the_clerk_and_carries_its_lateness(
     assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
     assert clerk.calls[0]["decision_evidence"].decision_lateness_ms is None
     assert clerk.calls[1]["decision_evidence"].decision_lateness_ms == 45_000
+    # An EXIT never waits for an account reading, so it carries no time limit.
+    assert clerk.calls[1]["decision_evidence"].decision_valid_until_ms is None
     (late_log,) = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision_late"]
     assert (late_log.exempt, late_log.intent, late_log.lateness_ms) == ("exit", "EXIT", 45_000)
 

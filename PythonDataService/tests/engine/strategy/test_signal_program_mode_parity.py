@@ -19,11 +19,13 @@ axes: how the evaluation *mode* for a bar is supplied, and how the resulting
 stage is *settled*.
 
 * Backtest: ``program.activate_for_backtest()`` sets a DECIDE default
-  (``engine.py`` ``run()``), and every consolidated bar is committed
-  unconditionally at the engine's drain seam,
-  ``program.session.commit_if_staged()`` (``engine.py``
-  ``_commit_staged_signal_program``). There is no concept of a blocked or
-  rejected decision in Backtest at all.
+  (``engine.py`` ``run()``), and every consolidated bar is committed at the
+  engine's drain seam, ``program.session.commit_if_staged()`` (``engine.py``
+  ``_settle_staged_signal_program``). The one exception is the closing-bar
+  rule (#2607): a decision on the session's closing bar settles DISCARD in
+  Backtest and is refused by both runners alike
+  (``bot_trade_strategy._refused_on_the_closing_bar``), so it cannot separate
+  the modes either. The qualified bars below exercise the committing path.
 * Dry Run and Paper: ``_build_signal_strategy`` calls
   ``program.activate_for_runner()`` for *both* (``bot_trade_strategy.py``),
   and both callers -- ``run_trade_bot`` (Paper) and ``run_dry_run_bot`` (Dry
@@ -221,7 +223,7 @@ def _replay_backtest(program: SignalProgram, bars: list[TradeBar]) -> list[Evalu
     ``program.activate_for_backtest()``; each consolidated bucket reaches
     ``program.on_consolidated_bar`` through the callback
     ``Strategy._signal_program_handler`` registers; and
-    ``_commit_staged_signal_program`` calls ``program.session.commit_if_staged()``.
+    ``_settle_staged_signal_program`` calls ``program.session.commit_if_staged()``.
     The mode is never passed in -- Backtest supplies it exclusively through
     the DECIDE default ``activate_for_backtest`` sets, which is precisely the
     axis this file claims to vary, so the replay must go through the same

@@ -36,12 +36,20 @@ def _certificate_lean_payload(run_id: str, symbol: str, **overrides) -> dict:
     return payload
 
 
+def _saved_id(outcome: service.SaveOutcome) -> int:
+    """Unwrap a ``SaveOutcome`` the row committed, or fail saying which way it went."""
+    assert outcome.status == "saved", outcome
+    assert outcome.run_id is not None
+    return outcome.run_id
+
+
 async def test_a_lean_companion_persisted_through_the_service_freezes_its_group(conn, unique: str) -> None:
     group = f"pg-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -51,11 +59,12 @@ async def test_a_lean_companion_persisted_through_the_service_freezes_its_group(
     )
     assert (await repo.get_parity_verdict(conn, group)).status == "pending"
 
-    right = await service.persist_run_payload(
-        _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
+    right = _saved_id(
+        await service.persist_run_payload(
+            _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
+        )
     )
 
-    assert right is not None
     verdict = await repo.get_parity_verdict(conn, group)
     assert verdict is not None and verdict.status in {"agree", "diverged", "unavailable"}
     assert verdict.left_run_id == left and verdict.right_run_id == right
@@ -65,20 +74,22 @@ async def test_a_lean_companion_persisted_through_the_service_freezes_its_group(
 async def test_an_engine_run_with_a_group_leaves_no_verdict_until_its_companion_lands(conn, unique: str) -> None:
     group = f"pg-{unique}"
 
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
 
-    assert left is not None
     assert await repo.get_parity_verdict(conn, group) is None
 
 
 async def test_marking_a_group_failed_through_the_service_transitions_only_a_pending_verdict(conn, unique: str) -> None:
     group = f"pg-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -97,10 +108,11 @@ async def test_marking_a_group_failed_through_the_service_transitions_only_a_pen
 async def test_a_companion_that_produced_no_result_settles_its_group_at_run_failed(conn, unique: str) -> None:
     """#1977: the group used to sit at ``pending`` for ever and the report polled it for ever."""
     group = f"pg-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -109,23 +121,24 @@ async def test_a_companion_that_produced_no_result_settles_its_group_at_run_fail
         verdict_json="{}",
     )
 
-    right = await service.persist_run_payload(
-        lean_payload(
-            f"companion-{group}",
-            symbol=unique,
-            parity_group_id=group,
-            requested_engine="both",
-            total_trades=0,
-            winning_trades=0,
-            losing_trades=0,
-            total_pnl=0.0,
-            win_rate=0.0,
-            trades=[],
-            parity_failure_detail="No normalized/result.json — LEAN run did not produce output",
+    _saved_id(
+        await service.persist_run_payload(
+            lean_payload(
+                f"companion-{group}",
+                symbol=unique,
+                parity_group_id=group,
+                requested_engine="both",
+                total_trades=0,
+                winning_trades=0,
+                losing_trades=0,
+                total_pnl=0.0,
+                win_rate=0.0,
+                trades=[],
+                parity_failure_detail="No normalized/result.json — LEAN run did not produce output",
+            )
         )
     )
 
-    assert right is not None  # the failed row still persists into run history
     verdict = await repo.get_parity_verdict(conn, group)
     assert verdict is not None and verdict.status == "run_failed"
     assert "No normalized/result.json" in verdict.verdict_json
@@ -136,10 +149,11 @@ async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none
 ) -> None:
     """#1977: a companion read timeout marked the group failed while the run was still going."""
     group = f"pg-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -151,11 +165,12 @@ async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none
         service.mark_parity_failed_sync, group, status="run_failed", detail="companion dispatch failed: ReadTimeout"
     )
 
-    right = await service.persist_run_payload(
-        _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
+    right = _saved_id(
+        await service.persist_run_payload(
+            _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
+        )
     )
 
-    assert right is not None
     verdict = await repo.get_parity_verdict(conn, group)
     assert verdict is not None and verdict.status in {"agree", "diverged"}
     assert verdict.right_run_id == right
@@ -173,10 +188,11 @@ async def test_a_committed_row_reports_its_id_even_when_the_settle_outruns_the_w
     caller is told the id, and told the settle is still running.
     """
     group = f"pg-slowsettle-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -194,12 +210,13 @@ async def test_a_committed_row_reports_its_id_even_when_the_settle_outruns_the_w
     monkeypatch.setattr(service, "settle_parity_for_lean_run", settle_after_the_caller_gives_up)
     monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
 
-    run_id = await service.persist_run_payload(
+    outcome = await service.persist_run_payload(
         _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
     )
 
-    assert run_id is not None, "a committed row was reported as unpersisted"
-    assert await repo.get_run(conn, run_id, trade_limit=None) is not None
+    assert outcome.status == "saved", "a committed row was reported as unpersisted"
+    assert outcome.run_id is not None
+    assert await repo.get_run(conn, outcome.run_id, trade_limit=None) is not None
 
     # And the settle it outran still lands.
     for _ in range(100):
@@ -221,10 +238,11 @@ async def test_the_settle_completes_after_the_caller_has_stopped_waiting(
     from the calling thread, and that hop never ran.
     """
     group = f"pg-{unique}"
-    left = await service.persist_run_payload(
-        _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+    left = _saved_id(
+        await service.persist_run_payload(
+            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
+        )
     )
-    assert left is not None
     await asyncio.to_thread(
         service.record_parity_disposition_sync,
         parity_group_id=group,
@@ -242,11 +260,11 @@ async def test_the_settle_completes_after_the_caller_has_stopped_waiting(
     monkeypatch.setattr(repo, "insert_run", insert_after_the_caller_gives_up)
     monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
 
-    run_id = await service.persist_run_payload(
+    outcome = await service.persist_run_payload(
         _certificate_lean_payload(f"companion-{group}", unique, parity_group_id=group, requested_engine="both")
     )
 
-    assert run_id is None  # the caller was told nothing, not that it failed
+    assert outcome.status == "unknown"  # the caller was told nothing, not that it failed
     for _ in range(100):
         verdict = await repo.get_parity_verdict(conn, group)
         if verdict is not None and verdict.status != "pending":

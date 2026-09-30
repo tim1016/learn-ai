@@ -165,6 +165,18 @@ def risk_fill_sequence(repo: ClerkSqliteRepository) -> int:
         return int(repo._conn.execute("SELECT COALESCE(MAX(recorded_transition_sequence), 0) FROM fills").fetchone()[0])
 
 
+def reading_covers_executions(repo: ClerkSqliteRepository, observation: AccountObservation) -> bool:
+    """Whether ``observation`` was read after every execution the Clerk has recorded.
+
+    The one execution-watermark rule (#2543): a reading taken before an
+    execution cannot say what that execution did to the account, so it admits
+    no new exposure until a newer reading covers it. Admission, the sync's
+    judgement of its own reading and the reading an ENTER waits for (#2623)
+    all ask this one question.
+    """
+    return observation.risk_fill_sequence == risk_fill_sequence(repo)
+
+
 def risk_evidence_ready(repo: ClerkSqliteRepository, *, now_ms: int) -> bool:
     """Canonical fees/coverage gate spending without subtracting fees from equity twice."""
     return repo.fee_attribution(now_ms=now_ms).known

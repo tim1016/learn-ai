@@ -34,13 +34,18 @@ originally captured to reconcile.
   `set_end_date(2026, 4, 15)`). The generator neither sets nor overrides a
   window — `scripts/generate_signal_program_trace_corpus.py`'s
   `_entry_for_cell` builds the registered strategy and hands the cell's
-  minute bars to `BacktestEngine(InMemoryDataReader(...))`, whose
+  minute bars to `BacktestEngine.for_decision_identity(InMemoryDataReader(...))`, whose
   `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
   window the strategy configured for itself. Every cell's data runs to
   2026-04-30, so each cell's final ~11 trading days fall outside this
   strategy's own 2026-04-15 end date and are not replayed into the corpus —
   the same truncation `ema_crossover_signal`/`sma_crossover` already accept
   from their own (earlier, 2026-03-27) fixed end dates.
+- Decision identity: the replay commits every staged decision
+  (`BacktestEngine.for_decision_identity`, the LEAN-compatibility
+  profile's convention). The closing-bar rule (#2607) is an execution
+  disposition applied after decision identity, in live and in every other
+  backtest, so it never changes this corpus.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   there is no external reference this promotion is tolerance-compared
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the
