@@ -166,7 +166,6 @@ def test_generated_contract_removes_generic_mutations_but_keeps_read_evidence() 
 def test_generated_contract_preserves_sqlite_custody_routes() -> None:
     paths = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))["paths"]
     required_operations = {
-        "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": "post",
         "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": "post",
         "/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile": "post",
         "/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline": "get",

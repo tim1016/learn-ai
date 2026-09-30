@@ -362,11 +362,6 @@
       "path_template": "/accounts/{account_id}/custody/recovery-actions/execute",
       "requires_account": true
     },
-    "custody_runs_start": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/custody/bots/{sid}/runs/start",
-      "requires_account": true
-    },
     "custody_runs_stop": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/runs/stop",

@@ -707,17 +707,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             ),
         ),
         _op(
-            "custody_runs_start",
-            "POST",
-            "/accounts/{account_id}/custody/bots/{sid}/runs/start",
-            capability=Capability.CUSTODY_COMMAND,
-            idempotency=_DURABLE,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/runs/start"
-            ),
-        ),
-        _op(
             "custody_runs_stop",
             "POST",
             "/accounts/{account_id}/custody/bots/{sid}/runs/stop",

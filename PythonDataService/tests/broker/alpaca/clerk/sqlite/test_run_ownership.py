@@ -145,7 +145,7 @@ async def test_a_garbage_collected_owner_counts_as_gone(tmp_path: Path) -> None:
 async def test_an_unowned_run_is_retired_after_one_pass_of_grace(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Fail closed: a run no in-process runner holds (``/runs/start``) is retired."""
+    """Fail closed: a run no in-process runner holds is retired."""
     repo, facade, broker = _facade(tmp_path)
     order_ref = await _working_enter(facade)
     sid = _binding().strategy_instance_id
