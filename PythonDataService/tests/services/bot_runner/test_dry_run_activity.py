@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import (
@@ -251,14 +252,13 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
     monkeypatch: pytest.MonkeyPatch,
     _isolated_synthetic_authority: None,
 ) -> None:
-    """#2596: the sandbox predicts the live Clerk's refusal of a last-bar market ENTER.
+    """#2607: the sandbox refuses a closing-bar ENTER exactly as Live does.
 
-    A Dry Run reads no live market clock, but its synthetic Clerk asks the same
-    calendar question the live one does: a market order sent at 16:00:00.6
-    reaches the broker after the close, where Alpaca would hold it for the next
-    open. So QQQ's first EMA ENTER, decided on its second session's last
-    bucket, is refused -- and no simulated fill is recorded at a close Live
-    never trades.
+    QQQ's first EMA ENTER is decided on its second session's last bucket --
+    the closing bar, decided only after the close. The Dry Run runner shares
+    the live runner's closing-bar screen, so the ENTER is discarded and
+    receipted ``CLOSING_BAR`` before its synthetic Clerk is reached, and no
+    simulated fill is recorded at a close Live never trades.
     """
     from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
     from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
@@ -306,11 +306,7 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
 
     assert registry.dry_run_activity("alpaca", _SID) == []
     (refusal,) = _refusals()
-    assert (refusal["reason_code"], refusal["decision_bar_close_ms"]) == ("MARKET_CLOSED", close_ms)
-    assert refusal["refusal_reason"] == (
-        "The regular session has closed, or closes within seconds. A market order sent now "
-        "could reach the broker after the close and wait there until the next open."
-    )
+    assert (refusal["reason_code"], refusal["decision_bar_close_ms"]) == (CLOSING_BAR_REASON_CODE, close_ms)
     assert clerk.calls == []
     await registry.stop("alpaca", _SID)
 

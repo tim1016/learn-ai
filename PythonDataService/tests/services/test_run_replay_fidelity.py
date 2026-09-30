@@ -8,6 +8,7 @@ from dataclasses import replace
 import pytest
 
 from app.engine.strategy.signal_program import Settlement, trace_root
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.decision_session import RunDecisionSession
@@ -163,6 +164,38 @@ async def test_run_fidelity_over_bars_classifies_a_decision_late_enter_as_expect
     assert result.drift_count == 0
     late = next(d for d in result.divergences if d.reason_code == "DECISION_LATE")
     assert (late.classification, late.replay_staged, late.live_outcome) == (
+        "expected_live_effect",
+        "ENTER",
+        "blocked",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_classifies_a_closing_bar_refusal_as_expected() -> None:
+    """#2607: the runner refuses a decision taken on the session's closing bar.
+
+    Its ``blocked``/``CLOSING_BAR`` receipt must replay as an expected live
+    effect -- the replay re-derives the math, not the runner's refusals --
+    rather than as ``UNRECOGNIZED_BLOCK_REASON`` drift.
+    """
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=True)
+    blocked = next(i for i, record in enumerate(records) if record.outcome == "blocked")
+    records[blocked] = replace(records[blocked], reason_code=CLOSING_BAR_REASON_CODE)
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"),
+        provider="fake-phase",
+        warmup=[],
+        live=_retained(bars),
+        records=records,
+        captured_decisions={},
+        session=_RTH_SESSION,
+    )
+
+    assert result.drift_count == 0
+    refused = next(d for d in result.divergences if d.reason_code == CLOSING_BAR_REASON_CODE)
+    assert (refused.classification, refused.replay_staged, refused.live_outcome) == (
         "expected_live_effect",
         "ENTER",
         "blocked",

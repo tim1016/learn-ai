@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASO
 from app.broker.alpaca.paths import safe_path_component
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
@@ -349,6 +350,11 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         # delivery allowance (#2303/#2345). Wall-clock lateness is live-only;
         # a replay cannot see it.
         DECISION_LATE_REASON_CODE,
+        # bot_trade_strategy._refused_on_the_closing_bar: a decision on the
+        # session's closing bar is never sent (#2607). The replay re-derives
+        # the decision math with every decision committed, not the runner's
+        # refusal of it.
+        CLOSING_BAR_REASON_CODE,
         # app/services/market_liveness.py — every liveness fact reason that can
         # block an ENTER at the pre-Clerk gate. MARKET_TRADABLE is deliberately
         # absent: it never blocks.

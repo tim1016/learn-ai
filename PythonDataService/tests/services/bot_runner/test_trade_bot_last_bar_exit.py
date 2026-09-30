@@ -1,19 +1,24 @@
-"""#2440 through the runner: a regular-hours run's last-bar EXIT leaves as an after-hours limit.
+"""#2607 through the runner: a regular-hours run's last-bar EXIT is not sent after the close.
 
-The Clerk's own suites pin the rule on the facade
-(``test_runtime_program_leg.py``). This drives it end to end instead: the real
-``run_trade_bot`` runs the sealed ``deployment_validation`` program on a
-``use_rth=True`` binding, enters, and decides its EXIT on the bar that closes
-at the regular close -- so the EXIT reaches a real ``SqliteAlpacaClerkFacade``
-after the session has ended. A market DAY leg sent then is one Alpaca queues
-for the next open; the Clerk must send the extended-hours DAY limit instead,
-priced off the decision bar's close and the exit allowance.
+The bar that closes at the session close is decided only after the close, so
+the runner refuses its decision before the Clerk: the program EXIT settles
+DISCARD (it stays due for the next session's first decision) and a
+``CLOSING_BAR`` receipt records the refusal. This supersedes, for program
+decisions, #2440's after-hours limit for a last-bar EXIT; manual Flatten and
+the watchdog's re-drive of a refused exit keep that path, and the Clerk's own
+suites (``test_runtime_program_leg.py``, ``test_exit_send_session.py``) still
+pin it on the facade.
+
+This drives the real ``run_trade_bot`` over the sealed
+``deployment_validation`` program on a ``use_rth=True`` binding: it enters,
+then decides its EXIT on the bar that closes at the regular close.
 
 The shared replay clock drives session rules at the fed bar, including the final close.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -28,10 +33,10 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide, OrderType
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import SourceBarLedger
@@ -129,18 +134,17 @@ def _regular_hours_binding() -> BrokerBotBinding:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stale_snapshot", [False, True])
 @pytest.mark.parametrize("day", [date(2024, 1, 2), date(2024, 11, 29)])
 @pytest.mark.parametrize("clock_read_before_close", [False, True])
-async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_hours_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool, day: date,
-    clock_read_before_close: bool,
+async def test_a_regular_hours_exit_decided_on_the_last_bar_is_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, day: date, clock_read_before_close: bool,
 ) -> None:
-    """The last bar's EXIT is the extended-hours DAY limit, never a market order queued for the open.
+    """The last bar's EXIT never reaches the Clerk, on a regular day or a half-day.
 
-    ``clock_read_before_close`` pins #2596's boundary for exits: the last clock
-    answer read before the close shows the market closed once the close has
-    passed, and the EXIT leaves exactly as it does on a fresh closed answer.
+    Only the ENTER is on the wire. The runner refuses the closing-bar EXIT with
+    a ``CLOSING_BAR`` receipt before any clock or Clerk is consulted, so it
+    holds whichever clock answer the strategy gate would have read, and even
+    though this account's policy could have priced an after-hours limit.
     """
     close_ms = session_close_ms_utc(day)
     if clock_read_before_close:
@@ -158,23 +162,6 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_h
         lease_ttl_ms=_REPLAY_LEASE_TTL_MS,
     )
     broker = _EntryFillingBroker()
-    if stale_snapshot:
-        original_submit = broker.submit
-
-        async def submit_then_lose_snapshot(leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
-            order = await original_submit(leg, client_order_id=client_order_id)
-            if leg.side is OrderSide.BUY:
-                raise_uncertainty(
-                    repo, strategy_instance_id=None, reason_code="BROKER_SNAPSHOT_STALE",
-                    headline="Broker account truth is unavailable",
-                    explanation="The account snapshot failed after the entry filled.",
-                    operator_impact="Unproven reductions are paused.",
-                    next_step="Reconcile after connectivity recovers.",
-                    cause_facts={"snapshot": "open_orders_and_positions"}, severity="error",
-                )
-            return order
-
-        monkeypatch.setattr(broker, "submit", submit_then_lose_snapshot)
     facade = SqliteAlpacaClerkFacade(
         repo=repo, read=broker, trade=broker, account_mode="paper", program_leg_policy=_POLICY
     )
@@ -194,39 +181,18 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_h
         await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger)
         await facade.drain_effects()
 
-        if stale_snapshot:
-            # The real capability refusal happens after acceptance. The Clerk
-            # retains custody and the runner commits the accepted evaluation;
-            # there is no unowned EXIT waiting for another strategy bar (#2482).
-            assert len(broker.submitted_legs) == 1
-            [pending] = repo.reconcilable_effect_operations()
-            assert pending.kind == "EXIT"
-            receipts = SqliteDecisionReceipts(repo, strategy_instance_id=_SID).tail(20)
-            assert receipts[-1].outcome == "exit_intent"
-            assert feed.bars_consumed == 3
-            await facade.reconcile_once()
-            assert feed.bars_consumed == 3
-
-        enter_leg, exit_leg = broker.submitted_legs
+        (enter_leg,) = broker.submitted_legs
         assert (enter_leg.side, enter_leg.order_type, enter_leg.extended_hours) == (
             OrderSide.BUY,
             OrderType.MARKET,
             False,
         )
-        assert (
-            exit_leg.side,
-            exit_leg.quantity,
-            exit_leg.order_type,
-            exit_leg.time_in_force,
-            exit_leg.extended_hours,
-            exit_leg.limit_price,
-        ) == (
-            OrderSide.SELL,
-            1.0,
-            OrderType.LIMIT,
-            TimeInForce.DAY,
-            True,
-            399.20,  # floor_tick(400.00 × (1 − 20 / 10⁴)): the last bar's close less the exit allowance
+        last = SqliteDecisionReceipts(repo, strategy_instance_id=_SID).tail(20)[-1]
+        facts = json.loads(last.facts_json)
+        assert (last.outcome, facts["reason_code"], facts["decision_bar_close_ms"]) == (
+            "blocked",
+            CLOSING_BAR_REASON_CODE,
+            close_ms,
         )
     finally:
         set_alpaca_clerk(None)

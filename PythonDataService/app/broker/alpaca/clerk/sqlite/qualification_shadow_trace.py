@@ -228,7 +228,7 @@ def _reference_backtest_traces(
     # No bars, no dates to pin: the engine reads nothing whatever its window.
     if bars:
         pin_strategy_window(strategy, et_date_at_ms(bars[0].start_ms), et_date_at_ms(bars[-1].start_ms))
-    result = BacktestEngine(InMemoryDataReader(list(bars))).run(strategy)
+    result = BacktestEngine.for_decision_identity(InMemoryDataReader(list(bars))).run(strategy)
     # Every bar the engine processes appends exactly one equity point
     # (``BacktestResult``), so this is the count it read.
     if len(result.equity_curve) != len(bars):

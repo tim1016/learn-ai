@@ -39,6 +39,7 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     trace_root,
 )
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -955,6 +956,8 @@ async def run_trade_bot(
                     reason_code="STOPPED_OBSERVE_ONLY",
                 )
                 continue
+            if _refused_on_the_closing_bar(decision_receipts, binding=binding, evaluation=evaluation, intent=intent):
+                continue
             lateness = _screen_late_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
             )
@@ -1192,6 +1195,52 @@ def _screen_late_decision(
     return _LatenessScreen(refused=True)
 
 
+def _refused_on_the_closing_bar(
+    decision_receipts: SqliteDecisionReceipts,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+) -> bool:
+    """Refuse a decision taken on the session's closing bar (#2607).
+
+    Shared by both runners. The bucket that ends at the close is decided only
+    after the market has closed, so its decision is never sent: DISCARD -- the
+    refused-decision path, so an ENTER is dropped and an EXIT stays due for the
+    next session's first decision -- plus a protected ``blocked`` receipt
+    naming ``CLOSING_BAR``. The backtest settles the same bar the same way
+    (``BacktestEngine``), and both read the one predicate
+    (``app.lean_sidecar.closing_bar``). The Clerk's market-closed gate stays
+    the backstop behind this screen.
+
+    Returns whether the decision was refused.
+    """
+    if not is_closing_bar(evaluation.decision_bar_close_ms):
+        return False
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=CLOSING_BAR_REASON_CODE,
+    )
+    logger.info(
+        "Bot decision on the session's closing bar not sent",
+        extra={
+            "action": "bot_closing_bar_decision_refused",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "intent": intent.kind.value,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+        },
+    )
+    return True
+
+
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
     return (
         f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
@@ -1330,6 +1379,8 @@ async def run_dry_run_bot(
                         "bar_end_ms": intent.bar_close_ms,
                     },
                 )
+                continue
+            if _refused_on_the_closing_bar(decision_receipts, binding=binding, evaluation=evaluation, intent=intent):
                 continue
             lateness = _screen_late_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity

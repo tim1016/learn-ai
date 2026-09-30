@@ -31,6 +31,9 @@ from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.framework.insight_manager import InsightManager
 from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import Strategy, StrategyContext
+from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.signal_program import Settlement
+from app.lean_sidecar.closing_bar import ClosingBarConvention, is_closing_bar
 from app.utils.timestamps import ny_datetime
 
 
@@ -64,12 +67,28 @@ class _ActiveBracket:
     fill_time_ms: int
 
 
+@dataclass(frozen=True)
+class ClosingBarSkip:
+    """One Signal Program decision the closing-bar rule set aside (#2607).
+
+    An ENTER here produced no trade. An EXIT stayed due and was decided again
+    on the next session's first decision, where it filled.
+    """
+
+    bar_close_ms: int
+    intent: SignalIntentKind
+    close_price: Decimal
+
+
 @dataclass
 class BacktestResult:
     initial_cash: Decimal
     final_equity: Decimal
     net_profit: Decimal
     total_fees: Decimal
+    # The run's closing-bar convention, and every decision it set aside --
+    # always empty under the LEAN-compatibility profile, which sets none aside.
+    closing_bar_convention: ClosingBarConvention
     order_events: list[OrderEvent] = field(default_factory=list)
     log_lines: list[str] = field(default_factory=list)
     # Retained bar data for LEAN statistics computation. Each entry is a
@@ -83,6 +102,7 @@ class BacktestResult:
     # scored after their prediction period expires.
     insights: list = field(default_factory=list)
     insight_summary: dict = field(default_factory=dict)
+    closing_bar_skips: list[ClosingBarSkip] = field(default_factory=list)
 
 
 # The one failure every caller reports for a result with an empty
@@ -138,6 +158,25 @@ class BacktestEngine:
         # plain-floor policy; LEAN-pinned callers (cross_runner) pass
         # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
         self.sizing_model = sizing_model or SimpleFloorSizing()
+
+    @classmethod
+    def for_decision_identity(cls, data_source: LeanMinuteDataReader | LeanDailyDataReader) -> BacktestEngine:
+        """An engine whose runs commit every staged Signal Program decision.
+
+        Decision identity -- a program's golden trace root, and the reference
+        trace a live run's decisions are compared with
+        (``qualification_shadow_trace``) -- is the program's decision math with
+        every decision committed; the live adapter's own decision stream
+        (``bot_trade_strategy.strategy_evaluations``) is the same. The
+        closing-bar rule (#2607) is an execution disposition applied after it,
+        by the live runners and by every other backtest, exactly like the
+        runners' other refusals. So a replay that mints or checks decision
+        identity runs under the one convention that commits every decision:
+        the LEAN-compatibility profile's. An ``EvaluationTrace`` holds no fill,
+        and that profile fills a closing-bar order within the same engine step
+        as any other, so the traces are the ones committing everything yields.
+        """
+        return cls(data_source, fill_model=FillModel(fill_stale_signal_at_current_open=True))
 
     def run(
         self,
@@ -228,6 +267,7 @@ class BacktestEngine:
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
         equity_curve: list[EquitySnapshot] = []
+        closing_bar_skips: list[ClosingBarSkip] = []
 
         active_brackets: list[_ActiveBracket] = []
         resting_limit_orders: list[Order] = []
@@ -334,6 +374,7 @@ class BacktestEngine:
                     order_events=order_events,
                     equity_curve=equity_curve,
                     retained_bars=retained_bars,
+                    closing_bar_skips=closing_bar_skips,
                 )
                 evaluation_pending = False
 
@@ -407,11 +448,11 @@ class BacktestEngine:
 
             # A registered Signal Program stages its semantic decision while
             # the consolidator callback runs. Backtest is the compatibility
-            # adapter: it commits that stage before the existing order-drain
+            # adapter: it settles that stage before the existing order-drain
             # phase, preserving historical fill timing while keeping the
             # program's explicit advance/settle boundary available to other
             # runtimes.
-            self._commit_staged_signal_program(strategy)
+            self._settle_staged_signal_program(strategy, closing_bar_skips)
 
             # ----- Session entry cutoff: drop any order submitted after
             # the cutoff that would GROW |position|. Exits (reductions
@@ -553,6 +594,7 @@ class BacktestEngine:
             equity_curve=equity_curve,
             order_events=order_events,
             register_bracket=_register_bracket_if_needed,
+            closing_bar_skips=closing_bar_skips,
         )
 
         insight_summary = ctx.insight_manager.get_summary()
@@ -564,12 +606,14 @@ class BacktestEngine:
             final_equity=final_equity,
             net_profit=final_equity - portfolio.initial_cash,
             total_fees=portfolio.total_fees,
+            closing_bar_convention=self.fill_model.closing_bar_convention,
             order_events=order_events,
             log_lines=list(ctx.log_lines),
             bars=retained_bars,
             equity_curve=equity_curve,
             insights=ctx.insight_manager.all_insights,
             insight_summary=insight_summary.to_dict(),
+            closing_bar_skips=closing_bar_skips,
         )
 
     # ------------------------------------------------------------------
@@ -589,6 +633,7 @@ class BacktestEngine:
         order_events: list[OrderEvent],
         equity_curve: list[EquitySnapshot],
         retained_bars: list[TradeBar],
+        closing_bar_skips: list[ClosingBarSkip],
     ) -> None:
         """Cross from warmup into evaluation: flush, assert readiness, reset.
 
@@ -617,7 +662,7 @@ class BacktestEngine:
         """
         for consolidator in ctx.get_consolidators(symbol):
             consolidator.scan(evaluation_start_ms)
-        self._commit_staged_signal_program(strategy)
+        self._settle_staged_signal_program(strategy, closing_bar_skips)
 
         program = strategy.signal_program
         if program is not None:
@@ -646,6 +691,7 @@ class BacktestEngine:
         order_events.clear()
         equity_curve.clear()
         retained_bars.clear()
+        closing_bar_skips.clear()
         ctx.log(f"[EVALUATION START] {ny_datetime(evaluation_start_ms)} — warmup state discarded, indicators primed")
 
     def _finalize(
@@ -660,6 +706,7 @@ class BacktestEngine:
         equity_curve: list[EquitySnapshot],
         order_events: list[OrderEvent],
         register_bracket: Callable[[Order, OrderEvent], None],
+        closing_bar_skips: list[ClosingBarSkip],
     ) -> None:
         """Close out the run once the bar stream is exhausted.
 
@@ -691,7 +738,7 @@ class BacktestEngine:
         # still dropped — matching LEAN, which does not emit partial bars.
         for consolidator in ctx.get_consolidators(symbol):
             consolidator.scan(previous_minute_bar.end_ms)
-        self._commit_staged_signal_program(strategy)
+        self._settle_staged_signal_program(strategy, closing_bar_skips)
         # A market order submitted from the final consolidated bar's
         # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
         # mode — the same as any in-loop bar, mirroring LEAN's
@@ -857,9 +904,36 @@ class BacktestEngine:
         """
         return getattr(consolidator, "_last_fired_bar", None)
 
-    @staticmethod
-    def _commit_staged_signal_program(strategy: Strategy) -> None:
-        """Apply a registry-owned staged program at Backtest's legacy seam."""
+    def _settle_staged_signal_program(self, strategy: Strategy, closing_bar_skips: list[ClosingBarSkip]) -> None:
+        """Settle a registry-owned staged program at Backtest's legacy seam.
+
+        A staged decision commits, except under the closing-bar rule (#2607):
+        outside the LEAN-compatibility profile, a decision with an intent on
+        the session's closing bar settles DISCARD -- the refused-decision path
+        live takes when it declines to send that bar's decision
+        (``app.lean_sidecar.closing_bar``). An ENTER is dropped; an EXIT stays
+        due, so the program decides it again on the next session's first
+        bucket. Each such decision is recorded in ``closing_bar_skips``.
+        """
         program = strategy.signal_program
-        if program is not None:
+        if program is None:
+            return
+        stage = program.session.active_stage
+        if (
+            stage is None
+            or not stage.intents
+            or self.fill_model.closing_bar_convention is not ClosingBarConvention.SKIP_CLOSING_BAR
+            or not is_closing_bar(stage.bar.end_ms)
+        ):
             program.session.commit_if_staged()
+            return
+        program.session.settle(Settlement.DISCARD)
+        for intent in stage.intents:
+            closing_bar_skips.append(
+                ClosingBarSkip(bar_close_ms=stage.bar.end_ms, intent=intent.kind, close_price=stage.bar.close)
+            )
+            if strategy.ctx is not None:
+                strategy.ctx.log(
+                    f"[CLOSING BAR] {intent.kind.value} decided on the session's closing bar "
+                    f"{ny_datetime(stage.bar.end_ms)} was not acted on (#2607)"
+                )
