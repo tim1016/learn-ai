@@ -291,6 +291,25 @@ def test_preview_asks_ibkr_for_an_unwatched_symbol_and_recovers_once_its_quote_l
     assert "position_headroom" in {shortcut.key for shortcut in ready.shortcuts}
 
 
+def test_a_disconnected_feed_is_unavailable_with_its_own_copy_not_a_price_wait(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2559: with the IBKR stream down, no quote can arrive on any re-check, so
+    the preview must not promise one. The state and the copy both differ from
+    a connected feed's first-quote wait."""
+    store = market_liveness.get_market_liveness_store()
+    _publish_book()
+    store.mark_stream_disconnected(observed_at_ms=NOON)
+    monkeypatch.setattr("app.utils.timestamps.now_ms_utc", lambda: NOON)
+
+    down = budget_deploy.preview_budget("BUDGET-PAPER", _request(symbol="NVDA"), resolved_parameters={})
+
+    assert down.state == "unavailable"
+    assert "feed is unavailable" in down.detail
+    assert "fresh IBKR price" not in down.detail
+    assert down.review_token is None and down.shortcuts == ()
+
+
 def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
     with pytest.raises(ValidationError):
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
@@ -387,7 +406,11 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
     """#2550 review: Deploy commits the private authority's budget before the runner
     records the binding. A crash in between must leave the committed command
     recoverable from that authority's own durable evidence, not a 404 forever.
-    Its recovery only releases: the orphaned run stops and the command fails."""
+
+    #2559: the recovery GET is now a read -- it appends no custody
+    transition and the command stays pending -- and a restart's boot
+    restoration is what releases the orphan, after which the receipt reads
+    failed."""
     from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
     from app.schemas.deployment_budget import DeployBudgetConsent
     from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -426,14 +449,39 @@ async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_b
         monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: primary)
         monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: recovered)
 
+        # The orphan's own durable evidence, read without writing it: count
+        # the private store's custody transitions around the GET.
+        sim_repo = ClerkSqliteRepository.open(
+            account_id=f"sim:{sid}", artifacts_root=tmp_path, clock=clock,
+        )
+        transitions_before = len(sim_repo.custody_transitions())
+        sim_repo.close()
+
         receipt = await budget_deploy.command_receipt("PARENT", _submitted(sid))
 
         assert receipt is not None
-        assert receipt.status == "failed" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
+        assert receipt.status == "pending" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
         assert receipt.run_id == f"{sid}:run-1"
         # A read composes nothing that outlives it and records no binding.
         assert get_clerk_runtime(f"sim:{sid}") is None
         assert recovered.bindings_for_broker("alpaca") == []
+        # A read appends no custody transition (#2559): the orphan's release
+        # belongs to boot's restoration, not to whoever happens to ask.
+        sim_repo = ClerkSqliteRepository.open(
+            account_id=f"sim:{sid}", artifacts_root=tmp_path, clock=clock,
+        )
+        try:
+            assert len(sim_repo.custody_transitions()) == transitions_before
+            assert sim_repo.active_run(sid) is not None  # still orphaned, still pending
+        finally:
+            sim_repo.close()
+
+        # The restart's boot restoration releases the orphan through the same
+        # recovery path bound Dry Runs use; the receipt then reads failed.
+        await recovered.start_dry_run_restoration()
+        receipt = await budget_deploy.command_receipt("PARENT", _submitted(sid))
+        assert receipt is not None
+        assert receipt.status == "failed"
         # An identity no private authority ever held still reads the primary.
         assert await budget_deploy.command_receipt("PARENT", _submitted("never-deployed")) is None
     finally:

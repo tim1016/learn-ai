@@ -75,7 +75,7 @@ from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster
-from app.services.market_liveness import prepared_top_of_book
+from app.services.market_liveness import prepared_top_of_book, status_stream_connected
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,18 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
     try:
         quote = prepared_top_of_book(request.symbol, now)
         if quote is None:
+            if not status_stream_connected(now):
+                # Not a short wait, and re-checking cannot help until the
+                # feed returns: say so, rather than promising a price that
+                # only a connected feed can deliver (#2559).
+                return DeploymentBudgetPreview(
+                    state="unavailable",
+                    detail=(
+                        "The IBKR market-data feed is unavailable, so this instrument cannot be "
+                        "priced. Restore the connection, then review the budget."
+                    ),
+                    world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                )
             # The read above asked IBKR for this symbol; its quote arrives with
             # a later snapshot, so the client re-checks instead of giving up.
             return DeploymentBudgetPreview(
