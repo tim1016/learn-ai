@@ -11,7 +11,7 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED
-from app.broker.alpaca.clerk.money import display_cents, dollars
+from app.broker.alpaca.clerk.money import display_dollars
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import EnvelopeReading
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.contract.errors import BrokerError
@@ -145,8 +145,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             outcome="refused",
             reason_code=LIVE_ENVELOPE_LOSS_HOLD_STANDS,
             detail=(
-                f"Day P&L {dollars(display_cents(day_pnl.display_total_usd))} USD is still at or below the "
-                f"{dollars(display_cents(reading.display_loss_limit_usd))} USD loss limit {limit_source}. "
+                f"Day P&L {display_dollars(day_pnl.display_total_usd)} USD is still at or below the "
+                f"{display_dollars(reading.display_loss_limit_usd)} USD loss limit {limit_source}. "
                 "The hold stands."
             ),
         )

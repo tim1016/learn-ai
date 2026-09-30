@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from app.broker.alpaca.clerk.money import display_cents, dollars, normalize_money
+from app.broker.alpaca.clerk.money import recorded_dollars
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
@@ -130,8 +130,8 @@ def account_hold_envelope(
         explanation = (
             "Account day P&L — current equity minus prior regular-session-close "
             "equity, net of deposits and withdrawals after that close — reached "
-            f"{dollars(display_cents(normalize_money(loss.day_pnl_usd)))} USD against a loss limit of "
-            f"{dollars(display_cents(normalize_money(loss.loss_limit_usd)))} USD. Every ENTER on the account is refused; "
+            f"{recorded_dollars(loss.day_pnl_usd)} USD against a loss limit of "
+            f"{recorded_dollars(loss.loss_limit_usd)} USD. Every ENTER on the account is refused; "
             "every EXIT still runs, so each program keeps managing its own position."
         )
         operator_impact = "New entries are held account-wide; exits are unaffected."

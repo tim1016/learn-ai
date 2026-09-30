@@ -417,6 +417,7 @@ __all__ = [
     "LiveEnvelopeGate",
     "LiveEnvelopeIncomplete",
     "LiveEnvelopeValues",
+    "display_loss_limit_usd",
     "envelope_agreement",
     "loss_breached",
     "loss_limit_usd",
