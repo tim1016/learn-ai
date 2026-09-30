@@ -5,7 +5,8 @@ from __future__ import annotations
 from app.lean_sidecar.trading_calendar import next_trading_day
 from app.schemas.run_admission import StartWindowFact
 from app.services.session_authority import scheduled_exchange_phase_at_ms, scheduled_extended_session_bounds
-from app.utils.session_anchors import et_date_at_ms, et_when_words
+from app.utils.et_words import et_when_words
+from app.utils.session_anchors import et_date_at_ms
 
 
 def deploy_window(now_ms: int) -> StartWindowFact:

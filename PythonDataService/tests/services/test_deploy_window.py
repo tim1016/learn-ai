@@ -1,6 +1,6 @@
 """The Start window's words and the Deploy exit steps' words, in the owner's ET (#2665).
 
-Both name their instants through ``app.utils.timestamps.et_when_words``, so
+Both name their instants through ``app.utils.et_words.et_when_words``, so
 they read like a bot's end: ``Thu Oct 1, 04:00 ET``, with the year when it is
 not now's. Every clock is ``int64 ms UTC`` built from an ET wall clock through
 the NY zone; the session times come from the canonical calendar.

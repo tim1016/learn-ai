@@ -4928,7 +4928,7 @@
       },
       "BotEndView": {
         "additionalProperties": false,
-        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now. ``default_end_at_ms`` is the end the fields open on when\nthe owner adds one to a bot with none -- the default end, by Deploy's\nrule -- set only while the bot has no end, its end may change now, and it\ntrades in regular hours only; otherwise null.",
+        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now. ``default_end_at_ms`` is the default end (Deploy's rule)\nthe fields open on when the owner adds an end to a bot with none. It is\nnull whenever an end is already set -- so always on Deploy's\n``default_end``, which is that default end itself -- whenever the end\ncannot change now, and whenever the bot trades outside regular hours.",
         "properties": {
           "default_end_at_ms": {
             "anyOf": [

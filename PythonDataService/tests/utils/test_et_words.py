@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.utils.session_anchors import et_when_words
+from app.utils.et_words import et_when_words
 from app.utils.timestamps import to_ms_utc
 
 _ET = ZoneInfo("America/New_York")

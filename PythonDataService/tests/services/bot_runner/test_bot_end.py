@@ -44,7 +44,7 @@ from app.services.bot_runner import (
     get_bot_task_registry,
     set_bot_task_registry,
 )
-from app.utils.session_anchors import et_when_words
+from app.utils.et_words import et_when_words
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed

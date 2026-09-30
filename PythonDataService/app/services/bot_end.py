@@ -49,7 +49,8 @@ from app.schemas.bot_end import (
     RecordedEnd,
 )
 from app.services.session_authority import et_minute_of_day_ms
-from app.utils.session_anchors import et_clock_words, et_date_at_ms, et_day_words, et_when_words
+from app.utils.et_words import et_clock_words, et_day_words, et_when_words
+from app.utils.session_anchors import et_date_at_ms
 
 #: The end is one minute before the close: the bot is gone before the bar that
 #: ends at the close is decided.
@@ -104,12 +105,9 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
                 next_action="Choose an end time, or choose no end with Sell.",
             )
         return ResolvedBotEnd(end=None)
-    if not use_rth:
-        raise BotEndRefused(
-            "This bot can't have an end.",
-            detail="An end is set within regular hours, and this bot also trades outside them.",
-            next_action="Remove the end, or deploy the bot for regular hours only.",
-        )
+    hours_refusal = _hours_refusal(use_rth=use_rth)
+    if hours_refusal is not None:
+        raise hours_refusal
     if choice is None:
         return ResolvedBotEnd(end=default_bot_end(now_ms))
     if dry_run and choice.end_action == "KEEP":
@@ -119,6 +117,22 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
             next_action="Choose Sell for this Dry Run.",
         )
     return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
+
+
+def _hours_refusal(*, use_rth: bool) -> BotEndRefused | None:
+    """Why a bot's hours allow it no end, or ``None`` when they allow one.
+
+    The one answer for :func:`resolve_bot_end` and the default
+    :func:`bot_end_view` offers: an end is set within regular hours, so a bot
+    that also trades outside them (``use_rth`` ``False``) has no end rule yet.
+    """
+    if use_rth:
+        return None
+    return BotEndRefused(
+        "This bot can't have an end.",
+        detail="An end is set within regular hours, and this bot also trades outside them.",
+        next_action="Remove the end, or deploy the bot for regular hours only.",
+    )
 
 
 def end_edit_refusal(pending: BotEnd | None, *, running: bool, now_ms: int) -> BotEndRefused | None:
@@ -159,12 +173,12 @@ def bot_end_view(
 
     A bot with no end whose end may change now is offered the default end
     (:func:`default_bot_end`, Deploy's rule) for the owner adding one --
-    unless it also trades outside regular hours (``use_rth`` ``False``),
-    which :func:`resolve_bot_end` gives no end.
+    unless its hours allow it no end (:func:`_hours_refusal`).
     """
     pending = None if recorded is None else recorded.pending()
     editable = end_edit_refusal(pending, running=running, now_ms=now_ms) is None
     if recorded is None:
+        offers_default = editable and _hours_refusal(use_rth=use_rth) is None
         return BotEndView(
             end_at_ms=None, end_action="SELL", status="no_end",
             headline="No end · runs until you stop it" if running else "No end scheduled",
@@ -174,7 +188,7 @@ def bot_end_view(
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
             notice=notice, editable=editable,
-            default_end_at_ms=default_bot_end(now_ms).end_at_ms if editable and use_rth else None,
+            default_end_at_ms=default_bot_end(now_ms).end_at_ms if offers_default else None,
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"

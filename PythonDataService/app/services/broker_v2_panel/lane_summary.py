@@ -76,7 +76,7 @@ from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
 from app.services.sqlite_clerk_compat import account_eligibility
-from app.utils.session_anchors import et_when_words
+from app.utils.et_words import et_when_words
 
 logger = logging.getLogger(__name__)
 

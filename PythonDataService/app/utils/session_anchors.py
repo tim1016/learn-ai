@@ -13,10 +13,6 @@ question: not *where* an instant is anchored but *how large* one may be.
 (``registry.py``'s ``artifact_paths``), so both live beside it rather than
 inside it — a line added there changes every program's ``artifact_digest`` and
 invalidates every committed golden qualification receipt.
-
-The owner's words for an instant in ET (``et_when_words``, #2665) live here
-for that reason too: they are the one author of backend copy that names a day
-and minute in ET, and they read the ET date from ``et_date_at_ms``.
 """
 
 from __future__ import annotations
@@ -24,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.utils.timestamps import ny_datetime, to_ms_utc
+from app.utils.timestamps import to_ms_utc
 
 _NY = ZoneInfo("America/New_York")
 
@@ -68,25 +64,3 @@ def et_day_end_ms(day: date) -> int:
 def et_date_at_ms(ms: int) -> date:
     """The America/New_York calendar date containing instant ``ms``."""
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_NY).date()
-
-
-def et_when_words(instant_ms: int, *, now_ms: int) -> str:
-    """An instant as the owner reads it: ``Wed Sep 30, 15:59 ET``, with the year when it is not this one.
-
-    Always the weekday and date, never "today": the owner may not be in the
-    market's time zone, so "today" in ET can be tomorrow where they are. The
-    words are display-only: never stored, parsed back, or compared.
-    """
-    return f"{et_day_words(instant_ms, now_ms=now_ms)}, {et_clock_words(instant_ms)} ET"
-
-
-def et_day_words(instant_ms: int, *, now_ms: int) -> str:
-    """An instant's ET date as the owner reads it: ``Wed Sep 30``, with the year when it is not now's (in ET)."""
-    day = et_date_at_ms(instant_ms)
-    year = "" if day.year == et_date_at_ms(now_ms).year else f" {day.year}"
-    return f"{day:%a %b} {day.day}{year}"
-
-
-def et_clock_words(instant_ms: int) -> str:
-    """An instant's ET wall clock, to the minute: ``15:59``."""
-    return f"{ny_datetime(instant_ms):%H:%M}"

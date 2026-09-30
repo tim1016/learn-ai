@@ -46,7 +46,8 @@ from app.services.broker_v2_panel.channel_health import (
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope, compose_strategy_catalog
 from app.services.deploy_window import deploy_window, start_window_next_step
 from app.services.session_authority import scheduled_extended_session_bounds
-from app.utils.session_anchors import et_date_at_ms, et_when_words
+from app.utils.et_words import et_when_words
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 
