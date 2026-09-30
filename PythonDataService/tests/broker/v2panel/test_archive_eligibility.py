@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from app.broker.v2panel.action_policy import archive_action, evaluate_archive
+from app.broker.v2panel.action_policy import ArchiveVerdict, archive_action, evaluate_archive
 from app.schemas.broker_v2_panel import PanelAction
 
 
@@ -76,6 +76,25 @@ def test_archive_refuses_a_dead_process_whose_run_never_settled() -> None:
     assert [b.condition.id for b in blockers] == ["BOT_DUTY_NOT_SETTLED"]
 
 
+@pytest.mark.parametrize("phase", ["OFF_DUTY", "ON_DUTY"])
+def test_archive_refuses_a_bot_sealed_on_an_account_the_clerk_does_not_hold(phase: str) -> None:
+    """A live account's shadow rehearsal after graduation (#2589): nothing here
+    can prove it holds nothing, and no wait changes that -- so it is refused
+    for its account, and ahead of a not-yet-settled run, whose words would
+    promise a clear that never comes."""
+    verdict = evaluate_archive(
+        running=False,
+        phase=phase,
+        custody_account_foreign=True,
+        has_exposure=False,
+        working_order_count=0,
+        outstanding_effect_count=0,
+        custody_provable=False,
+    )
+
+    assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
+
+
 def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:
     """An accepted effect can create broker custody after the archive lands.
 
@@ -86,6 +105,7 @@ def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:
     verdict = evaluate_archive(
         running=False,
         phase="OFF_DUTY",
+        custody_account_foreign=False,
         has_exposure=False,
         working_order_count=0,
         outstanding_effect_count=1,
@@ -214,6 +234,7 @@ def test_the_shared_rule_is_what_the_action_renders(facts: dict[str, Any]) -> No
     verdict = evaluate_archive(
         running=resolved["running"],
         phase=resolved["phase"],
+        custody_account_foreign=False,
         has_exposure=resolved["has_exposure"],
         working_order_count=resolved["working_order_count"],
         outstanding_effect_count=0,

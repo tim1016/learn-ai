@@ -1968,8 +1968,9 @@ _ARCHIVE_BLOCKER_TEXT = {
     "BOT_DUTY_NOT_SETTLED": (
         "bot",
         "This bot's last run has not finished settling.",
-        "Its process is gone but its run is still open. Wait for recovery to record how that "
-        "run ended, then clear it.",
+        "It ended without a clean stop. The Clerk records it as ended shortly, usually within "
+        "a minute; then you can clear the bot. A Dry Run's is recorded when the service next "
+        "starts.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "account",

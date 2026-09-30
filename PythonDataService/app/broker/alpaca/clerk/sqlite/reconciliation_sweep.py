@@ -29,6 +29,13 @@ type ReconciliationListener = Callable[[AccountReconciliationResult], object]
 # repair. A hook failure is isolated -- the lease stays revived and the next
 # boot scan remains the backstop.
 type LeaseRevivedHook = Callable[[], Awaitable[None]]
+# Awaited once after every pass, whatever the pass found: the runner re-reads
+# its own bots and settles the duty record of each one whose runner is gone
+# and whose run its Clerk has closed (#2589). Level-triggered on purpose --
+# a run may have been closed by any reconcile (a Clear, a Start, Reconcile
+# now), and a settle that failed is simply found again. A hook failure is
+# isolated; the next pass runs it again.
+type DutySettleHook = Callable[[], Awaitable[None]]
 # Renew the execution lease three times per TTL. This is a safety-margin
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
@@ -54,6 +61,7 @@ class ReconciliationSweep:
         intake: ReentrantAsyncLock | None = None,
         on_result: ReconciliationListener | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
+        on_duty_settle: DutySettleHook | None = None,
         pricing: RecoveryPricing,
         run_ownership: RunOwnership | None = None,
     ) -> None:
@@ -63,6 +71,7 @@ class ReconciliationSweep:
         self._run_ownership = run_ownership
         self._on_result = on_result
         self._on_lease_revived = on_lease_revived
+        self._on_duty_settle = on_duty_settle
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         # What the stuck-EXIT watchdog prices an extended-hours re-drive limit
@@ -90,6 +99,15 @@ class ReconciliationSweep:
         :meth:`start`, mirroring how the sweep itself is started late.
         """
         self._on_lease_revived = hook
+
+    def set_on_duty_settle(self, hook: DutySettleHook | None) -> None:
+        """Late-bind the post-pass duty-settle hook (#2589).
+
+        Same late-binding reason as :meth:`set_on_lease_revived`: the sweep
+        is constructed in the broker layer before the bot task registry
+        exists. The hook runs after every pass and takes nothing from it.
+        """
+        self._on_duty_settle = hook
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -356,6 +374,7 @@ class ReconciliationSweep:
         consecutive_failures = 0
         while True:
             succeeded = await self._run_one_pass()
+            await self._settle_duty()
             consecutive_failures = 0 if succeeded else consecutive_failures + 1
             passes += 1
             if self._max_passes is not None and passes >= self._max_passes:
@@ -395,5 +414,30 @@ class ReconciliationSweep:
             )
             return False
 
+    async def _settle_duty(self) -> None:
+        """Run the post-pass duty-settle hook, isolated (#2589)."""
+        if self._on_duty_settle is None:
+            return
+        try:
+            await self._on_duty_settle()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Isolated on purpose, like the lease-revival hook: the pass's
+            # own work stands, and the next pass runs the hook again.
+            logger.error(
+                "post-pass duty settle hook errored; the next pass runs it again",
+                extra={
+                    "action": "reconcile_sweep_duty_settle_error",
+                    "account_id": self._repo.account_id,
+                },
+                exc_info=True,
+            )
 
-__all__ = ["LeaseRevivedHook", "ReconciliationListener", "ReconciliationSweep"]
+
+__all__ = [
+    "DutySettleHook",
+    "LeaseRevivedHook",
+    "ReconciliationListener",
+    "ReconciliationSweep",
+]

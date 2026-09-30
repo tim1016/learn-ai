@@ -127,6 +127,13 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         rationale="SqliteDecisionReceipts appends one decision receipt under the repository write coordinator and does not advance custody control revision.",
     ),
     ExternalRepositoryWriter(
+        path="app/services/bot_binding_authority.py",
+        owner="SealedShadowBindingAuthority.lifecycle_for_settle",
+        call="submit_stop_run",
+        classification=RepositoryWriterClassification.ATOMIC,
+        rationale="A graduated shadow store has no facade, intake or sweep; the settle's opening holds its execution lease alone and closes the one dead run of the bot being settled in a single repository call -- the stop the #2369 retirement submits (#2589).",
+    ),
+    ExternalRepositoryWriter(
         path="app/services/broker_v2_panel/sqlite_panel_source.py",
         owner="execute_sqlite_panel_action",
         call="execute_recovery_action",

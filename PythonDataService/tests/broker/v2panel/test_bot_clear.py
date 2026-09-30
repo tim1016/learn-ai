@@ -33,7 +33,9 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ReconciliationCut
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError, BrokerRateLimited
@@ -595,11 +597,12 @@ async def test_an_unreadable_alpaca_refuses_every_leg_as_unprovable_after_one_at
 async def test_a_dead_bot_whose_run_never_settled_stays_on_home_until_recovery_settles_it(
     account: _Account,
 ) -> None:
-    """Owner decision 2026-09-29 (#2578): with Retire gone, Clear is the only
-    way off Home, and nothing new settles a dead run. A bot whose process died
-    before its run settled is refused with ``BOT_DUTY_NOT_SETTLED`` and stays
-    listed; its page offers no Retire. Recovery that already exists -- the
-    boot scan a restart runs -- is what settles the run, and then it clears.
+    """With Retire gone (#2578) Clear is the only way off Home. A bot whose
+    process died before its run settled is refused with ``BOT_DUTY_NOT_SETTLED``
+    and stays listed; its page offers no Retire. The account's next sweep pass
+    settles it -- no restart (owner decision 2026-09-30, #2589) -- although its
+    run was closed before that pass, and Clear's own batch pass came first;
+    then it clears.
     """
     account.dead_before_its_run_settled("spy-dead-1")
     account.finished("spy-done-1")
@@ -625,10 +628,17 @@ async def test_a_dead_bot_whose_run_never_settled_stays_on_home_until_recovery_s
     listed = [row.strategy_instance_id for row in await panel_data_source.get_catalog("alpaca", ACCT)]
     assert listed == ["spy-dead-1"]
 
-    async def _nothing_to_recover() -> None:
-        return None
-
-    await account.runner.run_boot_recovery(recover=_nothing_to_recover, reconcile=_nothing_to_recover)
+    await ReconciliationSweep(
+        repo=account.repo,
+        read=account.alpaca,  # type: ignore[arg-type]
+        trade=account.alpaca,  # type: ignore[arg-type]
+        intake=account.facade.intake,
+        run_ownership=account.facade.run_ownership,
+        max_passes=1,
+        sleep=lambda _delay: asyncio.sleep(0),
+        pricing=UNPRICEABLE_RECOVERY,
+        on_duty_settle=account.runner.settle_dead_runs,
+    ).run()
     settled = await bot_clear.clear_bots(
         "alpaca", ACCT, _request("spy-dead-1", key="clear-2"), operator_identity="owner"
     )

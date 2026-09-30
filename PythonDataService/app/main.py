@@ -938,6 +938,11 @@ async def _service_lifespan(
                     )
 
                 _pending_sweep.set_on_lease_revived(_post_revival_recovery)
+            if bot_task_registry is not None:
+                # #2589: after every pass the runner settles each bot whose
+                # runner is gone and whose run its Clerk has closed -- no
+                # restart -- a graduated shadow: store's through that store.
+                _pending_sweep.set_on_duty_settle(bot_task_registry.settle_dead_runs)
             _pending_sweep.start()
             logger.info(
                 "Alpaca reconciliation sweep started (authority=%s).",

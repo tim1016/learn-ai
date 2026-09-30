@@ -20,6 +20,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
+    authority_kind_for_account,
     evidence_account_id_for,
     synthetic_account_id_for_strategy,
 )
@@ -37,13 +38,17 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
 from app.broker.alpaca.clerk.models import ReconciliationCut
+from app.broker.alpaca.clerk.shadow_authority import open_graduated_shadow_store
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseHeld
+from app.broker.alpaca.clerk.sqlite.run_ownership import RUNNER_GONE_REASON
 from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
 from app.schemas.deployment_budget import DeployBudgetConsent
+from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjector,
@@ -96,6 +101,11 @@ class BindingAuthority:
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         raise NotImplementedError
+
+    @asynccontextmanager
+    async def lifecycle_for_settle(self) -> AsyncIterator[AlpacaLifecycleProjector]:
+        """The projector a bot whose runner is gone is settled through (#2589)."""
+        yield self.lifecycle_projector()
 
     def source_bars(self) -> SourceBarLedger | None:
         return None
@@ -547,6 +557,56 @@ class UnboundDryRunAuthority:
         await self._account.ensure_operating(lease_wait_s=lease_wait_s)
 
 
+@dataclass(frozen=True)
+class SealedShadowBindingAuthority:
+    """A binding sealed on a graduated live account's ``shadow:`` store (#2589).
+
+    The bots that rehearsed on the shadow authority stay sealed on it after
+    their live account graduates, while the installed authority custodies the
+    live account itself: no sweep reads their store again, and Start refuses
+    them ``SEALED_ACCOUNT_MISMATCH``. This authority offers the one thing such
+    a bot still needs -- settling a dead run's duty record through its own
+    store, never through the installed authority (ADR 0050's posture). It
+    admits, trades and proves custody for nothing.
+    """
+
+    binding: BrokerBotBinding
+    account_id: str
+    artifacts_root: Path
+    lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
+
+    @asynccontextmanager
+    async def lifecycle_for_settle(self) -> AsyncIterator[AlpacaLifecycleProjector]:
+        """The sealed store's projector, once this bot's dead run there is closed.
+
+        No runner in this process holds a run on a store the installed
+        authority does not custody, and the execution lease this opening
+        takes proves no other process does: a run the store still holds
+        ACTIVE is a dead process's, closed as the #2369 retirement closes one
+        on the installed account. The projector keeps the identity guard.
+        """
+        sid = self.binding.strategy_instance_id
+        async with open_graduated_shadow_store(
+            account_id=self.account_id, artifacts_root=self.artifacts_root
+        ) as repository:
+            run = repository.active_run(sid)
+            if run is not None:
+                submit_stop_run(
+                    repository,
+                    account_id=self.account_id,
+                    strategy_instance_id=sid,
+                    lifecycle_run_id=run.lifecycle_run_id,
+                    operator_reason=RUNNER_GONE_REASON,
+                    clock=repository.clock,
+                )
+            identity = AlpacaBotIdentityGuard(self.artifacts_root)
+            yield AlpacaLifecycleProjector(
+                authority=SqliteAlpacaLifecycleAuthority(repository),
+                lifecycle_repo_for=self.lifecycle_repo_for,
+                require_alpaca_identity=lambda instance, claim: identity.require(instance, sqlite_claim=claim),
+            )
+
+
 @dataclass
 class BindingAuthoritySelector:
     """Build the one typed authority object for each immutable bot binding."""
@@ -577,6 +637,28 @@ class BindingAuthoritySelector:
             external_start_guard=self.external_start_guard,
             artifacts_root=self.artifacts_root,
             custody_kind=primary_custody_kind,
+        )
+
+    def for_settle(
+        self, binding: BrokerBotBinding, *, foreign_account_id: str | None
+    ) -> BindingAuthority | SealedShadowBindingAuthority | None:
+        """The authority a bot whose runner is gone is settled through (#2589); ``None`` if this lane has none.
+
+        ``foreign_account_id`` is the account the binding is sealed on when
+        the installed authority does not custody it -- the one classification,
+        ``BotBootRecovery.foreign_binding``. The account's kind decides the
+        rest: a ``shadow:`` store settles through itself, and any other
+        account this lane does not hold has no authority here.
+        """
+        if foreign_account_id is None:
+            return self.for_binding(binding)
+        if authority_kind_for_account(foreign_account_id) != "shadow":
+            return None
+        return SealedShadowBindingAuthority(
+            binding=binding,
+            account_id=foreign_account_id,
+            artifacts_root=self.artifacts_root,
+            lifecycle_repo_for=self.lifecycle_repo_for,
         )
 
     def for_unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority | None:
@@ -646,6 +728,7 @@ __all__ = [
     "BindingAuthority",
     "BindingAuthoritySelector",
     "PrimaryAccountBindingAuthority",
+    "SealedShadowBindingAuthority",
     "SyntheticBindingAuthority",
     "UnboundDryRunAuthority",
     "primary_custody_kind",

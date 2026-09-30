@@ -50,8 +50,9 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
-from app.broker.v2panel.action_policy import evaluate_archive
+from app.broker.v2panel.action_policy import ArchiveVerdict, evaluate_archive
 from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -347,9 +348,17 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "The bot is still running.",
         "Stop the bot before clearing it.",
     ),
+    "ARCHIVE_SEALED_ACCOUNT_CUSTODY": (
+        "This bot's account is no longer managed here.",
+        "It ran on another account, such as a live account's rehearsal before "
+        "it went live. Clearing needs that account to show the bot holds "
+        "nothing, and the Clerk here can no longer check it.",
+    ),
     "BOT_DUTY_NOT_SETTLED": (
         "This bot's last run has not finished settling.",
-        "Wait for recovery to record how that run ended, then clear the bot.",
+        "It ended without a clean stop. The Clerk records it as ended "
+        "shortly, usually within a minute; then you can clear the bot. A Dry "
+        "Run's is recorded when the service next starts.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "This account cannot prove the bot is flat.",
@@ -988,26 +997,7 @@ class BotTaskRegistry:
                 )
             status = self.status(broker, strategy_instance_id)
             try:
-                async with self._archive_custody(binding, reconciled) as (custody, _policy, _terms):
-                    # A count the Clerk could not take carries no number and is
-                    # no proof of zero: with Alpaca unreadable, "nothing
-                    # working" is the Clerk's ignorance, not the bot's state.
-                    counts = (custody.working_orders, custody.unresolved_effects, custody.pending_orders)
-                    verdict = evaluate_archive(
-                        running=status.running,
-                        phase=status.phase,
-                        has_exposure=custody.exposure.state != "zero",
-                        working_order_count=custody.working_orders.count or 0,
-                        # Bot-scoped, and only the commit can see it: an effect
-                        # accepted before its broker order becomes working would
-                        # otherwise create custody for a terminal registration.
-                        outstanding_effect_count=(
-                            (custody.unresolved_effects.count or 0) + (custody.pending_orders.count or 0)
-                        ),
-                        custody_provable=(
-                            not custody.freeze.active and all(fact.count is not None for fact in counts)
-                        ),
-                    )
+                verdict = await self._archive_verdict(binding, status, reconciled)
                 if verdict.already_retired:
                     return status
                 if not verdict.eligible:
@@ -1027,6 +1017,49 @@ class BotTaskRegistry:
                 # mutation must too, or each archived Dry Run leaks an open
                 # SQLite authority for the rest of the process lifetime.
                 await self._authority_for(binding).release_if_unused()
+
+    async def _archive_verdict(
+        self,
+        binding: BrokerBotBinding,
+        status: BotStatusView,
+        reconciled: ReconciliationCut | None,
+    ) -> ArchiveVerdict:
+        """The shared archive rule, answered under the bot's lock against fresh custody."""
+        if self._boot_recovery.foreign_binding(binding.strategy_instance_id) is not None:
+            # The installed Clerk holds no custody for a bot sealed on another
+            # account (the one classification, which the duty settle reads
+            # too), so there is none to read: as under a freeze, the facts
+            # below prove nothing, and the rule refuses on the account first.
+            return evaluate_archive(
+                running=status.running,
+                phase=status.phase,
+                custody_account_foreign=True,
+                has_exposure=False,
+                working_order_count=0,
+                outstanding_effect_count=0,
+                custody_provable=False,
+            )
+        async with self._archive_custody(binding, reconciled) as (custody, _policy, _terms):
+            # A count the Clerk could not take carries no number and is
+            # no proof of zero: with Alpaca unreadable, "nothing
+            # working" is the Clerk's ignorance, not the bot's state.
+            counts = (custody.working_orders, custody.unresolved_effects, custody.pending_orders)
+            return evaluate_archive(
+                running=status.running,
+                phase=status.phase,
+                custody_account_foreign=False,
+                has_exposure=custody.exposure.state != "zero",
+                working_order_count=custody.working_orders.count or 0,
+                # Bot-scoped, and only the commit can see it: an effect
+                # accepted before its broker order becomes working would
+                # otherwise create custody for a terminal registration.
+                outstanding_effect_count=(
+                    (custody.unresolved_effects.count or 0) + (custody.pending_orders.count or 0)
+                ),
+                custody_provable=(
+                    not custody.freeze.active and all(fact.count is not None for fact in counts)
+                ),
+            )
 
     @asynccontextmanager
     async def _archive_custody(
@@ -1975,6 +2008,72 @@ class BotTaskRegistry:
             unresolved_intents_probe=self._unresolved_intents_probe,
             provenance=LEASE_REVIVAL_PROVENANCE,
         )
+
+    # ── the periodic duty settle (#2589) ──────────────────────────────
+
+    async def settle_dead_runs(self) -> None:
+        """Settle every bot whose runner is gone and whose run its Clerk has closed (#2589).
+
+        The account's reconciliation sweep runs this after every pass. It is
+        level-triggered: each pass re-reads every bot's own state, so it does
+        not matter which reconcile closed the run -- the sweep's own #2369
+        retirement, Clear's batch pass, a Start's admission, Reconcile now --
+        and a settle that failed is found again on the next pass. Each bot
+        gets the boot scan's own repair under its operation lock, with no
+        restart; a bot whose lock is held (a Start, Stop, Clear or
+        restoration in flight) waits for the next pass, and one bot's failure
+        is only its own.
+
+        Dry Runs are not settled here: each one's custody is its own ``sim:``
+        account, which no sweep reads, and boot's restoration settles it.
+        """
+        for binding in self._bindings.list_for_broker("alpaca"):
+            sid = binding.strategy_instance_id
+            if binding.mode == "dry_run" or self._is_running(sid):
+                continue
+            lock = self._operation_lock(sid)
+            if lock.locked():
+                continue
+            try:
+                async with lock:
+                    settled = await self._settle_dead_run_locked(binding)
+            except Exception:
+                logger.error(
+                    "A bot whose runner is gone could not be settled; the next pass tries again",
+                    extra={"action": "duty_settle_failed", "strategy_instance_id": sid},
+                    exc_info=True,
+                )
+                continue
+            if settled:
+                logger.warning(
+                    "Settled a bot whose runner is gone and whose run its Clerk closed",
+                    extra={"action": "duty_settled", "strategy_instance_id": sid},
+                )
+
+    async def _settle_dead_run_locked(self, binding: BrokerBotBinding) -> bool:
+        """One bot's settle, under its lock; True when its run received interrupted evidence.
+
+        Only a bot still on duty needs one, and only one whose run is no
+        longer ACTIVE in the account it is sealed on: a live run is the
+        Clerk's to close first (#2369), never this settle's.
+        """
+        sid = binding.strategy_instance_id
+        record = self._lifecycle_repo(sid).read()
+        if record is None or record.phase is not BotLifecyclePhase.ON_DUTY:
+            return False
+        foreign = self._boot_recovery.foreign_binding(sid)
+        authority = self._authorities.for_settle(
+            binding, foreign_account_id=None if foreign is None else foreign.sealed_account_id
+        )
+        if authority is None:
+            return False
+        run_id = record.active_run_id or binding.run_id
+        async with authority.lifecycle_for_settle() as projector:
+            if projector.run_is_active(strategy_instance_id=sid, run_id=run_id):
+                return False
+            return await self._boot_recovery.settle_dead_run(
+                strategy_instance_id=sid, run_id=run_id, projector=projector
+            )
 
     # ── read surface ──────────────────────────────────────────────────
 
