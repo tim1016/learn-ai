@@ -19524,6 +19524,8 @@ export interface components {
             cancellation: components["schemas"]["ManualOrderCancellationResponse"] | null;
             command: components["schemas"]["ManualOrderCommandResponse"] | null;
             effect: components["schemas"]["ManualOrderEffectResponse"] | null;
+            /** Ending */
+            ending: string | null;
             instruction: components["schemas"]["BrokerOrderLeg"] | null;
             /** Instruction Hash */
             instruction_hash: string;
