@@ -647,7 +647,9 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    expect(await screen.findByText('Cancelled at Alpaca with 3 of 5 shares filled.')).toBeTruthy();
+    const ending = await screen.findByText('Cancelled at Alpaca with 3 of 5 shares filled.');
+    // A definition-list group holds only dt/dd content (AXE definition-list rules).
+    expect(ending.tagName).toBe('DD');
     expect(screen.queryByRole('button', { name: /Cancel manual ticket/i })).toBeNull();
   });
 

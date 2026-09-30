@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.sqlite.folds import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
-    manual_order_broker_ending,
+    manual_order_ending_copy,
     manual_order_has_exact_terminal_coverage,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -48,7 +48,10 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
-from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    UNFILLED_TERMINAL_STATES,
+    OrderProjectionReadError,
+)
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -89,18 +92,6 @@ def submit_absence_grace_ms() -> int:
 #: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
 #: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
 TOTAL_PRICE_CONFLICT_ATOL = 0.01
-
-UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
-"""Terminal broker states that, with no recorded execution, are proven
-unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
-terminal snapshot can truthfully precede its execution slice on the
-websocket.
-
-Lives here rather than in any one domain module because each reads it: EXIT
-falls through to ``EXIT_NOT_FLAT`` on it (R12), ENTER folds ``ENTER_UNFILLED``
-on it (#2006, the same ruling mirrored), and a manual order's unfilled
-remainder ends on it (#2647).
-"""
 
 
 __all__ = [
@@ -723,9 +714,11 @@ def fold_manual_order_ended_if_proven(repo: ClerkSqliteRepository, *, order_ref:
     cancellation path already used: ``MANUAL_ORDER_CANCELED`` for a cancel,
     ``MANUAL_ORDER_TERMINAL`` for an expiry or a rejection. Their folds keep
     the manual ticket in step. The ``why`` is the owner's copy from
-    :func:`manual_order_broker_ending`. A cancel sent through the Clerk ends
-    the order here too, because its exact lookup is folded through this
-    acknowledgement before it records its own result.
+    ``manual_order_completion.manual_order_ending_copy``, which covers every
+    state gated on below (checked at import), so writing it cannot raise
+    mid-fold. A cancel sent through the Clerk ends the order here too,
+    because its exact lookup is folded through this acknowledgement before
+    it records its own result.
 
     **Keyed on the order, never on a carrier.** A Clerk fold ends the effect
     its transition is nested under, and an observation route may hand the
@@ -736,9 +729,9 @@ def fold_manual_order_ended_if_proven(repo: ClerkSqliteRepository, *, order_ref:
     snapshot cannot end it early and a later observation of the same order,
     in any state, can still end it:
 
-    - the order projection's broker state is ``canceled``, ``expired`` or
-      ``rejected``; terminal projections never regress, so this is the
-      ending the Clerk accepted;
+    - the order projection's broker state is one of
+      ``UNFILLED_TERMINAL_STATES``; terminal projections never regress, so
+      this is the ending the Clerk accepted;
     - the recorded fills cover the broker's governing cumulative. A partial
       fill keeps its shares and only the remainder ends, but a fill the
       Clerk has not recorded yet must not be dropped: the sweep's worklist
@@ -764,8 +757,7 @@ def fold_manual_order_ended_if_proven(repo: ClerkSqliteRepository, *, order_ref:
             or repo.order_fills_short_of_broker_cumulative(order_ref)
         ):
             return
-        why = manual_order_broker_ending(repo, order_ref=order_ref)
-        assert why is not None, f"no owner copy for a manual order Alpaca ended {broker_state!r}"
+        why = manual_order_ending_copy(repo, order=order)
         canceled = broker_state == "canceled"
         repo.append_transition(
             TransitionInput(

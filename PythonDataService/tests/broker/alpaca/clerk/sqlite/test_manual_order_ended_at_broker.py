@@ -11,14 +11,16 @@ on the ``trade_updates`` route and on the reconciliation sweep.
 
 from __future__ import annotations
 
+import importlib
 import logging
 
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sqlite import manual_order_completion, order_projection
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
-from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
+from app.broker.alpaca.clerk.sqlite.facts import ManualOrderCancelResultFacts, OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelTerminalError,
@@ -220,6 +222,44 @@ async def test_a_working_or_filled_manual_order_has_no_broker_ending_to_show(clo
     assert [t["transition_kind"] for t in _manual_endings(repo, manual.leg.order_ref)] == ["MANUAL_ORDER_FILLED"]
 
 
+async def test_a_share_count_of_a_million_or_more_reads_in_plain_digits(clocked_repo) -> None:  # noqa: F811
+    repo, _clock = clocked_repo
+    website = _AlpacaWebsite(repo=repo)
+    manual = await _buy_limit(repo, website, quantity=2_000_000)
+    assert manual.leg.order_ref is not None
+    _ended_at_alpaca(repo, website, manual.leg.order_ref, "canceled", filled_quantity=1_250_000.5)
+
+    await _reconciliation_pass(repo, website, spy_held=1_250_000.5)
+
+    assert _owner_reads(repo).ending == "Cancelled at Alpaca with 1250000.5 of 2000000 shares filled."
+
+
+# ── The owner copy covers exactly the states the fold ends ────────────────────
+
+
+def test_the_owner_copy_covers_exactly_the_unfilled_terminal_states() -> None:
+    assert frozenset(manual_order_completion._ENDING_COPY) == order_projection.UNFILLED_TERMINAL_STATES
+
+
+def test_an_unfilled_state_with_no_owner_copy_stops_the_import_not_the_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Widening ``UNFILLED_TERMINAL_STATES`` without copy fails when the module loads.
+
+    Otherwise the first acknowledgement of a manual order in the new state
+    would raise inside ``fold_order_acknowledgement`` and stop the
+    trade_updates sink and the account's reconciliation pass.
+    """
+    widened = order_projection.UNFILLED_TERMINAL_STATES | {"done_for_day"}
+    monkeypatch.setattr(order_projection, "UNFILLED_TERMINAL_STATES", widened)
+    try:
+        with pytest.raises(RuntimeError, match=r"missing \['done_for_day'\]"):
+            importlib.reload(manual_order_completion)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(manual_order_completion)
+
+
 # ── A partial fill keeps its shares; only the remainder ends ─────────────────
 
 
@@ -271,6 +311,7 @@ async def test_a_cancel_frame_that_outruns_its_fill_never_ends_the_order_short_o
     effect = repo.effect_operation(effect_id)
     assert effect is not None and effect.state not in _TERMINAL_EFFECT_STATES
     assert effect_id in {item.effect_operation_id for item in repo.reconcilable_effect_operations()}
+    assert _owner_reads(repo).ending is None  # the ticket names no ending the Clerk has not reached
 
     await _reconciliation_pass(repo, website, spy_held=3)
 
@@ -307,6 +348,9 @@ async def test_a_cancel_sent_through_the_clerk_ends_the_order_once_whatever_alpa
     assert (terminal["transition_kind"], terminal["effect_operation_id"]) == ("MANUAL_ORDER_CANCELED", effect_id)
     ticket = repo.manual_order_ticket(TICKET_ID)
     assert ticket is not None and (ticket.state, ticket.legs[0].state) == ("CANCELED", "CANCELED")
+    # The owner cancelled from the Clerk, not in Alpaca's website.
+    assert ManualOrderCancelResultFacts.from_facts_json(terminal["facts_json"]).why == "Cancelled."
+    assert _owner_reads(repo).ending == "Cancelled."
 
 
 async def test_a_clerk_cancel_after_alpaca_cancelled_the_order_is_refused_without_a_delete(
@@ -329,6 +373,7 @@ async def test_a_clerk_cancel_after_alpaca_cancelled_the_order_is_refused_withou
     assert website.cancel_calls == []
     assert repo.manual_order_cancellation(order_ref=order_ref) is None
     assert len(_manual_endings(repo, order_ref)) == 1
+    assert _owner_reads(repo).ending == "Cancelled at Alpaca."
 
 
 async def test_alpacas_cancel_landing_while_a_clerk_cancel_is_unknown_ends_the_order_once(
@@ -360,6 +405,7 @@ async def test_alpacas_cancel_landing_while_a_clerk_cancel_is_unknown_ends_the_o
     assert len(_manual_endings(repo, order_ref)) == 1
     ticket = repo.manual_order_ticket(TICKET_ID)
     assert ticket is not None and (ticket.state, ticket.legs[0].state) == ("CANCELED", "CANCELED")
+    assert _owner_reads(repo).ending == "Cancelled."
 
 
 # ── The ending lands while a bot's EXIT is being processed ───────────────────

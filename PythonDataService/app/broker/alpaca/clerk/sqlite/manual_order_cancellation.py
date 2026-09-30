@@ -39,7 +39,6 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
-    UNFILLED_TERMINAL_STATES,
     fold_order_evidence,
     fold_submit_absence_void,
     fold_uncertain,
@@ -48,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+    UNFILLED_TERMINAL_STATES,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
