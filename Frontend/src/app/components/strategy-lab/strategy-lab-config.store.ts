@@ -82,6 +82,8 @@ export class StrategyLabConfigStore {
     autoFetch: true,
   });
   readonly fillMode = signal<FillModeName>("signal_bar_close");
+  /** The fill a run on the selected engine uses: a paired run is pinned to the signal bar's close. */
+  readonly runFillMode = computed<FillModeName>(() => (this.engine() === "both" ? "signal_bar_close" : this.fillMode()));
   readonly initialCash = signal(100000);
   readonly commissionPerOrder = signal(0);
   readonly customLeanSource = signal<string | null>(null);

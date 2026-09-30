@@ -155,6 +155,14 @@ describe("StrategyLab configuration and runner", () => {
     expect(payload.backtest).not.toHaveProperty("fill_mode");
   });
 
+  it("names the signal bar's close as a paired run's fill, whatever the Python rail last held", () => {
+    config.fillMode.set("decision_minute_open");
+    expect(config.runFillMode()).toBe("decision_minute_open");
+
+    config.engine.set("both");
+    expect(config.runFillMode()).toBe("signal_bar_close");
+  });
+
   it("keeps data-policy cadence and adjustment choices in the configuration store", () => {
     config.engine.set("python");
     expect(config.dataPolicy()).toEqual(expect.objectContaining({
