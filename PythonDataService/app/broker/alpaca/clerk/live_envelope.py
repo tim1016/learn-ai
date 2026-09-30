@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
-from app.broker.alpaca.clerk.money import ZERO
+from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
@@ -280,6 +280,22 @@ def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_ag
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float | Decimal) -> float:
     """Float arithmetic in every custody world: an exact simulated baseline enters as its nearest float."""
     return min(values.loss_fraction * float(last_equity_usd), values.loss_usd)
+
+
+def display_loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float | Decimal) -> Decimal:
+    """The same limit in exact ``Decimal``, for the dollars the owner reads.
+
+    Each recorded input — the fraction, the dollar cap, the baseline — is
+    normalized on its own and the ``min`` runs in exact arithmetic, mirroring
+    :func:`loss_limit_usd` the way ``DayPnl.display_total_usd`` mirrors its
+    float (#2586). Never a loss-rule input: the rule keeps comparing the
+    float, byte for byte.
+    """
+    with money_context():
+        return min(
+            normalize_money(values.loss_fraction) * normalize_money(last_equity_usd),
+            normalize_money(values.loss_usd),
+        )
 
 
 def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:

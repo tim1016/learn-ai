@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.broker.alpaca.clerk.money import display_cents, dollars, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
@@ -121,11 +122,16 @@ def account_hold_envelope(
         loss = LossHoldCause.from_mapping(dict(cause_facts))
         cause = loss.to_mapping()
         headline = "The account is in loss hold"
+        # Each sealed float is normalized on its own through the money
+        # boundary, so the owner reads the cents the record carries (#2612).
+        # The sealed ``LossHoldCause`` bytes above are untouched: only this
+        # explanation's rendering changed, and it is written once, at the
+        # raise — rows already in the chain keep their recorded text.
         explanation = (
             "Account day P&L — current equity minus prior regular-session-close "
             "equity, net of deposits and withdrawals after that close — reached "
-            f"{loss.day_pnl_usd:.2f} USD against a loss limit of "
-            f"{loss.loss_limit_usd:.2f} USD. Every ENTER on the account is refused; "
+            f"{dollars(display_cents(normalize_money(loss.day_pnl_usd)))} USD against a loss limit of "
+            f"{dollars(display_cents(normalize_money(loss.loss_limit_usd)))} USD. Every ENTER on the account is refused; "
             "every EXIT still runs, so each program keeps managing its own position."
         )
         operator_impact = "New entries are held account-wide; exits are unaffected."
