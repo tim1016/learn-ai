@@ -11,7 +11,6 @@ This is NOT cross-sectional factor IC used in equity factor models.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -47,6 +46,7 @@ from app.research.indicator_reliability import (
     get_indicator_category,
 )
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     bar_minutes_for,
     calculate_dynamic_indicators,
     fetch_bars_chunked,
@@ -55,6 +55,7 @@ from app.services.dataset_service import (
     list_available_indicators,
     resolve_indicator_window,
 )
+from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
 from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
@@ -62,16 +63,6 @@ logger = logging.getLogger(__name__)
 
 # Module-level singleton
 _polygon_client = PolygonClientService()
-
-
-def _estimate_max_lookback(params: dict[str, Any]) -> int:
-    """Estimate indicator warmup period from params."""
-    lookback = 200  # Default
-    for key in ("length", "slow", "k", "bb_length", "kc_length", "lower_length", "upper_length"):
-        val = params.get(key, 0)
-        if isinstance(val, (int, float)):
-            lookback = max(lookback, int(val))
-    return lookback
 
 
 def _to_horizon_ic_result(
@@ -190,7 +181,11 @@ async def calculate_indicator_reliability(
             )
 
         # Compute warmup period
-        max_lookback = _estimate_max_lookback(request.indicator_params)
+        indicator_entry = {
+            "name": request.indicator_name,
+            "params": request.indicator_params,
+        }
+        max_lookback = requested_indicator_warmup_lookback([indicator_entry], INDICATOR_CONFIGS)
         window = resolve_indicator_window(
             request.from_date,
             max_lookback=max_lookback,
@@ -224,10 +219,6 @@ async def calculate_indicator_reliability(
         df = filter_session(df, "rth")
 
         # Calculate the indicator
-        indicator_entry = {
-            "name": request.indicator_name,
-            "params": request.indicator_params,
-        }
         df, column_meta = calculate_dynamic_indicators(df, [indicator_entry])
 
         if not column_meta:

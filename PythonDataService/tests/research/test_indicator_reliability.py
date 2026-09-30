@@ -159,6 +159,9 @@ class TestComputeIndicatorReliabilityWithOos:
         assert "train_bars" in metadata
         assert "test_bars" in metadata
 
+    # ~14 s: five horizons through the full IS/OOS pipeline. A change-driven
+    # PR shard that drew it ran past the 120 s gate (#2611), so it runs daily.
+    @pytest.mark.slow
     def test_multiple_horizons_apply_fdr(self):
         df = _create_test_df(500)
         results, _, _ = compute_indicator_reliability_with_oos(
@@ -177,6 +180,8 @@ class TestComputeIndicatorReliabilityWithOos:
             assert r.fdr_p >= raw_p - 1e-9
             assert r.bonferroni_p >= raw_p - 1e-9
 
+    # ~6 s, the slope pass doubling the pipeline: daily, as above.
+    @pytest.mark.slow
     def test_with_slope(self):
         df = _create_test_df(500)
         results, slope_results, _ = compute_indicator_reliability_with_oos(

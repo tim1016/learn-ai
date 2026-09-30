@@ -58,7 +58,13 @@ from app.routers import indicators as indicators_router
 from app.schemas.chart import ChartDataResponse
 from app.services import chart_service, dataset_service
 from app.services.dataset_plan_service import prepare_generation_request
-from app.services.dataset_service import bar_minutes_for, resolve_indicator_window
+from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
+    bar_minutes_for,
+    calculate_indicators_then_trim,
+    resolve_indicator_window,
+)
+from app.services.indicator_warmup_policy import IndicatorEntry, requested_indicator_warmup_lookback
 from app.utils.session_anchors import et_midnight_ms
 
 #: Wed 2026-01-07 → Thu 2026-01-08, the window the original regression used.
@@ -143,6 +149,36 @@ def _provider(from_date: str, to_date: str) -> list[dict[str, Any]]:
 
 def _session_bars(day: date) -> list[dict[str, Any]]:
     return _provider(day.isoformat(), day.isoformat())
+
+
+@cache
+def _session_open_history() -> tuple[tuple[date, dict[str, Any]], ...]:
+    """One seeded regular-hours bar at each session's open, mid-2023 onward:
+    years of history for weekly bars without years of minutes."""
+    windows = session_windows_ms_utc(date(2023, 6, 1), _UNIVERSE_LAST)
+    rng = np.random.default_rng(seed=2611)
+    closes = np.round(100.0 + np.cumsum(rng.normal(0.0, 1.0, len(windows))), 4)
+    return tuple(
+        (
+            window.session_date,
+            {
+                "timestamp": window.open_ms_utc,
+                "open": float(close),
+                "high": float(close) + 0.5,
+                "low": float(close) - 0.5,
+                "close": float(close),
+                "volume": 1_000,
+                "vwap": float(close),
+                "transactions": 10,
+            },
+        )
+        for window, close in zip(windows, closes, strict=True)
+    )
+
+
+def _session_open_bars(from_date: str, to_date: str) -> list[dict[str, Any]]:
+    first, last = date.fromisoformat(from_date), date.fromisoformat(to_date)
+    return [dict(bar) for day, bar in _session_open_history() if first <= day <= last]
 
 
 def _aggregate(bars: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
@@ -472,6 +508,88 @@ def test_a_fully_warmed_chart_carries_no_warmup_note(served: None) -> None:
     assert warmup.lead_in_bars >= warmup.required_bars == 1000
 
 
+def test_a_daily_ema20_chart_with_enough_history_carries_no_warmup_note(served: None) -> None:
+    """#2611: sized from the request, a daily EMA-20 chart warms up on 100
+    sessions and the held universe reaches further back, so no note. On master
+    the fixed 200-bar floor demanded 1,000 sessions and every daily chart
+    reported a warm-up shortfall it did not have."""
+    chart = _chart("rth", _EMAS[:1], "1D")
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.cold_bars, warmup.uncomputed) == (100, 0, [])
+    assert warmup.lead_in_bars >= 100
+    assert warmup.note is None
+
+
+def test_a_weekly_ema20_chart_that_really_lacks_history_still_says_so(served: None) -> None:
+    """Right-sizing the lead-in does not mean always satisfying it: EMA-20 on
+    weekly bars warms up on 100 weekly bars — 500 sessions, most of a year —
+    and the held universe holds 23 of them, so every visible value is short
+    and the note says so."""
+    chart = _chart("rth", _EMAS[:1], "1W")
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.lead_in_bars) == (100, 23)
+    assert warmup.cold_bars == len(chart["bars"])
+    assert warmup.note is not None
+    assert "not fully warmed up" in warmup.note
+
+
+def test_a_weekly_ema20_chart_with_enough_history_carries_no_warmup_note(
+    served: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2611: EMA-20 on weekly bars warms up on 100 weekly bars — 500 sessions,
+    which the provider's five years hold — so no note. The 200-bar floor asked
+    for 1,000 weekly bars, past the provider's history floor, and noted a
+    shortfall on every weekly chart. One regular-hours bar per session back to
+    mid-2023 is history enough: a weekly bar is built from whatever minutes
+    its sessions hold."""
+    monkeypatch.setattr(
+        chart_service,
+        "_fetch_chart_bars",
+        lambda _ticker, fetch_from, to_date, *_rest: (_session_open_bars(fetch_from, to_date), None),
+    )
+
+    chart = _chart("rth", _EMAS[:1], "1W")
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.cold_bars, warmup.uncomputed) == (100, 0, [])
+    assert warmup.lead_in_bars >= 100
+    assert warmup.note is None
+
+
+@pytest.mark.parametrize(
+    ("indicator", "required_bars"),
+    [
+        # No params: sized on the catalog default, RSI-14 at 5 × 2 × 14.
+        ({"name": "rsi", "params": {}}, 140),
+        # No whole-number length: today's 200-bar floor.
+        ({"name": "psar", "params": {"af0": 0.02, "af": 0.02, "max_af": 0.2}}, 1000),
+        ({"name": "obv", "params": {}}, 1000),
+    ],
+)
+def test_a_request_without_a_sized_length_still_warms_up_and_says_when_it_falls_short(
+    served: None, indicator: IndicatorEntry, required_bars: int
+) -> None:
+    """#2611 review P1-2: a request with no params, and one whose parameters
+    are all fractions, was sized at zero — the chart read no lead-in, every
+    visible value started cold, and the note never said so. Each now warms up
+    on a real lead-in, and where the held history falls short the note says
+    so."""
+    held_sessions = len(expected_sessions(_UNIVERSE_FIRST, date(2026, 1, 9)))
+
+    chart = _chart("rth", [indicator], "1D", _WINDOWS["monday"])
+
+    warmup = ChartDataResponse.model_validate(chart).indicator_warmup
+    assert warmup is not None
+    assert (warmup.required_bars, warmup.lead_in_bars, warmup.cold_bars) == (required_bars, held_sessions, 2)
+    assert warmup.note is not None
+    assert "not fully warmed up" in warmup.note
+
+
 def test_a_daily_chart_says_which_values_the_held_history_could_not_warm_up(served: None) -> None:
     """Owner decision 2026-09-29: warm up per timeframe, and where the provider
     simply does not hold enough history, say so. EMA-200 on daily bars needs
@@ -511,11 +629,98 @@ def test_a_single_held_bar_before_the_range_is_said_in_the_singular(
     warmup = ChartDataResponse.model_validate(chart).indicator_warmup
     assert warmup is not None
     assert warmup.lead_in_bars == 1
+    assert warmup.required_bars == 100
     assert warmup.note == (
         "Indicator values on all 2 bars are not fully warmed up: the chart warms its indicators up on "
-        "1,000 bars of earlier history, and only 1 bar is available before this range. "
+        "100 bars of earlier history, and only 1 bar is available before this range. "
         "Not shown: EMA (length=20) could not be computed from the 3 bars available."
     )
+
+
+# ── What a request-sized lead-in may change (#2611) ─────────────
+
+#: Every request warmed up on at least this many bars before #2611: a 200-bar
+#: lookback floor at the ×5 multiplier.
+_TODAYS_LEAD_IN_BARS = 1_000
+_VISIBLE_BARS = 250
+
+
+@cache
+def _daily_bars() -> pd.DataFrame:
+    """Seeded daily OHLCV holding today's 1,000-bar lead-in and a 250-bar
+    window. A random walk, so an indicator's leftover seed shows up as a
+    different number instead of hiding in flat prices."""
+    rng = np.random.default_rng(seed=2611)
+    count = _TODAYS_LEAD_IN_BARS + _VISIBLE_BARS
+    close = 200.0 * np.exp(np.cumsum(rng.normal(0.0, 0.015, count)))
+    open_ = close * (1.0 + rng.normal(0.0, 0.004, count))
+    return pd.DataFrame(
+        {
+            "timestamp": np.arange(count, dtype="int64") * 86_400_000,
+            "open": open_,
+            "high": np.maximum(open_, close) * (1.0 + np.abs(rng.normal(0.0, 0.008, count))),
+            "low": np.minimum(open_, close) * (1.0 - np.abs(rng.normal(0.0, 0.008, count))),
+            "close": close,
+            "volume": rng.integers(1_000_000, 5_000_000, count).astype("float64"),
+        }
+    )
+
+
+def _visible_values(entry: IndicatorEntry, lead_in_bars: int) -> dict[str, np.ndarray]:
+    """The window's values, computed over ``lead_in_bars`` of lead-in through
+    the compute-then-trim path the chart and the export share."""
+    bars = _daily_bars()
+    frame = bars.iloc[_TODAYS_LEAD_IN_BARS - lead_in_bars :].reset_index(drop=True)
+    first_visible_ms = int(bars["timestamp"].iloc[_TODAYS_LEAD_IN_BARS])
+    df, column_meta = calculate_indicators_then_trim(frame, [dict(entry)], trim_from_ts=first_visible_ms)
+    assert len(df) == _VISIBLE_BARS
+    return {meta["column"]: df[meta["column"]].to_numpy(dtype="float64") for meta in column_meta}
+
+
+@pytest.mark.parametrize(
+    ("entry", "atol", "rtol"),
+    [
+        # Finite window (m = 1): the value reads only its own window — exact.
+        ({"name": "sma", "params": {"length": 20}}, 1e-9, 0.0),
+        # EMA-smoothed (m = 1): ((N−1)/(N+1))^{5N} ≤ e^−10 of the seed survives
+        # 5N bars; the owner's bound on a price scale is 1e-4 of the value
+        # (20 seeded paths: at most 5e-6).
+        ({"name": "ema", "params": {"length": 20}}, 0.0, 1e-4),
+        # Wilder-smoothed (m = 2): (1 − 1/N)^{10N} ≤ e^−10; the owner's bound on
+        # a 0–100 oscillator is 0.01 points (20 seeded paths: at most 6.8e-3;
+        # at m = 1 it was 0.76).
+        ({"name": "rsi", "params": {"length": 14}}, 1e-2, 0.0),
+        # Double-Wilder (m = 3): the second RMA carries the first one's seed as
+        # (k/N)·e^{−k/N}, 15·e^−15 at 15N; 0.01 points on ADX, ADXR, +DI and −DI
+        # (20 seeded paths: at most 4.6e-4; at m = 1 it was 3.8).
+        ({"name": "adx", "params": {"length": 14}}, 1e-2, 0.0),
+        # Path-dependent: a cumulative sum never forgets, so OBV keeps today's
+        # 1,000-bar lead-in and today's values exactly.
+        ({"name": "obv", "params": {}}, 1e-9, 0.0),
+    ],
+)
+def test_a_request_sized_lead_in_keeps_warmed_values_within_their_family_bound(
+    entry: IndicatorEntry, atol: float, rtol: float
+) -> None:
+    """#2611 (owner decision 2026-09-30, "reduce the accuracy needed at
+    warmup, judiciously"): the lead-in the policy sizes from the request gives
+    the window the values today's 1,000-bar lead-in gives, within the
+    tolerance the indicator's smoothing family documents — derivation in
+    ``indicator_warmup_policy``, per-indicator measurements in
+    ``docs/references/data-lab-indicator-warmup.md``."""
+    lookback = requested_indicator_warmup_lookback([entry], INDICATOR_CONFIGS)
+    lead_in = resolve_indicator_window(
+        "2026-01-12", max_lookback=lookback, bar_minutes=bar_minutes_for("day", 1)
+    ).warmup_bars
+
+    sized = _visible_values(entry, lead_in)
+    todays = _visible_values(entry, _TODAYS_LEAD_IN_BARS)
+
+    assert sized
+    assert sized.keys() == todays.keys()
+    for column, values in sized.items():
+        assert not np.isnan(values).any(), f"{column} is blank inside the window"
+        np.testing.assert_allclose(values, todays[column], atol=atol, rtol=rtol, err_msg=column)
 
 
 # ── The one resolver ────────────────────────────────────────────
@@ -549,16 +754,43 @@ def test_an_early_close_in_the_lead_in_counts_its_shorter_session() -> None:
 @pytest.mark.parametrize("bar_minutes", [1, 5, 15, 30, 60, 240])
 @pytest.mark.parametrize("from_date", ["2026-01-07", "2026-01-12", "2025-12-01"])
 def test_an_intraday_lead_in_holds_just_enough_bars_of_its_own_length(from_date: str, bar_minutes: int) -> None:
-    """Bars per session divide by the bar length (the old sizing multiplied):
-    the lead-in holds the warm-up, and one session fewer would not."""
+    """Bars per session: a bar length that evenly divides the session span
+    counts its exact bins; anything else counts its floor, because the bin
+    straddling the open or close may be dropped by the regular-hours filter
+    (Polygon serves 6 or 7 hourly bins per regular session; #2611). The
+    lead-in holds the warm-up under that guaranteed count, and one session
+    fewer would not."""
     window = resolve_indicator_window(from_date, max_lookback=200, bar_minutes=bar_minutes)
 
     spans = {
-        session.session_date: -(-(session.close_ms_utc - session.open_ms_utc) // (bar_minutes * _MINUTE_MS))
+        session.session_date: (session.close_ms_utc - session.open_ms_utc) // (bar_minutes * _MINUTE_MS)
         for session in session_windows_ms_utc(date.fromisoformat(window.fetch_from), date.fromisoformat(from_date))
     }
     bars = [spans[day] for day in _lead_in_sessions(from_date, window.fetch_from)]
     assert sum(bars) >= window.warmup_bars > sum(bars[1:])
+
+
+def test_the_lead_in_is_sized_from_the_requested_indicators_not_a_fixed_floor() -> None:
+    """#2611: EMA-20 on daily bars warms up on 100 sessions (5 × 20), not the
+    1,000 a fixed 200-bar lookback floor forced on every daily, weekly and
+    monthly chart."""
+    lookback = requested_indicator_warmup_lookback(_EMAS[:1], INDICATOR_CONFIGS)
+
+    window = resolve_indicator_window("2026-01-12", max_lookback=lookback, bar_minutes=bar_minutes_for("day", 1))
+
+    assert window.warmup_bars == 100
+    assert len(_lead_in_sessions("2026-01-12", window.fetch_from)) == 100
+
+
+def test_hour_bars_count_the_guaranteed_six_per_regular_session() -> None:
+    """#2611: Polygon serves 6 or 7 hourly bins per regular session after the
+    regular-hours filter, so the lead-in is sized on the guaranteed 6 and can
+    never be one bin short. 20 warm-up bars take Tue 2026-01-06 through Fri
+    2026-01-09 (4 × 6 = 24); one session fewer holds only 18."""
+    window = resolve_indicator_window("2026-01-12", max_lookback=4, bar_minutes=60)
+
+    assert window.warmup_bars == 20
+    assert window.fetch_from == "2026-01-06"
 
 
 def test_daily_bars_warm_up_on_one_session_each() -> None:

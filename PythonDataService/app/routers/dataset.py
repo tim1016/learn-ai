@@ -30,13 +30,13 @@ from app.research.divergence.ingest import (
 from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     add_previous_close_column,
     bar_minutes_for,
     build_csv_bytes,
     build_metadata_csv,
     build_metadata_json,
     build_zip_bytes,
-    estimate_max_lookback,
     fetch_bars_chunked,
     fetch_rth_closes,
     get_indicator_configs,
@@ -46,6 +46,7 @@ from app.services.dataset_service import (
     resolve_indicator_window,
     select_output_columns,
 )
+from app.services.indicator_warmup_policy import requested_indicator_warmup_lookback
 from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
@@ -115,9 +116,7 @@ def _fetch_and_process(
     # too, keyed on this export's own bar length (#2458), so the two surfaces
     # warm the same indicator up on the same bars.
     max_lookback = (
-        estimate_max_lookback(request.indicator_entries)
-        if request.warmup and request.indicator_entries
-        else 0
+        requested_indicator_warmup_lookback(request.indicator_entries, INDICATOR_CONFIGS) if request.warmup else 0
     )
     window = resolve_indicator_window(
         request.from_date,
