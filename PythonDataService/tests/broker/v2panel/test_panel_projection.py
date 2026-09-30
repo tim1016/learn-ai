@@ -2956,6 +2956,31 @@ def test_a_startup_refusal_with_a_position_says_the_bot_is_not_managing_it() -> 
     assert "3 SPY" in notice.explanation
 
 
+@pytest.mark.parametrize(
+    ("exit_state", "closing"),
+    [
+        ("in_progress", "The Clerk is still working this bot's exit order"),
+        ("succeeded", "Use Flatten to close this position."),
+    ],
+)
+def test_a_held_position_names_the_exit_the_clerk_is_still_working(exit_state: str, closing: str) -> None:
+    """#2470: a restart ends the run but not its exit, and Flatten waits for that exit."""
+    base = _exposure_projection(orders=())
+    (operation,) = base.operations
+    projection = replace(
+        base, positions=_held(3.0), operations=(replace(operation, kind="EXIT", state=exit_state),)
+    )
+
+    outcome = adapt_sqlite_panel(
+        _refused_panel("INTERRUPTED_BY_RESTART", "EXITED_UNVERIFIED"), projection
+    ).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert notice.kind == "position_unmanaged"
+    assert closing in notice.explanation
+
+
 def test_a_confirmed_flat_refusal_says_nothing_about_a_position() -> None:
     assert _notices(_refused_panel(), _exposure_projection(orders=())) == []
 

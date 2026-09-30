@@ -1,6 +1,6 @@
 """Durable operator desired-state — persists cross-run intent so a
-PAUSED bot stays PAUSED across crash + reboot and a STOPPED bot refuses
-to restart on its own.
+STOPPED bot refuses to restart on its own. Nothing writes PAUSED since
+#2550 removed Pause; the value stays readable for records written before.
 
 Distinct from ``command_channel.py``: commands are one-shot, per-run
 events (``artifacts/live_runs/<run_id>/commands/``); desired-state is

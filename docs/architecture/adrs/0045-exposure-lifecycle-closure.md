@@ -145,6 +145,12 @@ exit on run death, no broker-side protective stop (the contract supports market
 and limit orders only; stops do not trade in extended hours), and no carry-over
 without a per-strategy replay-equivalence proof.
 
+**Amended 2026-09-30 (#2470):** #2550 removed Resume, so an ended bot never runs
+again and a held position stays its own until Flattened. A restart ends the run
+but not its orders: the Clerk cancels the run's working entry (#2362) and keeps
+working its exit, and while that exit works the held-position warning says
+Flatten waits for it. `test_crash_restart.py` pins each crash point.
+
 **Amended 2026-09-29 (owner decision): a Dry Run is exempt.** It holds nothing
 real, so leaving its simulated position open only strands a chore and a false
 alarm. When a Dry Run's run ends holding -- a crash, a feed death, the
