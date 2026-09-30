@@ -36,6 +36,9 @@ from app.broker.contract.errors import BrokerError
 
 logger = logging.getLogger(__name__)
 
+# The process stop's reason when the operator gave `stop_bot_decisions` none.
+_RECOVERY_STOP_REASON = "sqlite_recovery_stop_bot_decisions"
+
 
 class RecoveryExecutionError(Exception):
     """A presented capability has no live mutation dispatcher, or refused to run.
@@ -139,8 +142,12 @@ async def execute_recovery_action(
             # must still re-drive local quiescence: an earlier attempt could
             # have failed after committing the STOP but before the in-process
             # task stopped, leaving it free to keep consuming bars.
-            # `_quiesce_bot_process` is idempotent for an already-stopped task.
-            await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
+            # `quiesce_bot_process` is idempotent for an already-stopped task.
+            await quiesce_bot_process(
+                strategy_instance_id,
+                updated_by="operator_recovery",
+                reason=request.reason or _RECOVERY_STOP_REASON,
+            )
             return RecoveryExecutionResult(
                 action_id=request.action_id,
                 applied=False,
@@ -202,7 +209,11 @@ async def execute_recovery_action(
             run_id=capability.execution_ref,
             reason=request.reason,
         )
-        await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
+        await quiesce_bot_process(
+            strategy_instance_id,
+            updated_by="operator_recovery",
+            reason=request.reason or _RECOVERY_STOP_REASON,
+        )
         return RecoveryExecutionResult(
             action_id=request.action_id,
             applied=submission.created,
@@ -328,20 +339,22 @@ async def cancel_bot_end(strategy_instance_id: str, *, updated_by: str) -> None:
     await registry.cancel_end(strategy_instance_id, updated_by=updated_by)
 
 
-async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None) -> None:
+async def quiesce_bot_process(
+    strategy_instance_id: str, *, updated_by: str, reason: str | None
+) -> None:
     """Stop the in-process bot task after its durable SQLite STOP commits.
 
-    `stop_bot_decisions` durably records the Clerk-side STOP first (above),
-    but that alone leaves a running `BotTaskRegistry` task free to keep
-    consuming bars and calling `execute_for_instance` — the process only
-    reacts to `DesiredState`, which this command never touched. Route
-    through the registry's own serialized stop boundary so the durable
-    intent and process termination land together, matching the Button
-    Rule's cancel + reap contract (`BotTaskRegistry.stop`).
+    `stop_bot_decisions` (above) and the raw ``runs/stop`` route (#2664)
+    durably record the Clerk-side STOP first, but that alone leaves a running
+    `BotTaskRegistry` task free to keep consuming bars and calling
+    `execute_for_instance` — the process only reacts to `DesiredState`, which
+    the STOP never touched. Route through the registry's own serialized stop
+    boundary so the durable intent and process termination land together,
+    matching the Button Rule's cancel + reap contract (`BotTaskRegistry.stop`).
 
     A bot with no live task in this process (already stopped, running in a
     different process, or never started here) is not an error: the durable
-    SQLite STOP above is already the authority evidence in that case.
+    SQLite STOP is already the authority evidence in that case.
     """
     from app.services.bot_runner import get_bot_task_registry
     from app.services.bot_runner_errors import UnknownBotError
@@ -353,8 +366,8 @@ async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None)
         await registry.stop_after_durable_clerk_stop(
             "alpaca",
             strategy_instance_id,
-            updated_by="operator_recovery",
-            reason=reason or "sqlite_recovery_stop_bot_decisions",
+            updated_by=updated_by,
+            reason=reason,
         )
     except UnknownBotError:
         return

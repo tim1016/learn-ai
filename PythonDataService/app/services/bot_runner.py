@@ -1050,10 +1050,11 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         """Cancel and reap after the SQLite authority already committed STOP.
 
-        Recovery actions commit the lifecycle transition before entering the
-        process registry. Reusing :meth:`stop` would author the same natural
-        command key again with registry-owned prose, turning a successful
-        durable stop into a payload conflict before task cancellation.
+        Recovery actions and the raw ``runs/stop`` route (#2664) commit the
+        lifecycle transition before entering the process registry. Reusing
+        :meth:`stop` would author the same natural command key again with
+        registry-owned prose, turning a successful durable stop into a
+        payload conflict before task cancellation.
         """
         async with self._operation_lock(strategy_instance_id):
             return await self._stop_locked(
@@ -1481,7 +1482,7 @@ class BotTaskRegistry:
         before they commit the run's STOP, as :meth:`stop` records its intent
         first: between that STOP and the process stop, neither the end watch
         nor a Clerk pass may read the end as still to be carried out. The rest
-        of the panel Stop's record -- its STOPPED intent -- lands with the
+        of either Stop's record -- its STOPPED intent -- lands with the
         process stop (:meth:`stop_after_durable_clerk_stop`). Durable in the bot's desired
         state, so no restart revives it, and whether or not this runner has
         the bot's process.
@@ -1499,8 +1500,9 @@ class BotTaskRegistry:
     ) -> DesiredState | None:
         """An operator's Stop, as the bot's desired state records it: the one write every operator Stop makes.
 
-        The panel's, the lane-wide one, with or without the bot's process in
-        this runner (#2607). First the bot's end is cancelled, whatever its
+        The panel's, the raw ``runs/stop`` route's (#2664), the lane-wide one,
+        with or without the bot's process in this runner (#2607). First the
+        bot's end is cancelled, whatever its
         intent already says: Stop does not sell, so no sale is left scheduled
         behind it -- a crash's STOPPED keeps its end for the Clerk, and the
         owner's Stop ends it. Then the intent is STOPPED, the end left as the

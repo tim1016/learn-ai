@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionRequest,
     cancel_bot_end,
     execute_recovery_action,
+    quiesce_bot_process,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionUnavailableError,
@@ -367,17 +368,17 @@ async def stop_run(
     # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
     active = await asyncio.to_thread(repo.active_run, strategy_instance_id)
-    if active is not None and active.lifecycle_run_id == body.lifecycle_run_id:
+    # Only a Stop of the bot's active run is an operator's Stop of the bot:
+    # one naming another run -- a stale id, or a lost-response retry after a
+    # redeploy -- stops nothing of the running run and is refused or replayed
+    # below, the bot's end and process untouched. A retry of this Stop finds
+    # its run already stopped and is replayed the same way. A Dry Run's bot
+    # has no run on this authority, so it is untouched too.
+    stops_active_run = active is not None and active.lifecycle_run_id == body.lifecycle_run_id
+    if stops_active_run:
         # An operator's Stop sells nothing at the end time (#2664): the bot's
         # end is cancelled before its STOP commits, exactly as the panel's
         # Stop cancels it, so no Clerk pass between the two sells a SELL end.
-        # Only a Stop of the bot's active run cancels it: one naming another
-        # run -- a stale id, or a lost-response retry after a redeploy -- stops
-        # nothing of the running run and is refused or replayed below, its
-        # end untouched (a retry of this Stop finds its end already
-        # cancelled). A Dry Run's bot has no run on this authority, so its end
-        # is untouched too. This Stop does not stop the bot's process in the
-        # runner; the panel's Stop does.
         await cancel_bot_end(strategy_instance_id, updated_by="operator_runs_stop")
     try:
         submission = await asyncio.to_thread(
@@ -403,6 +404,16 @@ async def stop_run(
         raise _unknown_bot_response(exc) from exc
     except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise _unavailable_response(exc) from exc
+    if stops_active_run:
+        # The STOP is durable once ``submit_stop_run`` returns: it commits in
+        # the call, never queued. It fences the run at the Clerk, but the
+        # bot's process in the runner would keep consuming bars (#2664), so
+        # it is stopped now, as the panel's Stop stops it after its own STOP
+        # -- recording the operator's Stop (intent STOPPED, the end still
+        # cancelled) whether or not this runner still has the process.
+        await quiesce_bot_process(
+            strategy_instance_id, updated_by="operator_runs_stop", reason=body.operator_reason
+        )
     return CommandResponse.from_resource(submission.command)
 
 

@@ -214,7 +214,7 @@ class _FakeRegistry:
         self, broker: str, sid: str, *, updated_by: str, reason: str
     ) -> None:
         """The in-process quiescence step `stop_bot_decisions` drives after its
-        durable SQLite STOP commits (recovery_execution._quiesce_bot_process).
+        durable SQLite STOP commits (recovery_execution.quiesce_bot_process).
         Recorded, not asserted on, by every test in this module except the
         lease-revival ones, which use it to prove the retried write actually
         reached this step."""

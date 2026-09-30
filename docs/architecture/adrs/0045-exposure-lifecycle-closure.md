@@ -199,7 +199,8 @@ the one sale a dead run makes by itself; every other dead-run position keeps
 the rule above. On a `sim:` authority the end is a Stop and the Dry Run's
 run-end close does the sale; a Dry Run is never offered KEEP, and a stopped
 Dry Run's end is recorded carried out when it comes, since its run-end close
-already sold. Every operator Stop -- the panel's, and the lane-wide Stop that
+already sold. Every operator Stop -- the panel's, the raw lifecycle Stop route's
+(`runs/stop`, fleet op `custody_runs_stop`, #2664), and the lane-wide Stop that
 installation migration, lane retirement and the budget cutover run -- ends the
 bot and its end with it: Stop does not sell, so no sale is left scheduled
 behind it. Each makes the same record in the bot's desired state
@@ -208,10 +209,11 @@ durably, whether or not the runner still has the bot's process, and whatever
 the intent already says -- then records STOPPED, a write that never touches
 the end. A crash, a restart or a service shutdown keeps the end, so the Clerk
 still carries it out; a crash records STOPPED with the end kept, and a later
-operator Stop, the lane-wide one included, still cancels it. The panel's Stop
-cancels the end before it commits its STOP and stops the process, so nothing
-that runs in between (the runner's end watch, a Clerk pass) reads the end as
-still to be carried out. The runner stops a process "at its end" only when
+operator Stop, the lane-wide one included, still cancels it. The panel's Stop,
+and the raw route's when it names the bot's active run, cancels the end before
+it commits its STOP and then stops the process, so nothing that runs in
+between (the runner's end watch, a Clerk pass) reads the end as still to be
+carried out. The runner stops a process "at its end" only when
 the run's STOP is the Clerk's own at the end (`operator_reason`
 `scheduled_end`, which the raw lifecycle Stop route refuses as reserved); a
 run any other Stop ended is that Stop's. A Stop landing
