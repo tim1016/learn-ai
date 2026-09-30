@@ -73,6 +73,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
+from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,41 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
         return DeploymentBudgetPreview(
             state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
         )
+
+
+def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str | None:
+    """The Deploy review's warning when other bots in this account already trade the chosen symbol (#2622).
+
+    Alpaca refuses a new order that could trade against another open order
+    in the same account (its wash-trade protection), so two bots on one
+    symbol can refuse each other's orders. A bot trades the account's symbol
+    while Home lists it running or holding (``home_roster``, the catalog's
+    own groups); a Dry Run trades simulated cash, so it is never named, and a
+    Dry Run's own Deploy has no note. A warning only: it never refuses the
+    Deploy, and consent never binds it. Blocking: reads each bot's lifecycle.
+    """
+    runtime = _primary(account_id)
+    world, _ = _request_world(runtime, request)
+    if world == "synthetic":
+        return None
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    symbol = request.symbol.upper()
+    others = sorted(
+        bot.strategy_instance_id for bot in home_roster(repo, world=world)
+        if bot.group in ("running", "holding") and bot.symbol.upper() == symbol
+    )
+    if not others:
+        return None
+    who = (
+        f"Another bot in this account already trades {symbol}: {others[0]}." if len(others) == 1
+        else f"{len(others)} other bots in this account already trade {symbol}: {', '.join(others)}."
+    )
+    return (
+        f"{who} Alpaca refuses an order that could trade against another open {symbol} order in this account, "
+        "so when one bot buys while another sells, one of the two orders is refused. "
+        "A refused exit is sent again once the other order ends; a refused entry is dropped."
+    )
 
 
 def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:

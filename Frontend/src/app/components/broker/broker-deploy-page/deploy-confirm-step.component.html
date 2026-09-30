@@ -1,7 +1,13 @@
 <div class="confirm-step">
   <dl class="confirm-step__review" aria-label="Deploy review">
     <div><dt>Bot</dt><dd>{{ botNameNote() ?? 'Named when you deploy.' }}</dd></div>
-    <div><dt>Trades</dt><dd>{{ strategyLabel() ?? 'Choose a strategy in What' }} · {{ trades() }}</dd></div>
+    <div>
+      <dt>Trades</dt>
+      <dd>
+        {{ strategyLabel() ?? 'Choose a strategy in What' }} · {{ trades() }}
+        @if (sameSymbolNote(); as note) { <span class="confirm-step__caution">{{ note }}</span> }
+      </dd>
+    </div>
     <div>
       <dt>Account</dt>
       <dd>

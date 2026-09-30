@@ -28,6 +28,15 @@ raised. Every refusal is decided before ``accept_recovery_exit``, so a
 refused re-drive never parks an EXIT. #2504 measures persistent refusals in
 observed regular-session failure time. Holds and unobserved time never spend
 that durable budget, and the strategy's own working EXIT is always a hold.
+
+Owner decision 2026-09-29 (#2622): an exit Alpaca refused while the Clerk's
+own records showed an order open on the other side of its symbol (Alpaca's
+wash-trade protection; the refusal records those orders, #2621) waits only
+for that side to clear. It is sent again on the first pass after no such
+order is open, in any session -- no settle age, no wait for the next
+session. While one is still open the pass is a hold, until the settle age
+has passed in the regular session, where the ordinary failure path takes
+over, so escalation keeps its timing.
 """
 
 from __future__ import annotations
@@ -62,6 +71,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
+    OrderSubmitFailedFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -70,6 +80,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
+from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
@@ -130,6 +141,10 @@ class EpisodeAttempt:
     redrive: bool
 
 
+type OppositeSide = Literal["open", "ended"]
+"""Where the other side of a refused exit's symbol stands (:func:`opposite_side_after_refusal`)."""
+
+
 @dataclass(frozen=True)
 class _StaleExit:
     strategy_instance_id: str
@@ -141,6 +156,8 @@ class _StaleExit:
     attempts: tuple[EpisodeAttempt, ...]
     ready_at_ms: int
     stopped: bool
+    # ``None`` unless the episode's order was refused behind an opposite-side order (#2622).
+    opposite_side: OppositeSide | None
 
     @property
     def regular_failures(self) -> int:
@@ -213,9 +230,43 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
         stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
-        ready = repo.clock() if not stopped and replacement_ready(repo, facts.evidence_refs) else episode["observed_at_ms"] + policy.after_ms
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped))
+        opposite = opposite_side_after_refusal(
+            repo, facts.evidence_refs, symbol=cause.symbol, side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
+        )
+        send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
+        ready = repo.clock() if not stopped and send_now else episode["observed_at_ms"] + policy.after_ms
+        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite))
     return stale
+
+
+def opposite_side_after_refusal(
+    repo: ClerkSqliteRepository, evidence_refs: tuple[str, ...], *, symbol: str, side: OrderSide,
+) -> OppositeSide | None:
+    """Whether a ``side`` exit refused behind an opposite-side order is still blocked (#2622).
+
+    Alpaca refuses a new order while an order on the other side of its
+    symbol is open in the account, whoever placed it. On such a refusal the
+    Clerk records the orders its own records showed open there (#2621); an
+    episode's evidence names its latest order. ``open`` while any order on
+    the other side of ``side`` is open -- that one, or one opened since, which
+    would refuse the re-send again; ``ended`` once none is. ``None`` when the
+    episode's order was not refused behind one (any other refusal, or an
+    order the broker ended), which keeps the watchdog's ordinary timing, and
+    when the open orders cannot be read.
+    """
+    for order_ref in evidence_refs:
+        row = repo.last_order_transition(order_ref=order_ref, transition_kind="EXIT_NOT_FLAT")
+        if row is None or not OrderSubmitFailedFacts.from_facts_json(row["facts_json"]).opposite_open_order_refs:
+            continue
+        try:
+            return "open" if repo.open_opposite_side_orders(symbol=symbol, side=side) else "ended"
+        except OrderProjectionReadError:
+            logger.exception("Clerk could not read its open orders for a refused exit; it keeps the ordinary retry timing", extra={
+                "action": "exit_watchdog_opposite_orders_unreadable", "account_id": repo.account_id,
+                "order_ref": order_ref, "symbol": symbol, "side": side.value,
+            })
+            return None
+    return None
 
 
 def evaluate_recovery_wait(
@@ -230,6 +281,13 @@ def evaluate_recovery_wait(
     verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
+    if stale.opposite_side == "open" and (now_ms < stale.ready_at_ms or verdict != "send"):
+        # Past the settle age in the regular session the ordinary failure path
+        # takes over, so an order that keeps working escalates as before.
+        return RecoveryResult("hold", "OPPOSITE_ORDER_WORKING", (
+            "Alpaca refused this exit while an opposite order on this symbol was open in this account; "
+            "the Clerk sends it again once no such order is open."
+        ))
     if now_ms < stale.ready_at_ms:
         return RecoveryResult("hold", "RECOVERY_RETRY_WAIT", "The Clerk is allowing the previous exit's evidence to settle.",
                               next_redrive_at_ms(not_before_ms=stale.ready_at_ms, policy=policy))
@@ -237,7 +295,7 @@ def evaluate_recovery_wait(
         age_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
         if stale.regular_failures >= age_policy.max_count:
             return RecoveryResult("failure", "EXIT_REDRIVES_EXHAUSTED", "Automatic regular-session exit attempts were exhausted.")
-    else:
+    elif stale.opposite_side is None:
         bound = max((a.valid_until_ms for a in stale.attempts if a.submitted and a.extended_hours
                      and a.valid_until_ms is not None and a.valid_until_ms > now_ms), default=None)
         if bound is not None:

@@ -28,6 +28,14 @@
   dd { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 }
 
+.confirm-step__caution {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
 .confirm-step__blockers,
 .confirm-step__refusal {
   display: grid;

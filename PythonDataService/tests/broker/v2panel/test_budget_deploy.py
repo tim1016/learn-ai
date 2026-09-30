@@ -14,8 +14,10 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
@@ -31,7 +33,7 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
-from app.services.broker_v2_panel import bot_custody, budget_deploy
+from app.services.broker_v2_panel import bot_custody, budget_deploy, sqlite_roster_status
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -159,6 +161,57 @@ def test_dry_run_never_copies_parent_cash_or_risk(authority) -> None:
     assert preview.custody_account_id is None and preview.unreserved_usd is None
     assert [item.key for item in preview.shortcuts] == ["position_headroom"]
     assert preview.budget_usd == "2000.00"
+
+
+def _deployed_bot(repo: ClerkSqliteRepository, observation: AccountObservation, sid: str, symbol: str, *,
+                  mode: str = "trade") -> None:
+    """A bot Deploy committed and started on ``symbol`` in this account."""
+    terms = _request(symbol).exit_terms.seal()
+    repo.register_strategy_instance(
+        strategy_instance_id=sid, symbol=symbol, config_hash=f"seal-{sid}", exit_terms=terms,
+        strategy_key="deployment_validation", display_name=sid,
+        config_json=canonicalize({"mode": mode, "carryover_policy": "FORBID", "quantity": 1}),
+    )
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(observation)
+    submit_budgeted_deploy(
+        repo, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}", world="real_paper", committed_cents=20_000,
+        configuration_hash=f"seal-{sid}", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+        risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal(100),
+    )
+
+
+def test_the_review_names_the_other_bots_already_trading_the_symbol(
+    authority, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """#2622: Deploy warns, in its own words, when another bot in this account already trades the symbol.
+
+    Alpaca refuses an order that could trade against another open order in
+    the account, so two bots on one symbol can refuse each other's orders.
+    Only bots trading this account's money on that symbol are named: never
+    one on another symbol, a Dry Run, or one that has finished. A Dry Run's
+    own Deploy never trades the account, so it is never warned.
+    """
+    repo, _, snapshot = authority
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    for sid, symbol, mode in (("spy-a", "SPY", "trade"), ("qqq-a", "QQQ", "trade"),
+                              ("spy-sim", "SPY", "dry_run"), ("spy-done", "SPY", "trade")):
+        _deployed_bot(repo, snapshot.observation, sid, symbol, mode=mode)
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="spy-done",
+                    lifecycle_run_id="run-spy-done", clock=repo.clock)
+
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) == (
+        "Another bot in this account already trades SPY: spy-a. Alpaca refuses an order that could trade against "
+        "another open SPY order in this account, so when one bot buys while another sells, one of the two orders "
+        "is refused. A refused exit is sent again once the other order ends; a refused entry is dropped."
+    )
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("NVDA")) is None
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY", execution_mode="dry_run")) is None
+
+    _deployed_bot(repo, snapshot.observation, "spy-b", "SPY")
+
+    note = budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY"))
+    assert note is not None and note.startswith("2 other bots in this account already trade SPY: spy-a, spy-b. ")
 
 
 _CLAIMED_AT = 1

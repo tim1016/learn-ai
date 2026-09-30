@@ -24,8 +24,9 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
+from app.schemas.deployment_budget import DeploymentBudgetPreview
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
-from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
+from app.services.broker_v2_panel import budget_deploy, panel_deploy, panel_errors, panel_scope
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS, _T0, DEPLOYED_SID, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT
@@ -141,6 +142,36 @@ async def test_start_admission_preview_uses_the_request_specific_policy(
     assert response.status_code == 200
     assert response.json()["reason_code"] == "START_ADMITTED"
     assert response.json()["strategy_instance_id"] == DEPLOYED_SID
+
+
+@pytest.mark.asyncio
+async def test_the_budget_review_carries_the_same_symbol_warning_beside_the_money_preview(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2622: the review the Deploy form reads states the other bots already trading the symbol.
+
+    It is read beside the money preview, never inside it: consent re-runs
+    that preview at Deploy, and a warning is no part of what consent binds.
+    """
+    fast_app, _registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
+    monkeypatch.setattr(
+        budget_deploy, "same_symbol_note",
+        lambda account_id, request: f"Another bot in this account already trades {request.symbol}: spy-a.",
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots/budget-preview", json=_SETTINGS)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "ready"
+    assert response.json()["same_symbol_note"] == "Another bot in this account already trades SPY: spy-a."
 
 
 @pytest.mark.asyncio
