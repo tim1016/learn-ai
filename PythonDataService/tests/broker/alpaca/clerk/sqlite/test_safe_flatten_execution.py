@@ -63,7 +63,7 @@ from app.broker.contract.models import (
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.broker_v2_panel.sqlite_panel_adapter import _recent_fill_view
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _TestClock, _walk_clock_to
 
 ACCOUNT_ID = "PA-FLATTEN"
 SID = "crashed-bot"
@@ -359,7 +359,7 @@ async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_rech
 
 
 async def test_execute_safe_flatten_plan_refuses_a_symbol_an_exit_already_owns(
-    crashed_with_exposure,
+    crashed_with_exposure: tuple[ClerkSqliteRepository, _TestClock],
 ) -> None:
     """#2642: an EXIT accepted after the plan was presented owns the reduction.
 

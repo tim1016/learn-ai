@@ -652,6 +652,29 @@ describe('AlpacaHomeComponent', () => {
     expect(screen.queryByText(/Still checking/)).toBeNull();
   });
 
+  it('keeps a Stop begun after a switch in flight when the left account’s read answers late (#2634)', async () => {
+    const answers: ((panel: BotPanelView) => void)[] = [];
+    const { view, router, panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((resolve) => { answers.push(resolve); }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    const stop = await screen.findByRole('button', { name: 'Stop spy-ema-20260929-0931' });
+    await vi.waitFor(() => expect(stop.getAttribute('aria-busy')).toBe('false'));
+    fireEvent.click(stop);
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(2));
+
+    answers[0](fakeBotPanelView({ actions: fakeSqliteBotActions({ sid: 'spy-ema-20260929-0931' }) }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await view.fixture.whenStable();
+
+    expect(stop.getAttribute('aria-busy')).toBe('true');
+    expect(stop.textContent?.trim()).toBe('Checking…');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('says a bot the Clerk no longer lets stop cannot be stopped, without asking', async () => {
     const { panel } = await renderHome({
       getPanel: () => Promise.resolve(fakeBotPanelView({ actions: fakeSqliteBotActions({ running: false }) })),
