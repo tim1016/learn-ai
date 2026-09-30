@@ -163,7 +163,7 @@ async def test_the_budget_review_carries_the_same_symbol_warning_beside_the_mone
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(
         budget_deploy, "same_symbol_note",
-        lambda account_id, request: f"Another bot in this account already trades {request.symbol}: spy-a.",
+        lambda account_id, request: f"Also traded here by {request.symbol.lower()}-a.",
     )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
@@ -171,7 +171,7 @@ async def test_the_budget_review_carries_the_same_symbol_warning_beside_the_mone
 
     assert response.status_code == 200, response.text
     assert response.json()["state"] == "ready"
-    assert response.json()["same_symbol_note"] == "Another bot in this account already trades SPY: spy-a."
+    assert response.json()["same_symbol_note"] == "Also traded here by spy-a."
 
 
 @pytest.mark.asyncio

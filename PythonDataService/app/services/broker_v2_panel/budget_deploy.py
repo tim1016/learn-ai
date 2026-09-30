@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -219,15 +220,24 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
 
 
 def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str | None:
-    """The Deploy review's warning when other bots in this account already trade the chosen symbol (#2622).
+    """The Deploy review's one-line warning when other bots in this account already trade the chosen symbol (#2622).
 
     Alpaca refuses a new order that could trade against another open order
     in the same account (its wash-trade protection), so two bots on one
-    symbol can refuse each other's orders. A bot trades the account's symbol
-    while Home lists it running or holding (``home_roster``, the catalog's
-    own groups); a Dry Run trades simulated cash, so it is never named, and a
-    Dry Run's own Deploy has no note. A warning only: it never refuses the
-    Deploy, and consent never binds it. Blocking: reads each bot's lifecycle.
+    symbol can refuse each other's orders. A bot may trade the account's
+    symbol while Home lists it running or holding (``home_roster``, the
+    catalog's own groups), and when Home cannot place it because its
+    lifecycle cannot be read. A Dry Run trades simulated cash, so it is never
+    named, and a Dry Run's own Deploy has no note. One short line, so Deploy
+    still fits one screen (#2581): one bot by name, the rest counted.
+
+    A warning only: it never refuses the Deploy, consent never binds it, and
+    a roster that cannot be read omits it rather than failing the money
+    review. ``home_roster`` already contains one bot's unreadable lifecycle
+    (it projects that bot ungrouped); what can still escape it is an
+    account-wide read failing -- ``sqlite3.Error`` from the Clerk's database,
+    or ``MoneyInputError`` from the claimed-money arithmetic that decides
+    ``holding``. Blocking: reads each bot's lifecycle.
     """
     runtime = _primary(account_id)
     world, _ = _request_world(runtime, request)
@@ -236,21 +246,21 @@ def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str 
     repo = runtime.sqlite_repository
     assert repo is not None
     symbol = request.symbol.upper()
+    try:
+        roster = home_roster(repo, world=world)
+    except (sqlite3.Error, MoneyInputError):
+        logger.warning("Deploy could not read this account's bots; the review omits its same-symbol warning", extra={
+            "action": "deploy_same_symbol_note_unavailable", "account_id": account_id, "symbol": symbol,
+        }, exc_info=True)
+        return None
     others = sorted(
-        bot.strategy_instance_id for bot in home_roster(repo, world=world)
-        if bot.group in ("running", "holding") and bot.symbol.upper() == symbol
+        bot.strategy_instance_id for bot in roster
+        if bot.group in ("running", "holding", None) and bot.symbol.upper() == symbol
     )
     if not others:
         return None
-    who = (
-        f"Another bot in this account already trades {symbol}: {others[0]}." if len(others) == 1
-        else f"{len(others)} other bots in this account already trade {symbol}: {', '.join(others)}."
-    )
-    return (
-        f"{who} Alpaca refuses an order that could trade against another open {symbol} order in this account, "
-        "so when one bot buys while another sells, one of the two orders is refused. "
-        "A refused exit is sent again once the other order ends; a refused entry is dropped."
-    )
+    more = f" +{len(others) - 1} more" if len(others) > 1 else ""
+    return f"Also traded here by {others[0]}{more}."
 
 
 def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:

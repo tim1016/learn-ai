@@ -219,9 +219,9 @@ class DeploymentBudgetPreview(BaseModel):
     custody_account_id: str | None = None
     # How the bot will be named -- the backend names it at Deploy (#2551).
     bot_name_note: str = "The bot is named at Deploy."
-    # A warning, never a refusal (#2622): the other bots in this account that
-    # already trade the chosen symbol, and what that costs. ``None`` when
-    # there are none, and for Dry Run, which never trades the account.
+    # A warning, never a refusal (#2622): one short line naming the other
+    # bots in this account that already trade the chosen symbol. ``None``
+    # when there are none, and for Dry Run, which never trades the account.
     same_symbol_note: str | None = None
     # The previewed amount as Python normalizes it: what Deploy sets aside.
     budget_usd: str | None = None

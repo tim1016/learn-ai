@@ -612,8 +612,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
   });
 
   it('warns beside the trade, in the backend’s words, when another bot in this account already trades the symbol (#2622)', async () => {
-    const note = 'Another bot in this account already trades SPY: spy-ema-20260929-0931. '
-      + 'A refused exit is sent again once the other order ends; a refused entry is dropped.';
+    const note = 'Also traded here by spy-ema-20260929-0931.';
     const service = mockService();
     service.previewBudget.mockImplementation(async (_target, body: DeployBotBody) => ({
       ...previewFor(DEPLOY_VIEW, body), same_symbol_note: note,
@@ -622,7 +621,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     await chooseMoney();
     await fixture.whenStable();
 
-    const warning = within(screen.getByLabelText('Deploy review')).getByText(note);
+    const warning = within(screen.getByLabelText('Deploy review')).getByText(note, { exact: false });
     expect(warning.closest('div')?.querySelector('dt')?.textContent).toBe('Trades');
     // A warning, never a block: the Deploy stays open to the owner.
     expect(deployButton().disabled).toBe(false);
@@ -634,7 +633,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     await renderWorkflow();
     await chooseMoney();
 
-    expect(screen.getByLabelText('Deploy review').textContent).not.toContain('already trades');
+    expect(screen.getByLabelText('Deploy review').textContent).not.toContain('Also traded here');
   });
 });
 

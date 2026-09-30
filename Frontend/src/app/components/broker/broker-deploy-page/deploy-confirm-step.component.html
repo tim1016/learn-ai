@@ -5,7 +5,7 @@
       <dt>Trades</dt>
       <dd>
         {{ strategyLabel() ?? 'Choose a strategy in What' }} · {{ trades() }}
-        @if (sameSymbolNote(); as note) { <span class="confirm-step__caution">{{ note }}</span> }
+        @if (sameSymbolNote(); as note) { <span class="confirm-step__caution">· {{ note }}</span> }
       </dd>
     </div>
     <div>

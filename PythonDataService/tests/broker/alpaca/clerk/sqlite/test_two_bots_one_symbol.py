@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, 
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import submit_manual_order_cancellation
 from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
@@ -49,10 +50,18 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
 )
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.alpaca.marketable_limit import marketable_limit_price
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import (
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerOrderLeg,
+    OrderSide,
+    OrderType,
+    TimeInForce,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
     _FakeTradePort,
@@ -90,6 +99,11 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
 # names another open order only from its own records (#2621).
 _ILLUSTRATIVE_CODE = 40310000
 _WASH_TRADE_MESSAGE = "potential wash trade detected. use complex orders"
+_OPPOSITE_ORDER_HOLD = (
+    "Alpaca refused this exit while an opposite order on this symbol was open in this account; "
+    "the Clerk sends it again once no such order is open."
+)
+"""What A's page says while the order its refusal named, or another on that side, is still open (#2622)."""
 
 
 def _wash_trade_rejection(code: int | None = _ILLUSTRATIVE_CODE) -> BrokerError:
@@ -665,7 +679,8 @@ async def test_a_refused_exit_is_not_sent_into_another_buy_opened_since_the_refu
 
     assert redrive.submitted_legs == []
     shown = _shown_recovery(repo)
-    assert (shown.kind, shown.reason_code) == ("on_hold", "OPPOSITE_ORDER_WORKING")
+    assert (shown.kind, shown.reason_code) == ("on_hold", "EXIT_OTHER_ORDER_WORKING")
+    assert shown.explanation == _OPPOSITE_ORDER_HOLD
 
 
 @pytest.mark.parametrize("refusal", ["wash_trade_with_nothing_open", "invalid_order"])
@@ -739,6 +754,69 @@ async def test_a_refused_exit_escalates_only_if_the_other_bots_order_keeps_worki
     assert repo.position(WATCHDOG_SID, "SPY") == 10
 
 
+async def test_an_exit_ready_at_once_never_starts_its_escalation_clock_early(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """B's buy fills, so A's exit is ready at once, but other Clerk work keeps it from going out (#2622 review).
+
+    The owner's manual QQQ limit is still working, and the Clerk counts any
+    working manual order as work in flight on every symbol. Each refused
+    re-drive before the refusal has settled for the policy's re-drive age
+    (120 s) is a hold, so failure time starts where it always has and
+    ``EXIT_STUCK`` still lands 600 s after the refusal, never 480 s.
+    """
+    repo, clock = clocked_repo
+    working_b = await _a_sells_into_bs_working_buy(repo)
+    refused_at = repo.clock()
+    owner = _ManualTrade(repo=repo)
+    qqq = BrokerOrderLeg(symbol="QQQ", side="buy", quantity=1, order_type="limit", limit_price=10.0,
+                         time_in_force="gtc")
+    manual = await submit_manual_order(repo, account_id=ACCOUNT_ID, operator_id=OPERATOR_ID,
+                                       ticket_id=TICKET_ID, leg_id=LEG_ID, leg=qqq, trade=owner)
+    assert manual.leg.order_ref is not None
+    filled_b = await _fill_entry(repo, working_b, quantity=5, execution_id="b-exec")
+    policy = _exit_not_flat_redrive_policy()
+    redrive = _OneAccountTrade(owner)
+    broker = _FakeRead(orders=[filled_b, owner.orders[manual.leg.order_ref]],
+                       positions=[_position("SPY", quantity=15.0)])
+
+    while _exit_stuck(repo) is None:
+        assert repo.clock() - refused_at <= policy.after_ms * (policy.max_count + 2), "never escalated"
+        await reconcile_account(repo, read=broker, trade=redrive, pricing=UNPRICEABLE_RECOVERY)
+        if _exit_stuck(repo) is None:
+            clock.advance(DEFAULT_RECOVERY_INTERVAL_MS)
+
+    assert repo.clock() - refused_at == policy.after_ms + policy.after_ms * (policy.max_count + 1)
+    assert redrive.submitted_legs == []
+
+
+async def test_a_refused_exit_keeps_the_ordinary_timing_when_the_open_orders_cannot_be_read(
+    clocked_repo,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unreadable order record never sends an exit early: the watchdog logs it and waits out the settle age."""
+    repo, _clock = clocked_repo
+    working_b = await _a_sells_into_bs_working_buy(repo)
+    filled_b = await _fill_entry(repo, working_b, quantity=5, execution_id="b-exec")
+
+    def unreadable(*, symbol: str, side: OrderSide) -> tuple:
+        raise OrderProjectionReadError("SQLite order 'x' has malformed ENTER_ACCEPTED facts")
+
+    monkeypatch.setattr(repo, "open_opposite_side_orders", unreadable)
+    redrive = _FakeTradePort()
+
+    with caplog.at_level(logging.ERROR, logger="app.broker.alpaca.clerk.sqlite.exit_watchdog"):
+        await reconcile_account(repo, read=_FakeRead(orders=[filled_b], positions=[_position("SPY", quantity=15.0)]),
+                                trade=redrive, pricing=UNPRICEABLE_RECOVERY)
+
+    assert redrive.submitted_legs == []
+    assert _shown_recovery(repo).reason_code == "RECOVERY_RETRY_WAIT"
+    [logged] = [record for record in caplog.records
+                if getattr(record, "action", None) == "exit_watchdog_opposite_orders_unreadable"]
+    assert logged.exc_info is not None
+
+
 _AFTER_HOURS_SELL = ProgramLeg(
     LegShape(order_type=OrderType.LIMIT, time_in_force=TimeInForce.DAY, limit_price=99.80,
              extended_hours=True, side=OrderSide.SELL),
@@ -787,20 +865,14 @@ class _OneAccountTrade(_FakeTradePort):
         return self._owner.orders[client_order_id]
 
 
-async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_that_order_ends(
-    clocked_repo,  # noqa: F811
-) -> None:
-    """The owner's own buy limit blocks a bot's exit for as long as it rests (#2622).
+async def _as_sell_is_refused_behind_the_owners_buy_limit(
+    repo: ClerkSqliteRepository,
+) -> tuple[_ManualTrade, str, _OneAccountTrade]:
+    """The owner's GTC buy limit on SPY, placed in the morning, still rests at 17:00 when A's after-hours sell is refused.
 
-    Alpaca's wash-trade protection spans the account, manual tickets
-    included. The owner's GTC buy limit on SPY, placed in the morning, still
-    rests at 17:00 when A's after-hours sell is refused, and A's refusal
-    names it. While it rests, every pass holds A's exit: no order and, outside
-    the regular session, no ``EXIT_STUCK``. The owner cancels it at 18:30; on
-    the first pass after, A's sell goes out as an after-hours limit in the
-    same session -- not at 04:00 the next morning.
+    Returns the owner's order book, the buy limit's order reference, and the
+    account's trade port for the watchdog's passes.
     """
-    repo, _clock = clocked_repo
     ref_a = await _held_position(repo)
     owner = _ManualTrade(repo=repo)
     buy_limit = BrokerOrderLeg(symbol="SPY", side="buy", quantity=5, order_type="limit",
@@ -814,7 +886,24 @@ async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_ag
     facts = await _as_sell_is_refused(repo, ref_a, program_leg=_AFTER_HOURS_SELL)
 
     assert facts.opposite_open_order_refs == [manual_ref]
-    redrive = _OneAccountTrade(owner)
+    return owner, manual_ref, _OneAccountTrade(owner)
+
+
+async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_the_clerk_cancels_it(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """The owner's own buy limit blocks a bot's exit for as long as it rests (#2622).
+
+    Alpaca's wash-trade protection spans the account, manual tickets
+    included, and A's refusal names the owner's resting buy limit. While it
+    rests, every pass holds A's exit: no order and, outside the regular
+    session, no ``EXIT_STUCK``. The owner cancels it through the Clerk at
+    18:30; on the first pass after, A's sell goes out as an after-hours limit
+    in the same session -- not at 04:00 the next morning. (A cancel at Alpaca,
+    or an expiry, is #2647: see the xfail below.)
+    """
+    repo, _clock = clocked_repo
+    owner, manual_ref, redrive = await _as_sell_is_refused_behind_the_owners_buy_limit(repo)
     for at_ms in (WATCHDOG_POST_T0 + 180_000, WATCHDOG_POST_T0 + 3_600_000):
         _walk_clock_to(repo, at_ms)
         await reconcile_account(repo, read=_FakeRead(orders=[owner.orders[manual_ref]],
@@ -823,7 +912,8 @@ async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_ag
     assert redrive.submitted_legs == []
     assert _exit_stuck(repo) is None
     shown = _shown_recovery(repo)
-    assert (shown.kind, shown.reason_code, shown.allowed_from_ms) == ("on_hold", "OPPOSITE_ORDER_WORKING", None)
+    assert (shown.kind, shown.reason_code, shown.allowed_from_ms) == ("on_hold", "EXIT_OTHER_ORDER_WORKING", None)
+    assert shown.explanation == _OPPOSITE_ORDER_HOLD
 
     _walk_clock_to(repo, WATCHDOG_POST_T0 + 5_400_000)
     canceled = await submit_manual_order_cancellation(repo, account_id=ACCOUNT_ID, operator_id=OPERATOR_ID,
@@ -836,6 +926,53 @@ async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_ag
     assert [(leg.side, leg.quantity, leg.order_type, leg.extended_hours) for leg in redrive.submitted_legs] == [
         (OrderSide.SELL, 10, OrderType.LIMIT, True)]
     assert _exit_stuck(repo) is None
+
+
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str) -> None:
+        raise AssertionError("a lifecycle frame must not trigger reconciliation here")
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="#2647: a manual order that ends at Alpaca leaves its MANUAL_ORDER effect in progress, "
+    "so clerk_work_in_flight keeps refusing the exit",
+)
+@pytest.mark.parametrize("route", ["reconcile_sweep", "trade_updates"])
+async def test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca(
+    clocked_repo,  # noqa: F811
+    route: str,
+) -> None:
+    """The owner cancels the buy limit in Alpaca's own UI at 18:30 (reviewer probe, #2622).
+
+    The Clerk learns the order ended, by the next sweep or by its
+    ``trade_updates`` frame, so no order is open on the buy side of SPY and
+    A's sell should go out on the first pass after. It does not yet: the
+    manual order's effect never leaves ``in_progress`` (#2647).
+    """
+    repo, _clock = clocked_repo
+    owner, manual_ref, redrive = await _as_sell_is_refused_behind_the_owners_buy_limit(repo)
+    _walk_clock_to(repo, WATCHDOG_POST_T0 + 5_400_000)
+    now = repo.clock()
+    canceled = owner.orders[manual_ref].model_copy(update={
+        "status": "canceled", "canceled_at_ms": now, "updated_at_ms": now, "observed_at_ms": now})
+    owner.orders[manual_ref] = canceled
+    if route == "trade_updates":
+        sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler())
+        await sink.record_lifecycle_event(
+            client_order_id=manual_ref,
+            event=BrokerOrderEvent(event_type="canceled", occurred_at_ms=now, price=None, quantity=None),
+            event_key="owner-cancel-at-alpaca", order=canceled, recovery_source=None, recovery_window_limit=None,
+        )
+
+    await reconcile_account(repo, read=_FakeRead(orders=[canceled], positions=[_position("SPY", quantity=10.0)]),
+                            trade=redrive, pricing=_live_touch())
+
+    manual_order = repo.order(manual_ref)
+    assert manual_order is not None and manual_order.broker_state == "canceled"
+    assert repo.open_opposite_side_orders(symbol="SPY", side=OrderSide.SELL) == ()
+    assert [(leg.side, leg.quantity, leg.order_type, leg.extended_hours) for leg in redrive.submitted_legs] == [
+        (OrderSide.SELL, 10, OrderType.LIMIT, True)]
 
 
 # ── One account reading for every bot ─────────────────────────────────────────

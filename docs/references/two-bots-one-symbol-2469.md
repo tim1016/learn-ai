@@ -230,11 +230,22 @@ The stuck-EXIT watchdog then re-sends it on its own. All paths below are in
   is not empty, the watchdog asks the same #2621 read
   (`open_opposite_side_orders`) whether any order is still open on the other
   side of the symbol (`opposite_side_after_refusal`).
-  - While one is, every pass is a hold, `OPPOSITE_ORDER_WORKING`: A's page
+  - While one is, every pass is a hold, `EXIT_OTHER_ORDER_WORKING`: A's page
     says the Clerk sends the exit once no such order is open, and names no
     time.
   - On the first pass after none is, the exit is ready at once, in any
     session: no settle age, and no wait for the next session.
+  - It waits for the whole other side of the symbol, not only the order the
+    refusal named: an opposite order opened since would refuse the re-send
+    again. [test]
+    `test_a_refused_exit_is_not_sent_into_another_buy_opened_since_the_refusal`
+  - An exit ready at once can still be held back by other Clerk work. A
+    re-drive refused before the refusal has settled for the re-drive age
+    (120 s) is a hold, so failure time starts where it always has. [test]
+    `test_an_exit_ready_at_once_never_starts_its_escalation_clock_early`
+  - When its open orders cannot be read, the watchdog logs it and keeps the
+    ordinary timing. [test]
+    `test_a_refused_exit_keeps_the_ordinary_timing_when_the_open_orders_cannot_be_read`
 - **Otherwise it first lets the refusal settle.** Until the policy's re-drive
   age has passed (120 s, `uncertainty_policies.py`), every pass is a hold,
   `RECOVERY_RETRY_WAIT`. A refusal with no opposite-side order open keeps this
@@ -264,8 +275,13 @@ What that means for a wash-trade refusal:
   - Deploy starts regular-session bots only, so no program ENTER is sent
     outside the regular session. The case that happens is the owner's own
     manual buy limit, which can rest for hours: A's exit waits for it, then
-    goes out on the first pass after the owner cancels it.
-    [test] `test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_that_order_ends`
+    goes out on the first pass after the owner cancels it through the Clerk.
+    [test] `test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_the_clerk_cancels_it`
+  - A cancel at Alpaca, or an expiry, is #2647: the order's record ends, but
+    its manual effect stays in progress, so the Clerk keeps counting it as
+    work in flight and the exit still waits (on the regular session's
+    escalation budget from 09:30). [test] strict xfail
+    `test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca`
   - A refusal with no opposite-side order open still waits for the next
     session outside the regular one. Existing test
     `test_exit_send_session.py::test_failed_extended_limit_waits_for_next_eligible_session_without_chasing`
@@ -290,10 +306,11 @@ What that means for a wash-trade refusal:
   the opposite order ends, in any session. It becomes a task for the owner
   only when the opposite order keeps working through 8 minutes of
   regular-session retries.
-- **Deploy warns.** The Deploy review names the other bots in the account that
-  already trade the chosen symbol and what that costs, as a warning, never a
-  refusal (`budget_deploy.same_symbol_note`). A refused ENTER is still
-  dropped (owner decision 2026-09-29).
+- **Deploy warns.** The Deploy review says, in one line under Trades, which
+  other bot in the account already trades the chosen symbol ("Also traded
+  here by <bot>", the rest counted), as a warning, never a refusal
+  (`budget_deploy.same_symbol_note`). A refused ENTER is still dropped (owner
+  decision 2026-09-29).
 
 ## 3. Pattern day trading, the intraday margin rule and settlement
 
@@ -457,7 +474,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-42 passed
+44 passed, 2 xfailed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -469,6 +486,9 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
 - **The former xfails.** The file carried strict xfails for #2621 (the error
   mapping) and the two #2553 cash-claim cases. Each passed once its issue
   landed, and its mark was removed.
+- **The open xfail.** The two cases of a manual buy limit cancelled at Alpaca
+  (by the sweep and by its `trade_updates` frame) are strict xfails for
+  #2647; remove the mark when that issue lands.
 
 ## Sources
 

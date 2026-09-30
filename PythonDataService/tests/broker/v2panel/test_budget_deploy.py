@@ -1,6 +1,8 @@
 """Trader money review uses custody facts and immutable consent, not UI math."""
 from __future__ import annotations
 
+import logging
+import sqlite3
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, observation_is_fresh
+from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
@@ -184,13 +187,14 @@ def _deployed_bot(repo: ClerkSqliteRepository, observation: AccountObservation, 
 def test_the_review_names_the_other_bots_already_trading_the_symbol(
     authority, monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    """#2622: Deploy warns, in its own words, when another bot in this account already trades the symbol.
+    """#2622: Deploy warns, in one short line, when another bot in this account already trades the symbol.
 
     Alpaca refuses an order that could trade against another open order in
     the account, so two bots on one symbol can refuse each other's orders.
-    Only bots trading this account's money on that symbol are named: never
-    one on another symbol, a Dry Run, or one that has finished. A Dry Run's
-    own Deploy never trades the account, so it is never warned.
+    Only bots that may trade this account's money on that symbol are named:
+    never one on another symbol, a Dry Run, or one that has finished. A Dry
+    Run's own Deploy never trades the account, so it is never warned. The
+    line fits the Confirm step (#2581): one bot by name, the rest counted.
     """
     repo, _, snapshot = authority
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
@@ -200,18 +204,45 @@ def test_the_review_names_the_other_bots_already_trading_the_symbol(
     submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="spy-done",
                     lifecycle_run_id="run-spy-done", clock=repo.clock)
 
-    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) == (
-        "Another bot in this account already trades SPY: spy-a. Alpaca refuses an order that could trade against "
-        "another open SPY order in this account, so when one bot buys while another sells, one of the two orders "
-        "is refused. A refused exit is sent again once the other order ends; a refused entry is dropped."
-    )
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) == "Also traded here by spy-a."
     assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("NVDA")) is None
     assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY", execution_mode="dry_run")) is None
 
-    _deployed_bot(repo, snapshot.observation, "spy-b", "SPY")
+    for sid in ("spy-b", "spy-c"):
+        _deployed_bot(repo, snapshot.observation, sid, "SPY")
 
-    note = budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY"))
-    assert note is not None and note.startswith("2 other bots in this account already trade SPY: spy-a, spy-b. ")
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) == "Also traded here by spy-a +2 more."
+
+
+def test_the_review_names_a_bot_on_the_symbol_whose_lifecycle_cannot_be_read(
+    authority, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """Home cannot place a bot whose configuration it cannot read, so the Clerk cannot say it is finished: it may still trade."""
+    repo, _, snapshot = authority
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    _deployed_bot(repo, snapshot.observation, "spy-unread", "SPY", mode="not-a-mode")
+
+    assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) == "Also traded here by spy-unread."
+
+
+@pytest.mark.parametrize("failure", [
+    sqlite3.OperationalError("database is locked"),
+    MoneyInputError("Money evidence is not finite."),
+])
+def test_a_roster_that_cannot_be_read_omits_the_warning_and_never_fails_the_review(
+    authority, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: Exception,
+) -> None:
+    """The roster is read only for the warning: its failure is logged, and the money review goes on without it."""
+    def unreadable(repository: ClerkSqliteRepository, *, world: str) -> list:
+        raise failure
+
+    monkeypatch.setattr(budget_deploy, "home_roster", unreadable)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.broker_v2_panel.budget_deploy"):
+        assert budget_deploy.same_symbol_note("BUDGET-PAPER", _request("SPY")) is None
+
+    [logged] = [record for record in caplog.records if getattr(record, "action", None) == "deploy_same_symbol_note_unavailable"]
+    assert logged.exc_info is not None
 
 
 _CLAIMED_AT = 1

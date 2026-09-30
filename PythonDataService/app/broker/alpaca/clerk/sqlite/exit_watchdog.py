@@ -36,7 +36,8 @@ for that side to clear. It is sent again on the first pass after no such
 order is open, in any session -- no settle age, no wait for the next
 session. While one is still open the pass is a hold, until the settle age
 has passed in the regular session, where the ordinary failure path takes
-over, so escalation keeps its timing.
+over. A re-drive refused before the settle age is a hold too, so failure
+time starts where it always has and escalation keeps its timing.
 """
 
 from __future__ import annotations
@@ -156,8 +157,12 @@ class _StaleExit:
     attempts: tuple[EpisodeAttempt, ...]
     ready_at_ms: int
     stopped: bool
-    # ``None`` unless the episode's order was refused behind an opposite-side order (#2622).
+    # ``None`` unless the episode's order was refused behind an opposite-side
+    # order (#2622), and also when the open orders could not be read.
     opposite_side: OppositeSide | None
+    # The refusal has settled for the policy's re-drive age: only from here on
+    # does a refused re-drive spend regular-session failure time (#2622 review).
+    settled_at_ms: int
 
     @property
     def regular_failures(self) -> int:
@@ -231,12 +236,18 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
         stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
         opposite = opposite_side_after_refusal(
-            repo, facts.evidence_refs, symbol=cause.symbol, side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
+            repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
         )
+        settled = episode["observed_at_ms"] + policy.after_ms
         send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
-        ready = repo.clock() if not stopped and send_now else episode["observed_at_ms"] + policy.after_ms
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite))
+        ready = repo.clock() if not stopped and send_now else settled
+        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled))
     return stale
+
+
+def reducing_side(quantity: float) -> OrderSide:
+    """The side that takes a signed attributed ``quantity`` toward flat: sell a long, buy back a short."""
+    return OrderSide.SELL if quantity > 0 else OrderSide.BUY
 
 
 def opposite_side_after_refusal(
@@ -281,10 +292,10 @@ def evaluate_recovery_wait(
     verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
-    if stale.opposite_side == "open" and (now_ms < stale.ready_at_ms or verdict != "send"):
+    if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
         # Past the settle age in the regular session the ordinary failure path
         # takes over, so an order that keeps working escalates as before.
-        return RecoveryResult("hold", "OPPOSITE_ORDER_WORKING", (
+        return RecoveryResult("hold", "EXIT_OTHER_ORDER_WORKING", (
             "Alpaca refused this exit while an opposite order on this symbol was open in this account; "
             "the Clerk sends it again once no such order is open."
         ))
@@ -343,7 +354,7 @@ async def _recover_stale_exit(
         if market_leg_sendable(now_ms) else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
     )
     try:
-        shape = touch.price(side=OrderSide.SELL if stale.remaining > 0 else OrderSide.BUY,
+        shape = touch.price(side=reducing_side(stale.remaining),
                             symbol=cause.symbol, quantity=stale.remaining, now_ms=now_ms)
     except ProgramLegRefused as exc:
         logger.info("deferred a stuck-EXIT re-drive: no reduction can be priced", extra={
@@ -361,7 +372,11 @@ async def _recover_stale_exit(
         if accepted is None:
             return None
         if isinstance(accepted, _RedriveRefused):
-            outcome = accepted.outcome if market_leg_sendable(repo.clock()) else "hold"
+            # An exit ready before its refusal settled (#2622) spends no
+            # failure time early, so escalation keeps its timing.
+            refused_at_ms = repo.clock()
+            counts = market_leg_sendable(refused_at_ms) and refused_at_ms >= stale.settled_at_ms
+            outcome = accepted.outcome if counts else "hold"
             previous = await run(lambda: latest_exit_recovery(repo, strategy_instance_id=sid, uncertainty_id=stale.episode["uncertainty_id"]))
             if outcome == "failure" and (previous is None or previous.first_failure_at_ms is None):
                 logger.warning(accepted.message, extra={
@@ -494,7 +509,7 @@ def _accept_admissible_redrive(
         strategy_instance_id=strategy_instance_id,
         reduction_intent=ReductionIntent(
             symbol=symbol,
-            side="SELL" if remaining > 0 else "BUY",
+            side=reducing_side(remaining).value.upper(),
             quantity=abs(remaining),
         ),
     )
