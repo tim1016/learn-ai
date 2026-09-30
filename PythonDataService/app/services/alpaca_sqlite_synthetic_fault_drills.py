@@ -129,6 +129,9 @@ class _CancelThroughSeamTradePort:
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return await self._broker.get_order_by_client_order_id(client_order_id)
 
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return await self._broker.get_order_by_broker_order_id(order_id)
+
 
 def _no_network_alpaca_broker() -> tuple[AlpacaBroker, _NoNetworkAlpacaSdkClient]:
     raw = _NoNetworkAlpacaSdkClient()

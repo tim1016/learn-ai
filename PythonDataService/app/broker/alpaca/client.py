@@ -587,7 +587,7 @@ class AlpacaTradingClient:
             self._clear_uncertain_submission(client_order_id)
         return result
 
-    async def get_order(self, order_id: str) -> dict[str, Any] | None:
+    async def get_order_by_broker_order_id(self, order_id: str) -> dict[str, Any] | None:
         """GET ``/v2/orders/{order_id}`` for one broker-assigned order id (#2656).
 
         A manual order Alpaca replaced is followed by its broker order id:

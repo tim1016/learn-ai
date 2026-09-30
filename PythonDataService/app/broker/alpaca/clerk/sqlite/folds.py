@@ -638,32 +638,19 @@ def order_observation_advances(
 
 def _ack_advances_order(conn: sqlite3.Connection, payload: dict[str, Any]) -> bool:
     """Whether this observation may advance the materialized order snapshot."""
-    row = conn.execute(
-        "SELECT o.broker_state, o.broker_order_id, e.kind AS effect_kind "
-        "FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE o.order_ref = ?",
-        (payload["order_ref"],),
-    ).fetchone()
-    current_state = row["broker_state"] if row is not None else None
-    # An observation of an order Alpaca already replaced never advances the
-    # manual leg it continues (#2656): the row's broker identity is the
-    # chain's current head, and a stale frame for a superseded member would
-    # otherwise write that dead member's terminal state over the head's
-    # lifecycle. Manual orders only — a bot order's first broker identity is
-    # never superseded by this machinery.
-    if (
-        row is not None
-        and row["effect_kind"] == "MANUAL_ORDER"
-        and payload.get("broker_order_id")
-        and row["broker_order_id"]
-        and payload["broker_order_id"] != row["broker_order_id"]
-    ):
-        return False
+    row = conn.execute("SELECT broker_state FROM orders WHERE order_ref = ?", (payload["order_ref"],)).fetchone()
+    current_state = row["broker_state"]
 
+    # Source time is compared within the order's current broker lifecycle: a
+    # manual leg following an Alpaca replacement (#2656) starts its new
+    # head's lifecycle at the link that made it the head, never judged
+    # against the order it replaced. An order with no link is one lifecycle.
     current_sequence = _this_transition_sequence(conn)
     prior_source_time = conn.execute(
         "SELECT MAX(source_event_at_ms) AS latest FROM custody_transitions "
-        "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED' AND sequence < ?",
+        "WHERE order_ref = ?1 AND transition_kind = 'ORDER_SUBMIT_ACKED' AND sequence < ?2 "
+        "AND sequence > COALESCE((SELECT MAX(sequence) FROM custody_transitions "
+        "WHERE order_ref = ?1 AND transition_kind = 'MANUAL_ORDER_REPLACED' AND sequence < ?2), 0)",
         (payload["order_ref"], current_sequence),
     ).fetchone()["latest"]
     return order_observation_advances(
@@ -799,8 +786,9 @@ def _fold_manual_order_replaced(conn: sqlite3.Connection, payload: dict[str, Any
 
     The projection's broker id is the chain's current head (#2656); its
     lifecycle state restarts empty because nothing about the new order is
-    known yet — the first observation of the head repopulates it under the
-    same monotonic acknowledgement rule as any order. The fold applies only
+    known yet -- the first observation of the head repopulates it under the
+    same monotonic acknowledgement rule as any order, judged within the new
+    head's own lifecycle (:func:`_ack_advances_order`). The fold applies only
     while ``replaces`` is still the head, so replays and out-of-order links
     can never move the chain backwards, and a leg whose broker identity was
     never established stays untouched.

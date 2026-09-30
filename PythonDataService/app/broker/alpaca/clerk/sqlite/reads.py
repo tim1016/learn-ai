@@ -782,34 +782,29 @@ def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     return frozenset(row["order_ref"] for row in rows)
 
 
-def order_for_broker_order_id(conn: sqlite3.Connection, broker_order_id: str) -> OrderResource | None:
-    """The captured order whose broker identity is exactly this broker order id.
+def manual_chain_order_ref(conn: sqlite3.Connection, broker_order_id: str) -> str | None:
+    """The manual leg whose Alpaca replacement chain holds this broker order id (#2656).
 
-    Covered by ``ux_orders_broker_order_id``, so this is a point lookup. For a
-    manual leg the row's broker id is the chain's current head (#2656).
+    A member is the leg's current head (its ``orders`` row's broker id) or
+    either end of any durable ``MANUAL_ORDER_REPLACED`` link, whatever state
+    the leg's effect is in -- a late frame about a chain member still belongs
+    to its leg. Only manual legs have chains: the head probe goes through
+    ``ux_orders_broker_order_id`` and the link probe through the transitions'
+    ``order_ref`` index, scoped to the manual legs.
     """
     row = conn.execute(
-        "SELECT order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
-        "broker_state, submitted_at_ms, updated_at_ms FROM orders WHERE broker_order_id = ?",
+        "SELECT o.order_ref FROM orders o "
+        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
+        "WHERE o.broker_order_id = ?1 "
+        "UNION "
+        "SELECT t.order_ref FROM custody_transitions t "
+        "WHERE t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
+        "AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        "AND (t.broker_order_id = ?1 OR json_extract(t.facts_json, '$.replaces') = ?1) "
+        "LIMIT 1",
         (broker_order_id,),
     ).fetchone()
-    return OrderResource(**dict(row)) if row is not None else None
-
-
-def nonterminal_manual_broker_order_ids(conn: sqlite3.Connection) -> frozenset[str]:
-    """Broker order ids every still-working manual leg follows (#2656).
-
-    The head of each chain: an open broker order with no client id of ours
-    that the reconciliation verdict must not judge foreign while the Clerk
-    follows it. A terminal leg's head ended with it, so it is excluded.
-    """
-    rows = conn.execute(
-        "SELECT o.broker_order_id FROM orders o "
-        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE e.kind = 'MANUAL_ORDER' AND e.state NOT IN ('succeeded','failed','rejected') "
-        "AND o.broker_order_id IS NOT NULL"
-    ).fetchall()
-    return frozenset(row["broker_order_id"] for row in rows)
+    return row["order_ref"] if row is not None else None
 
 
 def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:

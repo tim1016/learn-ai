@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     resolve_manual_order_cancellation,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
-    resolve_manual_replacement,
+    resolve_captured_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
@@ -250,9 +250,10 @@ def _is_captured_broker_order(
     """Whether the Clerk's durable identities own one broker snapshot order.
 
     By its client order id when the captured order-ref set is supplied, and
-    for a manual replacement chain's head (#2656) by its broker order id —
-    Alpaca books the replacement with no client id of ours. Without the
-    captured set, the historical bot-only namespace heuristic answers.
+    by broker order id for every order the snapshot fold resolved -- a manual
+    order's Alpaca replacement chain (#2656), whose members carry a client
+    id Alpaca generated. Without the captured set, the historical bot-only
+    namespace heuristic answers.
     """
     if known_order_refs is None:
         return order_ref_namespace_matches(order.client_order_id, namespaces)
@@ -275,8 +276,8 @@ def plan_account_reconciliation(
     Once the active SQLite authority supplies its full captured order-ref
     set, that durable identity is stronger than the historical bot-only
     namespace heuristic and correctly recognizes manual custody too; a
-    manual replacement chain's head is recognized the same way
-    (:func:`_is_captured_broker_order`, #2656).
+    manual order's replacement chain is recognized by the broker ids the
+    snapshot fold resolved (:func:`_is_captured_broker_order`, #2656).
     """
     foreign = tuple(
         order
@@ -1083,33 +1084,36 @@ def _fold_snapshot_evidence(
     broker_orders: list[BrokerOrder],
     *,
     simulated_authority: bool = False,
-) -> None:
+) -> frozenset[str]:
+    """Fold every snapshot order a captured order owns; return their broker ids.
+
+    Ownership is the one resolver's answer (:func:`resolve_captured_order`):
+    our client id, or a manual order's Alpaca replacement chain (#2656),
+    whose members carry a client id Alpaca generated. The returned ids are
+    what the verdict must not judge foreign -- exactly the orders folded.
+    """
+    captured_ids: set[str] = set()
     for broker_order in broker_orders:
-        if broker_order.client_order_id is None:
-            # An order Alpaca booked to replace a manual one has no client id
-            # of ours; it is the same manual leg continued, resolved through
-            # the chain (#2656) rather than skipped.
-            local_order = resolve_manual_replacement(repo, order=broker_order)
-            if local_order is None:
-                continue
-        else:
-            local_order = repo.order(broker_order.client_order_id)
-        if local_order is None:
+        captured = resolve_captured_order(repo, broker_order)
+        if captured is None:
             continue
-        owner = repo.active_exit_for_order(local_order.order_ref) or repo.effect_operation(
-            local_order.effect_operation_id
+        captured_ids.add(broker_order.order_id)
+        owner = repo.active_exit_for_order(captured.order_ref) or repo.effect_operation(
+            captured.row.effect_operation_id
         )
         if owner is None:
             raise ReconciliationInvariantError(
-                f"captured order {local_order.order_ref!r} has no owning effect"
+                f"captured order {captured.order_ref!r} has no owning effect"
             )
         fold_order_evidence(
             repo,
             effect_operation_id=owner.effect_operation_id,
             order=broker_order,
             simulated_authority=simulated_authority,
-            order_ref=local_order.order_ref,
+            order_ref=captured.order_ref,
+            credit_only=captured.credit_only,
         )
+    return frozenset(captured_ids)
 
 
 async def _fold_snapshot_evidence_under_intake(
@@ -1305,7 +1309,9 @@ def _finalize_reconciliation_verdict(
     """Atomically bind a final broker snapshot, verdict, and operator receipt."""
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
         return None
-    _fold_snapshot_evidence(repo, broker_orders, simulated_authority=simulated_authority)
+    captured_broker_order_ids = _fold_snapshot_evidence(
+        repo, broker_orders, simulated_authority=simulated_authority
+    )
     # An exact slice that arrived after its order's final REST fold is proven
     # here, on recorded evidence, or its episode would never close (#2346).
     repo.resolve_order_total_covered_coverage_conflicts()
@@ -1328,7 +1334,7 @@ def _finalize_reconciliation_verdict(
         broker_positions=broker_positions,
         attributed_positions=repo.attributed_positions_by_symbol(),
         known_order_refs=frozenset(repo.all_order_refs()),
-        known_broker_order_ids=repo.nonterminal_manual_broker_order_ids(),
+        known_broker_order_ids=captured_broker_order_ids,
     )
     plan = _contain_unfoldable_orders(repo, plan)
     _sync_unexplained_order_hold(repo, plan.unexplained_orders)

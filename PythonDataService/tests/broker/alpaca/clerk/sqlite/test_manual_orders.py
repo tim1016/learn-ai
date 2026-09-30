@@ -1706,6 +1706,71 @@ async def test_manual_cancel_closes_expired_target_and_does_not_issue_delete(
 
 
 @pytest.mark.asyncio
+async def test_manual_cancel_of_a_filled_target_awaiting_its_exact_executions_never_closes_it_failed(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Alpaca already filled the order, and only its REST total is recorded yet.
+
+    The cancellation records its own terminal result and sends no DELETE. The
+    source leg is not closed ``failed`` beside a fill -- a receipt that would
+    contradict the fill, and a leg no exact execution could complete after.
+    It stays open, as it would without the cancel, until the stream's exact
+    execution completes it ``MANUAL_ORDER_FILLED``.
+    """
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+    from app.broker.contract.models import BrokerOrderEvent
+    from tests.broker.alpaca.clerk.sqlite.test_reconcile import _NoReconciler
+
+    trade = FakeTrade(repo=repo)
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=trade,
+    )
+    order_ref, source_id = submitted.leg.order_ref, submitted.leg.effect_operation_id
+    assert order_ref is not None and source_id is not None
+    trade.orders[order_ref] = filled_order(order_ref)
+
+    cancellation = await submit_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=order_ref,
+        cancel_request_id="5b0e6f5c-7d3a-4c1e-9f2b-8a4d6c1e3f70",
+        trade=trade,
+    )
+
+    assert cancellation.cancellation.state == "FAILED"
+    assert trade.cancel_calls == []
+    assert repo.effect_operation(source_id).state == "in_progress"  # type: ignore[union-attr]
+    assert not any(t["transition_kind"] == "MANUAL_ORDER_TERMINAL" for t in repo.transitions_for_order(order_ref))
+    assert repo.effective_fill_totals_for_order(order_ref)[0] == pytest.approx(1.0, abs=1e-9, rel=0)
+
+    sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler())
+    await sink.record_lifecycle_event(
+        client_order_id=order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=1_700_000_000_300, price=500, quantity=1,
+            execution_id="manual-execution-after-cancel",
+        ),
+        event_key="fill:manual-execution-after-cancel",
+        order=filled_order(order_ref),
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    assert repo.effect_operation(source_id).state == "succeeded"  # type: ignore[union-attr]
+    assert repo.effective_fill_totals_for_order(order_ref)[0] == pytest.approx(1.0, abs=1e-9, rel=0)
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None and ticket.legs[0].state == "SUCCEEDED"
+
+
+@pytest.mark.asyncio
 async def test_manual_cancel_polls_a_pending_cancel_without_another_delete(
     repo: ClerkSqliteRepository,
 ) -> None:

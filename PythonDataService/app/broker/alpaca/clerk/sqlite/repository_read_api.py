@@ -501,16 +501,9 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.order(self._conn, order_ref)
 
-    def order_for_broker_order_id(
-        self: ClerkSqliteRepository,
-        broker_order_id: str,
-    ) -> OrderResource | None:
+    def manual_chain_order_ref(self: ClerkSqliteRepository, broker_order_id: str) -> str | None:
         with self._write_lock:
-            return reads.order_for_broker_order_id(self._conn, broker_order_id)
-
-    def nonterminal_manual_broker_order_ids(self: ClerkSqliteRepository) -> frozenset[str]:
-        with self._write_lock:
-            return reads.nonterminal_manual_broker_order_ids(self._conn)
+            return reads.manual_chain_order_ref(self._conn, broker_order_id)
 
     def order_for_effect_operation(
         self: ClerkSqliteRepository,

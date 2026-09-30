@@ -572,7 +572,7 @@ class AlpacaBroker:
             return None
         return adapter.from_alpaca_order(payload)
 
-    async def get_order(self, order_id: str) -> BrokerOrder | None:
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         """Look one order up by its broker-assigned id (#2656).
 
         Follows a manual order's Alpaca replacement chain: the replacement
@@ -581,7 +581,7 @@ class AlpacaBroker:
         client-id lookup: ``None`` only on a definitive 404, transport
         failures stay ``BrokerUnavailable`` and propagate.
         """
-        payload = await self._client.get_order(order_id)
+        payload = await self._client.get_order_by_broker_order_id(order_id)
         if payload is None:
             return None
         return adapter.from_alpaca_order(payload)

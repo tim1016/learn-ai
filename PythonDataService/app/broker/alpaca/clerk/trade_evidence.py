@@ -17,7 +17,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
-    resolve_manual_replacement,
+    resolve_captured_order,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
@@ -159,13 +159,11 @@ class SqliteTradeUpdateEvidenceSink:
     ) -> TradeUpdateDisposition:
         del recovery_window_limit
         async with self._intake:
-            local_order = self._repo.order(client_order_id) if client_order_id else None
-            if local_order is None and order is not None:
-                # An order Alpaca booked to replace a manual one carries no
-                # client id of ours, yet it is the same manual leg continued
-                # (#2656). Resolve the chain before judging the order foreign.
-                local_order = resolve_manual_replacement(self._repo, order=order)
-            if local_order is None and order is not None:
+            # The one resolver every route shares: our client id first, then a
+            # manual order's Alpaca replacement chain (#2656) -- a replacement
+            # carries a client id Alpaca generated, never ours.
+            captured = resolve_captured_order(self._repo, order) if order is not None else None
+            if captured is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
                 # observation fold raises its own atomic account hold; an
@@ -177,7 +175,7 @@ class SqliteTradeUpdateEvidenceSink:
                 )
                 return "unfoldable_order" if observed == "unfoldable" else "unexplained_order"
 
-            if local_order is None or order is None:
+            if captured is None or order is None:
                 evidence_refs = tuple(
                     ref
                     for ref in (
@@ -201,11 +199,12 @@ class SqliteTradeUpdateEvidenceSink:
                 )
                 return "unexplained_order"
 
-            owner = self._repo.active_exit_for_order(local_order.order_ref)
+            order_ref = captured.order_ref
+            owner = self._repo.active_exit_for_order(order_ref)
             if owner is None:
-                owner = self._repo.effect_operation(local_order.effect_operation_id)
+                owner = self._repo.effect_operation(captured.row.effect_operation_id)
             if owner is None:
-                raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
+                raise RuntimeError(f"SQLite order {order_ref!r} has no owning effect operation")
 
             # Before the exact slice and the ack: a frame missing our order's
             # id, status, symbol or side folds as a lost one, never as its
@@ -214,7 +213,7 @@ class SqliteTradeUpdateEvidenceSink:
                 self._repo,
                 effect_operation_id=owner.effect_operation_id,
                 order=order,
-                order_ref=local_order.order_ref,
+                order_ref=order_ref,
             ):
                 return "withheld_order"
 
@@ -230,7 +229,8 @@ class SqliteTradeUpdateEvidenceSink:
                     self._repo,
                     effect_operation_id=owner.effect_operation_id,
                     order=order,
-                    order_ref=local_order.order_ref,
+                    order_ref=order_ref,
+                    credit_only=captured.credit_only,
                 )
                 return "order_event"
 
@@ -242,7 +242,7 @@ class SqliteTradeUpdateEvidenceSink:
                     self._repo,
                     event=event,
                     order=order,
-                    order_ref=local_order.order_ref,
+                    order_ref=order_ref,
                     owner=owner,
                     evidence_source="websocket",
                     conflict_copy=WEBSOCKET_EXACT_CONFLICT_COPY,
@@ -250,46 +250,51 @@ class SqliteTradeUpdateEvidenceSink:
                     extra_conflict_evidence_refs=[event_key],
                 )
 
-            # A websocket's embedded order is aggregate lifecycle evidence,
-            # never the source of fill math: it may report a cumulative filled
-            # quantity while the frame above contains exactly one execution
-            # slice. REST reconciliation remains the explicitly-labelled
-            # cumulative-recovery path in ``fold_order_evidence``.
-            fold_order_acknowledgement(
-                self._repo,
-                effect_operation_id=owner.effect_operation_id,
-                order=order,
-                append_stale_ack=False,
-                order_ref=local_order.order_ref,
-            )
-            # The same proven-unfilled fold the REST route reaches through
-            # ``fold_order_evidence``: the websocket usually sees a vendor
-            # cancel first, and the ack alone strands the ENTER (#2306).
-            # Also while the submit POST is still in flight: the ack above has
-            # already made the ENTER ``in_progress`` over a dead order, which
-            # no sweep revisits, so declining here would strand it.
-            fold_enter_unfilled_if_proven(
-                self._repo,
-                effect_operation_id=owner.effect_operation_id,
-                order=order,
-                order_ref=local_order.order_ref,
-            )
-            # The frame's embedded order is a cumulative total too (#2460
-            # review): once its exact slice advanced the recorded fills, the
-            # same price-conflict fold the REST snapshot runs must see this
-            # aggregate -- otherwise a snapshot-opened conflict keeps a stale
-            # reported average for ever once the order terminalizes.
-            fold_execution_price_conflict(
-                self._repo,
-                effect=owner,
-                order=order,
-                order_ref=local_order.order_ref,
-            )
+            # Only the chain head's frame states the order's lifecycle. A
+            # former or unproven member of a manual order's replacement chain
+            # is credit-only (#2656): its exact slice above is credited, its
+            # embedded order never restates the head or ends the leg.
+            if not captured.credit_only:
+                # A websocket's embedded order is aggregate lifecycle evidence,
+                # never the source of fill math: it may report a cumulative filled
+                # quantity while the frame above contains exactly one execution
+                # slice. REST reconciliation remains the explicitly-labelled
+                # cumulative-recovery path in ``fold_order_evidence``.
+                fold_order_acknowledgement(
+                    self._repo,
+                    effect_operation_id=owner.effect_operation_id,
+                    order=order,
+                    append_stale_ack=False,
+                    order_ref=order_ref,
+                )
+                # The same proven-unfilled fold the REST route reaches through
+                # ``fold_order_evidence``: the websocket usually sees a vendor
+                # cancel first, and the ack alone strands the ENTER (#2306).
+                # Also while the submit POST is still in flight: the ack above has
+                # already made the ENTER ``in_progress`` over a dead order, which
+                # no sweep revisits, so declining here would strand it.
+                fold_enter_unfilled_if_proven(
+                    self._repo,
+                    effect_operation_id=owner.effect_operation_id,
+                    order=order,
+                    order_ref=order_ref,
+                )
+                # The frame's embedded order is a cumulative total too (#2460
+                # review): once its exact slice advanced the recorded fills, the
+                # same price-conflict fold the REST snapshot runs must see this
+                # aggregate -- otherwise a snapshot-opened conflict keeps a stale
+                # reported average for ever once the order terminalizes.
+                fold_execution_price_conflict(
+                    self._repo,
+                    effect=owner,
+                    order=order,
+                    order_ref=order_ref,
+                )
             if event.event_type in {"fill", "partial_fill"}:
                 # Early, for latency only: every reconciliation pass is the
                 # canonical detector and re-derives this from durable facts
                 # (#2348). Same function, scoped to this order, under intake.
-                fence_fills_on_terminal_enters(self._repo, order_ref=local_order.order_ref)
+                fence_fills_on_terminal_enters(self._repo, order_ref=order_ref)
             return "order_event"
 
     async def reconcile_gap(self) -> None:

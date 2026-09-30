@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
@@ -38,7 +39,10 @@ from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
     manual_order_has_exact_terminal_coverage,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
-    record_manual_order_replacement,
+    MANUAL_ORDER_REPLACED_TRANSITION,
+    live_manual_effect,
+    manual_chain_head_beyond,
+    resolve_captured_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
@@ -72,6 +76,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reaso
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +114,7 @@ __all__ = [
     "fence_fills_on_terminal_enters",
     "fold_enter_unfilled_if_proven",
     "fold_entry_never_accepted",
+    "fold_exact_order_evidence",
     "fold_execution_price_conflict",
     "fold_failed",
     "fold_manual_order_ended_if_proven",
@@ -116,12 +124,14 @@ __all__ = [
     "fold_order_submission_response",
     "fold_submit_absence_void",
     "fold_uncertain",
+    "follow_manual_replacement_chain",
     "is_working_order",
     "order_never_reached_broker",
     "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
+    "unobserved_chain_head_why",
     "unresolved_order_refs",
     "withhold_unnamed_order",
     "working_order_refs",
@@ -134,6 +144,13 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     if transition is None:
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+
+
+def _evidence_order_ref(order: BrokerOrder, order_ref: str | None) -> str:
+    """The captured ref an observation folds under: the resolved one, else our own client id."""
+    resolved = order_ref if order_ref is not None else order.client_order_id
+    assert resolved is not None
+    return resolved
 
 
 def is_working_order(order: OrderResource) -> bool:
@@ -249,6 +266,7 @@ def fold_order_evidence(
     append_stale_ack: bool = True,
     simulated_authority: bool = False,
     order_ref: str | None = None,
+    credit_only: bool = False,
 ) -> None:
     """Fold a REST/reconciliation aggregate order observation.
 
@@ -261,10 +279,14 @@ def fold_order_evidence(
     immutable execution slice through ``EXECUTION_SLICE_FILLED`` and calls
     :func:`fold_order_acknowledgement` separately.
 
-    ``order_ref`` resolves the captured leg the observation belongs to. It
-    defaults to the observation's own ``client_order_id``; the one caller
-    that may not have one is a manual order's Alpaca replacement, resolved
-    through the chain (#2656) and folded as the same leg's continuation.
+    ``order_ref`` is the captured leg the observation belongs to, defaulting
+    to the observation's own ``client_order_id``. A manual order Alpaca
+    replaced is resolved through its chain instead (#2656,
+    :func:`resolve_captured_order`), and ``credit_only`` is that resolver's
+    answer for an observation that is not the chain's head: its cumulative
+    fill still folds to the leg, but it never reaches the acknowledgement,
+    so it neither restates the head's lifecycle, nor ends the leg, nor adds
+    an acknowledgement row per sweep.
 
     ``simulated_authority`` is the caller's trusted statement that this
     aggregate came from a deterministic no-submit adapter's own port
@@ -298,8 +320,7 @@ def fold_order_evidence(
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order_ref if order_ref is not None else order.client_order_id
-    assert order_ref is not None
+    order_ref = _evidence_order_ref(order, order_ref)
     if withhold_unnamed_order(
         repo, effect_operation_id=effect_operation_id, order=order, order_ref=order_ref
     ):
@@ -355,6 +376,8 @@ def fold_order_evidence(
             )
         )
 
+    if credit_only:
+        return
     fold_order_acknowledgement(
         repo,
         effect_operation_id=effect_operation_id,
@@ -648,6 +671,7 @@ def _fold_simulated_execution_evidence(
         effect_operation_id=effect_operation_id,
         order=order,
         append_stale_ack=append_stale_ack,
+        order_ref=order_ref,
     )
 
 
@@ -668,26 +692,23 @@ def fold_order_acknowledgement(
     ``fold_order_evidence`` above remains the explicitly labelled recovery
     path for sources that have no execution identity.
 
-    ``order_ref`` resolves the captured leg the observation belongs to,
-    defaulting to the observation's own ``client_order_id``. A manual
-    order's Alpaca replacement carries no client id of ours, so the routes
-    that resolve it through the chain (#2656) pass the leg's own ref; every
-    observation of the chain then folds under the one leg it continues.
+    ``order_ref`` is the captured leg the observation belongs to, defaulting
+    to the observation's own ``client_order_id``. For a manual order Alpaca
+    replaced (#2656) only the chain head's observation reaches this fold --
+    the routes resolve every observation first
+    (:func:`resolve_captured_order`) and fold a former or unproven member
+    credit-only -- so the acknowledgement always describes the order the leg
+    now follows, and its source time is judged within that order's own
+    lifecycle.
 
     Every route that observes an order reaches this fold, so a manual order's
     broker outcome is settled here too: a proven complete fill ends it
     ``MANUAL_ORDER_FILLED``, and a proven unfilled remainder ends it through
-    :func:`fold_manual_order_ended_if_proven`. Before either, one broker
-    observation can prove the leg's order was replaced at Alpaca — the
-    chain's head advances first (:func:`record_manual_order_replacement`),
-    so the acknowledgement that follows describes the head the leg now
-    follows, never the dead member it left (#2656).
+    :func:`fold_manual_order_ended_if_proven`.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order_ref if order_ref is not None else order.client_order_id
-    assert order_ref is not None
-    record_manual_order_replacement(repo, order=order, order_ref=order_ref)
+    order_ref = _evidence_order_ref(order, order_ref)
     latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
     reported_filled_quantity = (
         order.filled_quantity if normalize_money(order.filled_quantity) > 0 else None
@@ -715,9 +736,19 @@ def fold_order_acknowledgement(
     )
 
     current_order = repo.order(order_ref)
+    # The head's own lifecycle starts at the link that made it the head
+    # (#2656); an acknowledgement before that link describes another order.
+    latest_link = repo.last_order_transition(
+        order_ref=order_ref, transition_kind=MANUAL_ORDER_REPLACED_TRANSITION
+    )
+    head_ack = (
+        latest_ack
+        if latest_ack is not None and (latest_link is None or latest_ack["sequence"] > latest_link["sequence"])
+        else None
+    )
     ack_advances = order_observation_advances(
         current_state=(current_order.broker_state if current_order is not None else None),
-        prior_source_time=(latest_ack["source_event_at_ms"] if latest_ack else None),
+        prior_source_time=(head_ack["source_event_at_ms"] if head_ack is not None else None),
         incoming_state=order.status,
         incoming_source_time=order.updated_at_ms,
     )
@@ -751,7 +782,7 @@ def fold_order_acknowledgement(
             effect_operation_id=effect_operation_id,
             order_ref=order_ref,
             broker_state=order.status,
-            observed_quantity=order.quantity,
+            head_quantity=order.quantity,
         )
         and not repo.has_order_transition(
             order_ref=order_ref,
@@ -830,13 +861,8 @@ def fold_manual_order_ended_if_proven(repo: ClerkSqliteRepository, *, order_ref:
         broker_state = (order.broker_state or "").lower() if order is not None else ""
         if order is None or broker_state not in UNFILLED_TERMINAL_STATES:
             return
-        owner = repo.effect_operation(order.effect_operation_id)
-        if (
-            owner is None
-            or owner.kind != "MANUAL_ORDER"
-            or owner.state not in NONTERMINAL_EFFECT_STATES
-            or repo.order_fills_short_of_broker_cumulative(order_ref)
-        ):
+        owner = live_manual_effect(repo, order)
+        if owner is None or repo.order_fills_short_of_broker_cumulative(order_ref):
             return
         why = manual_order_ending_copy(repo, order=order)
         canceled = broker_state == "canceled"
@@ -875,7 +901,7 @@ def fold_enter_unfilled_if_proven(
     *,
     effect_operation_id: str,
     order: BrokerOrder,
-    order_ref: str | None = None,
+    order_ref: str,
 ) -> None:
     """Mirror R12 for ENTER: a proven-zero-fill terminal ENTER reaches ``failed``.
 
@@ -957,8 +983,6 @@ def fold_enter_unfilled_if_proven(
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    order_ref = order_ref if order_ref is not None else order.client_order_id
-    assert order_ref is not None
     owning = repo.order(order_ref)
     if owning is None:
         return
@@ -1012,8 +1036,7 @@ def fold_order_submission_acknowledgement(
     than being acknowledged as if the accounting evidence were complete.
     Exact REST recovery and reconciliation use :func:`fold_order_evidence`.
     """
-    order_ref = order.client_order_id
-    assert order_ref is not None
+    order_ref = _evidence_order_ref(order, None)
     if order.filled_quantity > 0 and order.filled_avg_price is None:
         fold_uncertain(
             repo,
@@ -1050,7 +1073,12 @@ def fold_order_submission_response(
     exact path (#2178). A response missing its broker order id, status,
     symbol or side folds as a lost one (:func:`withhold_unnamed_order`).
     """
-    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+    if withhold_unnamed_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=order,
+        order_ref=_evidence_order_ref(order, None),
+    ):
         return
     if trade_port_folds_simulated_evidence(trade):
         fold_order_evidence(
@@ -1109,7 +1137,7 @@ def withhold_unnamed_order(
     *,
     effect_operation_id: str,
     order: BrokerOrder,
-    order_ref: str | None = None,
+    order_ref: str,
 ) -> bool:
     """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
 
@@ -1138,8 +1166,6 @@ def withhold_unnamed_order(
     ]
     if not missing:
         return False
-    order_ref = order_ref if order_ref is not None else order.client_order_id
-    assert order_ref is not None
     why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
     logger.warning(
         "A broker answer about the Clerk's own order was incomplete and was withheld",
@@ -1404,6 +1430,10 @@ async def resolve_order_submission(
     manual custody, ENTER, and a future reducing order all use the same R4/R7
     claim, exact lookup, grace-window, and monotonic fold discipline.
 
+    A manual order Alpaca replaced (#2656) is then followed to its chain
+    head by broker id (:func:`follow_manual_replacement_chain`); a head read
+    that fails folds this one order uncertain, never the account's pass.
+
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior for every
     non-sweep caller.
@@ -1478,33 +1508,35 @@ async def resolve_order_submission(
                 )
             )
         else:
+            simulated_authority = trade_port_folds_simulated_evidence(trade)
             await guarded(
-                lambda: fold_order_evidence(
+                lambda: fold_exact_order_evidence(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
+                    order_ref=order_ref,
                     order=order,
-                    simulated_authority=trade_port_folds_simulated_evidence(trade),
+                    simulated_authority=simulated_authority,
                 )
             )
-            # A manual order's exact lookup answers for the client id the
-            # Clerk minted, which Alpaca may already have replaced: the fold
-            # above advanced the leg's chain head, and only the head's own
-            # answer can settle the leg (#2656). Ports without the broker-id
-            # lookup answer ``None`` and the stream ends the leg instead.
-            head_broker_order_id = await run(
-                lambda: _manual_replacement_head_beyond(repo, order_ref=order_ref, beyond=order.order_id)
+            head = await follow_manual_replacement_chain(
+                repo,
+                broker=broker,
+                effect_operation_id=effect.effect_operation_id,
+                order_ref=order_ref,
+                observed=order,
+                run=guarded,
+                simulated_authority=simulated_authority,
             )
-            if head_broker_order_id is not None:
-                replacement = await broker.lookup_replacement(head_broker_order_id)
-                if replacement is not None:
-                    await guarded(
-                        lambda: fold_order_evidence(
-                            repo,
-                            effect_operation_id=effect.effect_operation_id,
-                            order=replacement,
-                            order_ref=order_ref,
-                        )
+            if not isinstance(head, BrokerOrder):
+                head_failed_why = unobserved_chain_head_why(head)
+                await guarded(
+                    lambda: fold_uncertain(
+                        repo,
+                        effect_operation_id=effect.effect_operation_id,
+                        order_ref=order_ref,
+                        why=head_failed_why,
                     )
+                )
     finally:
         # Off the loop (it takes the write lock) and drained on cancellation
         # so it never interleaves with an abandoned worker's writes (#1993
@@ -1517,22 +1549,100 @@ async def resolve_order_submission(
         )
 
 
-def _manual_replacement_head_beyond(
-    repo: ClerkSqliteRepository, *, order_ref: str, beyond: str
-) -> str | None:
-    """The manual leg's chain head when it is no longer the order just observed.
+#: A bound on the replacement links one pass follows. Each hop is a new,
+#: durable link, so a longer chain simply finishes on the next pass.
+MAX_REPLACEMENT_HOPS_PER_PASS = 8
 
-    ``None`` for every unreplaced order and every bot order: only a manual
-    leg that Alpaca replaced (#2656) follows a broker identity its client-id
-    lookup cannot answer for.
+
+def fold_exact_order_evidence(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    order: BrokerOrder,
+    simulated_authority: bool = False,
+) -> None:
+    """Fold one exact lookup's answer for a captured order, through the one resolver.
+
+    The answer came from a lookup by this order's client id, or by a chain
+    head's broker id, and the lookup has already checked it names that
+    identity -- so it resolves to this order. The resolver's standing then
+    decides whether it states the order's lifecycle or folds credit-only
+    (#2656): an original Alpaca replaced answers for its client id long
+    after the chain moved on.
     """
-    row = repo.order(order_ref)
-    if row is None or row.broker_order_id is None or row.broker_order_id == beyond:
-        return None
-    effect = repo.effect_operation(row.effect_operation_id)
-    if effect is None or effect.kind != "MANUAL_ORDER":
-        return None
-    return row.broker_order_id
+    captured = resolve_captured_order(repo, order)
+    assert captured is not None and captured.order_ref == order_ref, (
+        f"exact evidence for broker order {order.order_id!r} does not resolve to {order_ref!r}"
+    )
+    fold_order_evidence(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=order,
+        order_ref=order_ref,
+        credit_only=captured.credit_only,
+        simulated_authority=simulated_authority,
+    )
+
+
+async def follow_manual_replacement_chain(
+    repo: ClerkSqliteRepository,
+    *,
+    broker: ClaimedBrokerIO,
+    effect_operation_id: str,
+    order_ref: str,
+    observed: BrokerOrder,
+    run: OffLoop,
+    simulated_authority: bool = False,
+) -> BrokerOrder | BrokerError | None:
+    """Fold each later member of a manual leg's chain until its head is the order observed.
+
+    ``observed`` is the answer the caller just folded. When that fold (or an
+    earlier one) moved the leg's head past it -- Alpaca replaced the order
+    (#2656) -- only the head's own answer can settle the leg, so the head is
+    read by its broker id and folded, hop by hop, bounded per pass. Returns
+    the last answer: the head's observation (``observed`` itself for every
+    unreplaced and every bot order), or the error or ``None`` of a head read
+    that failed -- which the caller folds as its own uncertainty, never
+    letting it escape the pass.
+    """
+    last: BrokerOrder = observed
+    for _ in range(MAX_REPLACEMENT_HOPS_PER_PASS):
+        head_id = await run(
+            lambda beyond=last.order_id: manual_chain_head_beyond(repo, order_ref=order_ref, beyond=beyond)
+        )
+        if head_id is None:
+            return last
+        answer = await broker.observe_broker_order(head_id)
+        if not isinstance(answer, BrokerOrder):
+            return answer
+        await run(
+            lambda answer=answer: fold_exact_order_evidence(
+                repo,
+                effect_operation_id=effect_operation_id,
+                order_ref=order_ref,
+                order=answer,
+                simulated_authority=simulated_authority,
+            )
+        )
+        last = answer
+    logger.info(
+        "A manual order's replacement chain is longer than one pass follows",
+        extra={
+            "action": "manual_order_replacement_hops_deferred",
+            "order_ref": order_ref,
+            "hops": MAX_REPLACEMENT_HOPS_PER_PASS,
+            "last_broker_order_id": last.order_id,
+        },
+    )
+    return last
+
+
+def unobserved_chain_head_why(answer: BrokerError | None) -> str:
+    """Why a replaced manual order's head could not be read (the uncertainty's words)."""
+    if answer is None:
+        return "Alpaca has no order under the replacement id it named for this manual order."
+    return f"The replacement order Alpaca named could not be read: {answer}"
 
 
 def _fold_absence_if_past_grace(

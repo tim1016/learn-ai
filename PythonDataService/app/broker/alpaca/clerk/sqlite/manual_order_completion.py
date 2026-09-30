@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import ManualOrderAcceptedFacts
+from app.broker.alpaca.clerk.sqlite.manual_order_replacement import MANUAL_ORDER_REPLACED_TRANSITION
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.order_projection import UNFILLED_TERMINAL_STATES
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
@@ -28,11 +29,11 @@ def manual_order_has_exact_terminal_coverage(
     effect_operation_id: str,
     order_ref: str,
     broker_state: str,
-    observed_quantity: float | None = None,
+    head_quantity: float | None,
 ) -> bool:
     """Whether exact evidence proves one manual tracer leg has fully filled.
 
-    Formula: ``abs(exact_effective_qty - expected_qty) <= FILL_QTY_EPSILON``.
+    Formula: ``abs(exact_effective_qty - governing_qty) <= FILL_QTY_EPSILON``.
     Reference: docs/references/clerk-invariants.md §2 — an absolute
     ``1e-9`` tolerance admits float64 aggregation residue without treating a
     material fractional-share remainder as complete.
@@ -40,27 +41,29 @@ def manual_order_has_exact_terminal_coverage(
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_manual_orders.py::test_manual_order_exact_coverage_tolerance.
 
-    ``expected_qty`` is the accepted leg's requested quantity. When the leg
-    follows an Alpaca replacement whose quantity the owner edited (#2656),
-    the observation's own requested quantity governs instead: a broker state
-    of ``filled`` means that order filled *its* requested quantity, so the
-    exact executions covering either figure prove the leg complete.
+    ``broker_state`` and ``head_quantity`` come from one observation of the
+    leg's chain head -- only a head's observation reaches this predicate.
+    The governing quantity is the accepted leg's until Alpaca replaced the
+    order (#2656); from then on it is the head's own requested quantity,
+    because the owner may have edited it and ``filled`` means the head filled
+    *its* quantity. One figure, never either of two: a head filled at a
+    raised quantity is not proven complete by exact fills that only reach
+    the original one.
     """
     if broker_state.lower() != "filled":
         return False
     effect = repo.effect_operation(effect_operation_id)
     if effect is None or effect.kind != "MANUAL_ORDER":
         return False
-    expected_quantity = _accepted_leg(repo, order_ref=order_ref).quantity
+    governing_quantity = (
+        head_quantity
+        if repo.has_order_transition(order_ref=order_ref, transition_kind=MANUAL_ORDER_REPLACED_TRANSITION)
+        else _accepted_leg(repo, order_ref=order_ref).quantity
+    )
+    if governing_quantity is None:
+        return False
     effective_quantity, _ = repo.effective_exact_fill_totals_for_order(order_ref)
-    covered = abs(effective_quantity - expected_quantity) <= FILL_QTY_EPSILON
-    if (
-        not covered
-        and observed_quantity is not None
-        and abs(effective_quantity - observed_quantity) <= FILL_QTY_EPSILON
-    ):
-        covered = True
-    return covered
+    return abs(effective_quantity - governing_quantity) <= FILL_QTY_EPSILON
 
 
 def _require_copy_for_every_unfilled_state(

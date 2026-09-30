@@ -137,6 +137,12 @@ class BrokerTradePort(Protocol):
     subclass on any other failure — a ``BrokerUnavailable`` from the lookup keeps
     the outcome uncertain, so the Clerk leaves the intent unresolved rather than
     fabricating a terminal state.
+
+    ``get_order_by_broker_order_id`` looks an order up by its
+    **broker-assigned** id, with the same ``None``-only-on-404 discipline. It
+    follows a manual order the owner replaced on the broker's own website
+    (#2656): the replacement is a new broker order that carries no client id
+    of ours, so only its broker id can answer for it.
     """
 
     broker_id: str
@@ -150,6 +156,8 @@ class BrokerTradePort(Protocol):
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> BrokerOrder | None: ...
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None: ...
 
 
 @runtime_checkable
