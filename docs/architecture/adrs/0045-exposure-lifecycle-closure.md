@@ -220,7 +220,9 @@ run any other Stop ended is that Stop's. A Stop landing
 after the Clerk's STOP at the end still cancels the end: its STOP is the one
 already committed, and the pass reads the end again before it sells. Changing
 the end to KEEP after its sale was accepted does not stop that sale: once
-accepted it is its EXIT's, like any sale already sent.
+accepted it is its EXIT's, like any sale already sent. A Stop does not call it
+off either, a sale waiting for the next open included: the Stop cancels the
+end, never a sale the Clerk has accepted (owner decision 2026-09-30, #2666).
 
 The stop at the end is proven by the pass that ended the bot, never by a pass
 of its own: every bot on the default end stops in the same minute, and a
