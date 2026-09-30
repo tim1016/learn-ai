@@ -182,27 +182,27 @@ def test_the_runtime_stage_ships_no_developer_tooling() -> None:
 
 
 def _included_requirement_files(requirements: str) -> set[str]:
-    """The files a requirements file pulls in, in every spelling pip accepts.
+    """The files a requirements file pulls in with pip's ``-r`` / ``--requirement``.
 
-    pip reads ``-r X``, ``-rX``, ``--requirement X`` and ``--requirement=X``
-    (#2604); an include the parser misses would make the qualification stage's
-    COPY list silently drop a file its install reads.
+    Every token of a line is examined, so an include preceded by other
+    options (``--index-url … -r X``) is seen too; the attached spellings
+    ``-rX`` and ``--requirement=X`` are pip's own (#2604). An include the
+    parser misses would make the qualification stage's COPY list silently
+    drop a file its install reads.
     """
     included: set[str] = set()
     for line in requirements.splitlines():
         tokens = line.split("#", 1)[0].split()
-        if not tokens:
-            continue
-        first, *rest = tokens
-        path: str | None = None
-        if first in ("-r", "--requirement") and rest:
-            path = rest[0]
-        elif first.startswith("-r") and len(first) > 2:
-            path = first[2:]
-        elif first.startswith("--requirement="):
-            path = first.split("=", 1)[1]
-        if path:
-            included.add(posixpath.normpath(path))
+        for index, token in enumerate(tokens):
+            path: str | None = None
+            if token in ("-r", "--requirement") and index + 1 < len(tokens):
+                path = tokens[index + 1]
+            elif token.startswith("-r") and len(token) > 2 and not token.startswith("--"):
+                path = token[2:]
+            elif token.startswith("--requirement="):
+                path = token.split("=", 1)[1]
+            if path:
+                included.add(posixpath.normpath(path))
     return included
 
 
@@ -222,15 +222,18 @@ def test_the_qualification_stage_copies_every_file_its_dev_install_reads() -> No
 
 
 def test_every_pip_spelling_of_a_requirements_include_is_recognised() -> None:
-    """`-r X`, `-rX`, `--requirement X` and `--requirement=X` all install the
-    named file (#2604); an unrecognized spelling would drop it from the COPY
-    list the contract above pins."""
+    """``-r X``, ``-rX``, ``--requirement X``, ``--requirement=X``, and an
+    include preceded by other options on the same line, all install the named
+    file (#2604); an unrecognized spelling would drop it from the COPY list
+    the contract above pins."""
     text = "\n".join(
         [
             "-r requirements-heavy.txt",
             "--requirement requirements-light.txt",
             "-rrequirements-light.txt",
             "--requirement=requirements-heavy.txt",
+            "--index-url https://pypi.org/simple -r requirements-heavy.txt",
+            "--extra-index-url https://example.com/simple --requirement requirements-light.txt",
             "# -r commented-out.txt",
             "pytest>=8",
         ]
