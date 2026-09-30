@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
+from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book
 
 logger = logging.getLogger(__name__)
@@ -215,6 +217,50 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
         return DeploymentBudgetPreview(
             state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
         )
+
+
+def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str | None:
+    """The Deploy review's one-line warning when other bots in this account already trade the chosen symbol (#2622).
+
+    Alpaca refuses a new order that could trade against another open order
+    in the same account (its wash-trade protection), so two bots on one
+    symbol can refuse each other's orders. A bot may trade the account's
+    symbol while Home lists it running or holding (``home_roster``, the
+    catalog's own groups), and when Home cannot place it because its
+    lifecycle cannot be read. A Dry Run trades simulated cash, so it is never
+    named, and a Dry Run's own Deploy has no note. One short line, so Deploy
+    still fits one screen (#2581): one bot by name, the rest counted.
+
+    A warning only: it never refuses the Deploy, consent never binds it, and
+    a roster that cannot be read omits it rather than failing the money
+    review. ``home_roster`` already contains one bot's unreadable lifecycle
+    (it projects that bot ungrouped); what can still escape it is an
+    account-wide read failing -- ``sqlite3.Error`` from the Clerk's database,
+    or ``MoneyInputError`` from the claimed-money arithmetic that decides
+    ``holding``. Blocking: reads each bot's lifecycle.
+    """
+    runtime = _primary(account_id)
+    world, _ = _request_world(runtime, request)
+    if world == "synthetic":
+        return None
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    symbol = request.symbol.upper()
+    try:
+        roster = home_roster(repo, world=world)
+    except (sqlite3.Error, MoneyInputError):
+        logger.warning("Deploy could not read this account's bots; the review omits its same-symbol warning", extra={
+            "action": "deploy_same_symbol_note_unavailable", "account_id": account_id, "symbol": symbol,
+        }, exc_info=True)
+        return None
+    others = sorted(
+        bot.strategy_instance_id for bot in roster
+        if bot.group in ("running", "holding", None) and bot.symbol.upper() == symbol
+    )
+    if not others:
+        return None
+    more = f" +{len(others) - 1} more" if len(others) > 1 else ""
+    return f"Also traded here by {others[0]}{more}."
 
 
 def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:

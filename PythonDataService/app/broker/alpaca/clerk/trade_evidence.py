@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_execution_price_conflict,
     fold_order_acknowledgement,
     fold_order_evidence,
+    withhold_unnamed_order,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -41,7 +42,12 @@ UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
 # ``unfoldable_order``: a foreign broker order the fold cannot state
 # truthfully (#2363). It is recorded durably by name and contained to itself,
 # so the stream keeps folding every other order instead of reconnecting forever.
-TradeUpdateDisposition = Literal["order_event", "unexplained_order", "unfoldable_order"]
+# ``withheld_order``: a frame about our own order missing its id, status,
+# symbol or side; nothing of it is applied, and its effect folds unknown
+# like a lost response (#2643).
+TradeUpdateDisposition = Literal[
+    "order_event", "unexplained_order", "unfoldable_order", "withheld_order"
+]
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +198,14 @@ class SqliteTradeUpdateEvidenceSink:
                 owner = self._repo.effect_operation(local_order.effect_operation_id)
             if owner is None:
                 raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
+
+            # Before the exact slice and the ack: a frame missing our order's
+            # id, status, symbol or side folds as a lost one, never as its
+            # evidence -- and never raises out of the sink (#2643).
+            if withhold_unnamed_order(
+                self._repo, effect_operation_id=owner.effect_operation_id, order=order
+            ):
+                return "withheld_order"
 
             if (
                 recovery_source == "closed_orders_window"

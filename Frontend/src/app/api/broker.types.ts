@@ -14295,6 +14295,8 @@ export interface components {
              * @default 0
              */
             risk_revision?: number;
+            /** Same Symbol Note */
+            same_symbol_note?: string | null;
             /**
              * Shortcuts
              * @default []
