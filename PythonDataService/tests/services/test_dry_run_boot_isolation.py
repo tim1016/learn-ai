@@ -18,6 +18,7 @@ a foreign lease owner.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
@@ -272,6 +273,161 @@ async def test_the_unrestored_dry_runs_panel_says_its_account_did_not_open(
 
     assert refused.value.http_status == 503
     assert "This Dry Run's own simulated Clerk could not be opened." in str(refused.value.detail)
+
+
+# ── #2668: the restoration runs under its bot's own operation lock ────────────
+
+
+async def test_a_dry_run_whose_authority_cannot_be_built_is_its_own_failure(
+    tmp_path: Path, booting: BotTaskRegistry, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Building one Dry Run's authority once aborted the restoration of every later one (#2668).
+
+    The authorities were built while the list was drawn, outside the per-bot
+    boundary: one bot's unreadable ledger left every later Dry Run marked
+    ``restoring`` until a restart, with Start telling the owner to wait for a
+    restoration that was no longer running. Each bot's authority is now built
+    inside its own boundary, so that failure refuses that bot alone.
+    """
+    for sid in ("live-dry-dv-a-0930", "live-dry-dv-b-0930"):
+        binding = _dry_run_binding().model_copy(
+            update={"strategy_instance_id": sid, "sealed_account_id": f"sim:{sid}", "run_id": f"run-{sid}"}
+        )
+        booting._bindings.record_launch(binding, launch_reason="deploy")
+    authority_for = booting._authority_for
+
+    def _authority_raises_for_one(binding: BrokerBotBinding) -> object:
+        if binding.strategy_instance_id == "live-dry-dv-a-0930":
+            raise RuntimeError("authority construction failed")
+        return authority_for(binding)
+
+    monkeypatch.setattr(booting, "_authority_for", _authority_raises_for_one)
+
+    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+        restoring = booting.start_dry_run_restoration()
+        await asyncio.wait_for(restoring, timeout=10.0)
+
+    (failed,) = _logged(caplog, "boot_dry_run_restoration_failed")
+    assert failed.strategy_instance_id == "live-dry-dv-a-0930"
+    assert failed.restoration == "not_restored"
+    assert failed.exc_info is not None
+    # The second Dry Run is restored as though nothing happened.
+    assert get_clerk_runtime("sim:live-dry-dv-b-0930") is not None
+    assert booting.dry_run_restoration_state("live-dry-dv-b-0930") is None
+
+
+async def test_an_archive_of_a_bot_whose_restoration_waits_on_a_held_lease_cannot_interleave(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive holds the bot's operation lock, and the restoration now holds it too (#2668).
+
+    Without the lock, an Archive could run while the restoration was still
+    inside its lease wait -- the two interleaving over one account. Archive
+    now waits for the restoration to settle, and then runs: the predecessor's
+    lease below lapses while the restoration waits it out, so the bot is
+    restored and Archive answers only after that.
+    """
+    from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
+    from app.services.bot_runner_errors import BotRunnerError
+
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 5.0)
+    # The dead process's lease: it lapses while the restoration is waiting it out.
+    predecessor = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=600)
+    try:
+        restoring = restarted_lane.registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration is now inside its lease wait
+        archiving = asyncio.create_task(restarted_lane.registry.archive("alpaca", SID))
+
+        await asyncio.sleep(0.3)
+        assert not archiving.done(), "Archive must wait for the bot's restoration to settle"
+
+        # The fixture's bot never fully deployed, so Archive's own outcome is
+        # one of its typed refusals; what is pinned here is the ordering.
+        with contextlib.suppress(BotRunnerError, UnknownStrategyInstanceError):
+            await asyncio.wait_for(archiving, timeout=10.0)
+        await asyncio.wait_for(restoring, timeout=10.0)
+        assert restarted_lane.registry.dry_run_restoration_state(SID) is None, (
+            "the restoration waited out the lease and settled before Archive ran"
+        )
+    finally:
+        predecessor.close()
+
+
+async def test_a_panel_read_of_a_bot_still_being_restored_answers_at_once(
+    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The panel once waited out the restoration's whole lease deadline (#2668).
+
+    The restoration holds the account's runtime lock while it waits out a
+    held lease, and the panel's read takes the same lock. A bot still being
+    restored now answers at once, saying so, rather than blocking for the
+    deadline.
+    """
+    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 2.0)
+    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
+    try:
+        restarted_lane.registry.start_dry_run_restoration()
+        await asyncio.sleep(0.2)  # the restoration is now inside its lease wait
+
+        started_ms = now_ms_utc()
+        with pytest.raises(PanelUnavailableError) as refused:
+            async with binding_clerk_runtime(restarted_lane.registry, _dry_run_binding()):
+                pass
+
+        assert now_ms_utc() - started_ms < 500, "a restoring bot's panel must not wait out the lease deadline"
+        assert str(refused.value) == "This Dry Run is still being restored after the Clerk restarted."
+        assert refused.value.http_status == 503
+    finally:
+        holder.close()
+
+
+async def test_a_failed_startup_cancels_the_restoration_and_releases_its_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A startup step that raises after the restoration starts ends it too (#2668).
+
+    The failed-startup cleanup closed the synthetic runtimes already
+    registered, but a restoration still opening registers its runtime after
+    that cleanup has run -- holding its account's lease in a process that
+    never serves. The cleanup cancels and awaits the restoration first.
+    """
+    from app.broker_configuration.worker_lifecycle import close_failed_startup
+    from app.services.bot_runner import set_bot_task_registry
+
+    broker = _Broker()
+    account_repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "account")
+    account = SqliteAlpacaClerkFacade(repo=account_repo, read=broker, trade=broker, account_mode="paper")  # type: ignore[arg-type]
+    previous = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    previous._bindings.record_launch(_dry_run_binding(), launch_reason="deploy")
+    deployed = previous._authority_for(_dry_run_binding())
+    await deployed.ensure_recoverable()
+    await deployed.release_if_unused()
+    assert get_clerk_runtime(SIM_ACCOUNT) is None
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=account, _sqlite_repository=account_repo)
+    )
+    registry = BotTaskRegistry(tmp_path, feed_resolver=lambda: None)
+    set_bot_task_registry(registry)
+    recovering = asyncio.Event()
+
+    async def _recover_until_cancelled(_self: object) -> None:
+        recovering.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(SqliteAlpacaClerkFacade, "recover", _recover_until_cancelled)
+    try:
+        restoring = registry.start_dry_run_restoration()
+        await asyncio.wait_for(recovering.wait(), timeout=5.0)
+
+        await close_failed_startup()
+
+        assert restoring.done()
+        # Another process can take the account at once: no lease was left behind.
+        _another_process_holds_the_dry_run(tmp_path, lease_ttl_ms=60_000).close()
+    finally:
+        # close_failed_startup already closed the account runtime and its
+        # repository, as it does for a process that never serves.
+        set_bot_task_registry(None)
 
 
 # ── Unbound Dry Run orphans at boot (#2559) ─────────────────────────────────
