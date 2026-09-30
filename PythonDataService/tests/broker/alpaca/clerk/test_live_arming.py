@@ -163,11 +163,10 @@ def test_a_rewritten_envelope_is_caught_by_the_envelope_sha_before_the_digest() 
 def test_the_lapse_count_must_be_the_sealed_envelopes_own() -> None:
     """``max_sessions`` is not a second, independent number.
 
-    ``arming_status`` counts the lapse off the record's own ``max_sessions``
-    while the envelope sealed beside it -- the one the operator confirmed, and
-    the one the sync publishes -- carries ``arming_max_sessions``. Nothing but
-    this check forces them to agree, so a record whose sealed envelope says 20
-    sessions could otherwise stay armed for 100.
+    The retired status rule counted the lapse off the record's own
+    ``max_sessions`` while the envelope sealed beside it -- the one the
+    operator confirmed -- carries ``arming_max_sessions``. A record is still
+    verified exactly as it was sealed, so the two must still agree.
     """
     with pytest.raises(LiveArmingInvalid, match="disagrees with the sealed envelope"):
         _armed(max_sessions=ENVELOPE.arming_max_sessions + 1, envelope=ENVELOPE)
