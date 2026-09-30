@@ -170,7 +170,9 @@ async def run_authority_reconnect(
                 "until the Clerk restarts",
                 extra={"action": "clerk_authority_reconnect_final_boot_failed", "account_id": failure.account_id},
             )
-        return final
+        # Acknowledgement can replace the refusal it was handed; the caller
+        # must receive the runtime the lane serves, not the one composed here.
+        return acknowledged
     if runtime.clerk is not None:
         RECONNECT_COUNTERS.installed += 1
         logger.info(

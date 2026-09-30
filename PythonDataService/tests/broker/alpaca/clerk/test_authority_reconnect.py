@@ -766,6 +766,43 @@ async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
     assert _fresh_counters.final == 1
 
 
+async def test_a_reconnect_that_breaks_returns_the_refusal_it_installed_and_booted(
+    _fresh_counters: ReconnectCounters,
+) -> None:
+    """Acknowledgement can replace the refusal it was handed (#2620 review).
+
+    ``acknowledge_runtime_binding`` answers a fresh refusal of its own when
+    recording the binding's refusal breaks the arming ledger's rules; the
+    runtime the reconnect returns must be the one it installed and booted --
+    the one the lane serves -- not the one it composed.
+    """
+    unreachable = reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT)
+
+    async def _select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    root = _CompositionRoot(_select_breaks)
+    replacement = unavailable_runtime(
+        "LIVE_ARMING_LEDGER_INVALID",
+        account_id=LIVE_ACCT,
+        recovery="The configuration arming evidence could not be read; restore it and restart.",
+    )
+
+    async def _acknowledge_replaces(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
+        root.events.append(("acknowledge", runtime))
+        return replacement
+
+    root.acknowledge = _acknowledge_replaces  # type: ignore[method-assign]
+
+    returned = await _reconnect(unreachable, root)
+
+    assert root.names() == ["acknowledge", "install", "boot"]
+    assert root.events[1] == ("install", replacement)
+    assert root.events[-1] == ("boot", replacement)
+    assert get_active_clerk_runtime() is replacement
+    assert returned is replacement
+
+
 async def test_a_reconnect_that_breaks_while_retiring_boots_its_final_refusal_and_keeps_home_s_line(
     tmp_path: Path,
 ) -> None:
