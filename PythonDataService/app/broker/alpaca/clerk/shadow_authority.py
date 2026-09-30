@@ -12,7 +12,9 @@ every live boot's answer.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -20,9 +22,12 @@ from app.broker.alpaca.clerk.account_authority import (
     shadow_account_id_for_live_account,
 )
 from app.broker.alpaca.clerk.active_runtime import (
+    DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     ActiveClerkRuntime,
     activate_isolated_authority,
     compose_repository_runtime,
+    open_repository,
+    open_repository_after_lease_expiry,
     reconnecting_refusal,
     terminal_startup_recovery,
     transient_startup_failure,
@@ -153,20 +158,13 @@ async def select_shadow_clerk_runtime(
             ),
         )
 
-    def _verify_shadow_activation(meta: ControlMetaSnapshot) -> None:
-        if (
-            meta.authority_generation != activation.authority_generation
-            or meta.db_identity_token != activation.db_identity_token
-        ):
-            raise ShadowActivationInvalid("shadow activation does not match repository identity")
-
     try:
         composed = await compose_repository_runtime(
             ports=ports,
             authority_kind="shadow",
             account_mode=account.account_mode,
             artifacts_root=artifacts_root,
-            verify_activation=_verify_shadow_activation,
+            verify_activation=partial(_require_activation_match, activation),
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
@@ -234,6 +232,46 @@ async def select_shadow_clerk_runtime(
     )
 
 
+def _require_activation_match(activation: ShadowActivationRecord, meta: ControlMetaSnapshot) -> None:
+    """The opened store is the one ``activation`` names, or refuse."""
+    if (
+        meta.authority_generation != activation.authority_generation
+        or meta.db_identity_token != activation.db_identity_token
+    ):
+        raise ShadowActivationInvalid("shadow activation does not match repository identity")
+
+
+@asynccontextmanager
+async def open_graduated_shadow_store(
+    *, account_id: str, artifacts_root: Path
+) -> AsyncIterator[ClerkSqliteRepository]:
+    """A graduated live account's ``shadow:`` store, opened without its broker (#2589).
+
+    After graduation the live account's orders belong to the real-money
+    authority, so the shadow composition above refuses by design and no sweep
+    reads this store again; yet the bots that rehearsed on it stay sealed on
+    it. This opening serves only their settling: the same activation proof as
+    the composition, no broker port, and one attempt at the execution lease
+    -- a lease still held means another process owns the store, and the
+    caller tries again later. The lease is released on exit.
+    """
+    activation = ShadowActivationStore(artifacts_root).latest(account_id)
+    if activation is None:
+        raise ShadowActivationInvalid(f"{account_id!r} has no shadow activation record")
+    repository = await open_repository_after_lease_expiry(
+        open_repository,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+        wait_timeout_s=0.0,
+        retry_interval_s=DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+    )
+    try:
+        _require_activation_match(activation, repository.control_meta_snapshot())
+        yield repository
+    finally:
+        repository.close()
+
+
 async def activate_shadow_clerk_authority(
     *,
     live_account_id: str,
@@ -257,5 +295,6 @@ async def activate_shadow_clerk_authority(
 
 __all__ = [
     "activate_shadow_clerk_authority",
+    "open_graduated_shadow_store",
     "select_shadow_clerk_runtime",
 ]

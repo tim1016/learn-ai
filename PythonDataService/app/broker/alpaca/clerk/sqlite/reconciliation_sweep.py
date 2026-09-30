@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
@@ -29,11 +29,13 @@ type ReconciliationListener = Callable[[AccountReconciliationResult], object]
 # repair. A hook failure is isolated -- the lease stays revived and the next
 # boot scan remains the backstop.
 type LeaseRevivedHook = Callable[[], Awaitable[None]]
-# Awaited with the runs a pass retired because their in-process runner is
-# gone (#2369), so the runner settles those bots' own duty records now
-# instead of waiting for a restart (#2589). A hook failure is isolated --
-# the retirements stand and the next pass remains the backstop.
-type DutySettleHook = Callable[[Sequence[tuple[str, str]]], Awaitable[None]]
+# Awaited once after every pass, whatever the pass found: the runner re-reads
+# its own bots and settles the duty record of each one whose runner is gone
+# and whose run its Clerk has closed (#2589). Level-triggered on purpose --
+# a run may have been closed by any reconcile (a Clear, a Start, Reconcile
+# now), and a settle that failed is simply found again. A hook failure is
+# isolated; the next pass runs it again.
+type DutySettleHook = Callable[[], Awaitable[None]]
 # Renew the execution lease three times per TTL. This is a safety-margin
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
@@ -103,8 +105,7 @@ class ReconciliationSweep:
 
         Same late-binding reason as :meth:`set_on_lease_revived`: the sweep
         is constructed in the broker layer before the bot task registry
-        exists. The hook receives exactly the runs this sweep's passes retire
-        because their in-process runner is gone (#2369).
+        exists. The hook runs after every pass and takes nothing from it.
         """
         self._on_duty_settle = hook
 
@@ -373,6 +374,7 @@ class ReconciliationSweep:
         consecutive_failures = 0
         while True:
             succeeded = await self._run_one_pass()
+            await self._settle_duty()
             consecutive_failures = 0 if succeeded else consecutive_failures + 1
             passes += 1
             if self._max_passes is not None and passes >= self._max_passes:
@@ -401,23 +403,6 @@ class ReconciliationSweep:
             )
             if self._on_result is not None:
                 self._on_result(result)
-            if result.runner_gone_runs and self._on_duty_settle is not None:
-                try:
-                    await self._on_duty_settle(result.runner_gone_runs)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # Isolated on purpose, like the lease-revival hook: the
-                    # retirements are already committed, and the next pass
-                    # re-hands any run whose settle failed.
-                    logger.error(
-                        "post-pass duty settle hook errored; the next pass remains the backstop",
-                        extra={
-                            "action": "reconcile_sweep_duty_settle_error",
-                            "account_id": self._repo.account_id,
-                        },
-                        exc_info=True,
-                    )
             return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
@@ -428,6 +413,26 @@ class ReconciliationSweep:
                 exc_info=True,
             )
             return False
+
+    async def _settle_duty(self) -> None:
+        """Run the post-pass duty-settle hook, isolated (#2589)."""
+        if self._on_duty_settle is None:
+            return
+        try:
+            await self._on_duty_settle()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Isolated on purpose, like the lease-revival hook: the pass's
+            # own work stands, and the next pass runs the hook again.
+            logger.error(
+                "post-pass duty settle hook errored; the next pass runs it again",
+                extra={
+                    "action": "reconcile_sweep_duty_settle_error",
+                    "account_id": self._repo.account_id,
+                },
+                exc_info=True,
+            )
 
 
 __all__ = [

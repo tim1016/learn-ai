@@ -828,12 +828,6 @@ class AccountReconciliationResult:
     # custody (``SqliteAlpacaClerkFacade.published_custody``, #2607).
     # In-process only, like ``stale_cause``.
     through_sequence: int | None = field(default=None, compare=False)
-    # The runs this pass retired because their in-process runner is gone
-    # (#2369), ``(strategy_instance_id, lifecycle_run_id)`` each. The sweep
-    # hands them to its duty-settle hook, which closes the runner's own duty
-    # record for exactly these runs instead of waiting for a restart (#2589).
-    # In-process only, like ``stale_cause``.
-    runner_gone_runs: tuple[tuple[str, str], ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -842,17 +836,9 @@ class _StaleSnapshot:
 
     broker_error: BrokerError | None = None
 
-    def result(
-        self,
-        *,
-        resolved_count: int = 0,
-        runner_gone_runs: tuple[tuple[str, str], ...] = (),
-    ) -> AccountReconciliationResult:
+    def result(self, *, resolved_count: int = 0) -> AccountReconciliationResult:
         return AccountReconciliationResult(
-            verdict="stale",
-            resolved_count=resolved_count,
-            stale_cause=self.broker_error,
-            runner_gone_runs=runner_gone_runs,
+            verdict="stale", resolved_count=resolved_count, stale_cause=self.broker_error
         )
 
 
@@ -1231,15 +1217,8 @@ async def _reconcile_account_serialized(
     # A run whose in-process runner is gone is retired first (#2369), so the
     # step below also cancels the ENTERs of a runner that ended without
     # committing RUN_STOPPED.
-    runner_gone_runs: tuple[tuple[str, str], ...] = ()
     if run_ownership is not None:
-        retired = await _under_intake(
-            intake, retire_runs_whose_runner_is_gone, repo, run_ownership
-        )
-        runner_gone_runs = tuple(
-            (strategy_instance_id, lifecycle_run_id)
-            for (strategy_instance_id, lifecycle_run_id), _reason in retired
-        )
+        await _under_intake(intake, retire_runs_whose_runner_is_gone, repo, run_ownership)
 
     # No ENTER may stay working once its run is no longer ACTIVE (#2362):
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
@@ -1283,9 +1262,7 @@ async def _reconcile_account_serialized(
     for _attempt in range(2):
         final_snapshot = await _read_account_snapshot(repo, read, intake=intake)
         if isinstance(final_snapshot, _StaleSnapshot):
-            return final_snapshot.result(
-                resolved_count=resolved_count, runner_gone_runs=runner_gone_runs
-            )
+            return final_snapshot.result(resolved_count=resolved_count)
         broker_orders, broker_positions = final_snapshot
         finalized = await _under_intake(
             intake,
@@ -1297,7 +1274,6 @@ async def _reconcile_account_serialized(
             trigger=trigger,
             expected_control_revision=verdict_base_revision,
             simulated_authority=simulated_authority,
-            runner_gone_runs=runner_gone_runs,
         )
         if finalized is not None:
             await _under_intake(
@@ -1313,9 +1289,7 @@ async def _reconcile_account_serialized(
         repo,
         "The Clerk changed while final broker truth was observed.",
     )
-    return AccountReconciliationResult(
-        verdict="stale", resolved_count=resolved_count, runner_gone_runs=runner_gone_runs
-    )
+    return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
 
 
 def _control_revision(repo: ClerkSqliteRepository) -> int:
@@ -1331,7 +1305,6 @@ def _finalize_reconciliation_verdict(
     trigger: Trigger,
     expected_control_revision: int,
     simulated_authority: bool = False,
-    runner_gone_runs: tuple[tuple[str, str], ...] = (),
 ) -> AccountReconciliationResult | None:
     """Atomically bind a final broker snapshot, verdict, and operator receipt."""
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
@@ -1390,7 +1363,6 @@ def _finalize_reconciliation_verdict(
         drifted_symbols=plan.drifted_symbols,
         indeterminate_symbols=plan.indeterminate_symbols,
         through_sequence=repo.last_custody_sequence(),
-        runner_gone_runs=runner_gone_runs,
     )
     if trigger != "OPERATOR_RECONCILE_NOW":
         return result

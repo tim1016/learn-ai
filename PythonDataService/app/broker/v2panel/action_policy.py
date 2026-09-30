@@ -55,6 +55,7 @@ def _blocker(
 
 ArchiveBlockedCause = Literal[
     "BOT_STILL_RUNNING",
+    "ARCHIVE_SEALED_ACCOUNT_CUSTODY",
     "BOT_DUTY_NOT_SETTLED",
     "ARCHIVE_CUSTODY_UNPROVABLE",
     "ARCHIVE_WOULD_STRAND_CUSTODY",
@@ -82,6 +83,7 @@ def evaluate_archive(
     *,
     running: bool,
     phase: str,
+    custody_account_foreign: bool,
     has_exposure: bool,
     working_order_count: int,
     outstanding_effect_count: int,
@@ -107,6 +109,12 @@ def evaluate_archive(
     ``retired_at_ms`` on a registration whose run never ended. The fold that
     writes it states there is no active run; this is what makes that true.
 
+    ``custody_account_foreign`` is a registration sealed on an account the
+    installed Clerk does not custody -- a live account's shadow rehearsal
+    after graduation (#2589). Nothing here can prove it holds nothing, and no
+    wait changes that, so it is refused before its duty settles: a
+    not-yet-settled refusal would promise a clear that never comes.
+
     ``outstanding_effect_count`` is bot-scoped and asymmetric by design: the
     commit-time caller reads it from a freshly reconciled custody snapshot,
     while the presentation cannot see it and passes zero. That asymmetry is
@@ -120,6 +128,8 @@ def evaluate_archive(
         return ArchiveVerdict(eligible=False, already_retired=True)
     if running:
         return ArchiveVerdict(eligible=False, cause="BOT_STILL_RUNNING")
+    if custody_account_foreign:
+        return ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
     if phase != "OFF_DUTY":
         return ArchiveVerdict(eligible=False, cause="BOT_DUTY_NOT_SETTLED")
     if not custody_provable:
@@ -134,12 +144,17 @@ _ARCHIVE_BLOCKER_COPY: dict[ArchiveBlockedCause, tuple[str, str]] = {
         "Stop the bot before clearing it.",
         "A running bot still evaluates bars and can place orders.",
     ),
+    "ARCHIVE_SEALED_ACCOUNT_CUSTODY": (
+        "This bot's account is no longer managed here.",
+        "It ran on another account, such as a live account's rehearsal before "
+        "it went live. Clearing needs that account to show the bot holds "
+        "nothing, and the Clerk here can no longer check it.",
+    ),
     "BOT_DUTY_NOT_SETTLED": (
         "This bot's last run has not finished settling.",
-        "Its process is gone but its run is still open. The account's sweep "
-        "settles a provably dead run on its next pass; one that stays open "
-        "here cannot yet be proven dead, so check the bot's evidence before "
-        "clearing it.",
+        "It ended without a clean stop. The Clerk records it as ended "
+        "shortly, usually within a minute; then you can clear the bot. A Dry "
+        "Run's is recorded when the service next starts.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "This account cannot prove the bot is flat.",
@@ -173,6 +188,10 @@ def archive_action(
     verdict = evaluate_archive(
         running=running,
         phase=phase,
+        # A page is built from the installed Clerk's custody record, which a
+        # bot sealed on another account does not have -- its page is not
+        # found -- so a presented archive is never for one (#2589).
+        custody_account_foreign=False,
         has_exposure=has_exposure,
         working_order_count=working_order_count,
         # The panel has no bot-scoped effect count; the commit does, and it is

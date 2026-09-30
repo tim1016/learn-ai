@@ -103,14 +103,11 @@ class RunOwnership:
 def retire_runs_whose_runner_is_gone(
     repo: ClerkSqliteRepository,
     ownership: RunOwnership,
-) -> list[tuple[tuple[str, str], str]]:
+) -> None:
     """Commit ``RUN_STOPPED`` for every ACTIVE run whose runner is gone.
 
     Runs under the account intake fence, as one step of the reconciliation
     pass, before the #2362 step that cancels a non-ACTIVE run's ENTERs.
-    Returns what it retired, ``((instance, run_id), reason)`` each, so the
-    pass's result can tell the sweep -- whose duty-settle hook closes the
-    runner's own duty record for exactly these runs (#2589).
     """
     active = {
         (run.strategy_instance_id, run.lifecycle_run_id)
@@ -120,7 +117,6 @@ def retire_runs_whose_runner_is_gone(
         )
         if run is not None
     }
-    retired: list[tuple[tuple[str, str], str]] = []
     for (strategy_instance_id, lifecycle_run_id), reason in ownership.runs_to_retire(active):
         submit_stop_run(
             repo,
@@ -130,7 +126,6 @@ def retire_runs_whose_runner_is_gone(
             operator_reason=reason,
             clock=repo.clock,
         )
-        retired.append(((strategy_instance_id, lifecycle_run_id), reason))
         logger.warning(
             "retired an ACTIVE run whose in-process runner is gone",
             extra={
@@ -141,7 +136,6 @@ def retire_runs_whose_runner_is_gone(
                 "reason": reason,
             },
         )
-    return retired
 
 
 __all__ = [

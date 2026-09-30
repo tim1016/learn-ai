@@ -69,7 +69,7 @@ class BotRecoveryCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class _ForeignBinding:
+class ForeignBinding:
     """A binding the installed primary authority does not custody."""
 
     strategy_instance_id: str
@@ -211,7 +211,7 @@ class BotBootRecovery:
         A Dry Run is never in the account's sweep: its custody lives in its
         own ``sim:`` account, which boot restores off the serving path, one
         bot at a time. Each candidate gets the sweep's own repair; a Dry Run
-        is never foreign (``_foreign_binding``), so that check has nothing to
+        is never foreign (``foreign_binding``), so that check has nothing to
         say here. Returns the bots that received interrupted evidence.
         """
         interrupted: list[str] = []
@@ -252,7 +252,7 @@ class BotBootRecovery:
         for candidate in candidates:
             if not self._manages_instance(candidate.strategy_instance_id):
                 continue
-            foreign_binding = self._foreign_binding(candidate.strategy_instance_id)
+            foreign_binding = self.foreign_binding(candidate.strategy_instance_id)
             if foreign_binding is not None:
                 # Same posture as ``authority_unavailable`` below and for the
                 # same ADR 0050 reason: this authority has never seen the
@@ -296,7 +296,7 @@ class BotBootRecovery:
                 interrupted.append(candidate.strategy_instance_id)
         return interrupted, authority_unavailable, foreign
 
-    def _foreign_binding(self, strategy_instance_id: str) -> _ForeignBinding | None:
+    def foreign_binding(self, strategy_instance_id: str) -> ForeignBinding | None:
         """Why the installed primary authority does not custody this binding, if so.
 
         Foreignness is the boot-side half of Start's ``SEALED_ACCOUNT_MISMATCH``
@@ -306,7 +306,8 @@ class BotBootRecovery:
         under the Shadow Account Authority is sealed on
         ``shadow:<live_account_id>`` while the primary custodies
         ``<live_account_id>`` -- foreign to it, and refused rather than
-        repaired (ADR 0059 slice 7, R15).
+        repaired (ADR 0059 slice 7, R15). The one classification: the
+        periodic duty settle and Clear read it too (#2589).
 
         A Dry Run binding is never foreign, however its ``sim:`` custody id
         compares: the registry routes it to its own per-instance authority,
@@ -337,39 +338,35 @@ class BotBootRecovery:
             return None
         if self._lifecycle_projector_for(strategy_instance_id) is not self._lifecycle_projector:
             return None
-        return _ForeignBinding(
+        return ForeignBinding(
             strategy_instance_id=strategy_instance_id,
             sealed_account_id=binding.sealed_account_id,
             installed_account_id=installed_account_id,
         )
 
-    async def settle_proven_dead_run(
+    async def settle_dead_run(
         self,
-        candidate: BotRecoveryCandidate,
-        provenance: RecoverySweepProvenance,
         *,
-        projector: AlpacaLifecycleProjector | None = None,
+        strategy_instance_id: str,
+        run_id: str,
+        projector: AlpacaLifecycleProjector,
     ) -> bool:
-        """Settle one run the reconciliation sweep proved dead (#2589).
+        """The boot scan's repair for one run whose runner is gone and whose Clerk closed it (#2589).
 
-        The boot scan is the same repair; this entry is the periodic sweep's,
-        so a dead bot's duty record settles within one pass instead of
-        waiting for a restart. The bar is exactly the owner's: no live
-        process owns the run (``_is_running`` false — a registry key removed
-        counts), and the run is closed in its own Clerk (``sqlite_active``
-        false — the sweep's #2369 retirement closed it, or the sealed
-        account's reopen did). A run that fails either test is never settled.
-
-        ``projector`` overrides the registry-routed one for a binding sealed
-        on a foreign ``shadow:`` account: the repair then writes through the
-        sealed account's own authority, never the installed one (ADR 0050).
-        Returns True when the run received interrupted evidence.
+        Reached from the reconciliation sweep's pass instead of a restart.
+        ``projector`` belongs to the authority the bot is sealed on
+        (``BindingAuthoritySelector.for_settle``), so a bot sealed on a
+        graduated ``shadow:`` store is written through that store, never the
+        installed authority (ADR 0050). True when the run received
+        interrupted evidence.
         """
-        if self._is_running(candidate.strategy_instance_id):
-            return False
-        if candidate.sqlite_active:
-            return False
-        return await self._repair_candidate(candidate, provenance, projector=projector)
+        return await self._repair_candidate(
+            BotRecoveryCandidate(
+                strategy_instance_id=strategy_instance_id, run_id=run_id, sqlite_active=False
+            ),
+            SWEEP_SETTLE_PROVENANCE,
+            projector=projector,
+        )
 
     async def _repair_candidate(
         self,
@@ -383,8 +380,7 @@ class BotBootRecovery:
         Every branch consults the projector before it writes anything; the
         unavailable-authority handler in the caller relies on that ordering
         to leave durable evidence untouched. ``projector`` overrides the
-        registry routing for a sealed foreign account's own authority
-        (:meth:`settle_proven_dead_run`).
+        registry routing (:meth:`settle_dead_run`).
         """
         strategy_instance_id = candidate.strategy_instance_id
         run_id = candidate.run_id

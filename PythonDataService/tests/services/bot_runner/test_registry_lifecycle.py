@@ -1039,10 +1039,9 @@ async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
     assert refused.value.reason_code == "BOT_DUTY_NOT_SETTLED"
     assert (str(refused.value), refused.value.detail) == (
         "This bot's last run has not finished settling.",
-        "Its process is gone but its run is still open. The account's sweep "
-        "settles a provably dead run on its next pass; one that stays open "
-        "here cannot yet be proven dead, so check the bot's evidence before "
-        "clearing it.",
+        "It ended without a clean stop. The Clerk records it as ended "
+        "shortly, usually within a minute; then you can clear the bot. A Dry "
+        "Run's is recorded when the service next starts.",
     )
     assert registry.status("alpaca", _SID).phase != "RETIRED"
 
