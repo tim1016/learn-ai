@@ -424,7 +424,7 @@ class ProfileCreateRequest(RevisionContentRequest):
 
 
 class ProfilePatchRequest(_ClosedRequest):
-    """Metadata only. A rename never invalidates an arming (ADR 0060 D4)."""
+    """Metadata only: a rename or an archive changes no revision's values (ADR 0060 D4)."""
 
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
     archived: bool | None = None

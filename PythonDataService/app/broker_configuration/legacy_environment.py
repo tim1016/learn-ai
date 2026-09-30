@@ -185,7 +185,10 @@ class LegacyEnvironmentValues(BaseSettings):
     field by field instead of refusing to construct at all.
 
     Pinned against the canonical declarations by
-    ``tests/broker_configuration/test_legacy_environment.py``.
+    ``tests/broker_configuration/test_legacy_environment.py``. The two retired
+    session counts have no ``AlpacaSettings`` field any more (#2629), so the
+    declarations here are their only ones: an old ``.env`` still imports into
+    a historical revision that keeps its six-value identity.
     """
 
     model_config = _MODEL_CONFIG

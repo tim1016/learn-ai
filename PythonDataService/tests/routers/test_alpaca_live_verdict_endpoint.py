@@ -94,7 +94,6 @@ async def test_live_settings_with_refused_clerk_serve_live_unarmed(
     for name, value in {
         "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s", "ALPACA_MODE": "live",
         "ALPACA_LIVE_LOSS_FRACTION": "0.02", "ALPACA_LIVE_LOSS_USD": "500",
-        "ALPACA_LIVE_SHADOW_SESSIONS": "5", "ALPACA_LIVE_ARMING_MAX_SESSIONS": "20",
         "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
     }.items():
         monkeypatch.setenv(name, value)
@@ -126,7 +125,6 @@ async def test_shadow_authority_ignores_old_receipts(
         "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s", "ALPACA_MODE": "live",
         "ALPACA_CLERK_DIR": str(tmp_path),
         "ALPACA_LIVE_LOSS_FRACTION": "0.02", "ALPACA_LIVE_LOSS_USD": "500",
-        "ALPACA_LIVE_SHADOW_SESSIONS": "5", "ALPACA_LIVE_ARMING_MAX_SESSIONS": "20",
         "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
     }.items():
         monkeypatch.setenv(name, value)

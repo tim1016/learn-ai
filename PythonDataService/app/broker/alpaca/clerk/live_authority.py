@@ -4,10 +4,11 @@ A live account gets a mutating Clerk only on three-way mode agreement: the
 configured mode (which the adapter already derived the observed
 ``account_mode`` from), the broker-observed account, and the cutover's
 activation record naming that exact account. It is the same ``sqlite`` Clerk
-the paper account runs, composed with the two gates a real-money ENTER is
-admitted against — the risk envelope (D4) and the per-instance arming gate
-(D3/D11) — and the real trade port. Every refusal is a typed ``unavailable``
-runtime; a live boot never aborts the data plane (#2014).
+the paper account runs, composed with the risk envelope a real-money ENTER is
+admitted against (D4) and the real trade port. Only a budgeted deployment
+admits an ENTER (#2553); the per-instance arming gate is retired (#2629).
+Every refusal is a typed ``unavailable`` runtime; a live boot never aborts the
+data plane (#2014).
 
 Cold start is the paper path's (design R18): the cutover's flat-and-order-
 free evidence at graduation and ``recover()`` at every boot. The shadow
@@ -18,7 +19,7 @@ refuse every boot.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -32,8 +33,6 @@ from app.broker.alpaca.clerk.active_runtime import (
     developer_reset_refusal,
     unavailable_runtime,
 )
-from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
-from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
@@ -50,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.schemas.account_authority import world_admits_account_mode
@@ -59,16 +59,6 @@ logger = logging.getLogger(__name__)
 # ADR 0059 D10 by extension (design R14): a real-money authority never
 # installs behind an open data-plane control surface.
 LIVE_CONTROL_UNAUTHENTICATED = "LIVE_CONTROL_UNAUTHENTICATED"
-
-
-# The runner's sealed bindings on one live account: ``strategy_instance_id``
-# -> that instance's current sealed-program hash. Built in the composition
-# root (``main.py``'s ``_alpaca_instance_seals``) and injected, so the clerk
-# layer never learns the runner's root and never imports the binding
-# repository. It takes the live account's id because the composition root
-# learns that id only from this selector's own broker read. ``None`` means no
-# seals, which means no instance is armed: fail closed, never a default.
-type InstanceSealsForAccount = Callable[[str], Mapping[str, str]]
 
 
 async def select_live_clerk_runtime(
@@ -85,10 +75,9 @@ async def select_live_clerk_runtime(
     execution_lease_retry_interval_s: float,
     stream_health_gate: StreamHealthGate | None,
     live_envelope_values: LiveEnvelopeValues | None,
-    instance_seals: InstanceSealsForAccount | None,
     control_unauthenticated: bool,
 ) -> ActiveClerkRuntime:
-    """Compose the real-money authority for an activated live account (ADR 0059 D1/D11)."""
+    """Compose the real-money authority for an activated live account (ADR 0059 D1)."""
     if control_unauthenticated:
         return unavailable_runtime(
             LIVE_CONTROL_UNAUTHENTICATED,
@@ -107,7 +96,7 @@ async def select_live_clerk_runtime(
         or activation.account_id != account.account_id
     ):
         return unavailable_runtime(
-            LIVE_MODE_DISAGREEMENT,
+            BrokerAccountModeDisagreement.reason_code,
             account_id=account.account_id,
             recovery=(
                 "The observed account, the configured mode and the live activation record "
@@ -166,13 +155,9 @@ async def select_live_clerk_runtime(
             # Real custody: the broker's cash already reflects this Clerk's
             # own fills, so the envelope subtracts nothing (ADR 0059 D4).
             live_envelope=LiveEnvelopeGate(values=live_envelope_values, custody_is_simulated=False),
+            # Historical evidence only: the exit-terms upgrade prices a bot
+            # armed before exit terms existed from its own arming (#2629).
             arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id),
-            arming_gate=ArmingGate(),
-            # Bound to the observed account here, where its id is first known;
-            # the sync calls the result with no arguments once per tick.
-            instance_seals=(
-                None if instance_seals is None else (lambda: instance_seals(account.account_id))
-            ),
         )
     except Exception as exc:
         logger.warning(
@@ -192,7 +177,7 @@ async def select_live_clerk_runtime(
             db_identity_token=activation.db_identity_token,
         )
     logger.warning(
-        "REAL-MONEY Alpaca authority installed; ENTERs admit only for armed instances",
+        "REAL-MONEY Alpaca authority installed; ENTERs admit only for budgeted deployments",
         extra={"action": "live_authority_installed", "account_id": account.account_id},
     )
     return ActiveClerkRuntime(
@@ -213,4 +198,4 @@ async def select_live_clerk_runtime(
     )
 
 
-__all__ = ["LIVE_CONTROL_UNAUTHENTICATED", "InstanceSealsForAccount", "select_live_clerk_runtime"]
+__all__ = ["LIVE_CONTROL_UNAUTHENTICATED", "select_live_clerk_runtime"]

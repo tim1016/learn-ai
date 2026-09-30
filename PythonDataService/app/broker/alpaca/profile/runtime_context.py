@@ -1,9 +1,10 @@
 """Resolve one immutable profile revision without environment fallback.
 
-Current profiles carry four monetary fields. Historical revisions retain both
-retired integer session counts solely to reconstruct their original sealed
-identity. Types are checked before settings validation, and a current revision
-explicitly clears old environment counts rather than inheriting them.
+Current profiles carry four monetary fields. Historical revisions also store
+both retired integer session counts, solely so the resolved envelope keeps
+its original sealed identity. They are type-checked here and carried from the
+stored revision straight into the envelope: no setting holds them any more
+(#2629), so a stale environment count has nothing to reach.
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ from typing import Final, Literal
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.live_envelope import (
-    CURRENT_ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_SETTINGS_FIELDS,
+    RETIRED_ENVELOPE_FIELDS,
     LiveEnvelopeValues,
 )
 from app.broker.alpaca.config import AlpacaSettings, alpaca_configuration_error_detail
@@ -33,16 +34,15 @@ EndpointMode = Literal["paper", "live"]
 # The six envelope field names, exactly as ``LiveEnvelopeValues`` declares them
 # — which is exactly what the contract's ``live_envelope`` block carries, so the
 # mapping between the two is an identity and no rename layer can drift (§2.4).
-LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = tuple(
-    field for field, _ in ENVELOPE_SETTINGS_FIELDS
+LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = (
+    *(field for field, _ in ENVELOPE_SETTINGS_FIELDS),
+    *RETIRED_ENVELOPE_FIELDS,
 )
 
-# The counts that must round-trip as exactly ``int``; every other field is a
-# float. Derived from the dataclass's own annotations rather than hand-listed:
-# a hand-listed split would drift silently if a field's type changed or a
-# seventh were added, and drift here changes the ``sha`` — which every arming
-# record already in an operator's ledger is sealed over (contract §2.4).
-_INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(("shadow_sessions", "arming_max_sessions"))
+# The counts that must be stored as exactly ``int``; every other field is a
+# float. Pinned against the dataclass's own annotations by
+# ``tests/broker/alpaca/profile/test_runtime_context.py``.
+_INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(RETIRED_ENVELOPE_FIELDS)
 
 # What a revision with no live envelope hands ``AlpacaSettings``: every live
 # field explicitly ``None``, so a stale ``ALPACA_LIVE_*`` in the environment
@@ -74,10 +74,9 @@ def is_exactly_int(value: object) -> bool:
 
     **Duplicate, with a parity test.** ``clerk/live_arming.py::_is_int`` is the
     canonical statement of this predicate for a sealed arming record, and this
-    file deliberately does not import it: ``live_arming`` pulls
-    ``app.lean_sidecar.trading_calendar`` and with it the market-calendar
-    dependency, which has no business on the credential-resolution path. The
-    parity test that pins the two against each other is
+    file deliberately does not import it: the historical arming-record module
+    has no business on the credential-resolution path. The parity test that
+    pins the two against each other is
     ``tests/broker/alpaca/profile/test_runtime_context.py::
     test_the_integer_predicate_agrees_with_the_sealed_record_validator``
     (CLAUDE.md guiding philosophy #5).
@@ -90,16 +89,17 @@ def _is_real_number(value: object) -> bool:
     return type(value) is int or type(value) is float
 
 
-def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float | int]:
+def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float]:
     """The stored envelope as ``AlpacaSettings`` keyword arguments.
 
     Checks the keys and the Python types on the way (contract §2.4), and keys
     the result by settings field so the caller does not walk the same pairing a
-    second time.
+    second time. A historical revision's two session counts are checked here
+    and carried into the envelope by the caller: no setting holds them (#2629).
     """
     supplied = set(live_envelope)
     expected = set(LIVE_ENVELOPE_FIELDS)
-    current = {field for field, _ in CURRENT_ENVELOPE_SETTINGS_FIELDS}
+    current = {field for field, _ in ENVELOPE_SETTINGS_FIELDS}
     missing = sorted(current - supplied)
     if missing:
         raise RevisionIncomplete("its live envelope is missing " + ", ".join(missing))
@@ -112,16 +112,17 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float |
 
     if supplied not in (current, expected):
         raise RevisionIncomplete("its historical envelope must carry both retired session counts")
-    values: dict[str, float | int] = {}
-    for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
+    for field in RETIRED_ENVELOPE_FIELDS:
         if field not in live_envelope:
             continue
+        count = live_envelope[field]
+        if not is_exactly_int(count):
+            raise RevisionIncomplete(f"its {field} is not stored as a whole number")
+        if count < 1:
+            raise RevisionIncomplete(f"its {field} is not at least 1")
+    values: dict[str, float] = {}
+    for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
         value = live_envelope[field]
-        if field in _INTEGER_ENVELOPE_FIELDS:
-            if not is_exactly_int(value):
-                raise RevisionIncomplete(f"its {field} is not stored as a whole number")
-            values[settings_field] = value
-            continue
         if not _is_real_number(value):
             raise RevisionIncomplete(f"its {field} is not stored as a number")
         values[settings_field] = float(value)
@@ -247,7 +248,7 @@ def resolve_runtime_context(
         )
 
     credentials = resolve_credentials(credential_slot, environment=environment)
-    envelope_settings: Mapping[str, float | int | None] = _ABSENT_ENVELOPE_SETTINGS
+    envelope_settings: Mapping[str, float | None] = _ABSENT_ENVELOPE_SETTINGS
     if live_envelope is not None:
         envelope_settings = {**_ABSENT_ENVELOPE_SETTINGS, **_envelope_settings(live_envelope)}
     elif paper_xh_allowances is not None:
@@ -281,10 +282,10 @@ def resolve_runtime_context(
         settings=settings,
         credentials=credentials,
         live_envelope=(
-            None if live_envelope is None else LiveEnvelopeValues(**{
-                field: getattr(settings, settings_field)
-                for field, settings_field in ENVELOPE_SETTINGS_FIELDS if field in live_envelope
-            })
+            None if live_envelope is None else LiveEnvelopeValues(
+                **{field: getattr(settings, settings_field) for field, settings_field in ENVELOPE_SETTINGS_FIELDS},
+                **{field: live_envelope[field] for field in RETIRED_ENVELOPE_FIELDS if field in live_envelope},
+            )
         ),
         account_pin=account_pin,
         profile_id=profile_id,

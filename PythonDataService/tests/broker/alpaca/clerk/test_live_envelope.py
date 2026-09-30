@@ -1,4 +1,4 @@
-"""The live risk envelope's values, agreement and loss rule.
+"""The live risk envelope's values and loss rule.
 
 The cash rule is judged at the ENTER seam: ``sqlite/test_envelope_admission.py``.
 """
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    CURRENT_ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_ADMISSION_REASON_CODES,
+    ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
     OBSERVATION_MAX_AGE_MS,
@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.live_envelope import (
     LiveEnvelopeGate,
     LiveEnvelopeIncomplete,
     LiveEnvelopeValues,
-    envelope_agreement,
     loss_breached,
     loss_limit_usd,
 )
@@ -55,8 +54,6 @@ def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> No
         mode="live",
         live_loss_fraction=0.05,
         live_loss_usd=5_000.0,
-        live_shadow_sessions=1,
-        live_arming_max_sessions=20,
         live_xh_entry_bps=10.0,
         live_xh_exit_bps=10.0,
     )
@@ -71,13 +68,6 @@ def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> No
     )
     with pytest.raises(LiveEnvelopeIncomplete, match="live_loss_fraction"):
         LiveEnvelopeValues.from_settings(paper)
-
-
-def test_agreement_is_unsealed_agreed_or_disagreed() -> None:
-    assert envelope_agreement(TEST_ENVELOPE_VALUES, None) == "unsealed"
-    assert envelope_agreement(TEST_ENVELOPE_VALUES, LiveEnvelopeValues(**TEST_ENVELOPE_VALUES.to_mapping())) == "agreed"
-    other = LiveEnvelopeValues(**{**TEST_ENVELOPE_VALUES.to_mapping(), "loss_fraction": 0.04})
-    assert envelope_agreement(TEST_ENVELOPE_VALUES, other) == "disagreed"
 
 
 def test_the_loss_limit_is_the_tighter_of_fraction_and_usd() -> None:
@@ -151,7 +141,6 @@ def test_an_observation_trusts_only_fills_recorded_a_grace_before_its_reads() ->
 
 def test_the_gate_serves_only_a_fresh_observation() -> None:
     gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
-    assert gate.agreement == "unsealed"
     assert gate.latest_observation() is None
     assert gate.fresh_observation(1_000) is None
     gate.publish(_observation(1_000))
@@ -197,4 +186,4 @@ def test_the_admission_reason_codes_are_the_envelope_refusals() -> None:
 
 def test_the_envelope_reads_exactly_the_settings_live_mode_requires() -> None:
     """A value added to one list only would turn a valid live boot into a service that fails to start."""
-    assert tuple(name for _, name in CURRENT_ENVELOPE_SETTINGS_FIELDS) == tuple(name for name in _LIVE_REQUIRED_FIELDS if name not in {"live_shadow_sessions", "live_arming_max_sessions"})
+    assert tuple(name for _, name in ENVELOPE_SETTINGS_FIELDS) == _LIVE_REQUIRED_FIELDS

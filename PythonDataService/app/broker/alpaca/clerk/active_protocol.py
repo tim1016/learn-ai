@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
-    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
     from app.broker.alpaca.clerk.models import (
         ClerkCustodySnapshot,
         EffectOperationReceipt,
@@ -59,18 +58,6 @@ class ActiveAlpacaClerk(Protocol):
         every authority is account-scoped by construction, so a caller
         comparing a binding's sealed account against the installed one is
         asking a question the protocol answers, not probing for a capability.
-        """
-        ...
-
-    @property
-    def live_arming(self) -> ArmingGate | None:
-        """The per-instance arming gate, or ``None`` where arming does not apply.
-
-        Composed only on a live-mode authority (ADR 0059 D3/D11); the paper,
-        shadow and synthetic authorities answer ``None``. Declared so a reader
-        of the gate's fault -- the live verdict's mid-session mode
-        disagreement -- reads a stated ``None`` rather than an absent
-        attribute, which would look the same and mean something else.
         """
         ...
 

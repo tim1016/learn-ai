@@ -552,33 +552,11 @@ async def _service_lifespan(
             # append-only activation fence must select SQLite; a missing or invalid
             # activation installs no broker-mutation capability.
             #
-            # ADR 0059 slice 7: the live authority's arming gate reads the runner's
-            # sealed bindings beside the ledger every tick. Built here and
-            # injected as a callable because the ceremony imports the runner's
-            # binding repository, and the clerk layer must never learn the
-            # runner's root. Resolved per call, so a bot deployed after boot is
-            # seen without a restart.
-            from app.broker.alpaca.clerk.live_arming_history import instance_seal_hashes
-            from app.broker.ibkr.config import live_artifacts_root
-
-            def _alpaca_instance_seals(live_account_id: str) -> dict[str, str]:
-                return {
-                    sid: seal.seal_hash
-                    for sid, seal in instance_seal_hashes(
-                        live_account_id=live_account_id,
-                        live_state_root=live_artifacts_root(),
-                        # This authority custodies the live id itself, so the
-                        # rehearsal's `shadow:`-sealed bindings are foreign to it
-                        # (design R15) and seal nothing the gate may admit.
-                        custody_world="real_live",
-                    ).items()
-                }
-
             # ADR 0059 D4 / ADR 0060: the live world's risk envelope, taken from
             # the revision this worker bound rather than from the environment. The
             # resolved context already carries it — a live revision cannot resolve
-            # without all six values — so this is a read, not a second construction
-            # that could disagree with the one the binding sealed.
+            # without its four current values — so this is a read, not a second
+            # construction that could disagree with the one the binding sealed.
             live_envelope_values = alpaca_binding.context.live_envelope
 
             if fleet_lane is not None:
@@ -622,10 +600,8 @@ async def _service_lifespan(
                     artifacts_root=alpaca_clerk_root,
                     stream_health_gate=alpaca_stream_health_gate,
                     live_envelope_values=live_envelope_values,
-                    # ADR 0059 slice 7: the live authority reads sealed bindings beside
-                    # the arming ledger every tick, and refuses to install behind an
-                    # open control plane (R14).
-                    instance_seals=_alpaca_instance_seals,
+                    # ADR 0059 slice 7 R14: the live authority refuses to install
+                    # behind an open control plane.
                     control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
                     expected_account_id=alpaca_binding.context.account_pin,
                 )

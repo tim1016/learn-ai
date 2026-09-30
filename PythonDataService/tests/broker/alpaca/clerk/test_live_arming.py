@@ -8,26 +8,17 @@ from datetime import date
 import pytest
 
 from app.broker.alpaca.clerk.live_arming import (
-    ARMING_REASON_CODES,
-    LIVE_ARMING_FUTURE_DATED,
-    LIVE_ARMING_LAPSED,
-    LIVE_ARMING_REVOKED,
-    LIVE_ARMING_SEAL_CHANGED,
-    LIVE_ENVELOPE_DISAGREEMENT,
-    LIVE_ENVELOPE_MISSING,
-    ArmingStatus,
-    LedgerRecord,
+    ARMING_ADMISSION_REASON_CODES,
+    LIVE_MODE_DISAGREEMENT,
     LiveArmingInvalid,
     LiveArmingRecord,
-    LiveArmingRefused,
     LiveDisarmRecord,
     RehearsalPredecessor,
-    arming_status,
-    sessions_used,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
-from app.lean_sidecar.trading_calendar import is_trading_day, trading_session_count
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.services.session_authority import et_minute_of_day_ms
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -47,7 +38,6 @@ ENVELOPE = LiveEnvelopeValues(
 # Friday 2026-09-11, 10:00 ET — a full NYSE session.
 FRIDAY_MS = et_minute_of_day_ms(date(2026, 9, 11), 10 * 60)
 MONDAY_MS = et_minute_of_day_ms(date(2026, 9, 14), 10 * 60)
-TUESDAY_MS = et_minute_of_day_ms(date(2026, 9, 15), 10 * 60)
 
 
 def _armed(*, max_sessions: int = 20, armed_at_ms: int = FRIDAY_MS, seal: str = SEAL, instance: str = SID,
@@ -77,18 +67,6 @@ def _disarmed(record: LiveArmingRecord, *, at_ms: int = MONDAY_MS) -> LiveDisarm
         revokes_record_sha256=record.record_sha256,
         disarmed_at_ms=at_ms,
     )
-
-
-def _status(records: list[LedgerRecord], **overrides: object) -> ArmingStatus:
-    kwargs: dict = {
-        "live_account_id": ACCOUNT,
-        "strategy_instance_id": SID,
-        "seal_hash": SEAL,
-        "configured_envelope": ENVELOPE,
-        "now_ms": FRIDAY_MS,
-    }
-    kwargs.update(overrides)
-    return arming_status(records, **kwargs)
 
 
 def test_the_record_seals_every_field_and_round_trips() -> None:
@@ -329,146 +307,37 @@ def test_a_disarm_row_is_sealed_and_names_what_it_revokes() -> None:
         LiveDisarmRecord.from_payload({**asdict(disarm), "disarmed_at_ms": MONDAY_MS + 1})
 
 
-def test_a_refusal_carries_its_reason_code() -> None:
-    refusal = LiveArmingRefused(LIVE_ARMING_LAPSED, "the arming lapsed")
-    assert refusal.reason_code == LIVE_ARMING_LAPSED
-    assert str(refusal) == "the arming lapsed"
-    assert isinstance(refusal, ValueError)
-
-
-def test_every_code_is_its_own_name_and_the_set_is_closed() -> None:
+def test_the_recorded_refusal_codes_are_their_own_names_and_the_set_is_closed() -> None:
+    """The retired ENTER refusals stay recognisable in history (#2629)."""
     assert frozenset(
         {
-            "LIVE_ARMING_LAPSED",
-            "LIVE_ARMING_REVOKED",
-            "LIVE_ARMING_SEAL_CHANGED",
-            "LIVE_ARMING_INSTANCE_UNSEALED",
-            "LIVE_ARMING_TOKEN_INVALID",
-            "LIVE_ARMING_PLAN_EXPIRED",
-            "LIVE_ARMING_INPUTS_CHANGED",
-            "LIVE_ARMING_NOT_ARMED",
-            "LIVE_ARMING_TTL_INVALID",
-            "LIVE_ARMING_FUTURE_DATED",
-            "LIVE_SHADOW_INCOMPLETE",
-            "LIVE_ENVELOPE_DISAGREEMENT",
-            "LIVE_ENVELOPE_MISSING",
             "LIVE_ARMING_REQUIRED",
             "LIVE_ARMING_UNOBSERVED",
             "LIVE_ARMING_LEDGER_INVALID",
-            "LIVE_VERDICT_TRANSITION_HALT",
+            "LIVE_ARMING_LAPSED",
+            "LIVE_ARMING_REVOKED",
+            "LIVE_ARMING_SEAL_CHANGED",
+            "LIVE_ARMING_FUTURE_DATED",
+            "LIVE_ENVELOPE_DISAGREEMENT",
+            "LIVE_MODE_DISAGREEMENT",
         }
-    ) == ARMING_REASON_CODES
-    assert LIVE_ENVELOPE_MISSING == "LIVE_ENVELOPE_MISSING"
-    assert LIVE_ARMING_FUTURE_DATED == "LIVE_ARMING_FUTURE_DATED"
+    ) == ARMING_ADMISSION_REASON_CODES
     from app.broker.alpaca.clerk import live_arming as live_arming_module
 
-    for name in ARMING_REASON_CODES:
+    for name in ARMING_ADMISSION_REASON_CODES:
         assert getattr(live_arming_module, name) == name
 
 
-def test_the_arming_session_counts_as_one_and_a_weekend_spends_nothing() -> None:
-    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=FRIDAY_MS) == 1
-    # Saturday and Sunday are not sessions: Monday is only the second.
-    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=MONDAY_MS) == 2
-    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=TUESDAY_MS) == 3
-    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=MONDAY_MS) == trading_session_count(
-        date(2026, 9, 11), date(2026, 9, 14)
-    )
+def test_the_mode_disagreement_code_is_the_adapters_own() -> None:
+    assert BrokerAccountModeDisagreement("m", broker="alpaca", detail="d").reason_code == LIVE_MODE_DISAGREEMENT
 
 
-def test_a_market_holiday_spends_nothing_either() -> None:
-    """Thanksgiving 2026-11-26 is a Thursday and not a session; 11-27 is a half day."""
-    assert not is_trading_day(date(2026, 11, 26))
-    armed = et_minute_of_day_ms(date(2026, 11, 25), 10 * 60)
-    checked = et_minute_of_day_ms(date(2026, 11, 30), 10 * 60)
-    expected = trading_session_count(date(2026, 11, 25), date(2026, 11, 30))
-    assert expected == 3  # Wed 25, Fri 27 (half day), Mon 30
-    assert sessions_used(armed_at_ms=armed, now_ms=checked) == expected
-
-
-def test_sessions_used_refuses_a_reversed_range() -> None:
-    """A now_ms behind the arming fails closed, to the millisecond -- the calendar never sees a reversed range."""
-    with pytest.raises(ValueError, match="precedes armed_at_ms"):
-        sessions_used(armed_at_ms=MONDAY_MS, now_ms=FRIDAY_MS)
-    with pytest.raises(ValueError):
-        sessions_used(armed_at_ms=FRIDAY_MS, now_ms=FRIDAY_MS - 1)
-    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=FRIDAY_MS) == 1
-
-
-def test_no_record_is_unarmed() -> None:
-    assert _status([]) == ArmingStatus(
-        state="unarmed", reason_code=None, record=None, sessions_used=0, sessions_remaining=0
-    )
-
-
-def test_the_latest_record_decides_and_a_re_arm_supersedes() -> None:
-    first = _armed(max_sessions=2)
-    second = _armed(max_sessions=5, armed_at_ms=MONDAY_MS)
-    status = _status([first, second], now_ms=MONDAY_MS, configured_envelope=second.envelope)
-    assert (status.state, status.record) == ("armed", second)
-    assert (status.sessions_used, status.sessions_remaining) == (1, 4)
-
-
-def test_a_disarm_revokes_until_the_instance_is_armed_again() -> None:
-    record = _armed()
-    status = _status([record, _disarmed(record)], now_ms=MONDAY_MS)
-    assert (status.state, status.reason_code, status.record) == ("disarmed", LIVE_ARMING_REVOKED, None)
-    assert (status.sessions_used, status.sessions_remaining) == (0, 0)
-
-    rearmed = _armed(armed_at_ms=MONDAY_MS)
-    assert _status([record, _disarmed(record), rearmed], now_ms=MONDAY_MS).state == "armed"
-
-
-def test_a_changed_seal_disarms_and_an_absent_binding_counts_as_changed() -> None:
-    records = [_armed()]
-    changed = _status(records, seal_hash="d" * 64)
-    assert (changed.state, changed.reason_code) == ("disarmed", LIVE_ARMING_SEAL_CHANGED)
-    absent = _status(records, seal_hash=None)
-    assert (absent.state, absent.reason_code) == ("disarmed", LIVE_ARMING_SEAL_CHANGED)
-    # The record is still reported so an operator can see what was armed.
-    assert changed.record == records[0] and changed.sessions_used == 1
-
-
-def test_a_changed_environment_disagrees_with_the_sealed_envelope() -> None:
-    status = _status([_armed()], configured_envelope=replace(ENVELOPE, loss_usd=4_000.0))
-    assert (status.state, status.reason_code) == ("disarmed", LIVE_ENVELOPE_DISAGREEMENT)
-
-
-def test_the_arming_lapses_only_once_the_count_is_exceeded() -> None:
-    records = [_armed(max_sessions=2)]
-    granted = records[0].envelope
-    on_the_last_session = _status(records, now_ms=MONDAY_MS, configured_envelope=granted)
-    assert on_the_last_session.state == "armed"
-    assert (on_the_last_session.sessions_used, on_the_last_session.sessions_remaining) == (2, 0)
-
-    lapsed = _status(records, now_ms=TUESDAY_MS, configured_envelope=granted)
-    assert (lapsed.state, lapsed.reason_code) == ("lapsed", LIVE_ARMING_LAPSED)
-    assert (lapsed.sessions_used, lapsed.sessions_remaining) == (3, 0)
-
-
-def test_a_record_dated_after_the_clock_is_disarmed() -> None:
-    """A record armed after now_ms fails closed under a thirteenth code (controller ruling)."""
-    record = _armed(armed_at_ms=MONDAY_MS)
-    status = _status([record], now_ms=FRIDAY_MS)
-    assert (status.state, status.reason_code, status.record) == ("disarmed", LIVE_ARMING_FUTURE_DATED, record)
-    assert (status.sessions_used, status.sessions_remaining) == (0, record.max_sessions)
-
-
-def test_the_checks_run_in_the_order_r5_fixes() -> None:
-    """A record that fails three ways at once is reported by the first failure."""
-    records = [_armed(max_sessions=1)]
-    status = _status(
-        records, seal_hash="d" * 64, configured_envelope=replace(ENVELOPE, loss_usd=4_000.0), now_ms=TUESDAY_MS
-    )
-    assert status.reason_code == LIVE_ARMING_SEAL_CHANGED
-    envelope_first = _status(records, configured_envelope=replace(ENVELOPE, loss_usd=4_000.0), now_ms=TUESDAY_MS)
-    assert envelope_first.reason_code == LIVE_ENVELOPE_DISAGREEMENT
-
-
-def test_another_accounts_or_another_instances_record_never_answers_here() -> None:
-    foreign_account = _armed(account="9LIVE0002")
-    foreign_instance = _armed(instance="other")
-    assert _status([foreign_account, foreign_instance]).state == "unarmed"
+def test_the_newest_arming_ignores_revocations() -> None:
+    first = _armed()
+    second = _armed(armed_at_ms=MONDAY_MS)
+    assert latest_arming([]) is None
+    assert latest_arming([first, _disarmed(first)]) == first
+    assert latest_arming([first, second, _disarmed(second)]) == second
 
 
 def test_a_record_without_a_receipt_seals_round_trips_and_still_detects_tampering() -> None:
@@ -490,13 +359,3 @@ def test_a_record_without_a_receipt_seals_round_trips_and_still_detects_tamperin
         LiveArmingRecord.from_payload({**payload, "shadow_receipt_sha256": "e" * 64})
     with pytest.raises(LiveArmingInvalid):
         LiveArmingRecord.from_payload({**payload, "seal_hash": "f" * 64})
-    # A receipt-less record still grants exactly what an armed row grants.
-    status = arming_status(
-        (record,),
-        live_account_id=ACCOUNT,
-        strategy_instance_id=SID,
-        seal_hash=SEAL,
-        configured_envelope=ENVELOPE,
-        now_ms=FRIDAY_MS,
-    )
-    assert status.state == "armed"

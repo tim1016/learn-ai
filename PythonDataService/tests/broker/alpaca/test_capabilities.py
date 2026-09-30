@@ -64,8 +64,8 @@ def test_capabilities_select_by_settings_mode(
     monkeypatch: pytest.MonkeyPatch, mode: str, expected
 ) -> None:
     live_values = {
-        "live_loss_fraction": 0.02, "live_loss_usd": 500.0, "live_shadow_sessions": 5,
-        "live_arming_max_sessions": 20, "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
+        "live_loss_fraction": 0.02, "live_loss_usd": 500.0,
+        "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
     }
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode=mode, **(live_values if mode == "live" else {}))
     monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", lambda: settings)

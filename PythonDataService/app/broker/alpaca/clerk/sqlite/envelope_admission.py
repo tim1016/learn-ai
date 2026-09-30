@@ -1,8 +1,8 @@
 """The envelope's ENTER-time check — the sibling of ``require_admission`` (ADR 0059 D4).
 
 Order of refusals, each fail-closed: an account not yet switched to
-budgets; a sealed envelope that disagrees with the environment; no fresh
-observation; a market leg with no decision-bar price; then the budget rule.
+budgets; no fresh observation; a market leg with no decision-bar price; then
+the budget rule.
 The loss hold is not checked here: it is an account hold
 ``require_admission`` already refuses on.
 
@@ -28,7 +28,6 @@ from decimal import Decimal
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable, budget_entry_decision
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_CASH_EXCEEDED,
-    LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
     EnvelopeReservation,
     LiveEnvelopeGate,
@@ -78,12 +77,6 @@ def require_envelope_admission(
         raise ValueError("the envelope admits BUY legs only; every program ENTER is a BUY")
     if repo.budget_authority_version() != BUDGET_AUTHORIZATION:
         raise _refuse(BUDGETS_NOT_SWITCHED_ON, BUDGETS_NOT_SWITCHED_ON_WHY)
-    if envelope.agreement == "disagreed":
-        raise _refuse(
-            LIVE_ENVELOPE_DISAGREEMENT,
-            "The ALPACA_LIVE_* environment values differ from the envelope sealed "
-            "for this deployment; review a fresh Deploy to change them.",
-        )
     observation = require_current_risk_admission(repo, envelope=envelope, now_ms=now_ms)
     price = leg.limit_price if leg.order_type is OrderType.LIMIT else reference_price
     if price is None:

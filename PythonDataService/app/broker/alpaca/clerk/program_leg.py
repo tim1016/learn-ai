@@ -50,10 +50,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# How a policy learns its allowances. Injected as a callable -- the
-# ``instance_seals`` pattern -- so a test can state the
-# resolved document directly instead of building a Clerk volume, and so the one
-# production resolver below is named in exactly one place.
+# How a policy learns its allowances. Injected as a callable so a test can
+# state the resolved document directly instead of building a Clerk volume,
+# and so the one production resolver below is named in exactly one place.
 type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]
 
 # Why the two resolution steps below import inside their function bodies, and
@@ -63,20 +62,17 @@ type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]
 # ``repository`` imports ``clerk.live_envelope`` straight back -- and
 # ``active_runtime`` imports *this* module before it imports anything under
 # ``clerk.sqlite``. A module-level import here therefore lands on a
-# half-initialised ``live_envelope``. The arming ledger separately drags
-# ``app.lean_sidecar.trading_calendar`` and the whole market calendar with it,
-# which ``profile/runtime_context.py`` already declined to put on a
-# configuration-resolution path. Both resolvers run at authority composition,
-# never at import, so the deferral costs one dict lookup.
+# half-initialised ``live_envelope``. Both resolvers run at authority
+# composition, never at import, so the deferral costs one dict lookup.
 
 
 def _sealed_allowances(context: AlpacaRuntimeContext, strategy_instance_id: str | None = None) -> ExtendedHoursAllowances | None:
     """The newest **armed** record's allowances, or ``None`` when there are none to read.
 
     Reuses the ledger's own reader and ``live_arming.latest_arming`` -- the
-    canonical "newest arming, ignoring revocations" (R10) the live authority's
-    arming refresh already reads every tick. A disarm row carries no envelope,
-    which is exactly why ``latest_arming`` skips it.
+    canonical "newest arming, ignoring revocations" (R10). A disarm row
+    carries no envelope, which is exactly why ``latest_arming`` skips it.
+    Pricing only: nothing here grants or checks permission (#2629).
 
     The account comes from the binding's ``account_pin``: the revision's own
     observed account, never a value composed here. Absent (a paper or
@@ -84,9 +80,8 @@ def _sealed_allowances(context: AlpacaRuntimeContext, strategy_instance_id: str 
 
     Nothing raises out of here. A pin that is not a real account id, a ledger
     that will not verify and a store that will not read are each "not this
-    source" -- logged at error level, as ``LiveArmingLedger.discover`` logs a
-    damaged sibling, because an EXIT must never be blocked by a
-    broker-configuration problem (plan §0 D3).
+    source" -- logged at error level, because an EXIT must never be blocked by
+    a broker-configuration problem (plan §0 D3).
     """
     from app.broker.alpaca.clerk.live_arming import latest_arming
     from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger

@@ -257,8 +257,8 @@ def _record_binding(
 ) -> None:
     """Persist one launched Alpaca bot binding, with no v2 program seal.
 
-    Deliberately unsealed: ``instance_seal_hashes`` skips a binding like this,
-    and the obligations probe must not.
+    Deliberately unsealed: a legacy binding like this is still a bot on the
+    account, and the obligations probe must count it.
     """
     live_state_binding_repository(live_state_root).record_launch(
         BrokerBotBinding(

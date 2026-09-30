@@ -34,8 +34,6 @@ class _AccountClient:
 _LIVE_ENVELOPE = {
     "live_loss_fraction": 0.02,
     "live_loss_usd": 500.0,
-    "live_shadow_sessions": 5,
-    "live_arming_max_sessions": 20,
     "live_xh_entry_bps": 10.0,
     "live_xh_exit_bps": 10.0,
 }

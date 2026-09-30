@@ -21934,7 +21934,7 @@ export interface components {
         };
         /**
          * ProfilePatchRequest
-         * @description Metadata only. A rename never invalidates an arming (ADR 0060 D4).
+         * @description Metadata only: a rename or an archive changes no revision's values (ADR 0060 D4).
          */
         ProfilePatchRequest: {
             /** Archived */

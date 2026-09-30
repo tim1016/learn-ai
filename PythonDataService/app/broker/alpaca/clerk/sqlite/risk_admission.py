@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import (
     ENVELOPE_SYNC_INTERVAL_S,
-    LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
     AccountObservation,
     LiveEnvelopeGate,
@@ -71,14 +70,12 @@ def current_risk_readiness(
     This read is advisory: actual commitment rechecks and records breaches.
     """
     with repo._write_lock:
-        if envelope.agreement == "disagreed":
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_DISAGREEMENT, detail="This account's saved risk limits disagree. Review the daily loss limit in Settings.")
         if repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, strategy_instance_id=None) is not None:
             return RiskReadiness(reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, detail="The account loss hold stands. Review it in Settings.")
         policy = repo.account_risk_policy()
         revision = None if policy is None else policy.revision
         synthetic = repo.account_id.startswith("sim:")
-        values = policy if policy is not None else (envelope.in_force if envelope.values is not None else None)
+        values = policy if policy is not None else envelope.values
         # A missing limit is judged before any observation: without one there
         # is nothing to observe against, and naming stale evidence instead sent
         # the owner looking for a refresh that could never help (#2566, H6/H7).

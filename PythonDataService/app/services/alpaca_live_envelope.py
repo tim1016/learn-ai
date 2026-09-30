@@ -2,7 +2,7 @@
 
 Re-observe current evidence, then prove the current policy and the hold's
 retained period/threshold under the custody writer fence. A rollover, larger
-baseline, looser Apply or legacy re-arm cannot clear a standing hold.
+baseline or looser Apply cannot clear a standing hold.
 """
 
 from __future__ import annotations
@@ -19,11 +19,6 @@ from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 
 LIVE_ENVELOPE_LOSS_HOLD_STANDS = "LIVE_ENVELOPE_LOSS_HOLD_STANDS"
 LIVE_ENVELOPE_LOSS_HOLD_CLEARED = "LIVE_ENVELOPE_LOSS_HOLD_CLEARED"
-# Which envelope decided, said in the operator's own sentence. An operator who
-# has just raised a limit in the environment and is watching the hold refuse
-# anyway needs to read that the number is the armed one, not the edited one.
-_SEALED_LIMIT = "sealed at arming"
-_CONFIGURED_LIMIT = "configured in the environment"
 
 _ClearOutcome = Literal["cleared", "no_hold", "refused"]
 
@@ -54,15 +49,14 @@ def _unjudgeable_detail(reading: EnvelopeReading) -> str:
     """Why the account cannot be judged, in the operator's own sentence.
 
     One predicate, two sentences, so the prose cannot drift from the diagnosis
-    the sync logs beside it (``_unknown_detail``'s
-    ``sealed_envelope_readable``). An operator sent to debug the broker feed
-    over a corrupt ``live_arming.jsonl`` loses the incident.
+    the sync logs beside it (``_unknown_detail``'s ``loss_limit_set``). An
+    operator sent to debug the broker feed over a missing limit loses the
+    incident.
     """
-    if not reading.seal_readable:
+    if not reading.limit_set:
         return (
-            "This account's arming inputs could not be read, so there is no sealed "
-            "loss limit to judge against. Repair the arming ledger, then clear again. "
-            "The hold stands."
+            "No daily loss limit is set for this account, so there is nothing to judge "
+            "the hold against. Set one in Settings, then clear again. The hold stands."
         )
     return (
         "Account day P&L is unknown (fees, execution coverage or transfer evidence are incomplete, or the broker "
@@ -134,7 +128,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
             detail=_unjudgeable_detail(reading),
         )
-    limit_source = "effective account policy" if reading.policy_revision is not None else (_SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT)
+    limit_source = "effective account policy" if reading.policy_revision is not None else "configured in the environment"
     if reading.breached:
         # The day figure is the exact ``Decimal`` formula Deploy's "today
         # P&L" renders (#2586), so both screens name the same cent. The limit

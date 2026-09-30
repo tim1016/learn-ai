@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import asdict, dataclass
 
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
@@ -35,6 +35,25 @@ order's unfilled remainder ends on it (#2647), whose owner copy
 (``manual_order_completion``) is checked against it at import.
 """
 
+ENDED_BROKER_STATES = ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES - {"filled"}
+"""Terminal broker states after which an order can never fill further.
+
+Every terminal state but ``filled``: ``UNFILLED_TERMINAL_STATES`` plus
+``replaced``, an order the broker replaced, which fills no further under its
+own id. Derived from the one terminal set so the SQL below cannot spell a
+second list that drifts from it.
+"""
+
+
+def sql_string_list(values: Collection[str]) -> str:
+    """``values`` as the body of an SQL ``IN (...)``, sorted so the text is stable.
+
+    For this module's fixed broker-state vocabularies only -- never for input,
+    which is always bound as a parameter.
+    """
+    return ",".join(f"'{value}'" for value in sorted(values))
+
+
 # An order that can never fill further, over ``orders o`` joined to its
 # ``effect_operations e``: the broker ended it, or its effect is terminal while
 # nothing says the broker ever knew it -- no broker identity (set only by an
@@ -45,7 +64,7 @@ order's unfilled remainder ends on it (#2647), whose owner copy
 # composes; the same three facts ``order_evidence.order_never_reached_broker``
 # reads.
 ORDER_ENDED_SQL = (
-    "(LOWER(COALESCE(o.broker_state, '')) IN ('canceled','expired','rejected','replaced') "
+    f"(LOWER(COALESCE(o.broker_state, '')) IN ({sql_string_list(ENDED_BROKER_STATES)}) "
     "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
 )
@@ -317,6 +336,7 @@ def _order_leg_from_facts(
 
 
 __all__ = [
+    "ENDED_BROKER_STATES",
     "ORDER_ENDED_SQL",
     "ORDER_OPEN_SQL",
     "OrderProjectionReadError",
@@ -325,4 +345,5 @@ __all__ = [
     "read_open_opposite_side_orders",
     "read_order_details",
     "read_orders_by_operation",
+    "sql_string_list",
 ]

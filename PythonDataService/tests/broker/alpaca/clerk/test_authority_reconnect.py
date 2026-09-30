@@ -61,7 +61,6 @@ from app.services.sqlite_clerk_compat import failed_sqlite_projection
 from app.services.sqlite_clerk_transaction_projection import sqlite_transaction_history
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_authority_fixtures import (
-    instance_seals_over,
     live_activation,
     pinned_repository,
 )
@@ -141,7 +140,6 @@ def _live_selection(
             activation_store=_ActivationStore(activation),
             repository_opener=pinned_repository(NOW_MS),
             live_envelope_values=TEST_ENVELOPE_VALUES,
-            instance_seals=instance_seals_over(tmp_path / "runner"),
             startup_recovery_timeout_s=startup_recovery_timeout_s,
         )
 

@@ -163,7 +163,11 @@ def test_the_planned_envelope_hashes_to_the_legacy_one(
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     configured = AlpacaSettings(_env_file=None)
-    expected = LiveEnvelopeValues(**{field: getattr(configured, f"live_{field}") for field in ("loss_fraction", "loss_usd", "shadow_sessions", "arming_max_sessions", "xh_entry_bps", "xh_exit_bps")}).sha
+    expected = LiveEnvelopeValues(
+        **{field: getattr(configured, f"live_{field}") for field in ("loss_fraction", "loss_usd", "xh_entry_bps", "xh_exit_bps")},
+        shadow_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_SHADOW_SESSIONS"]),
+        arming_max_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_ARMING_MAX_SESSIONS"]),
+    ).sha
 
     plan = _plan(_live_values(), ExistingConfiguration.absent())
 

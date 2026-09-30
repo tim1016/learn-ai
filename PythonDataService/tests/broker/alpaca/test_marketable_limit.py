@@ -72,8 +72,6 @@ def test_the_envelope_and_settings_constructors_agree_on_the_same_six_numbers() 
         mode="live",
         live_loss_fraction=0.05,
         live_loss_usd=5_000.0,
-        live_shadow_sessions=1,
-        live_arming_max_sessions=20,
         live_xh_entry_bps=12.5,
         live_xh_exit_bps=8.0,
     )
@@ -172,8 +170,6 @@ def test_allowance_converters_keep_defaults_legacy_knobs_only_apply_at_upgrade(m
             api_secret_key="s",
             live_loss_fraction=0.5,
             live_loss_usd=100.0,
-            live_shadow_sessions=1,
-            live_arming_max_sessions=1,
             live_xh_entry_bps=10.0,
             live_xh_exit_bps=20.0,
             # Deploy-time values set here must NOT change the converted pair:

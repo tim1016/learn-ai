@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
@@ -369,7 +369,6 @@ def envelope_gate(
     *,
     cash: float = 100_000.0,
     observed_at_ms: int = ENVELOPE_T0,
-    sealed: LiveEnvelopeValues | None = None,
     fill_sequence: int = 0,
 ) -> LiveEnvelopeGate:
     """A gate holding one observation of ``cash``, fresh at ``observed_at_ms``.
@@ -377,7 +376,7 @@ def envelope_gate(
     ``fill_sequence`` is the executions the reading saw (``day_pnl.risk_fill_sequence``);
     a reading older than the newest fill admits nothing.
     """
-    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=sealed, custody_is_simulated=True)
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
     gate.publish(
         AccountObservation(
             observed_at_ms=observed_at_ms,

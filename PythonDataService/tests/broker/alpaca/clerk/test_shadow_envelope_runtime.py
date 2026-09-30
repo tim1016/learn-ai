@@ -416,7 +416,6 @@ async def test_shadow_risk_ignores_retired_arming_bytes_and_never_records_sessio
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("corrupt retired grant\n")
     assert await runtime.envelope_sync.tick() == "observed"
-    assert runtime.envelope_sync.envelope.sealed is None
     assert path.read_text() == "corrupt retired grant\n"
     assert not tuple(tmp_path.rglob("shadow_sessions.jsonl"))
 
