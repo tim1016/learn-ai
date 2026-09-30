@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import sqlite3
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from app.services.sovereign_equity_snapshots import (
     DailySovereignEquitySnapshotStore,
     DailySovereignEquitySnapshotWriter,
     DuplicateDailySovereignEquitySnapshotError,
+    UnapprovedAccountEquitySnapshotError,
     next_nyse_session_close_ms,
 )
 
@@ -74,6 +76,49 @@ async def test_writer_appends_account_scoped_daily_equity_row_to_sqlite(tmp_path
             "FROM daily_sovereign_equity_snapshots"
         ).fetchall()
     assert rows == [("alpaca-account", session_close_ms, 100_125.75, _ms_utc(2026, 11, 27, 18, 0))]
+
+
+@pytest.mark.asyncio
+async def test_writer_records_the_account_the_binding_pinned(tmp_path: Path) -> None:
+    store = DailySovereignEquitySnapshotStore(tmp_path / "sovereign-equity.sqlite3")
+    session_close_ms = _ms_utc(2026, 7, 8, 20, 0)
+
+    async def load_account() -> BrokerAccountSnapshot:
+        return _account_snapshot(account_id="PA-APPROVED")
+
+    writer = DailySovereignEquitySnapshotWriter(
+        store=store, account_snapshot_provider=load_account, expected_account_id="PA-APPROVED"
+    )
+
+    appended = await writer.capture(session_close_ms=session_close_ms)
+
+    assert appended.account_id == "PA-APPROVED"
+
+
+@pytest.mark.asyncio
+async def test_writer_refuses_an_account_the_binding_did_not_pin(tmp_path: Path) -> None:
+    """#2669: a boot whose Alpaca did not answer starts the scheduler before the pin is checked.
+
+    If the credentials then reach an account the configuration did not
+    approve, its equity is never appended -- the ledger is append-only, so
+    the row could not be taken back once the reconnect refuses the binding.
+    """
+    database_path = tmp_path / "sovereign-equity.sqlite3"
+
+    async def load_account() -> BrokerAccountSnapshot:
+        return _account_snapshot(account_id="PA-UNAPPROVED")
+
+    writer = DailySovereignEquitySnapshotWriter(
+        store=DailySovereignEquitySnapshotStore(database_path),
+        account_snapshot_provider=load_account,
+        expected_account_id="PA-APPROVED",
+    )
+
+    with pytest.raises(UnapprovedAccountEquitySnapshotError) as refused:
+        await writer.capture(session_close_ms=_ms_utc(2026, 7, 8, 20, 0))
+
+    assert (refused.value.account_id, refused.value.expected_account_id) == ("PA-UNAPPROVED", "PA-APPROVED")
+    assert not database_path.exists()
 
 
 def test_store_refuses_duplicate_or_mutable_daily_equity_rows(tmp_path: Path) -> None:
@@ -213,3 +258,51 @@ async def test_scheduler_captures_latest_missed_close_before_waiting_for_next() 
     await scheduler.stop()
 
     assert captured_closes == [missed_close_ms]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_refuses_an_unapproved_account_s_close_without_retrying(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2669: a retry reads the same credentials, so the refused close waits for the next one."""
+    missed_close_ms = _ms_utc(2026, 7, 8, 20, 0)
+    next_close_ms = _ms_utc(2026, 7, 9, 20, 0)
+    now_ms = missed_close_ms + 60_000
+    captured_closes: list[int] = []
+    slept_for: list[float] = []
+    waiting = asyncio.Event()
+
+    class Writer:
+        async def capture(self, *, session_close_ms: int) -> DailySovereignEquitySnapshot:
+            captured_closes.append(session_close_ms)
+            raise UnapprovedAccountEquitySnapshotError(
+                account_id="PA-UNAPPROVED", expected_account_id="PA-APPROVED"
+            )
+
+    async def wait_for_the_next_close(seconds: float) -> None:
+        slept_for.append(seconds)
+        waiting.set()
+        await asyncio.Event().wait()
+
+    scheduler = DailySovereignEquitySnapshotScheduler(
+        writer=Writer(),
+        clock=lambda: now_ms,
+        sleep=wait_for_the_next_close,
+        session_close_resolver=lambda _now_ms: next_close_ms,
+        latest_completed_session_close_resolver=lambda _now_ms: missed_close_ms,
+    )
+    with caplog.at_level(logging.ERROR, logger="app.services.sovereign_equity_snapshots"):
+        scheduler.start()
+        await asyncio.wait_for(waiting.wait(), timeout=1)
+        await scheduler.stop()
+
+    assert captured_closes == [missed_close_ms]
+    assert slept_for == [(next_close_ms - now_ms) / 1_000], "no 60 s retry of the refused close"
+    refusals = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "daily_sovereign_equity_snapshot_unapproved_account"
+    ]
+    assert len(refusals) == 1
+    assert refusals[0].account_id == "PA-UNAPPROVED"
+    assert refusals[0].expected_account_id == "PA-APPROVED"

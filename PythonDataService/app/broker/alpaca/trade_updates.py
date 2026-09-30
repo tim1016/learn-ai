@@ -143,7 +143,8 @@ class TradeUpdateCounters:
     - ``unfoldable_orders`` — events whose order the Clerk could not fold;
       recorded durably by name and contained to that order (#2363).
     - ``withheld_orders`` — events about the Clerk's own order missing its
-      id, status, symbol or side; withheld like a lost response (#2643).
+      id, status, symbol or side, or naming values the adapter could not
+      read; withheld like a lost response (#2643, #2648).
     - ``parse_errors`` — frames that captured but would not parse.
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
@@ -175,8 +176,14 @@ class _SeenEvent:
 
 
 def _broker_order_fingerprint_fields(broker_order: BrokerOrder) -> dict[str, object]:
-    """Return the one canonical broker-order shape used by fingerprints."""
-    return {
+    """Return the one canonical broker-order shape used by fingerprints.
+
+    ``unreadable_fields`` joins it only when non-empty (#2648): a row read
+    with a value absent is not the same ledger meaning as a readable row
+    whose value really is zero, while every readable order keeps exactly the
+    shape -- and variant digest -- it always had.
+    """
+    fields: dict[str, object] = {
         "order_id": broker_order.order_id,
         "client_order_id": broker_order.client_order_id,
         "symbol": broker_order.symbol,
@@ -196,6 +203,9 @@ def _broker_order_fingerprint_fields(broker_order: BrokerOrder) -> dict[str, obj
         "canceled_at_ms": broker_order.canceled_at_ms,
         "expired_at_ms": broker_order.expired_at_ms,
     }
+    if broker_order.unreadable_fields:
+        fields["unreadable_fields"] = list(broker_order.unreadable_fields)
+    return fields
 
 
 def _event_fingerprint(
@@ -795,8 +805,14 @@ def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
     ``timestamp_ms`` is canonical boundary data and fill fields remain clearly
     labelled as cumulative recovery by the selected evidence sink. It never
     fabricates an execution ID. Returns ``None`` when the status has no
-    lifecycle event (e.g. an intermediate state).
+    lifecycle event (e.g. an intermediate state), and for an order naming
+    ``unreadable_fields`` (#2648): re-shaped into a payload, its absent
+    values would read back as a readable zero fill or no price. The adapter
+    has already logged that row by id, and the sweep's exact lookup recovers
+    an order of the Clerk's own once the broker answers readably.
     """
+    if broker_order.unreadable_fields:
+        return None
     event = _STATUS_TO_EVENT.get(str(broker_order.status))
     if event is None:
         return None

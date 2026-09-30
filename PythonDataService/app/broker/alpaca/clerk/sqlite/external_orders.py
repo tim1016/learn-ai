@@ -125,9 +125,10 @@ def observe_or_record_unfoldable(
 
     Both the trade-update sink and the reconciliation verdict call this, so a
     broker order no ``external_orders`` row can state truthfully (a multi-leg
-    parent with a null ``side``) is contained identically on both: recorded
-    by name under ``UNFOLDABLE_BROKER_ORDER`` and never allowed to raise out
-    of the caller's loop. Only :class:`ExternalOrderObservationError` is
+    parent with a null ``side``, or a row naming ``unreadable_fields``, #2648)
+    is contained identically on both: recorded by name under
+    ``UNFOLDABLE_BROKER_ORDER`` and never allowed to raise out of the
+    caller's loop. Only :class:`ExternalOrderObservationError` is
     contained -- it is raised before anything is appended. Storage and
     transport errors still propagate.
     """
@@ -154,9 +155,15 @@ def _broker_state(order: BrokerOrder) -> str:
 
     A change in it is *activity* -- a fill, a cancel, an expiry -- which is
     new broker evidence an earlier review never saw. A replay or a sweep
-    re-seeing the same state is not.
+    re-seeing the same state is not. A fill count the broker sent unreadably
+    (#2648) is never stated as a zero: it reads ``filled=unreadable``, and
+    the broker's own last-update time stands in for it, so a fill that
+    leaves the status unchanged is still activity.
     """
-    return f"{order.status.strip().lower()} filled={order.filled_quantity!r}"
+    status = order.status.strip().lower()
+    if "filled_qty" in order.unreadable_fields:
+        return f"{status} filled=unreadable updated_at_ms={order.updated_at_ms!r}"
+    return f"{status} filled={order.filled_quantity!r}"
 
 
 def record_unfoldable_broker_order(
@@ -547,6 +554,14 @@ class SqliteExternalOrderReader:
 
 
 def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
+    # Ahead of every other check, so the recorded reason names the real
+    # cause: the adapter reads a value it could not parse as absent and names
+    # it rather than refusing the whole orders answer (#2648), and an absent
+    # quantity or price is not a truthful observation.
+    if order.unreadable_fields:
+        raise ExternalOrderObservationError(
+            f"broker sent values this app could not read: {', '.join(order.unreadable_fields)}"
+        )
     broker_order_id = order.order_id.strip()
     symbol = order.symbol.strip().upper()
     side = order.side.upper()

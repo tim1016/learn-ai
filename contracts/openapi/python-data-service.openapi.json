@@ -7020,6 +7020,14 @@
             "title": "Time In Force",
             "type": "string"
           },
+          "unreadable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unreadable Fields",
+            "type": "array"
+          },
           "updated_at_ms": {
             "anyOf": [
               {

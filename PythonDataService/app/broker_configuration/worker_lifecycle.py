@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from app.broker.alpaca.active_binding import UnboundBroker, refuse_active_alpaca_binding
+from app.broker.alpaca.active_binding import (
+    UnboundBroker,
+    account_background_work_refused,
+    refuse_active_alpaca_binding,
+)
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
     live_account_id_for_shadow_account,
@@ -25,6 +32,80 @@ from app.broker_configuration.worker_binding import (
 )
 from app.utils.advisory_lock import try_advisory_file_lock
 
+if TYPE_CHECKING:
+    from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
+    from app.services.sovereign_equity_snapshots import DailySovereignEquitySnapshotScheduler
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AccountBackgroundWork:
+    """The bound account's background work, which runs only while its binding stands (#2669).
+
+    The IBKR market-status source on Alpaca's execution clock, and the daily
+    sovereign equity snapshot scheduler. A boot that met a binding refusal
+    starts neither. A boot whose Alpaca did not answer starts both -- the pin
+    was never checked, so nothing was refused -- and a reconnect whose
+    acknowledgement then refuses the binding stops them, so the lane ends as
+    a boot that met the refusal directly. The start, that stop and the
+    shutdown's all go through this module, reading the one decision
+    ``account_background_work_refused``.
+    """
+
+    market_liveness: AlpacaMarketLivenessConsumer
+    equity_snapshots: DailySovereignEquitySnapshotScheduler
+
+
+_running_account_work: AccountBackgroundWork | None = None
+
+
+def start_account_background_work(work: AccountBackgroundWork) -> None:
+    """Start the account's background work unless the binding is refused."""
+    global _running_account_work
+    if account_background_work_refused():
+        logger.info(
+            "The Alpaca binding is refused; the IBKR market-status source and the daily "
+            "sovereign equity snapshot scheduler are not started.",
+            extra={"action": "account_background_work_not_started"},
+        )
+        return
+    from app.broker.alpaca.market_liveness import set_market_liveness_consumer
+
+    work.market_liveness.start()
+    set_market_liveness_consumer(work.market_liveness)
+    work.equity_snapshots.start()
+    _running_account_work = work
+    logger.info(
+        "IBKR market-status source, Alpaca execution clock and daily sovereign equity "
+        "snapshot scheduler started.",
+        extra={"action": "account_background_work_started"},
+    )
+
+
+async def stop_account_background_work() -> bool:
+    """Stop and clear the running account background work; whether any was running.
+
+    Idempotent. The snapshot scheduler stops first -- it is the worker that
+    can write for an account the configuration did not approve -- and a raise
+    from it still stops the market-status source. Only this lane's own
+    market-status source closes; the shared IBKR client and bar feed are not
+    this work's to touch.
+    """
+    global _running_account_work
+    work = _running_account_work
+    if work is None:
+        return False
+    from app.broker.alpaca.market_liveness import set_market_liveness_consumer
+
+    try:
+        await work.equity_snapshots.stop()
+    finally:
+        set_market_liveness_consumer(None)
+        await work.market_liveness.stop()
+    _running_account_work = None
+    return True
+
 
 async def close_failed_startup() -> None:
     """Close resources installed before a later startup step failed."""
@@ -32,10 +113,6 @@ async def close_failed_startup() -> None:
         close_synthetic_clerk_runtimes,
         get_active_clerk_runtime,
         set_active_clerk_runtime,
-    )
-    from app.broker.alpaca.market_liveness import (
-        get_market_liveness_consumer,
-        set_market_liveness_consumer,
     )
     from app.broker.alpaca.trade_updates import (
         get_trade_updates_consumer,
@@ -55,10 +132,7 @@ async def close_failed_startup() -> None:
     if updates is not None:
         await updates.stop()
         set_trade_updates_consumer(None)
-    liveness = get_market_liveness_consumer()
-    if liveness is not None:
-        await liveness.stop()
-        set_market_liveness_consumer(None)
+    await stop_account_background_work()
     await close_synthetic_clerk_runtimes()
     runtime = get_active_clerk_runtime()
     set_active_clerk_runtime(None)
@@ -178,3 +252,35 @@ async def acknowledge_runtime_binding(
         account_id=account_id,
         recovery="The broker binding could not be recorded; restart to resolve the current selection.",
     )
+
+
+async def acknowledge_reconnected_binding(
+    *,
+    bound: BoundWorker,
+    runtime: ActiveClerkRuntime,
+    service_factory: ServiceFactory = get_broker_configuration_service,
+) -> ActiveClerkRuntime:
+    """Acknowledge a reconnect's selection as the boot's own, then follow the binding (#2669).
+
+    The boot started the account's background work only because its binding
+    was not refused then: an unanswered Alpaca left the pin unchecked. When
+    this acknowledgement refuses the binding -- the reconnect read an account
+    the configuration did not approve -- that work stops. A reconnect that
+    ends serving leaves it running.
+    """
+    acknowledged = await acknowledge_runtime_binding(
+        bound=bound, runtime=runtime, service_factory=service_factory
+    )
+    if account_background_work_refused() and await stop_account_background_work():
+        failure = acknowledged.startup_failure
+        logger.warning(
+            "The reconnect refused this worker's Alpaca binding; the IBKR market-status source "
+            "and the daily sovereign equity snapshot scheduler are stopped, so no snapshot is "
+            "written for an unapproved account.",
+            extra={
+                "action": "account_background_work_stopped",
+                "reason_code": None if failure is None else failure.reason_code,
+                "account_id": None if failure is None else failure.account_id,
+            },
+        )
+    return acknowledged

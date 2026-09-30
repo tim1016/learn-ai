@@ -10895,6 +10895,11 @@ export interface components {
             symbol: string;
             /** Time In Force */
             time_in_force: string;
+            /**
+             * Unreadable Fields
+             * @default []
+             */
+            unreadable_fields?: string[];
             /** Updated At Ms */
             updated_at_ms: number | null;
         };

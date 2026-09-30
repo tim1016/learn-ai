@@ -1511,10 +1511,11 @@ class _MalformedSnapshotClient:
     def __init__(self, malformed: Literal["orders", "positions"]) -> None:
         self._malformed = malformed
 
-    async def list_orders(self, **_query: object) -> list[dict[str, object]]:
-        # A boolean fill count cannot be a quantity; missing text alone is
-        # contained per order instead (#2643).
-        return [{"symbol": "SPY", "filled_qty": True}] if self._malformed == "orders" else []
+    async def list_orders(self, **_query: object) -> list[object]:
+        # Not an object at all: there is no order to contain under any id.
+        # Missing text and unreadable values are contained per order instead
+        # (#2643, #2648).
+        return ["not-an-order"] if self._malformed == "orders" else []
 
     async def list_positions(self) -> list[dict[str, str]]:
         return [{"symbol": "SPY"}] if self._malformed == "positions" else []
@@ -1529,6 +1530,8 @@ async def test_reconcile_holds_the_account_stale_on_a_malformed_broker_snapshot(
 
     It escaped the reconciler's ``BrokerError`` handling into the sweep's
     catch-all, so new exposure was not held and exit recovery not paused.
+    An order row with missing text or an unreadable value no longer reaches
+    this path: it is contained per order (#2643, #2648).
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
@@ -1610,6 +1613,126 @@ async def test_reconcile_contains_one_unnamed_order_and_keeps_reading_the_rest(
     hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
     assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
+
+
+# A row whose fill count, timestamp or session flag cannot be parsed once
+# refused the whole orders answer (#2648) -- the account-wide reduction hold
+# #2363 removed for text (#2643). Each shape is one unreadable value on an
+# otherwise readable order.
+_UNREADABLE_ORDER_VALUES = [
+    pytest.param({"filled_qty": True}, id="boolean-fill-count"),
+    pytest.param({"submitted_at": "yesterday"}, id="unparseable-timestamp"),
+    pytest.param({"extended_hours": "false"}, id="non-boolean-extended-hours"),
+]
+
+
+@pytest.mark.parametrize("unreadable", _UNREADABLE_ORDER_VALUES)
+async def test_reconcile_contains_one_order_with_unreadable_values_and_keeps_reading_the_rest(
+    repo: ClerkSqliteRepository,
+    unreadable: dict[str, object],
+) -> None:
+    """One row a value of which cannot be parsed once refused the whole orders read (#2648).
+
+    That was ``BROKER_SNAPSHOT_STALE``, which admits no reduction: one bad
+    broker record froze exits account-wide. The row now maps with that value
+    named unreadable, so the Clerk cannot state it truthfully, and is
+    contained alone under its id with reductions admitted, the same
+    per-order rule missing text follows (#2643), and the rest of the
+    snapshot is judged as usual.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    base = load_alpaca_fixture_file("orders", "orders.json")[1]
+    readable = {**base, "id": "external-order-1", "client_order_id": "alpaca-console:operator-order-1"}
+    poisoned = {
+        **base,
+        "id": "unreadable-order-1",
+        "client_order_id": "alpaca-console:unreadable-1",
+        **unreadable,
+    }
+    read = AlpacaBroker(client=_RawOrdersClient([poisoned, readable]))  # type: ignore[arg-type]
+
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+
+    assert result.verdict == "unexplained_order"
+    assert (
+        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="BROKER_SNAPSHOT_STALE", strategy_instance_id=None)
+        is None
+    )
+    episode = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+    )
+    assert episode is not None and bool(episode["allows_reduction"])
+    assert json.loads(episode["evidence_refs_json"]) == ["unreadable-order-1"]
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
+    assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
+    assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
+
+
+@pytest.mark.parametrize("unreadable", _UNREADABLE_ORDER_VALUES)
+async def test_an_answer_about_our_own_order_with_unreadable_values_stays_unknown_and_recoverable(
+    repo: ClerkSqliteRepository,
+    unreadable: dict[str, object],
+) -> None:
+    """An unreadable value in an answer about our own order once refused the whole read (#2648).
+
+    The answer now maps with that value named unreadable and is withheld the
+    way a missing identity is (#2643): the ENTER folds ``unknown`` under a
+    reason naming the unreadable field -- never a status the broker did send
+    (#2648 review) -- nothing of the unreadable row becomes evidence, and the
+    sweep's exact lookup by ``client_order_id`` recovers the order and its
+    fill once the broker answers readably.
+    """
+    from app.broker.alpaca.broker import AlpacaBroker
+
+    answer = dict(load_alpaca_fixture_file("orders", "orders.json")[0])  # a filled SPY buy of 1
+    unreadable_broker = AlpacaBroker(client=_RawOwnOrderClient({**answer, **unreadable}))  # type: ignore[arg-type]
+
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="d-unreadable",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=unreadable_broker,
+    )
+    order_ref = submission.order_ref
+    assert order_ref is not None
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id is None
+    kinds = [row["transition_kind"] for row in repo.transitions_for_order(order_ref)]
+    assert "ORDER_SUBMIT_UNCERTAIN" in kinds and "ORDER_SUBMIT_ACKED" not in kinds
+    [withheld] = [
+        json.loads(row["facts_json"])["why"]
+        for row in repo.transitions_for_order(order_ref)
+        if row["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+    ]
+    [field] = unreadable
+    assert withheld == (
+        f"broker reported this order with values this app could not read ({field}); "
+        "withholding its evidence"
+    )
+
+    # The sweep's exact lookup is withheld the same way while the answer stays unreadable...
+    await reconcile_account(repo, read=_FakeRead(), trade=unreadable_broker, pricing=UNPRICEABLE_RECOVERY)
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id is None
+    assert repo.fills_for_order(order_ref) == []
+    assert repo.attributed_positions_by_symbol() == {}
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+
+    # ...and recovers the order and its fill once the broker answers readably.
+    named = AlpacaBroker(client=_RawOwnOrderClient(answer))  # type: ignore[arg-type]
+    await reconcile_account(repo, read=_FakeRead(), trade=named, pricing=UNPRICEABLE_RECOVERY)
+    order = repo.order(order_ref)
+    assert order is not None and order.broker_order_id == answer["id"]
+    assert repo.position(SID, "SPY") == 1.0
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state != "unknown"
 
 
 class _RawOwnOrderClient:

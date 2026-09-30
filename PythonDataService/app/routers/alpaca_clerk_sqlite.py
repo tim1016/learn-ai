@@ -9,7 +9,10 @@ repository is synchronous blocking I/O (SQLite + fsync), and calling it
 directly from an ``async def`` handler would stall the FastAPI event loop
 for every other in-flight request for as long as the write takes
 (open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync blocks the
-FastAPI event loop").
+FastAPI event loop"). The one exception is a Stop, raw or through the
+recovery actions: it commits through the facade's ``stop_strategy_run``,
+which writes on the loop under the Clerk's intake lock, as every facade
+STOP does, so it keys with the stored account and serializes with intake.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     NoActiveRunError,
     UnknownStrategyInstanceError,
     submit_start_run,
-    submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -49,8 +51,8 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
-    cancel_bot_end,
     execute_recovery_action,
+    operator_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionUnavailableError,
@@ -97,6 +99,9 @@ from app.services.sqlite_clerk_compat import failed_sqlite_projection
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
 ReadResult = TypeVar("ReadResult")
 _MAX_TIMELINE_CURSOR_LENGTH = 4_096
+# The raw lifecycle Stop's author in the bot's desired state, and the reason
+# recorded there when the caller gave none.
+_RUNS_STOP = "operator_runs_stop"
 # The fold registry is the authority for transition kinds.  Exposing the same
 # closed vocabulary here makes invalid timeline filters fail at the HTTP
 # boundary and keeps the generated OpenAPI contract honest.
@@ -389,28 +394,23 @@ async def stop_run(
         )
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
-    repo = await _repo(account_id)
-    active = await asyncio.to_thread(repo.active_run, strategy_instance_id)
-    if active is not None and active.lifecycle_run_id == body.lifecycle_run_id:
-        # An operator's Stop sells nothing at the end time (#2664): the bot's
-        # end is cancelled before its STOP commits, exactly as the panel's
-        # Stop cancels it, so no Clerk pass between the two sells a SELL end.
-        # Only a Stop of the bot's active run cancels it: one naming another
-        # run -- a stale id, or a lost-response retry after a redeploy -- stops
-        # nothing of the running run and is refused or replayed below, its
-        # end untouched (a retry of this Stop finds its end already
-        # cancelled). A Dry Run's bot has no run on this authority, so its end
-        # is untouched too. This Stop does not stop the bot's process in the
-        # runner; the panel's Stop does.
-        await cancel_bot_end(strategy_instance_id, updated_by="operator_runs_stop")
+    facade = _active_sqlite_facade(account_id)
     try:
-        submission = await asyncio.to_thread(
-            submit_stop_run,
-            repo,
-            account_id=account_id,
+        # An operator's Stop of the named run, as the panel's Stop makes it
+        # (#2664): when the run is the bot's current one -- live, crashed, or
+        # stopped at its end -- the bot's end is cancelled before the STOP
+        # commits and its process stopped once the STOP is durable, and a
+        # retry redoes both. A Stop naming another run, or a Dry Run's bot (it
+        # has no run here), is replayed or refused by its STOP alone. The STOP
+        # commits through the authority, keyed with the account it stores:
+        # the URL's spelling only selected the authority.
+        submission = await operator_stop_run(
+            facade,
             strategy_instance_id=strategy_instance_id,
             lifecycle_run_id=body.lifecycle_run_id,
             operator_reason=body.operator_reason,
+            updated_by=_RUNS_STOP,
+            reason=body.operator_reason or _RUNS_STOP,
         )
     except NoActiveRunError as exc:
         raise HTTPException(
