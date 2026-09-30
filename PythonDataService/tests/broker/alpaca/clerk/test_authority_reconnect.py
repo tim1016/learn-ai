@@ -684,6 +684,69 @@ async def test_a_control_meta_read_that_raises_retires_the_authority_it_just_ins
     assert root.events[-1] == ("boot", final)
 
 
+async def test_an_acknowledgement_that_raises_retires_the_authority_it_was_handed(tmp_path: Path) -> None:
+    """#2671: selection opened the authority and started its lease heartbeat.
+
+    An acknowledgement that raised -- the configuration database could not
+    be written -- escaped to the catch-all with that authority never
+    installed and never closed: its execution lease kept renewing against
+    the next owner. It is retired, and the reconnect ends final.
+    """
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    root = _CompositionRoot(select, acknowledgement_error=RuntimeError("the binding receipt could not be written"))
+
+    final = await _reconnect(at_boot, root)
+
+    assert root.names() == ["acknowledge", "retire", "acknowledge", "install", "boot"]
+    selected = root.events[0][1]
+    assert selected.clerk is not None  # a real authority, never installed
+    assert root.events[1] == ("retire", selected)
+    _next_process_can_take_the_lease(tmp_path)
+    assert get_active_clerk_runtime() is final
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == RECONNECT_FAILED
+    assert "the binding receipt could not be written" in final.startup_failure.recovery
+
+
+async def test_a_refusal_whose_install_raises_still_retires_the_authority_it_replaces(tmp_path: Path) -> None:
+    """#2620 review: installing the failed composition's refusal was unguarded.
+
+    Raising there skipped the retirement after it, so the authority whose
+    boot recovery had failed kept its lease while the catch-all installed
+    the final refusal.
+    """
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1))
+    at_boot = await select()
+    root = _CompositionRoot(select, boot_errors=[RuntimeError("a bot's lifecycle record could not be read")])
+    install = root.install
+    broke = False
+
+    def install_breaks_for_the_first_refusal(runtime: ActiveClerkRuntime) -> None:
+        nonlocal broke
+        if runtime.clerk is None and not broke:
+            broke = True
+            root.events.append(("install", runtime))
+            raise RuntimeError("the lane's authority state could not be reported")
+        install(runtime)
+
+    root.install = install_breaks_for_the_first_refusal  # type: ignore[method-assign]
+
+    final = await _reconnect(at_boot, root)
+
+    assert root.names() == [
+        "acknowledge", "install", "boot",  # the failed boot recovery
+        "install", "retire",  # its refusal's install raises; the authority is retired all the same
+        "acknowledge", "install", "boot",  # the catch-all's final refusal
+    ]
+    assert root.events[4] == ("retire", root.events[1][1])
+    _next_process_can_take_the_lease(tmp_path)
+    assert get_active_clerk_runtime() is final
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == RECONNECT_FAILED
+    assert "the lane's authority state could not be reported" in final.startup_failure.recovery
+
+
 async def test_an_install_that_raises_retires_the_authority_it_half_installed(tmp_path: Path) -> None:
     """#2620 review: the install sat outside the composition guard too.
 

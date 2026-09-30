@@ -10,10 +10,10 @@ serving with it installed while this loop retries on a capped backoff, for as
 long as it takes (owner decision 2026-09-29: no give-up). One attempt is the
 boot's own steps in the boot's own order -- select, acknowledge, install, boot
 recovery -- so an attempt either leaves a booted authority serving or leaves
-nothing of itself behind: an authority whose install or boot recovery fails is
-retired, and the lane goes back to reconnecting (Alpaca again) or to a final
-refusal that says restart (anything else). Every attempt is logged and
-counted, never silently.
+nothing of itself behind: an authority whose acknowledgement, install or boot
+recovery fails is retired, and the lane goes back to reconnecting (Alpaca
+again) or to a final refusal that says restart (anything else). Every attempt
+is logged and counted, never silently.
 """
 
 from __future__ import annotations
@@ -210,7 +210,7 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     installed and boot-recovered. An authority whose install, identity read
     or boot recovery fails is retired before its refusal replaces it, so no
     half-booted authority -- sweepless, Start refused for good -- is ever
-    left serving.
+    left serving; one whose acknowledgement fails is retired uninstalled.
     That refusal is the one a failed boot composition installs
     (``compose_failure_refusal``): reconnecting when Alpaca was the cause,
     else final, and naming the activation the retired authority served, read
@@ -219,7 +219,14 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     selected = await steps.select()
     if selected.reconnecting:
         return selected
-    acknowledged = await steps.acknowledge(selected)
+    try:
+        acknowledged = await steps.acknowledge(selected)
+    except Exception:
+        # Never installed, yet selection already holds its lease (#2671): it
+        # is retired, and the error ends the reconnect like any other
+        # unexpected one -- the catch-all acknowledges its final refusal.
+        await steps.retire(selected)
+        raise
     # A refusal holds no repository, so no lease to release: it is installed
     # and booted as it stands.
     repository = acknowledged.sqlite_repository
@@ -256,8 +263,12 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
             },
             exc_info=True,
         )
-        steps.install(refusal)
-        await steps.retire(acknowledged)
+        try:
+            steps.install(refusal)
+        finally:
+            # Retired even when installing its refusal raises; that error
+            # then ends the reconnect in the catch-all (#2620).
+            await steps.retire(acknowledged)
         await steps.boot(refusal)
         return refusal
     return acknowledged
