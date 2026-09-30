@@ -38,6 +38,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.lean_sidecar.trading_calendar import SessionWindow
+from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
 from app.services.bot_binding_repository import (
     RUN_OUTCOMES_DIRECTORY,
@@ -54,6 +55,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogRevisionMismatch,
     status_label_for,
 )
+from app.services.broker_v2_panel.panel_errors import DryRunRestoringError
 
 
 class _Repository:
@@ -597,15 +599,34 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
         def bindings_for_broker(self, _broker: str) -> list[SimpleNamespace]:
             return [restoring, restored]
 
-        def status(self, _broker: str, _sid: str) -> SimpleNamespace:
-            return SimpleNamespace(phase="OFF_DUTY")
+        def status(self, _broker: str, sid: str) -> BotStatusView:
+            return BotStatusView(
+                strategy_instance_id=sid,
+                broker="alpaca",
+                symbol="SPY",
+                mode="dry_run",
+                quantity=1,
+                running=False,
+                phase="OFF_DUTY",
+                desired_state="RUNNING",
+                active_run_id=None,
+                duty_outcome=None,
+                last_transition_at_ms=0,
+                binding_created_at_ms=0,
+            )
 
         def dry_run_restoration_state(self, sid: str) -> str | None:
             return "restoring" if sid == restoring.strategy_instance_id else None
 
         @asynccontextmanager
         async def synthetic_runtime_for_projection(self, received_binding: SimpleNamespace):
-            assert received_binding is restored, "the poll opened a Dry Run still being restored"
+            if received_binding is restoring:
+                # What the account layer answers for a bot still being
+                # restored (#2684): at once, never an open.
+                raise DryRunRestoringError(
+                    "This Dry Run is still being restored after the Clerk restarted.",
+                    detail="Wait up to a minute, then try again.",
+                )
             yield SimpleNamespace(clerk=facade, authority_kind="synthetic")
 
     async def real_catalog(_broker: str, _account_id: str) -> list[object]:
@@ -623,9 +644,20 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
     with caplog.at_level(logging.INFO, logger=panel_data_source.__name__):
         result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
-    assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
-    (skipped,) = [record for record in caplog.records if getattr(record, "action", None) == "catalog_dry_run_restoring_skipped"]
-    assert skipped.strategy_instance_id == "dry-restoring"
+    # #2684: the restoring bot keeps its own row -- listed, never dropped --
+    # with every economic fact unknown: exposure is None, never {} (which
+    # would read as flat), and the row says what it is waiting for.
+    assert [(row.strategy_instance_id, row.mode) for row in result] == [
+        ("dry-restoring", "dry_run"),
+        ("dry-spy", "dry_run"),
+    ]
+    restoring_row = result[0]
+    assert restoring_row.status_label == "Restoring"
+    assert restoring_row.exposure is None
+    assert restoring_row.group == "dry_run"
+    assert "still being restored" in restoring_row.status_explanation
+    (listed,) = [record for record in caplog.records if getattr(record, "action", None) == "catalog_dry_run_unreadable_row"]
+    assert (listed.strategy_instance_id, listed.restoring) == ("dry-restoring", True)
 
 
 @pytest.mark.asyncio

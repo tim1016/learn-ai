@@ -20,6 +20,7 @@ from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
+from app.services.broker_v2_panel.panel_errors import DryRunRestoringError, PanelUnavailableError
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -147,6 +148,51 @@ class CatalogEconomicRollup:
     open_pnl: float | None
     last_activity_at_ms: int | None
     needs_attention: bool
+
+
+#: The closed-vocabulary labels for a Dry Run whose own simulator cannot be
+#: read right now (#2684): its own row on Home, its facts unknown.
+_STATUS_LABEL_RESTORING = "Restoring"
+_STATUS_LABEL_UNAVAILABLE = "Unavailable"
+
+
+def unreadable_catalog_view(
+    status: BotStatusView, *, account_id: str, failure: PanelUnavailableError
+) -> BotCatalogView:
+    """The roster row for a Dry Run whose own simulator cannot be read right now (#2684).
+
+    Boot may still be restoring it, or its account may be held elsewhere:
+    either way no economic fact is readable, so every rollup is unknown and
+    exposure is ``None`` -- never ``{}``, which would read as flat. The bot
+    is never dropped from Home and never fails the lane's roster (#2582),
+    and it stays in the Dry Run group: "finished" would claim a flatness
+    nobody can prove. The row says why, in the failure's own words; only a
+    failure that is not a restoration asks for attention.
+    """
+    restoring = isinstance(failure, DryRunRestoringError)
+    return BotCatalogView(
+        strategy_instance_id=status.strategy_instance_id,
+        strategy_key=status.strategy_key,
+        strategy_label=_strategy_label_for(status),
+        broker=status.broker,
+        account_id=account_id,
+        symbol=status.symbol,
+        mode=status.mode,
+        phase=status.phase,
+        desired_state=status.desired_state,
+        running=status.running,
+        status_label=_STATUS_LABEL_RESTORING if restoring else _STATUS_LABEL_UNAVAILABLE,
+        status_explanation=str(failure) if failure.detail is None else f"{failure} {failure.detail}",
+        exposure=None,
+        fills_today=None,
+        realized_pnl_today=None,
+        open_pnl=None,
+        day_pnl=None,
+        last_activity_at_ms=None,
+        needs_attention=not restoring,
+        group="dry_run",
+        world_label=WORLD_LABELS["synthetic"],
+    )
 
 
 def status_label_for(status: BotStatusView) -> str:

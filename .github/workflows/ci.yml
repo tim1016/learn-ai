@@ -348,16 +348,19 @@ jobs:
           fi
 
   python-test-shard:
-    name: Python Test Shard ${{ matrix.shard }}/12
+    name: Python Test Shard ${{ matrix.shard }}/16
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     env:
       # Match the runner's 4 vCPUs so each shard stays well inside the
       # 120-second budget (pytest-xdist reads this variable when `-n auto`
-      # is used; at 2 workers shards measured 95-120s on CI).
+      # is used; at 2 workers shards measured 95-120s on CI). Shard balance
+      # comes from scripts/pr_shard_durations.json via scripts.pytest_shard:
+      # at 12 hash-only shards the heaviest ran 103-109s (#2682), and 16
+      # duration-balanced shards keep every shard near the mean.
       PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
       # Numerical evidence is a baseline obligation, not a change-detection
       # heuristic. The fixture path exercises the committed reference outputs
@@ -477,7 +480,7 @@ jobs:
           if [ -n "$extra" ]; then
             read -r -a extra_paths <<< "$extra"
           fi
-          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/12" "${extra_paths[@]}"
+          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16" "${extra_paths[@]}"
 
       - name: Run scientific proof tests
         run: |

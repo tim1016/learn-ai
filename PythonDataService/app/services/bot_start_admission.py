@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import DRY_RUN_ACCOUNT_HELD_SENTENCE
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut, RecoveryEvaluationObservation
@@ -158,6 +159,40 @@ class StartAdmissionUnavailable(Exception):
 #: process still holds that account, or failed for any other reason.
 DryRunRestorationState = Literal["restoring", "account_held", "not_restored"]
 
+#: The one owner sentence for a Dry Run whose own account is being restored
+#: (#2684): Start, the lane-wide Stop, the panel, and Home's row all say it.
+DRY_RUN_RESTORING_SENTENCE = (
+    "This Dry Run is still being restored after the Clerk restarted.",
+    "Wait up to a minute, then try again.",
+)
+
+
+class SyntheticAccountRestoring(StartAdmissionUnavailable):
+    """A ``sim:`` account is being restored by another task; answered at once (#2684).
+
+    Raised by the account layer before any lock wait, so every reader and
+    action -- the panel, the roster, replay, fees, Start -- gets the same
+    immediate answer instead of waiting out the restoration's lease deadline.
+    """
+
+    def __init__(self) -> None:
+        headline, detail = DRY_RUN_RESTORING_SENTENCE
+        super().__init__(headline, detail=detail)
+
+
+class DryRunAccountHeldElsewhere(StartAdmissionUnavailable):
+    """A ``sim:`` account's lease is still held by another live process (#2670).
+
+    The one typed form of that fact: the account layer translates both raw
+    forms (the store's ``ExecutionLeaseHeld`` and the selection's lease-held
+    startup failure) into it, and its words are
+    :data:`DRY_RUN_ACCOUNT_HELD_SENTENCE` -- one sentence everywhere.
+    """
+
+    def __init__(self) -> None:
+        headline, detail = DRY_RUN_ACCOUNT_HELD_SENTENCE
+        super().__init__(headline, detail=detail)
+
 
 def refuse_unrestored_dry_run(state: DryRunRestorationState | None) -> None:
     """Refuse Start for a Dry Run whose own simulated account boot has not restored (#2582).
@@ -169,16 +204,13 @@ def refuse_unrestored_dry_run(state: DryRunRestorationState | None) -> None:
     if state is None:
         return
     if state == "restoring":
-        raise StartAdmissionUnavailable(
-            "This Dry Run is still being restored after the Clerk restarted.",
-            detail="Wait up to a minute, then start it again.",
-        )
+        raise SyntheticAccountRestoring()
     if state == "account_held":
-        raise StartAdmissionUnavailable(
-            "This Dry Run could not be restored after the Clerk restarted: its simulated "
-            "account is still open in another running copy of this Clerk.",
-            detail="Stop the other copy of this Clerk, then restart this one.",
-        )
+        # #2670: the same sentence the authority's own startup failure and
+        # the panel carry. Start re-checks this mark before answering it, so
+        # an operator who sees it and stops the other copy can press Start
+        # again -- no restart (owner decision 2026-09-30).
+        raise DryRunAccountHeldElsewhere()
     raise StartAdmissionUnavailable(
         "This Dry Run could not be restored after the Clerk restarted.",
         detail="Restart the Clerk to try again. If it happens again, the Clerk's log names the cause.",
