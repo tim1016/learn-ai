@@ -78,8 +78,10 @@ class ExtendedHoursAdmissionFact(BaseModel):
     """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
 
     ``EXIT_ALLOWANCE_UNSET`` is the regular-hours run's own state (#2440): no
-    extended session was asked for, but the exit on the day's last bar needs
-    the exit allowance. It refuses as ``ALLOWANCE_UNSET`` does; holding Resume requires Flatten.
+    extended session was asked for, but the run's exits outside the session
+    (a manual Flatten, the watchdog's re-drive of a refused exit, an exit that
+    reaches the broker after the close) need the exit allowance. It refuses as
+    ``ALLOWANCE_UNSET`` does; holding Resume requires Flatten.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

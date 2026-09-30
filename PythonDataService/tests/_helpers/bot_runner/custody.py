@@ -135,7 +135,7 @@ def _lifecycle_json(tmp_path: Path, sid: str = _SID) -> dict:
 
 
 def configure_execution_allowances(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run mechanics fixtures configure the after-close exit allowance by default.
+    """Run mechanics fixtures configure the out-of-session exit allowance by default.
 
     A refused profile binding still raises before these settings are read.
     Tests of an unconfigured lane can clear the pair themselves.
