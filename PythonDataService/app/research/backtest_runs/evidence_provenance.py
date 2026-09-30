@@ -18,8 +18,9 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 class ClosingBarSkipRecord(BaseModel):
     """One decision a run's closing-bar convention set aside (#2607).
 
-    An ENTER produced no trade. An EXIT stayed due and filled on the next
-    session's first decision instead of at this bar's close.
+    An ENTER produced no trade. An EXIT stayed due: the program decided it
+    again from the next session, when its own exit condition said so, instead
+    of at this bar's close.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -41,7 +42,7 @@ class RunEvidenceProvenance(BaseModel):
     # bar (#2607), and every decision that convention set aside. Absent on
     # evidence recorded before #2607, whose non-LEAN runs filled such a
     # decision at that bar's close.
-    closing_bar_convention: str | None = None
+    closing_bar_convention: ClosingBarConvention | None = None
     closing_bar_skips: tuple[ClosingBarSkipRecord, ...] = ()
 
 

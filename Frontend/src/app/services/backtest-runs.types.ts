@@ -97,8 +97,9 @@ export interface MetricDocumentationContext {
 
 /**
  * One decision the run's closing-bar rule set aside (#2607): an ENTER that
- * produced no trade, or an EXIT that filled on the next session's first
- * decision instead. Read from the evidence provenance the producer recorded.
+ * produced no trade, or an EXIT that stayed due for the program to decide
+ * again from the next session. Read from the evidence provenance the producer
+ * recorded.
  */
 export interface BacktestRunClosingBarSkip {
   barCloseMs: number;

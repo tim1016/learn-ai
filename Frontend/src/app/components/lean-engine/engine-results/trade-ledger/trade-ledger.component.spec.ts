@@ -53,8 +53,24 @@ describe('TradeLedgerComponent', () => {
     expect(screen.getByText('This run did not close any trades.')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Decided on the closing bar' })).toBeTruthy();
     expect(screen.getByText('Entry skipped')).toBeTruthy();
-    expect(screen.getByText('Exit moved to the next session')).toBeTruthy();
+    expect(screen.getByText('Exit stayed due')).toBeTruthy();
     expect(screen.getByText('612.34')).toBeTruthy();
+    expect(screen.getByText(/An entry decided there produced no trade\./)).toBeTruthy();
+    expect(screen.getByText(/An exit decided there stayed due, and the program decided it again from the next session\./)).toBeTruthy();
+  });
+
+  it('states only what happened to the kinds of decision the run set aside', async () => {
+    await render(TradeLedgerComponent, {
+      inputs: {
+        trades: [trade(2)],
+        closingBarSkips: [{ bar_close_ms: Date.UTC(2026, 6, 1, 20, 0, 0), intent: 'ENTER', close_price: 612.34 }],
+      },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.getByText(/An entry decided there produced no trade\./)).toBeTruthy();
+    expect(screen.queryByText(/An exit decided there/)).toBeNull();
+    expect(screen.queryByText('Exit stayed due')).toBeNull();
   });
 
   it('shows no closing-bar section when the run set nothing aside', async () => {

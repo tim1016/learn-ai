@@ -15,15 +15,17 @@ Every session boundary below comes from the canonical calendar
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine, BacktestResult, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
-from app.engine.execution.order import Direction, FillMode
+from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
@@ -85,18 +87,28 @@ class _ScriptedSignalProgram(Strategy):
     """A registered-style Signal Program whose decisions are scripted by bucket close.
 
     ENTER on the bucket closing at ``enter_at_ms`` while flat. EXIT on every
-    bucket closing at or after ``exit_from_ms`` while holding -- a level, like
-    the sealed programs' exits, so a refused EXIT is due again on the next
-    bucket. Custody moves only inside ``commit_signal_decision``, as every
-    Signal Program's must.
+    bucket closing in ``[exit_from_ms, exit_until_ms]`` while holding -- a
+    level, like the sealed programs' exits, so a refused EXIT is due again on
+    the next bucket for as long as its condition holds, and no longer. Custody
+    moves only inside ``commit_signal_decision``, as every Signal Program's
+    must.
     """
 
-    def __init__(self, *, first_day: date, last_day: date, enter_at_ms: int, exit_from_ms: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        first_day: date,
+        last_day: date,
+        enter_at_ms: int,
+        exit_from_ms: int | None = None,
+        exit_until_ms: int | None = None,
+    ) -> None:
         super().__init__()
         self._first_day = first_day
         self._last_day = last_day
         self._enter_at_ms = enter_at_ms
         self._exit_from_ms = exit_from_ms
+        self._exit_until_ms = exit_until_ms
         self._in_position = False
         self.signal_program = SignalProgram.create(
             self, program_key="closing-bar-probe", program_version="v1", timeframe_ms=_BUCKET_MS
@@ -114,7 +126,7 @@ class _ScriptedSignalProgram(Strategy):
         kind: SignalIntentKind | None = None
         if not self._in_position and bar.end_ms == self._enter_at_ms:
             kind = SignalIntentKind.ENTER
-        elif self._in_position and self._exit_from_ms is not None and bar.end_ms >= self._exit_from_ms:
+        elif self._in_position and self._exit_is_due(bar.end_ms):
             kind = SignalIntentKind.EXIT
         return SignalDecision(
             intent=None if kind is None else SignalIntent(kind=kind, bar_close_ms=bar.end_ms, intended_price=bar.close),
@@ -125,6 +137,11 @@ class _ScriptedSignalProgram(Strategy):
             action_plan_request=None,
         )
 
+    def _exit_is_due(self, bar_close_ms: int) -> bool:
+        if self._exit_from_ms is None or bar_close_ms < self._exit_from_ms:
+            return False
+        return self._exit_until_ms is None or bar_close_ms <= self._exit_until_ms
+
     def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
         assert self.ctx is not None
         self.ctx.emit_signal_intent(intent)
@@ -132,6 +149,36 @@ class _ScriptedSignalProgram(Strategy):
 
     def signal_program_settings(self) -> dict[str, str]:
         return {}
+
+
+@dataclass
+class _LoggedExit:
+    """The part of a ``LoggedTrade`` the engine's end-of-data close labels."""
+
+    exit_ms: int
+    signal_reason: str = ""
+    is_synthetic_exit: bool = False
+
+
+class _ScriptedProgramThatExitsAtTheEnd(_ScriptedSignalProgram):
+    """Exits whatever it still holds when the data ends, as every sealed program's end hook does."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.trade_log: list[_LoggedExit] = []
+
+    def on_order_event(self, event: OrderEvent) -> None:
+        if event.direction is Direction.SHORT:
+            self.trade_log.append(_LoggedExit(exit_ms=event.filled_at_ms))
+
+    def on_end_of_algorithm(self) -> None:
+        if not self._in_position:
+            return
+        assert self.ctx is not None and self.ctx.current_time_ms is not None
+        self.ctx.emit_signal_intent(
+            SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=self.ctx.current_time_ms, intended_price=Decimal(0))
+        )
+        self._in_position = False
 
 
 def _run(strategy: Strategy, bars: list[TradeBar], fill_model: FillModel) -> BacktestResult:
@@ -201,6 +248,59 @@ def test_an_early_close_bucket_is_the_closing_bar(fill_mode: FillMode) -> None:
     assert [(skip.bar_close_ms, skip.intent) for skip in result.closing_bar_skips] == [
         (close_ms, SignalIntentKind.ENTER)
     ]
+
+
+@pytest.mark.parametrize("fill_mode", _NON_LEAN_MODES)
+def test_a_level_exit_whose_condition_clears_overnight_leaves_the_position_open(fill_mode: FillMode) -> None:
+    """A set-aside EXIT is decided again from the next session, not filled at its open.
+
+    The program's exit condition holds only on the closing bar. Set aside
+    there, it is no longer due next session, so the position stays open --
+    exactly as live, which refused the same bar. Only EMA's countdown exit is
+    certain to fire on the next session's first decision.
+    """
+    close_ms = trading_calendar.session_close_ms_utc(REGULAR_DAY)
+    strategy = _ScriptedSignalProgram(
+        first_day=REGULAR_DAY,
+        last_day=NEXT_REGULAR_DAY,
+        enter_at_ms=close_ms - _BUCKET_MS,
+        exit_from_ms=close_ms,
+        exit_until_ms=close_ms,
+    )
+    bars = _session_minutes(REGULAR_DAY, Decimal("100")) + _session_minutes(NEXT_REGULAR_DAY, Decimal("200"))
+
+    result = _run(strategy, bars, FillModel(mode=fill_mode, commission_per_order=Decimal(0)))
+
+    (entry,) = result.order_events
+    assert entry.direction is Direction.LONG
+    assert [(skip.bar_close_ms, skip.intent) for skip in result.closing_bar_skips] == [
+        (close_ms, SignalIntentKind.EXIT)
+    ]
+
+
+@pytest.mark.parametrize("fill_mode", _NON_LEAN_MODES)
+def test_a_closing_bar_exit_on_the_last_day_of_data_is_closed_by_the_synthetic_end_exit(fill_mode: FillMode) -> None:
+    """With no next session in the data, the end hook's exit closes the position.
+
+    It fills at the final minute's close -- the closing bar's own close -- and
+    is labelled a synthetic end-of-algorithm exit, never a trade the program
+    decided at the close.
+    """
+    close_ms = trading_calendar.session_close_ms_utc(REGULAR_DAY)
+    day_one = _session_minutes(REGULAR_DAY, Decimal("100"))
+    strategy = _ScriptedProgramThatExitsAtTheEnd(
+        first_day=REGULAR_DAY, last_day=REGULAR_DAY, enter_at_ms=close_ms - _BUCKET_MS, exit_from_ms=close_ms
+    )
+
+    result = _run(strategy, day_one, FillModel(mode=fill_mode, commission_per_order=Decimal(0)))
+
+    _, exit_ = result.order_events
+    (skip,) = result.closing_bar_skips
+    assert (skip.bar_close_ms, skip.intent) == (close_ms, SignalIntentKind.EXIT)
+    assert (exit_.tag, exit_.filled_at_ms, exit_.fill_price) == ("EndOfAlgorithm", close_ms, day_one[-1].close)
+    assert exit_.fill_price == skip.close_price
+    (logged,) = strategy.trade_log
+    assert (logged.is_synthetic_exit, logged.signal_reason) == (True, "EndOfAlgorithm (synthetic exit)")
 
 
 def test_a_decision_before_the_closing_bar_is_untouched() -> None:

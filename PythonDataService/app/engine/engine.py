@@ -71,8 +71,10 @@ class _ActiveBracket:
 class ClosingBarSkip:
     """One Signal Program decision the closing-bar rule set aside (#2607).
 
-    An ENTER here produced no trade. An EXIT stayed due and was decided again
-    on the next session's first decision, where it filled.
+    An ENTER here produced no trade. An EXIT stayed due: the program decides it
+    again from the next session, when its own exit condition says so -- or, on
+    the last day of data, the synthetic end-of-algorithm exit closes the
+    position at this bar's close.
     """
 
     bar_close_ms: int
@@ -746,13 +748,7 @@ class BacktestEngine:
             if position.quantity == 0:
                 continue
             prior_trade_count = len(getattr(strategy, "trade_log", []))
-            event = self._close_at_bar(
-                portfolio,
-                position.quantity,
-                exit_symbol,
-                previous_minute_bar,
-                tag="EndOfAlgorithm",
-            )
+            event = self._close_at_bar(portfolio, position.quantity, exit_symbol, previous_minute_bar)
             portfolio.apply_fill(event)
             order_events.append(event)
             strategy.on_order_event(event)
@@ -801,16 +797,8 @@ class BacktestEngine:
             holdings_value=total - portfolio.cash,
         )
 
-    def _close_at_bar(
-        self,
-        portfolio: Portfolio,
-        pos_qty: int,
-        symbol: str,
-        bar: TradeBar,
-        *,
-        tag: str,
-    ) -> OrderEvent:
-        """Synthesize a market-close fill at ``bar``'s close.
+    def _close_at_bar(self, portfolio: Portfolio, pos_qty: int, symbol: str, bar: TradeBar) -> OrderEvent:
+        """Synthesize the end-of-algorithm market close at ``bar``'s close.
 
         Bypasses ``fill_model.fill_market_order`` so the synthetic close works
         identically under any configured fill mode (NEXT_BAR_OPEN's deferred
@@ -831,7 +819,7 @@ class BacktestEngine:
             fill_quantity=close_qty,
             direction=direction,
             fee=self.fill_model.compute_fee(quantity=int(close_qty), fill_price=fill_price),
-            tag=tag,
+            tag="EndOfAlgorithm",
         )
 
     @staticmethod
@@ -853,8 +841,8 @@ class BacktestEngine:
         the session's closing bar settles DISCARD -- the refused-decision path
         live takes when it declines to send that bar's decision
         (``app.lean_sidecar.closing_bar``). An ENTER is dropped; an EXIT stays
-        due, so the program decides it again on the next session's first
-        bucket. Each such decision is recorded in ``closing_bar_skips``.
+        due, and the program decides it again from the next session. Each such
+        decision is recorded in ``closing_bar_skips``.
         """
         program = strategy.signal_program
         if program is None:

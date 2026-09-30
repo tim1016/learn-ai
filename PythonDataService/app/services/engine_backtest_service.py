@@ -1050,7 +1050,7 @@ def _aggregate_backtest_response(
             statistics_basis="marked_equity_curve/v1",
             daily_return_convention="initial_capital_first_session/v1",
             data_availability_hash=lake_manifest,
-            closing_bar_convention=result.closing_bar_convention.value,
+            closing_bar_convention=result.closing_bar_convention,
             closing_bar_skips=tuple(
                 ClosingBarSkipRecord(
                     bar_close_ms=skip.bar_close_ms,

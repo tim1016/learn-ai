@@ -44,10 +44,7 @@
   @if (closingBarSkips().length > 0) {
     <section class="closing-bar" aria-labelledby="closing-bar-title">
       <h3 id="closing-bar-title">Decided on the closing bar</h3>
-      <p>
-        The bar that ends at the session close is decided only after the market closes, so live cannot trade it
-        and this backtest did not: an entry was skipped, and an exit moved to the next session's first decision.
-      </p>
+      <p>{{ closingBarNote() }}</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Bar close</th><th>Outcome</th><th>Close</th></tr></thead>

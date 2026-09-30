@@ -2,7 +2,7 @@
 
 **Status:** research note, 2026-09-29, revised the same day after an independent review. Code examined at `8e138f73` (master, after #2440 merged as `d4c521b2`). Parent #2439; owner decision #2431; live change #2440; live bug #2596.
 
-**Superseded by #2607 (2026-09-29).** The owner chose a different model from this note's recommendation: neither live nor the backtest acts on a decision taken on the closing bar. An ENTER is skipped, and an EXIT fires on the next session's first decision; nothing is priced after the close. The rule is one predicate, `app/lean_sidecar/closing_bar.py`. The measurements below describe the code as it stood at `8e138f73`, and the committed JSON is that run's output. The script now measures the engine's own rule against the LEAN profile (see "The models" below), so rerunning it reproduces neither the after-hours legs nor the `close`, `live` and `skip_all` models.
+**Superseded by #2607 (2026-09-29).** The owner chose a different model from this note's recommendation: neither live nor the backtest acts on a decision taken on the closing bar. An ENTER is skipped, and an EXIT stays due for the program to decide again from the next session; nothing is priced after the close. The rule is one predicate, `app/lean_sidecar/closing_bar.py`. The measurements below describe the code as it stood at `8e138f73`, and the committed JSON is that run's output. The script now measures the engine's own rule against the LEAN profile (see "The models" below), so rerunning it reproduces neither the after-hours legs nor the `close`, `live` and `skip_all` models.
 
 ## The answer
 

@@ -11,9 +11,10 @@ runtime acts on such a decision:
   fill mode outside the LEAN-compatibility profile.
 
 Both refuse it the same way -- ``Settlement.DISCARD``, a Signal Program's
-refused-decision path -- so an ENTER is dropped, and an EXIT stays due and
-fires on the next session's first decision. A live run and its backtest
-therefore agree on the bar, which is the point of the rule.
+refused-decision path -- so an ENTER is dropped, and an EXIT stays due: the
+program decides it again from the next session, when its own exit condition
+says so. A live run and its backtest therefore agree on the bar, which is the
+point of the rule.
 
 This lives beside ``trading_calendar`` rather than inside it: the calendar's
 bytes are sealed into every Signal Program's qualification receipt

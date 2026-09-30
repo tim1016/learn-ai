@@ -7,7 +7,7 @@ already held on this machine, with no vendor fetch and no running service:
    decisions fall on the session's closing bar? Live decides that bar only
    after the close, so since #2607 neither live nor the backtest acts on it.
 2. **Models.** The engine's own closing-bar rule (every non-LEAN backtest:
-   an ENTER is skipped, an EXIT fires on the next session's first decision)
+   an ENTER is skipped, an EXIT stays due for the program to decide again)
    against the LEAN-compatibility profile, which fills the same decision at
    the next session's first-minute open.
 3. **Closing prints.** For the sessions whose live-observed IBKR minutes are
