@@ -159,7 +159,6 @@ function account(accountId: string, equity: number): BrokerAccountSnapshot {
     account_status: 'ACTIVE',
     account_blocked: false,
     trading_blocked: false,
-    pattern_day_trader: false,
     currency: 'USD',
     cash: equity,
     equity,

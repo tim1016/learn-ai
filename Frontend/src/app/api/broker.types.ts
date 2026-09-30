@@ -10672,8 +10672,6 @@ export interface components {
             created_at_ms: number | null;
             /** Currency */
             currency: string;
-            /** Daytrading Buying Power */
-            daytrading_buying_power?: number | null;
             /** Equity */
             equity: number;
             /** Initial Margin */
@@ -10688,8 +10686,6 @@ export interface components {
             multiplier?: number | null;
             /** Observed At Ms */
             observed_at_ms: number;
-            /** Pattern Day Trader */
-            pattern_day_trader: boolean | null;
             /** Portfolio Value */
             portfolio_value: number;
             /** Regt Buying Power */

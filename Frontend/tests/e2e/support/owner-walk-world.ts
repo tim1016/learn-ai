@@ -187,7 +187,6 @@ function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number
     account_status: 'ACTIVE',
     account_blocked: false,
     trading_blocked: false,
-    pattern_day_trader: false,
     currency: 'USD',
     cash: equity,
     equity,

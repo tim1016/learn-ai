@@ -52,7 +52,6 @@ class _StartupSyntheticBroker(SyntheticBroker):
             portfolio_value=100_000.0,
             long_market_value=0.0,
             short_market_value=0.0,
-            pattern_day_trader=False,
             trading_blocked=False,
             account_blocked=False,
             created_at_ms=now,

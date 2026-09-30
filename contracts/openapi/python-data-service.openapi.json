@@ -6307,17 +6307,6 @@
             "title": "Currency",
             "type": "string"
           },
-          "daytrading_buying_power": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daytrading Buying Power"
-          },
           "equity": {
             "title": "Equity",
             "type": "number"
@@ -6374,17 +6363,6 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
-          "pattern_day_trader": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pattern Day Trader"
-          },
           "portfolio_value": {
             "title": "Portfolio Value",
             "type": "number"
@@ -6432,7 +6410,6 @@
           "portfolio_value",
           "long_market_value",
           "short_market_value",
-          "pattern_day_trader",
           "trading_blocked",
           "account_blocked",
           "created_at_ms",

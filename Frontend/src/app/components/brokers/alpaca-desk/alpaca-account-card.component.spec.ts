@@ -23,7 +23,6 @@ function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAcco
     portfolio_value: 150,
     long_market_value: 50,
     short_market_value: 0,
-    pattern_day_trader: false,
     trading_blocked: false,
     account_blocked: false,
     created_at_ms: 1_600_000_000_000,
@@ -99,8 +98,7 @@ describe('AlpacaAccountCardComponent', () => {
         fakeAccount({
           multiplier: 4,
           regt_buying_power: 200_000,
-          daytrading_buying_power: null,
-          maintenance_margin: 0,
+          maintenance_margin: null,
           initial_margin: 0,
           sma: 100_000,
           last_equity: 100_000,
@@ -110,7 +108,7 @@ describe('AlpacaAccountCardComponent', () => {
 
     expect(await screen.findByText('Multiplier')).toBeTruthy();
     expect(screen.getByText('Multiplier').nextElementSibling?.textContent).toContain('4');
-    expect(screen.getByText('Day-trading BP').nextElementSibling?.textContent).toContain('—');
+    expect(screen.getByText('Maintenance margin').nextElementSibling?.textContent).toContain('—');
   });
 
   it('seats the margin panel after the disclosure toggle in DOM order', async () => {

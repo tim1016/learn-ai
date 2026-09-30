@@ -34,7 +34,6 @@ function fakeAccount(): BrokerAccountSnapshot {
     portfolio_value: 15_000,
     long_market_value: 5_000,
     short_market_value: 0,
-    pattern_day_trader: false,
     trading_blocked: false,
     account_blocked: false,
     created_at_ms: 1_600_000_000_000,

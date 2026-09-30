@@ -31,7 +31,6 @@ def _account(**overrides: object) -> BrokerAccountSnapshot:
         portfolio_value=1500.0,
         long_market_value=500.0,
         short_market_value=0.0,
-        pattern_day_trader=False,
         trading_blocked=False,
         account_blocked=False,
         created_at_ms=1_600_000_000_000,
