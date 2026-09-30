@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -23,6 +24,7 @@ from app.broker.alpaca.clerk.account_authority import (
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
+    SYNTHETIC_CLERK_LEASE_HELD,
     ActiveClerkRuntime,
     SyntheticOpening,
     activate_synthetic_clerk_authority,
@@ -36,7 +38,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseHeld
 from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
@@ -49,7 +51,9 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_start_admission import (
     AdmissionCustodyCut,
+    DryRunAccountHeldElsewhere,
     StartAdmissionUnavailable,
+    SyntheticAccountRestoring,
     default_reconciliation_covers,
     default_start_custody_guard,
     default_start_custody_projection,
@@ -204,10 +208,20 @@ class SyntheticRuntimeAccess:
     Clerk's short intake fence, which lifecycle work may acquire inside it.
     Task reentry lets an admission promote a runtime already opened for its
     projection; child tasks must wait like every other caller.
+
+    ``restorer`` is the task restoring this account, from the moment boot
+    queues it until its restoration settles (#2684). It is the one
+    fail-fast check: every other task asking for the account is answered at
+    once with :class:`SyntheticAccountRestoring` instead of queueing behind
+    the restoration's lease wait; the restorer passes by its identity.
     """
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     owner: asyncio.Task | None = field(default=None, init=False)
+    restorer: asyncio.Task | None = field(default=None, init=False)
+
+    def is_restoring(self) -> bool:
+        return self.restorer is not None
 
     @asynccontextmanager
     async def hold(self) -> AsyncIterator[None]:
@@ -215,6 +229,8 @@ class SyntheticRuntimeAccess:
         if current is not None and self.owner is current:
             yield
             return
+        if self.restorer is not None and self.restorer is not current:
+            raise SyntheticAccountRestoring()
         async with self.lock:
             self.owner = current
             try:
@@ -249,11 +265,20 @@ class _SyntheticAccount:
 
     async def ensure_operating(self, *, lease_wait_s: float) -> None:
         """Compose this account for operation -- its full recovery included -- or raise why it cannot be."""
-        runtime = await self.open(SyntheticOpening.OPERATE, lease_wait_s=lease_wait_s)
+        try:
+            runtime = await self.open(SyntheticOpening.OPERATE, lease_wait_s=lease_wait_s)
+        except ExecutionLeaseHeld as exc:
+            # The activation's own open raises the store's error raw.
+            raise DryRunAccountHeldElsewhere() from exc
         if runtime.clerk is None:
+            failure = runtime.startup_failure
+            if failure is not None and failure.reason_code == SYNTHETIC_CLERK_LEASE_HELD:
+                # The selection's form of the same fact (#2670): one typed
+                # error for both, so no caller matches either raw form.
+                raise DryRunAccountHeldElsewhere()
             detail = (
-                runtime.startup_failure.recovery
-                if runtime.startup_failure is not None
+                failure.recovery
+                if failure is not None
                 else "Synthetic runtime was not composed."
             )
             raise StartAdmissionUnavailable(
@@ -577,6 +602,40 @@ class BindingAuthoritySelector:
             clock=self.clock,
             runtime_access=self._runtime_access(strategy_instance_id),
         ))
+
+    def queue_for_restoration(self, strategy_instance_ids: Iterable[str], restorer: asyncio.Task[Any]) -> None:
+        """Mark each ``sim:`` account restoring by ``restorer`` from now, not from its turn (#2684).
+
+        Boot restores its Dry Runs one at a time, so a bot still queued is as
+        unreadable to everyone else as the one being restored. Each mark ends
+        when that bot's own restoration settles (``restoring``) -- and every
+        mark still standing ends with ``restorer`` itself, however it ends.
+        """
+        for strategy_instance_id in strategy_instance_ids:
+            self._runtime_access(strategy_instance_id).restorer = restorer
+        restorer.add_done_callback(self._end_restorer)
+
+    @contextmanager
+    def restoring(self, strategy_instance_id: str) -> Iterator[None]:
+        """Mark one ``sim:`` account restoring by the current task until this settles (#2684)."""
+        access = self._runtime_access(strategy_instance_id)
+        restorer = asyncio.current_task()
+        access.restorer = restorer
+        try:
+            yield
+        finally:
+            if access.restorer is restorer:
+                access.restorer = None
+
+    def is_restoring(self, strategy_instance_id: str) -> bool:
+        """Whether a restoration holds this ``sim:`` account: the one answer Start, Stop and every read share."""
+        access = self.synthetic_runtime_access.get(strategy_instance_id)
+        return access is not None and access.is_restoring()
+
+    def _end_restorer(self, restorer: asyncio.Task[Any]) -> None:
+        for access in self.synthetic_runtime_access.values():
+            if access.restorer is restorer:
+                access.restorer = None
 
     def _runtime_access(self, strategy_instance_id: str) -> SyntheticRuntimeAccess:
         """The one lock per ``sim:`` account, shared by its bound and unbound authorities."""

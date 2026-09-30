@@ -40,6 +40,7 @@ from app.schemas.alpaca_fee_reconciliation import (
     SessionFeeReconciliation,
 )
 from app.services.alpaca_fee_attribution import FeeAttribution, collapse_activity_deliveries
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
@@ -393,15 +394,26 @@ async def deployment_fee_attribution(
         registry = get_bot_task_registry()
         if registry is not None:
             binding = registry.binding_for_control("alpaca", strategy_instance_id)
-            async with _panel_authority_for_binding(registry, binding) as selected:
-                if selected is not None:
-                    return (await asyncio.to_thread(read_fee_view, selected, period=None))[0]
+            try:
+                async with _panel_authority_for_binding(registry, binding) as selected:
+                    if selected is not None:
+                        return (await asyncio.to_thread(read_fee_view, selected, period=None))[0]
+            except PanelUnavailableError as exc:
+                # This bot's own custody cannot be read right now -- a Dry Run
+                # still being restored (#2684), or held elsewhere: its fees
+                # are unavailable, in its own words, never a 500.
+                return _unavailable_fee_attribution(
+                    str(exc) if exc.detail is None else f"{exc} {exc.detail}", period=period
+                )
     clerk = active_sqlite_facade("alpaca") if strategy_instance_id is None else None
     if clerk is None:
-        return DeploymentFeeAttribution(account_id=None, observed_at_ms=now_ms_utc(), authority_revision=None,
-            available=False, known=False, rows=[], account_unattributed_usd=None,
-            messages=["Fee evidence is unavailable while the account Clerk is offline."], period=period)
+        return _unavailable_fee_attribution("Fee evidence is unavailable while the account Clerk is offline.", period=period)
     return (await asyncio.to_thread(read_fee_view, clerk, period=period))[0]
+
+
+def _unavailable_fee_attribution(message: str, *, period: ActivityPeriod | None) -> DeploymentFeeAttribution:
+    return DeploymentFeeAttribution(account_id=None, observed_at_ms=now_ms_utc(), authority_revision=None,
+        available=False, known=False, rows=[], account_unattributed_usd=None, messages=[message], period=period)
 
 
 def _fee_row_identity(

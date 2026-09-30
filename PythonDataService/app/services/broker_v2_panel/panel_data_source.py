@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
+    synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
@@ -86,6 +87,7 @@ from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, cust
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     custody_bot_status,
+    unreadable_catalog_view,
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
@@ -342,15 +344,30 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
                 assert facade is not None
                 rows = await read_sqlite_catalog_from_facade(broker, facade)
                 budget = facade.repository.deployment_budget(binding.strategy_instance_id)
-        except DryRunRestoringError:
-            # A Dry Run boot is still restoring is that bot's wait alone
-            # (#2582): the lane's other bots list, and it lists once restored.
-            logger.info(
-                "A Dry Run still being restored is left off this roster read",
+        except PanelUnavailableError as exc:
+            # #2684, #2582: one Dry Run whose simulator cannot be read --
+            # still being restored, or held by another copy -- keeps its own
+            # row on Home and never fails the lane's roster. Nothing about it
+            # is readable, so every fact is unknown, never zero, and the row
+            # says why. It lists normally once it can be read.
+            restoring = isinstance(exc, DryRunRestoringError)
+            logger.log(
+                logging.INFO if restoring else logging.WARNING,
+                "A Dry Run whose simulator cannot be read is listed as its own row",
                 extra={
-                    "action": "catalog_dry_run_restoring_skipped",
+                    "action": "catalog_dry_run_unreadable_row",
                     "strategy_instance_id": binding.strategy_instance_id,
+                    "restoring": restoring,
+                    "error": str(exc),
+                    "error_detail": exc.detail,
                 },
+            )
+            synthetic_rows.append(
+                unreadable_catalog_view(
+                    registry.status(broker, binding.strategy_instance_id),
+                    account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
+                    failure=exc,
+                )
             )
             continue
         except SqliteCatalogProjectionUnavailable as exc:

@@ -41,6 +41,7 @@ from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
+from app.services.bot_start_admission import SyntheticAccountRestoring
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
@@ -1141,16 +1142,21 @@ class RunReplayProofService:
                     "No authority selector is wired; Dry Run receipts are unreachable.",
                     http_status=503,
                 )
-            async with self.authority_for(binding).runtime_for_projection() as runtime:
-                repository = None if runtime is None else runtime.sqlite_repository
-                if repository is None:
-                    raise RunReplayUnavailableError(
-                        "The Dry Run synthetic authority could not be projected.",
-                        http_status=503,
-                    )
-                return SqliteDecisionReceipts(
-                    repository, strategy_instance_id=binding.strategy_instance_id
-                ).retained_window()
+            try:
+                async with self.authority_for(binding).runtime_for_projection() as runtime:
+                    repository = None if runtime is None else runtime.sqlite_repository
+                    if repository is None:
+                        raise RunReplayUnavailableError(
+                            "The Dry Run synthetic authority could not be projected.",
+                            http_status=503,
+                        )
+                    return SqliteDecisionReceipts(
+                        repository, strategy_instance_id=binding.strategy_instance_id
+                    ).retained_window()
+            except SyntheticAccountRestoring as exc:
+                # Unavailable for now, never a durable ``replay_failed``: the
+                # account is readable again once its restoration settles (#2684).
+                raise RunReplayUnavailableError(str(exc), detail=exc.detail, http_status=503) from exc
         clerk = get_alpaca_clerk()
         repository = getattr(clerk, "repository", None)
         if repository is None:

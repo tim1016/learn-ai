@@ -9994,7 +9994,7 @@ export interface components {
             /** Exposure */
             exposure: {
                 [key: string]: number;
-            };
+            } | null;
             /** Fills Today */
             fills_today: number | null;
             /** Final Result Usd */

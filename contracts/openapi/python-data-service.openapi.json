@@ -4503,11 +4503,18 @@
             "title": "Ended At Ms"
           },
           "exposure": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "title": "Exposure",
-            "type": "object"
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
           },
           "fills_today": {
             "anyOf": [
