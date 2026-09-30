@@ -65,6 +65,18 @@ def opt_float(value: Any) -> float | None:
     return to_float(value)
 
 
+def to_str(value: Any, *, field: str) -> str:
+    """Parse a required Alpaca text field, returned unchanged.
+
+    Null, blank and non-text values are refused: ``str(None) == "None"``, so a
+    null identity field would otherwise become a real-looking account number,
+    order id or symbol (#2627, #2643).
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Alpaca field {field!r} must be a non-blank string, got {value!r}")
+    return value
+
+
 def opt_str(value: Any) -> str | None:
     """Coerce an optional value to ``str``; ``None`` stays ``None``."""
     return None if value is None else str(value)
@@ -195,9 +207,7 @@ def from_alpaca_account(
     A number that is not a non-blank string is no account at all, in any
     mode: ``str(None)`` once became live account ``"None"`` (#2627).
     """
-    account_number = payload["account_number"]
-    if not isinstance(account_number, str) or not account_number.strip():
-        raise ValueError(f"Alpaca account_number must be a non-blank string, got {account_number!r}")
+    account_number = to_str(payload["account_number"], field="account_number")
     looks_paper = account_number.startswith(_PAPER_ACCOUNT_NUMBER_PREFIX)
     if looks_paper != (account_mode == "paper"):
         raise BrokerAccountModeDisagreement(
@@ -257,11 +267,11 @@ def from_alpaca_position(
     """Map a raw Alpaca position payload to a ``BrokerPosition`` (signed qty)."""
     return BrokerPosition(
         broker=BROKER_ID,
-        symbol=str(payload["symbol"]),
+        symbol=to_str(payload["symbol"], field="symbol"),
         asset_id=opt_str(payload.get("asset_id")),
         asset_class=opt_str(payload.get("asset_class")),
         quantity=to_float(payload["qty"]),
-        side=str(payload["side"]),
+        side=to_str(payload["side"], field="side"),
         average_entry_price=to_float(payload["avg_entry_price"]),
         market_value=to_float(payload["market_value"]),
         cost_basis=to_float(payload["cost_basis"]),
@@ -347,12 +357,18 @@ def from_alpaca_order(
     *,
     observed_at_ms: int | None = None,
 ) -> BrokerOrder:
-    """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event."""
+    """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event.
+
+    ``id`` and ``status`` are required text. ``symbol`` and ``side`` are not:
+    Alpaca leaves both blank on a multi-leg parent, and the Clerk contains
+    that one order rather than refusing the whole orders answer, which
+    would freeze exits account-wide (#2363).
+    """
     submitted_at_ms = opt_rfc3339_to_ms(payload.get("submitted_at"))
     filled_at_ms = opt_rfc3339_to_ms(payload.get("filled_at"))
     return BrokerOrder(
         broker=BROKER_ID,
-        order_id=str(payload["id"]),
+        order_id=to_str(payload["id"], field="id"),
         client_order_id=opt_str(payload.get("client_order_id")),
         symbol=str(payload["symbol"]),
         asset_class=opt_str(payload.get("asset_class")),
@@ -365,7 +381,7 @@ def from_alpaca_order(
         stop_price=opt_float(payload.get("stop_price")),
         extended_hours=bool(payload.get("extended_hours") or False),
         filled_avg_price=opt_float(payload.get("filled_avg_price")),
-        status=str(payload["status"]),
+        status=to_str(payload["status"], field="status"),
         submitted_at_ms=submitted_at_ms,
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         updated_at_ms=opt_rfc3339_to_ms(payload.get("updated_at")),
@@ -482,9 +498,9 @@ def from_alpaca_activity(
     is_trade = "transaction_time" in payload
     return BrokerActivity(
         broker=BROKER_ID,
-        activity_id=str(payload["id"]),
+        activity_id=to_str(payload["id"], field="id"),
         native_order_id=opt_str(payload.get("order_id")),
-        activity_type=str(payload["activity_type"]),
+        activity_type=to_str(payload["activity_type"], field="activity_type"),
         category="trade_activity" if is_trade else "non_trade_activity",
         symbol=opt_str(payload.get("symbol")),
         side=opt_str(payload.get("side")),
@@ -506,12 +522,12 @@ def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
     """
     return BrokerAsset(
         broker=BROKER_ID,
-        asset_id=str(payload["id"]),
-        symbol=str(payload["symbol"]),
+        asset_id=to_str(payload["id"], field="id"),
+        symbol=to_str(payload["symbol"], field="symbol"),
         name=opt_str(payload.get("name")),
         asset_class=str(payload["class"] if "class" in payload else payload["asset_class"]),
         exchange=opt_str(payload.get("exchange")),
-        status=str(payload["status"]),
+        status=to_str(payload["status"], field="status"),
         tradable=bool(payload.get("tradable", False)),
         fractionable=bool(payload.get("fractionable", False)),
         shortable=opt_bool(payload.get("shortable")),

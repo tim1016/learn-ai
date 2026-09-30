@@ -17,6 +17,7 @@ from app.broker.alpaca.adapter import (
     opt_rfc3339_to_ms,
     rfc3339_to_ms,
     to_float,
+    to_str,
 )
 
 
@@ -62,6 +63,27 @@ def test_numeric_helpers_reject_booleans(parser: Callable[[Any], float | None], 
     # become $1 or $0 of broker evidence.
     with pytest.raises(TypeError, match="not a boolean"):
         parser(value)
+
+
+def test_to_str_returns_the_vendor_text_unchanged() -> None:
+    assert to_str("SPY", field="symbol") == "SPY"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("", id="blank"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param(12345, id="number"),
+        pytest.param(True, id="boolean"),
+    ],
+)
+def test_to_str_refuses_a_value_that_is_not_text(value: object) -> None:
+    # ``str(None) == "None"``: a null identity field would otherwise become a
+    # real-looking order id, symbol or account number (#2643).
+    with pytest.raises(ValueError, match="'symbol' must be a non-blank string"):
+        to_str(value, field="symbol")
 
 
 def test_et_date_anchors_at_ny_midnight() -> None:

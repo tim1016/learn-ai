@@ -447,6 +447,15 @@ class _MalformedAlpacaClient:
     async def list_activities(self, **_query: object) -> list[dict[str, str]]:
         return [{"id": "act-1"}]
 
+    async def list_assets(self, **_query: object) -> list[dict[str, str]]:
+        return [{"symbol": "SPY"}]
+
+    async def get_clock(self) -> dict[str, bool]:
+        return {"is_open": False}
+
+    async def get_portfolio_history(self, **_query: object) -> dict[str, list[int]]:
+        return {"timestamp": [1_700_000_000]}
+
 
 @pytest.mark.parametrize(
     ("path", "evidence"),
@@ -457,6 +466,15 @@ class _MalformedAlpacaClient:
         pytest.param("/api/brokers/alpaca/activities", "activity", id="activities"),
         pytest.param("/api/brokers/alpaca/activities?after_ms=0", "activity", id="activities-window"),
         pytest.param("/api/brokers/alpaca/activities/period?period=30d", "activity", id="activity-period"),
+        # These four reads once let the adapter's raw error escape as a 500 (#2643).
+        pytest.param("/api/brokers/alpaca/assets", "asset", id="assets"),
+        pytest.param("/api/brokers/alpaca/clock", "market clock", id="clock"),
+        pytest.param("/api/brokers/alpaca/portfolio-history?range=30D", "portfolio history", id="portfolio-history"),
+        pytest.param(
+            "/api/brokers/alpaca/portfolio-history-proof?range=30D",
+            "portfolio history",
+            id="portfolio-history-proof",
+        ),
     ],
 )
 async def test_a_malformed_alpaca_answer_reaches_the_owner_as_a_named_503(path: str, evidence: str) -> None:

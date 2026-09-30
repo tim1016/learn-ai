@@ -249,3 +249,40 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     assert info.value.detail is not None
     assert cause_type.__name__ not in info.value.detail
     assert isinstance(info.value.__cause__, cause_type)
+
+
+@pytest.mark.parametrize("field", ["id", "status"])
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["null", "blank", "whitespace"])
+async def test_broker_refuses_an_order_whose_identity_is_not_text(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    field: str,
+    value: object,
+) -> None:
+    """A null id once became order "None", a real-looking broker order (#2643)."""
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+    broker = AlpacaBroker(client=_OrdersClient([{**open_order, field: value}]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="order data this app could not read") as info:
+        await broker.list_orders(status="open", limit=500)
+
+    assert isinstance(info.value.__cause__, ValueError)
+    assert f"'{field}'" in str(info.value.__cause__)
+
+
+@pytest.mark.parametrize("blank", [None, ""], ids=["null", "blank"])
+async def test_a_multi_leg_parent_order_still_maps_so_the_clerk_can_contain_it(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    blank: object,
+) -> None:
+    """Alpaca leaves a multi-leg parent's symbol and side blank (alpaca-py ``Order``).
+
+    Refusing them would refuse the whole orders answer and freeze exits
+    account-wide; the Clerk contains that one order instead (#2363).
+    """
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+    parent = {**open_order, "id": "mleg-parent", "order_class": "mleg", "symbol": blank, "side": blank}
+    broker = AlpacaBroker(client=_OrdersClient([parent, open_order]))  # type: ignore[arg-type]
+
+    orders = await broker.list_orders(status="open", limit=500)
+
+    assert [order.order_id for order in orders] == ["mleg-parent", open_order["id"]]
