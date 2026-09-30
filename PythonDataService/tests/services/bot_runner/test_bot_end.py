@@ -35,7 +35,7 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.schemas.bot_end import BotEnd, BotEndInput
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
-from app.services.bot_end import BotEndRefused, when_words
+from app.services.bot_end import BotEndRefused
 from app.services.bot_run_terminal import prove_end_stop_outcome
 from app.services.bot_runner import (
     BotTaskRegistry,
@@ -44,6 +44,7 @@ from app.services.bot_runner import (
     get_bot_task_registry,
     set_bot_task_registry,
 )
+from app.utils.et_words import et_when_words
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
@@ -171,6 +172,18 @@ async def test_deploy_with_no_end_records_no_end(tmp_path: Path) -> None:
     assert registry.pending_ends([_SID]) == []
 
 
+async def test_a_running_bot_with_no_end_is_offered_the_default_end_to_add(tmp_path: Path) -> None:
+    """#2663: the bot page's Change opens on the default end, as Deploy's form does; a bot with one opens on its own."""
+    registry = await _deployed(tmp_path, _Clock(), end=None)
+
+    assert registry.bot_end("alpaca", _SID).default_end_at_ms == _END.end_at_ms
+
+    view = await registry.edit_bot_end("alpaca", _SID, _sell(_END.end_at_ms - 3_600_000), updated_by="operator")
+
+    assert view.end_at_ms == _END.end_at_ms - 3_600_000
+    assert view.default_end_at_ms is None
+
+
 # ── the owner edits a running bot's end ──────────────────────────────────────
 
 
@@ -189,7 +202,7 @@ async def test_editing_a_running_bots_end_takes_effect_without_a_restart_and_cha
     )
 
     assert view.end_at_ms == later.end_at_ms
-    assert view.headline == f"Ends {when_words(later.end_at_ms, now_ms=clock())} · keeps its shares"
+    assert view.headline == f"Ends {et_when_words(later.end_at_ms, now_ms=clock())} · keeps its shares"
     assert registry.pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=later)]
     # No restart: the same task runs the same run.
     assert registry._bots[_SID].task is task and not task.done()

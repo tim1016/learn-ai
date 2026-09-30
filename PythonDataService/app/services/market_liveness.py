@@ -616,6 +616,15 @@ def prepared_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
     return _store.top_of_book(symbol, now_ms=now_ms)
 
 
+def status_stream_connected(now_ms: int) -> bool:
+    """Whether the market-status stream is connected with fresh proof.
+
+    Lets a caller whose quote read answered ``None`` say whether it is
+    waiting for a first quote or for the feed itself to come back (#2559).
+    """
+    return _store.status_snapshot(now_ms=now_ms).connected
+
+
 def reset_market_liveness_store_for_testing() -> None:
     """Reset process state between isolated tests."""
     global _store

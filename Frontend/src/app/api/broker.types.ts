@@ -10200,9 +10200,15 @@ export interface components {
          *     · sells"); ``explanation`` says what will happen, or what happened.
          *     ``notice`` is set only when the chosen time was moved, e.g. to one minute
          *     before an early close. ``editable`` says whether the panel may offer to
-         *     change it now.
+         *     change it now. ``default_end_at_ms`` is the default end (Deploy's rule)
+         *     the fields open on when the owner adds an end to a bot with none. It is
+         *     null whenever an end is already set -- so always on Deploy's
+         *     ``default_end``, which is that default end itself -- whenever the end
+         *     cannot change now, and whenever the bot trades outside regular hours.
          */
         BotEndView: {
+            /** Default End At Ms */
+            default_end_at_ms: number | null;
             /** Editable */
             editable: boolean;
             /**

@@ -71,17 +71,18 @@ from app.schemas.broker_v2_panel import (
     LaneAttentionKind,
     LaneAttentionRead,
 )
-from app.services.bot_end import when_words
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
 from app.services.sqlite_clerk_compat import account_eligibility
+from app.utils.et_words import et_when_words
 
 logger = logging.getLogger(__name__)
 
 _OPEN_BOT = LaneAttentionAction(label="Open bot", destination="bot")
 _ORDER_RECORDS = LaneAttentionAction(label="Open order records", destination="activity")
+_SETTINGS = LaneAttentionAction(label="Open Settings", destination="settings")
 
 #: What each episode is about, and where its fix lives. A hold on losses is
 #: cleared in Settings; a channel is checked there; an order or position the
@@ -89,7 +90,7 @@ _ORDER_RECORDS = LaneAttentionAction(label="Open order records", destination="ac
 #: an exit that has not flattened is its bot's. An episode not named here
 #: opens its bot, or the order records when it names none.
 _EPISODE_LINES: dict[str, tuple[LaneAttentionKind, LaneAttentionAction]] = {
-    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: ("hold", LaneAttentionAction(label="Open Settings", destination="settings")),
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: ("hold", _SETTINGS),
     STREAM_HEALTH_HOLD_REASON_CODE: ("channel", LaneAttentionAction(label="Check connection", destination="settings")),
     **{
         reason_code: ("out_of_sync", _ORDER_RECORDS)
@@ -121,17 +122,21 @@ async def lane_attention_read() -> LaneAttentionRead:
     (holds, channels, out-of-sync orders and positions, exits that have not
     flattened), a bot whose lifecycle cannot be read, stopped bots still
     holding money, bots that ended uncleanly since the account was last
-    checked against Alpaca, the account's own standing (a failed authority,
-    or what the latest cached account observation says), a bot's end sale
-    waiting for the next open, and an account that has not switched to
-    budgets. A lane with no authority at all answers empty rather than
-    unknown.
+    checked against Alpaca, the account's own standing (an authority that is
+    not serving, or what the latest cached account observation says), a bot's
+    end sale waiting for the next open, and an account that has not switched
+    to budgets. A lane with no authority at all, or one awaiting the owner's
+    activation, answers empty rather than unknown.
     """
     runtime = get_active_clerk_runtime()
     repository = None if runtime is None else runtime.sqlite_repository
     if runtime is None or repository is None:
         failure = None if runtime is None else runtime.startup_failure
-        if failure is None or not failure.activation_detected:
+        # Only the owner's own activation step is quiet here (#2620). Every
+        # other refusal is an authority that should serve and does not --
+        # including one whose account read failed, which identified no
+        # account and so carries no activation evidence.
+        if failure is None or failure.awaiting_activation:
             return LaneAttentionRead(account_id=None, items=[])
         return LaneAttentionRead(account_id=failure.account_id, items=[_failed_authority_item(failure)])
     # Read eligibility from the selected facade, exactly as the desk and
@@ -159,31 +164,29 @@ async def lane_attention_read() -> LaneAttentionRead:
     if repository.budget_authority_version() < 2:
         items.append(LaneAttentionItem(
             condition_id="legacy-budget", reason_code=BUDGETS_NOT_SWITCHED_ON, kind="legacy_budget",
-            severity="warning", headline=LEGACY_BUDGET_DETAIL,
-            action=LaneAttentionAction(label="Open Settings", destination="settings"),
+            severity="warning", headline=LEGACY_BUDGET_DETAIL, action=_SETTINGS,
         ))
     return LaneAttentionRead(account_id=repository.account_id, items=items)
 
 
 def _failed_authority_item(failure: ClerkStartupFailure) -> LaneAttentionItem:
-    """An activated authority that failed to start: the account is not managed.
+    """An authority that is not serving the account: reconnecting, or failed.
 
     Review B5: its only renderer was retired with Overview, so a failed
-    custody authority left Home quiet. Recovery is an offline step the
-    account's order records and recovery explain.
+    custody authority left Home quiet. The lane holds no repository here, so
+    order records answer 503; the one action is Settings, which loads and
+    names the refusal's own recovery (#2620).
     """
     if failure.reconnecting:
         # Not a failure (#2582): the authority installs on its own once Alpaca
         # answers, and this line clears with it.
         return LaneAttentionItem(
             condition_id="account:authority-reconnecting", reason_code=failure.reason_code,
-            kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE,
-            action=_ORDER_RECORDS,
+            kind="account", severity="warning", headline=_AUTHORITY_RECONNECTING_HEADLINE, action=_SETTINGS,
         )
     return LaneAttentionItem(
         condition_id=f"account:authority-failed:{failure.reason_code}", reason_code=failure.reason_code,
-        kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE,
-        action=_ORDER_RECORDS,
+        kind="account", severity="blocking", headline=_AUTHORITY_FAILED_HEADLINE, action=_SETTINGS,
     )
 
 
@@ -205,8 +208,7 @@ def _account_standing_items(projection: ClerkProjection) -> list[LaneAttentionIt
         return []
     return [LaneAttentionItem(
         condition_id=f"account:{condition.condition_id}", reason_code=condition.condition_id, kind="account",
-        severity=condition.severity, headline=condition.headline,
-        action=LaneAttentionAction(label="Open Settings", destination="settings"),
+        severity=condition.severity, headline=condition.headline, action=_SETTINGS,
     )]
 
 
@@ -258,7 +260,7 @@ def _end_sale_item(waiting: EndSaleWaiting, *, opens_at_ms: int, now_ms: int) ->
         headline=(
             f"{waiting.strategy_instance_id} reached its end while the market was closed. "
             f"Its sale of {holdings_text({waiting.symbol: waiting.quantity})} goes out at the open, "
-            f"{when_words(opens_at_ms, now_ms=now_ms)}."
+            f"{et_when_words(opens_at_ms, now_ms=now_ms)}."
         ),
         action=_OPEN_BOT,
     )
@@ -403,6 +405,7 @@ async def _bot_counts() -> tuple[int, int] | None:
 async def _attention_count() -> int | None:
     read = await lane_attention_read()
     # No clerk is serving an account: the bell has nothing to list, but that
-    # is "not counted", never "none need attention". A failed authority names
-    # its account, and its line counts.
-    return None if read.account_id is None else len(read.items)
+    # is "not counted", never "none need attention". An authority that is not
+    # serving always has its line, and it counts -- even when the account read
+    # is what failed, so no account is named (#2620).
+    return None if read.account_id is None and not read.items else len(read.items)

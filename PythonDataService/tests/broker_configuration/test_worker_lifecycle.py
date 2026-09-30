@@ -195,6 +195,55 @@ async def test_a_reconnecting_boot_neither_acknowledges_nor_refuses_its_apply(
     assert selection.effective_account_id is None
 
 
+async def test_a_reconnect_that_breaks_records_the_apply_it_held_as_refused(
+    service: BrokerConfigurationService,
+) -> None:
+    """#2620: the reconnect's final refusal goes through the boot's own acknowledgement.
+
+    A reconnecting boot leaves its Apply pending for the reconnect's outcome
+    (above); when the reconnect breaks, that outcome is the refusal, so the
+    Apply is consumed as refused rather than left waiting on a reconnect
+    that has ended. The real acknowledgement over the real service, not an
+    identity stand-in.
+    """
+    from app.broker.alpaca.clerk.authority_reconnect import AuthoritySteps, run_authority_reconnect
+
+    profile = paper_profile(service)
+    staged = service.stage_selection(
+        profile_id=profile.profile.profile_id, revision=1, expected_selection_generation=0
+    )
+    requested = service.request_apply(expected_selection_generation=staged.selection_generation)
+    bound = _bound(profile.profile.profile_id, requested.selection_generation)
+    installed: list[ActiveClerkRuntime] = []
+
+    async def select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    async def acknowledge(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
+        return await acknowledge_runtime_binding(bound=bound, runtime=runtime, service_factory=lambda: service)
+
+    async def nothing(_: object) -> None:
+        return None
+
+    final = await run_authority_reconnect(
+        reconnecting_refusal(
+            BrokerUnreachable("Could not reach Alpaca while fetching positions.", broker="alpaca"),
+            account_id="PA-TEST",
+        ),
+        steps=AuthoritySteps(
+            select=select_breaks, acknowledge=acknowledge, install=installed.append, retire=nothing, boot=nothing,
+        ),
+        sleep=nothing,
+    )
+
+    assert installed == [final]
+    assert final.startup_failure is not None
+    selection = service.selection()
+    assert not selection.apply_requested
+    assert selection.last_apply_outcome == "refused"
+    assert selection.last_apply_refusal_reason == final.startup_failure.recovery
+
+
 async def test_unreadable_arming_evidence_during_acknowledgement_closes_custody(
     service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
