@@ -7,7 +7,7 @@ their existing authorities; this composes their facts into clerk.budgets.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -289,7 +289,20 @@ class BotResult:
 def project_bot_results(
     conn: sqlite3.Connection, *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
 ) -> dict[str, BotResult]:
+    """Each bot's whole-life result over this snapshot's effective fills (``bot_results_from_fills``)."""
+    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
+    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
+    return bot_results_from_fills(records, fees=fees, strategy_instance_ids=strategy_instance_ids)
+
+
+def bot_results_from_fills(
+    records: Sequence[FillRecord], *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
+) -> dict[str, BotResult]:
     """Each bot's whole-life result: what its balance gained over its budget.
+
+    ``records`` are the effective fills the caller read on its own snapshot
+    (``effective_fill_records``), so a caller that already holds them never
+    reads them twice.
 
     Formula: result = canonical FIFO gross realized P&L - the bot's attributed
       fees (``budgets.deployment_budget``'s balance - commitment); trade_count
@@ -300,15 +313,6 @@ def project_bot_results(
       fees the canonical fee reconciler.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_bot_results.py.
     """
-    account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
-    records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
-    return bot_results_from_fills(records, fees=fees, strategy_instance_ids=strategy_instance_ids)
-
-
-def bot_results_from_fills(
-    records: Sequence[FillRecord], *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
-) -> dict[str, BotResult]:
-    """``project_bot_results`` over effective fills the caller already read on its snapshot."""
     if not fees.known:
         raise BudgetUnavailable("Fee evidence is unresolved: " + "; ".join(fees.unresolved))
     results: dict[str, BotResult] = {}
@@ -321,8 +325,10 @@ def bot_results_from_fills(
     return results
 
 
-type RevisionKey = tuple[int, tuple[str, ...] | None]
-"""A custody file's ``control_revision`` and the bots a read asked for (``None``: all)."""
+type RevisionKey = tuple[str, int, int, tuple[str, ...] | None]
+"""Which custody file a read saw -- its identity and generation, so a file
+replaced at the same path never answers for the old one -- at which
+``control_revision``, and the bots it asked for (``None``: all)."""
 
 
 class RevisionMemo[T]:
@@ -361,17 +367,42 @@ def read_bot_results(
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
+    def project(conn: sqlite3.Connection) -> dict[str, BotResult]:
+        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
+        return project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
+
+    # A copy: the memo keeps its own answer.
+    return dict(read_at_revision(db_path, strategy_instance_ids=strategy_instance_ids, memo=memo, project=project))
+
+
+def read_at_revision[T](
+    db_path: Path,
+    *,
+    strategy_instance_ids: Sequence[str] | None,
+    memo: RevisionMemo[T] | None,
+    project: Callable[[sqlite3.Connection], T],
+    keep: Callable[[T], bool] = lambda _answer: True,
+) -> T:
+    """``project`` on its own query-only snapshot, or ``memo``'s answer for the same file and revision.
+
+    ``keep`` says whether an answer may be reused (``RevisionMemo``: never
+    one that depended on something beside the custody file). Blocking.
+    """
     with query_only_snapshot(db_path) as conn:
-        revision = int(conn.execute("SELECT control_revision FROM control_meta WHERE id = 1").fetchone()[0])
-        key = (revision, tuple(strategy_instance_ids))
+        identity, generation, revision = conn.execute(
+            "SELECT db_identity_token, authority_generation, control_revision FROM control_meta WHERE id = 1"
+        ).fetchone()
+        key: RevisionKey = (
+            str(identity), int(generation), int(revision),
+            None if strategy_instance_ids is None else tuple(strategy_instance_ids),
+        )
         cached = None if memo is None else memo.get(key)
         if cached is not None:
-            return dict(cached)
-        fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
-        results = project_bot_results(conn, fees=fees, strategy_instance_ids=strategy_instance_ids)
-        if memo is not None:
-            memo.put(key, dict(results))
-        return results
+            return cached
+        answer = project(conn)
+    if memo is not None and keep(answer):
+        memo.put(key, answer)
+    return answer
 
 
 @contextmanager

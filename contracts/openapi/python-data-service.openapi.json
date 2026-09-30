@@ -5163,6 +5163,17 @@
               }
             ]
           },
+          "page_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Unavailable Reason"
+          },
           "result_usd": {
             "anyOf": [
               {
@@ -5275,7 +5286,8 @@
           "fees_usd",
           "money_unavailable_reason",
           "money_scope_note",
-          "runs"
+          "runs",
+          "page_unavailable_reason"
         ],
         "title": "BotHistoryBot",
         "type": "object"
@@ -19424,6 +19436,17 @@
               }
             ]
           },
+          "page_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Unavailable Reason"
+          },
           "result_usd": {
             "anyOf": [
               {
@@ -19537,6 +19560,7 @@
           "money_unavailable_reason",
           "money_scope_note",
           "runs",
+          "page_unavailable_reason",
           "broker",
           "clerk_id"
         ],

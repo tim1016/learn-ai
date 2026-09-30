@@ -160,8 +160,11 @@ const HISTORY_STATUS_LABELS = {
   finished: 'Finished',
   cleared: 'Cleared',
 } as const satisfies Record<HistoryStatus, string>;
-/** `bot_history._OUTCOME_HEADLINES["STOPPED"]`. */
+/** `outcome_copy.outcome_headline` for an owner's Stop: the one outcome
+ * vocabulary's `STOPPED_OUTCOME` label, or its words for a run whose stop the
+ * owner's flatten followed. */
 const STOPPED_HEADLINE = 'Stopped by you';
+const FLATTENED_HEADLINE = 'Stopped and flattened';
 
 /** The amounts this walk types, and the Live phrase the backend binds consent to. */
 export const PAPER_BUDGET = '1000.00';
@@ -520,6 +523,7 @@ const LAKE_COVERAGE = {
 /** Where the walked bot is in its life. */
 export type BotPhase = 'not_deployed' | 'running' | 'holding' | 'finished' | 'cleared';
 
+const EARLIER_ENDED_AT_MS = NOW_MS - 3 * 86_400_000;
 const EARLIER_FINISHED = fakeCatalogBot({
   strategy_instance_id: EARLIER_BOT,
   account_id: PAPER_ACCOUNT,
@@ -532,11 +536,11 @@ const EARLIER_FINISHED = fakeCatalogBot({
   fills_today: 0,
   realized_pnl_today: 0,
   open_pnl: null,
-  last_activity_at_ms: NOW_MS - 3 * 86_400_000,
+  last_activity_at_ms: EARLIER_ENDED_AT_MS,
   group: 'finished',
   final_result_usd: '-3.10',
   trade_count: 4,
-  ended_at_ms: NOW_MS - 3 * 86_400_000,
+  ended_at_ms: EARLIER_ENDED_AT_MS,
 });
 
 function walkedCatalogRow(phase: BotPhase): BotCatalogView | null {
@@ -589,14 +593,16 @@ interface HistoryFacts {
   readonly budget_usd: string;
   readonly result_usd: string;
   readonly transaction_count: number;
+  /** The owner's flatten sold what the stopped run held. */
+  readonly flattened?: boolean;
 }
 
 /** `bot_history.compose_bots`' row for a bot with one run. */
-function historyRow(facts: HistoryFacts): FleetBotHistoryRow {
+function historyRow({ flattened = false, ...facts }: HistoryFacts): FleetBotHistoryRow {
   const outcome = facts.stopped_at_ms === null ? null : {
     kind: 'STOPPED' as const,
-    reason_code: 'OWNER_STOP',
-    headline: STOPPED_HEADLINE,
+    reason_code: 'STOPPED_FLAT',
+    headline: flattened ? FLATTENED_HEADLINE : STOPPED_HEADLINE,
     recorded_at_ms: facts.stopped_at_ms,
   };
   const orders = { sent: facts.transaction_count, filled: facts.transaction_count, cancelled: 0, rejected: 0 };
@@ -612,6 +618,7 @@ function historyRow(facts: HistoryFacts): FleetBotHistoryRow {
     fees_usd: '0.00',
     money_unavailable_reason: null,
     money_scope_note: null,
+    page_unavailable_reason: null,
     runs: [{
       run_id: `run-${facts.strategy_instance_id}`,
       running: facts.stopped_at_ms === null,
@@ -628,9 +635,11 @@ function historyRow(facts: HistoryFacts): FleetBotHistoryRow {
  * on this account, and a bot cleared on the Live account. */
 const OTHER_HISTORY_ROWS: readonly FleetBotHistoryRow[] = [
   historyRow({
-    clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: EARLIER_BOT, symbol: 'QQQ',
-    world: 'paper', status: 'finished', started_at_ms: NOW_MS - 3 * 86_400_000 - 21_600_000,
-    stopped_at_ms: NOW_MS - 3 * 86_400_000, budget_usd: PAPER_BUDGET, result_usd: '-3.10', transaction_count: 4,
+    clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: EARLIER_BOT,
+    symbol: EARLIER_FINISHED.symbol, world: 'paper', status: 'finished',
+    started_at_ms: EARLIER_ENDED_AT_MS - 21_600_000, stopped_at_ms: EARLIER_ENDED_AT_MS,
+    budget_usd: PAPER_BUDGET, result_usd: EARLIER_FINISHED.final_result_usd ?? '0.00',
+    transaction_count: EARLIER_FINISHED.trade_count ?? 0,
   }),
   historyRow({
     clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: DRY_RUN_BOT, symbol: 'SPY',
@@ -644,14 +653,15 @@ const OTHER_HISTORY_ROWS: readonly FleetBotHistoryRow[] = [
   }),
 ];
 
-/** The walked bot's History row: none before its Deploy, then its status is its phase. */
+/** The walked bot's History row: none before its Deploy, then its status is
+ * its phase. It is flat once the owner's flatten sold what it held. */
 function walkedHistoryRow(phase: BotPhase): FleetBotHistoryRow | null {
   if (phase === 'not_deployed') return null;
   const flat = phase === 'finished' || phase === 'cleared';
   return historyRow({
     clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: WALKED_BOT, symbol: 'SPY',
     world: 'paper', status: phase, started_at_ms: NOW_MS, stopped_at_ms: phase === 'running' ? null : NOW_MS,
-    budget_usd: PAPER_BUDGET, result_usd: flat ? '0.99' : '0.00', transaction_count: flat ? 2 : 1,
+    budget_usd: PAPER_BUDGET, result_usd: flat ? '0.99' : '0.00', transaction_count: flat ? 2 : 1, flattened: flat,
   });
 }
 
@@ -661,10 +671,12 @@ const HISTORY_QUERY = new Set(['clerk_id', 'status', 'world', 'symbol', 'strateg
 /**
  * History's one read, answered as the coordinator answers it
  * (`aggregate_broker_clerks_bot_history` + `merge_bot_history`): the lanes
- * `clerk_id` names (every lane without it), each asked only for the bot
- * `strategy_instance_id` names; newest first; `status`, `world` and `symbol`
- * applied; then paged. `symbols` is every symbol a read row trades, before
- * those three filters. A query the route would refuse (422) is a walk bug.
+ * `clerk_id` names (every lane without it; one naming no lane is the
+ * `unknown_account` gap), each asked only for the bot `strategy_instance_id`
+ * names; newest first; `status`, `world` and `symbol` applied; then paged.
+ * `symbols` is every symbol a read row trades, before those three filters. A
+ * query name or enum value the route would refuse (422) is a walk bug; a
+ * symbol's or bot id's shape is not checked here.
  */
 function historyPage(bots: readonly FleetBotHistoryRow[], query: URLSearchParams): FleetBotHistoryPage | null {
   const status = query.get('status');
@@ -680,15 +692,19 @@ function historyPage(bots: readonly FleetBotHistoryRow[], query: URLSearchParams
   ) return null;
   const narrowed = (row: FleetBotHistoryRow, names: readonly ('clerk_id' | 'strategy_instance_id' | 'status' | 'world' | 'symbol')[]) =>
     names.every((name) => query.get(name) === null || row[name] === query.get(name));
-  // Every bot's instant is its own, so newest-first needs no tie-break here.
   const read = bots
     .filter((row) => narrowed(row, ['clerk_id', 'strategy_instance_id']))
-    .sort((a, b) => (b.started_at_ms ?? 0) - (a.started_at_ms ?? 0));
+    .sort((a, b) => (b.started_at_ms ?? 0) - (a.started_at_ms ?? 0)
+      || a.clerk_id.localeCompare(b.clerk_id) || a.strategy_instance_id.localeCompare(b.strategy_instance_id));
   const matching = read.filter((row) => narrowed(row, ['status', 'world', 'symbol']));
+  const clerkId = query.get('clerk_id');
   return {
     observed_at_ms: NOW_MS,
     rows: matching.slice((page - 1) * pageSize, page * pageSize),
-    gaps: [],
+    gaps: clerkId === null || [PAPER_CLERK, LIVE_CLERK].includes(clerkId) ? [] : [{
+      broker: 'alpaca', clerk_id: clerkId, account_id: null, strategy_instance_id: null,
+      reason: 'No account by this id is known here, so its bots cannot be listed.', reason_code: 'unknown_account',
+    }],
     total: matching.length,
     page,
     page_size: pageSize,
@@ -862,8 +878,6 @@ export class OwnerWalkWorld {
   private botEnd: BotEndView = WALK_DEFAULT_END;
   /** Bumped on every state change, so the bot page adopts the new snapshot. */
   private surfaceVersion = 1;
-  /** The sids the last clear took off Home. */
-  private readonly cleared = new Set<string>();
   /** Commands held back until the walk releases them, by `action_id`. */
   private readonly holds = new Map<string, Promise<void>>();
 
@@ -1059,8 +1073,7 @@ export class OwnerWalkWorld {
 
   private paperCatalog(): BotCatalogView[] {
     const walked = walkedCatalogRow(this.phase);
-    return [...(walked === null ? [] : [walked]), EARLIER_FINISHED]
-      .filter((row) => !this.cleared.has(row.strategy_instance_id));
+    return [...(walked === null ? [] : [walked]), EARLIER_FINISHED];
   }
 
   private panel(): BotPanelView {
@@ -1213,7 +1226,6 @@ export class OwnerWalkWorld {
           error: { action_id: 'archive', outcome: 'conflict', receipt_id: null, recorded_at_ms: NOW_MS, ...CLEAR_REFUSAL },
         };
       }
-      this.cleared.add(sid);
       if (sid === WALKED_BOT) this.advance('cleared');
       return {
         strategy_instance_id: sid,

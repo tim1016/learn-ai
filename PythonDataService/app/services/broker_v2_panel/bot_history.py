@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
+from typing import NamedTuple
 
 from app.broker.alpaca.clerk.account_authority import (
     authority_kind_for_account,
@@ -113,8 +114,11 @@ _BOT_GAP_COPY = "This bot's records could not be read, so it is not listed."
 _UNREADABLE_WHY = "could not be read"
 _SCHEMA_WHY = "are kept in a record format this version cannot read"
 
-#: One memo per database no running Clerk owns, for this process's life.
+#: One memo per database no running Clerk owns, for this process's life:
+#: an account's Dry Runs and its other world, each kept to its last answer.
 _SOURCE_MEMOS: dict[Path, RevisionMemo[CustodyHistory]] = {}
+#: How many of an account's databases one History read reads at once.
+_SOURCES_READ_AT_ONCE = 4
 
 _WORLDS: dict[AuthorityKind, BotHistoryWorld] = {
     "real_live": "live",
@@ -122,6 +126,9 @@ _WORLDS: dict[AuthorityKind, BotHistoryWorld] = {
     "shadow": "shadow",
     "synthetic": "dry_run",
 }
+
+#: A Live account's other world, named in a sentence.
+_OTHER_WORLD_NAMES: dict[AuthorityKind, str] = {"shadow": "Shadow", "real_live": "Live"}
 
 _STATUS_LABELS: dict[BotHistoryStatus, str] = {
     "running": "Running",
@@ -144,6 +151,9 @@ class _Source:
     world: AuthorityKind
     #: The one Dry Run a ``sim:`` database holds; ``None`` for a whole world.
     strategy_instance_id: str | None = None
+    #: Why its bots' pages cannot open: the account's workspace reads its own
+    #: world and its Dry Runs, never its other world (``_sibling_sources``).
+    page_unavailable_reason: str | None = None
 
 
 async def account_bot_history(
@@ -164,24 +174,22 @@ async def account_bot_history(
     only = None if strategy_instance_id is None else (strategy_instance_id,)
     world = authority_kind_for_account(facade.account_id, account_mode=facade.account_mode)
     now_ms = now_ms_utc()
-    # Each database this history reads: the world it holds, the one Dry Run
-    # it holds (``None`` for a whole world), and its read.
-    reads: list[tuple[AuthorityKind, str | None, Callable[[], CustodyHistory]]] = [
+    reads = [
         # The account's own, with this Clerk's own fee-evidence freshness.
-        (world, None, partial(facade.repository.bot_history, only)),
+        _Read(world, None, partial(facade.repository.bot_history, only)),
         *(
-            (source.world, source.strategy_instance_id, partial(
+            _Read(source.world, source.strategy_instance_id, partial(
                 read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
                 strategy_instance_ids=only if source.strategy_instance_id is None else (source.strategy_instance_id,),
                 memo=_SOURCE_MEMOS.setdefault(source.path, RevisionMemo()),
-            ))
+            ), page_unavailable_reason=source.page_unavailable_reason)
             for source in (*_sibling_sources(facade), *_dry_run_sources(broker, only=strategy_instance_id))
         ),
     ]
-    answers = await asyncio.gather(*(
-        _read_source(read, world=source_world, dry_run_sid=dry_run_sid, account_id=resolved)
-        for source_world, dry_run_sid, read in reads
-    ))
+    # At most a few at once: the worker threads are shared with the
+    # Clerk's own lease heartbeat, which a history read must never hold up.
+    limit = asyncio.Semaphore(_SOURCES_READ_AT_ONCE)
+    answers = await asyncio.gather(*(_read_source(read, account_id=resolved, limit=limit) for read in reads))
     bots = sorted(
         (bot for read_bots, _ in answers for bot in read_bots),
         key=lambda bot: (-(bot.started_at_ms or 0), bot.strategy_instance_id),
@@ -190,24 +198,39 @@ async def account_bot_history(
     return AccountBotHistory(account_id=resolved, observed_at_ms=now_ms, bots=tuple(bots), gaps=gaps)
 
 
+class _Read(NamedTuple):
+    """One database this history reads."""
+
+    world: AuthorityKind
+    #: The one Dry Run it holds; ``None`` for a whole world.
+    dry_run_sid: str | None
+    read: Callable[[], CustodyHistory]
+    #: Set for a world the account's workspace does not read (``_Source``).
+    page_unavailable_reason: str | None = None
+
 
 async def _read_source(
-    read: Callable[[], CustodyHistory], *, world: AuthorityKind, dry_run_sid: str | None, account_id: str,
+    source: _Read, *, account_id: str, limit: asyncio.Semaphore,
 ) -> tuple[tuple[BotHistoryBot, ...], tuple[BotHistoryGap, ...]]:
     """One database's bots and gaps; a database that cannot be read is its own gap."""
-    try:
-        history = await asyncio.to_thread(read)
-    except (*_UNREADABLE, CustodySchemaUnreadable) as exc:
-        logger.warning(
-            "A bot-history source could not be read; it is named as a gap",
-            exc_info=True,
-            extra={"action": "bot_history_source_unreadable", "account_id": account_id, "world": world,
-                   "strategy_instance_id": dry_run_sid,
-                   "schema_version": getattr(exc, "schema_version", None)},
+    log = {"action": "bot_history_source_unreadable", "account_id": account_id, "world": source.world,
+           "strategy_instance_id": source.dry_run_sid}
+    async with limit:
+        try:
+            history = await asyncio.to_thread(source.read)
+        except CustodySchemaUnreadable as exc:
+            logger.warning(
+                "A bot-history source keeps a schema this build cannot read; it is named as a gap",
+                extra={**log, "schema_version": exc.schema_version},
+            )
+            return (), (_gap_for(source.world, source.dry_run_sid, why=_SCHEMA_WHY),)
+        except _UNREADABLE:
+            logger.warning("A bot-history source could not be read; it is named as a gap", exc_info=True, extra=log)
+            return (), (_gap_for(source.world, source.dry_run_sid, why=_UNREADABLE_WHY),)
+        return await asyncio.to_thread(
+            compose_bots, history, authority_world=source.world, account_id=account_id,
+            page_unavailable_reason=source.page_unavailable_reason,
         )
-        why = _SCHEMA_WHY if isinstance(exc, CustodySchemaUnreadable) else _UNREADABLE_WHY
-        return (), (_gap_for(world, dry_run_sid, why=why),)
-    return await asyncio.to_thread(compose_bots, history, authority_world=world, account_id=account_id)
 
 
 def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
@@ -224,7 +247,14 @@ def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
     path = facade.repository.neighbour_custody_file(sibling)
     if not path.is_file():
         return ()
-    return (_Source(path=path, world=authority_kind_for_account(sibling, account_mode="live")),)
+    world = authority_kind_for_account(sibling, account_mode="live")
+    return (_Source(
+        path=path, world=world,
+        page_unavailable_reason=(
+            f"This bot ran in the account's {_OTHER_WORLD_NAMES[world]} world, which the account's pages "
+            "don't open, so it has no page of its own. History keeps its record."
+        ),
+    ),)
 
 
 def _dry_run_sources(broker: str, *, only: str | None) -> tuple[_Source, ...]:
@@ -256,6 +286,7 @@ def _gap_for(world: AuthorityKind, dry_run_sid: str | None, *, why: str) -> BotH
 
 def compose_bots(
     history: CustodyHistory, *, authority_world: AuthorityKind, account_id: str,
+    page_unavailable_reason: str | None = None,
 ) -> tuple[tuple[BotHistoryBot, ...], tuple[BotHistoryGap, ...]]:
     """Word one custody database's bots, each on its own: one it cannot read is a gap.
 
@@ -267,7 +298,7 @@ def compose_bots(
         try:
             bots.append(_bot(
                 facts, authority_world=authority_world, account_id=account_id,
-                money_unavailable=history.money_unavailable,
+                money_unavailable=history.money_unavailable, page_unavailable_reason=page_unavailable_reason,
             ))
         except _BOT_UNREADABLE:
             logger.warning(
@@ -282,6 +313,7 @@ def compose_bots(
 
 def _bot(
     facts: BotFacts, *, authority_world: AuthorityKind, account_id: str, money_unavailable: str | None,
+    page_unavailable_reason: str | None,
 ) -> BotHistoryBot:
     sid = facts.strategy_instance_id
     if facts.config is None:
@@ -322,6 +354,7 @@ def _bot(
             if len(runs) > 1 else None
         ),
         runs=runs,
+        page_unavailable_reason=page_unavailable_reason,
     )
 
 

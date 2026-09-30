@@ -13,9 +13,10 @@ import { historyAccountName, historyWorldChip, type FleetBotHistoryRow } from '.
 
 /**
  * History's list (#2574): one line per bot, newest first. Each line names its
- * account and wears the world its run was in (`historyWorldChip`), and the whole line opens
- * the bot's own page — its one real link, the bot's name, stretched over the
- * row. Every figure is the backend's: counts as counted, dollars as authored
+ * account and wears the world its run was in (`historyWorldChip`), and the
+ * whole line opens the bot's own page — its one real link, the bot's name,
+ * stretched over the row. A bot of the account's other world has no page, so
+ * its line says why instead. Every figure is the backend's: counts as counted, dollars as authored
  * strings (an unknown one says so, never $0), outcomes in the backend's
  * words with their code through `receiptLabel`.
  *
@@ -52,7 +53,9 @@ export class HistoryTableComponent {
       return {
         key,
         bot,
-        page: accountWorkspaceBotRoute({
+        // A bot of the account's other world has no page to open (the
+        // backend says why), so its name is not a link.
+        page: bot.page_unavailable_reason !== null ? null : accountWorkspaceBotRoute({
           broker: bot.broker,
           clerkId: bot.clerk_id,
           accountId: (lane === undefined ? null : laneConfirmedAccount(lane)) ?? bot.account_id,

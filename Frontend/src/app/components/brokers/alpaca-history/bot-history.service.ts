@@ -78,18 +78,11 @@ export function botHistoryQuery(
   };
 }
 
-const WORLD_TONES: Readonly<Record<BotHistoryWorld, LaneModeChip['tone']>> = {
-  live: 'live',
-  paper: 'paper',
-  shadow: 'shadow',
-  dry_run: 'dry-run',
-};
-
 /** The chip a History row wears: the world that bot's run was in, worded by
  * the backend (`world_label`) — never the lane's mode today, so a red chip
  * only ever means real money (owner decision 2026-09-30, #2615). */
 export function historyWorldChip(row: FleetBotHistoryRow): LaneModeChip {
-  return { tone: WORLD_TONES[row.world], mode: row.world_label };
+  return { tone: row.world, mode: row.world_label };
 }
 
 /** The one name History shows an account by: its lane's name, else its

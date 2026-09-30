@@ -58,7 +58,7 @@ def _bot(sid: str, *, account: str, started_at_ms: int, status: str = "finished"
         status_label=status.title(), started_at_ms=started_at_ms, stopped_at_ms=started_at_ms + 60_000,
         outcome=None, transaction_count=2, orders=BotHistoryOrders(sent=1, filled=1, cancelled=0, rejected=0),
         budget_usd="150.00", result_usd="9.99", fees_usd="0.01", money_unavailable_reason=None,
-        money_scope_note=None, runs=(),
+        money_scope_note=None, runs=(), page_unavailable_reason=None,
     )
 
 

@@ -35,20 +35,24 @@ the broker, or a limit that expired unsent -- is not a flatten. Nor is a
 partial one: a flatten whose order sold part of the position and was then
 cancelled or expired, or is still working, leaves the bot holding the rest,
 so the run reads as stopped, not flattened -- unless the stuck-EXIT
-watchdog's re-drive of that flatten then sold the rest (#2615). A re-drive
-carries on the EXIT its episode names (``redrive_episode_token``), so one
-that sold for an owner's flatten -- directly, or re-driving an earlier
-re-drive of it -- finishes that flatten, at the flatten's own acceptance.
+watchdog's re-drives of that flatten then sold the rest (#2615). A re-drive
+carries on its ``EXIT_NOT_FLAT`` episode (``redrive_episode_token``), and the
+episode's raise and refreshes in the transition log name every EXIT it was
+about -- the flatten, then each re-drive that failed -- so a re-drive that
+sold for an owner's flatten, however many tries in, finishes that flatten,
+at the flatten's own acceptance.
 
 A custody file no running Clerk has opened since a schema upgrade -- a Live
 account's retired Shadow world, a Dry Run from before one -- keeps its old
 schema. It is read through the Clerk's own chained migrations applied to a
 private in-memory copy (``read_custody_history``), so the file is never
-written; one no migration reaches is ``CustodySchemaUnreadable`` (#2615).
+written; one no migration reaches (a newer build's, the offline v8 ceremony,
+one with no registered path) is ``CustodySchemaUnreadable`` (#2615).
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -65,7 +69,7 @@ from app.broker.alpaca.clerk.sqlite.budget_projection import (
     RevisionMemo,
     bot_results_from_fills,
     bots_holding_money,
-    query_only_snapshot,
+    read_at_revision,
 )
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
@@ -77,8 +81,11 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
 from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
-from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, is_upgradable_to_current, migrate_schema
+from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, migrate_schema
+from app.broker.alpaca.clerk.sqlite.timeline_query import uncertainty_sequence
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
+
+logger = logging.getLogger(__name__)
 
 #: The broker's order states each order count reads. Lower-cased: Alpaca's
 #: own spelling ("canceled") is the stored one.
@@ -359,11 +366,15 @@ def _owner_flatten_instants(
 
 
 def _redriven_exits(conn: sqlite3.Connection, *, tokens: set[str]) -> dict[str, tuple[str, ...]]:
-    """For each re-drive episode token asked about, the EXITs its episode names.
+    """For each re-drive episode token asked about, every EXIT its episode was about.
 
-    An ``EXIT_NOT_FLAT`` episode's evidence is the stuck EXIT's order; a
-    re-drive decided under its token carries that EXIT on. Only the episodes
-    a sold re-drive names are read.
+    An ``EXIT_NOT_FLAT`` episode's evidence is the stuck EXIT's order, and a
+    failed re-drive refreshes the episode with its own order, so the
+    episode's row names only the latest. Its raise (the transition its id
+    names) and each refresh (``proof_reference`` = the episode) stay in the
+    log, and together name them all. Only the episodes a sold re-drive names
+    are read; facts that cannot be read prove no flatten, and never fail the
+    whole history.
     """
     if not tokens:
         return {}
@@ -372,13 +383,27 @@ def _redriven_exits(conn: sqlite3.Connection, *, tokens: set[str]) -> dict[str, 
         for row in conn.execute("SELECT order_ref, effect_operation_id FROM orders")
     }
     redriven: dict[str, tuple[str, ...]] = {}
-    for row in conn.execute(
-        "SELECT uncertainty_id, facts_json FROM uncertainties WHERE reason_code = ?", (EXIT_NOT_FLAT_REASON_CODE,),
-    ):
-        token = redrive_episode_token(str(row["uncertainty_id"]))
-        if token in tokens:
-            refs = UncertaintyRaisedFacts.from_facts_json(str(row["facts_json"])).evidence_refs
-            redriven[token] = tuple(effect_of_order[ref] for ref in refs if ref in effect_of_order)
+    for row in conn.execute("SELECT uncertainty_id FROM uncertainties WHERE reason_code = ?", (EXIT_NOT_FLAT_REASON_CODE,)):
+        uncertainty_id = str(row["uncertainty_id"])
+        token = redrive_episode_token(uncertainty_id)
+        if token not in tokens:
+            continue
+        refs: set[str] = set()
+        for transition in conn.execute(
+            "SELECT facts_json FROM custody_transitions "
+            "WHERE (sequence = ? AND transition_kind = 'UNCERTAINTY_RAISED') "
+            "OR (transition_kind = 'UNCERTAINTY_REFRESHED' AND proof_reference = ?)",
+            (uncertainty_sequence(uncertainty_id), uncertainty_id),
+        ):
+            try:
+                refs.update(UncertaintyRaisedFacts.from_facts_json(str(transition["facts_json"])).evidence_refs)
+            except (TypeError, ValueError, KeyError):
+                logger.warning(
+                    "A stuck-EXIT episode's facts could not be read; its re-drives prove no flatten",
+                    exc_info=True,
+                    extra={"action": "bot_history_episode_unreadable", "uncertainty_id": uncertainty_id},
+                )
+        redriven[token] = tuple(sorted({effect_of_order[ref] for ref in refs if ref in effect_of_order}))
     return redriven
 
 
@@ -402,21 +427,20 @@ def read_custody_history(
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
-    with query_only_snapshot(db_path) as snapshot:
-        revision = int(snapshot.execute("SELECT control_revision FROM control_meta WHERE id = 1").fetchone()[0])
-        key = (revision, None if strategy_instance_ids is None else tuple(strategy_instance_ids))
-        cached = None if memo is None else memo.get(key)
-        if cached is not None:
-            return cached
+    def project(snapshot: sqlite3.Connection) -> CustodyHistory:
         with _at_current_schema(snapshot) as conn:
             fees = custody_fee_attribution(conn, now_ms=now_ms, evidence_checked_at_ms=fee_evidence_checked_at_ms)
-            history = project_custody_history(
+            return project_custody_history(
                 conn, fees=fees if fees.known else None, strategy_instance_ids=strategy_instance_ids,
                 fees_unavailable=None if fees.known else "Fee evidence is unresolved: " + "; ".join(fees.unresolved),
             )
-    if memo is not None and history.money_unavailable is None:
-        memo.put(key, history)
-    return history
+
+    # Unknown money is kept only for a file no running Clerk owns: with no
+    # fee evidence to go stale, it too moves only with the custody revision.
+    return read_at_revision(
+        db_path, strategy_instance_ids=strategy_instance_ids, memo=memo, project=project,
+        keep=lambda history: history.money_unavailable is None or fee_evidence_checked_at_ms is None,
+    )
 
 
 class CustodySchemaUnreadable(Exception):
@@ -438,13 +462,18 @@ def _at_current_schema(snapshot: sqlite3.Connection) -> Iterator[sqlite3.Connect
     if version == SCHEMA_VERSION:
         yield snapshot
         return
-    if version > SCHEMA_VERSION or not is_upgradable_to_current(version):
+    if version > SCHEMA_VERSION:
         raise CustodySchemaUnreadable(version)
     copy = sqlite3.connect(":memory:")
     try:
         snapshot.backup(copy)
         copy.row_factory = sqlite3.Row
-        migrate_schema(copy, from_version=version)
+        try:
+            migrate_schema(copy, from_version=version)
+        except ValueError as exc:
+            # No registered path from here: the offline v8 ceremony, a v6
+            # file holding rows, a version never migrated from.
+            raise CustodySchemaUnreadable(version) from exc
         copy.execute("PRAGMA query_only = ON")
         copy.execute("BEGIN")
         yield copy

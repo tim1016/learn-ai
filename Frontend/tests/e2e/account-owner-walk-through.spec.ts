@@ -144,6 +144,12 @@ function botBanner(page: Page): Locator {
   return page.locator('app-bot-banner');
 }
 
+/** The page as the app shell serves it passes AXE, landmarks and all. */
+async function expectNoAxeViolations(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page }).analyze();
+  expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+}
+
 /** `bot-banner.component.html`'s note on a cleared bot's page. */
 const CLEARED_NOTE = 'Cleared: this bot will not run again, and its records here are read-only.';
 
@@ -157,7 +163,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // ── Home before: all $25,000.00 free, one bot finished days ago. ──────
     await page.goto(PAPER_WORKSPACE);
-    const home = page.getByRole('main', { name: 'Home' });
+    const home = page.getByRole('region', { name: 'Home' });
     const freeToDeploy = headerFigure(page, 'Free to deploy');
     await expect(freeToDeploy).toHaveText('$25,000.00');
     const accountBar = home.getByRole('list', { name: 'Where the money is' });
@@ -367,6 +373,8 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // ── Home: clear the finished bot from the Finished fold. ──────────────────
     await page.goto(PAPER_WORKSPACE);
     const finished = finishedFold(page);
+    await expect(finished).toBeVisible();
+    await expectNoAxeViolations(page);
     await finished.locator('summary').click();
     await finished.getByRole('checkbox', { name: `Select ${WALKED_BOT}` }).check();
     await finished.getByRole('button', { name: 'Clear selected (1)' }).click();
@@ -385,11 +393,11 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(historyBots(page)).toHaveText([WALKED_BOT, DRY_RUN_BOT, LIVE_CLEARED_BOT]);
     await expect(history).toContainText('Page 1 of 1 · 3 bots');
     await expect(historyRow(page, WALKED_BOT)).toContainText('Cleared');
-    await expect(historyRow(page, DRY_RUN_BOT)).toContainText(WORLD_LABELS.dry_run);
+    // Each row wears the world its run was in, not its lane's mode (#2615).
+    await expect(historyRow(page, DRY_RUN_BOT).locator('app-alpaca-lane-mode-chip')).toHaveText(WORLD_LABELS.dry_run);
 
     // The page passes AXE as the app shell serves it, landmarks and all.
-    const axe = await new AxeBuilder({ page }).analyze();
-    expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+    await expectNoAxeViolations(page);
 
     // ── The cleared bot's page, from its History row: read-only, Deploy again. ─
     await history.getByRole('link', { name: WALKED_BOT, exact: true }).click();

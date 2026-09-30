@@ -21,7 +21,7 @@ from app.broker.v2panel.vocabulary import copy_for, duty_outcome_copy_key
 from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.services.bot_end import SCHEDULED_END_REASON_CODE
-from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
+from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE, PROVISIONAL_STOP_REASON_CODE
 from app.services.broker_v2_panel.feed_continuity_projection import WARMUP_REFUSAL_COPY
 
 #: Each end whose cause says more than its kind: (label, explanation).
@@ -50,6 +50,12 @@ END_REASON_COPY: dict[str, tuple[str, str]] = {
     "SERVICE_SHUTDOWN": (
         "Stopped when the service shut down",
         "The service shut down while the bot was running, which ended this run.",
+    ),
+    # Every Stop records this first and replaces it once its custody is
+    # proven; one never proven keeps it, and it says nothing of who stopped.
+    PROVISIONAL_STOP_REASON_CODE: (
+        "Stopped",
+        "The run stopped. How it ended, and what it still holds, is not recorded yet.",
     ),
     # A failed launch recorded before #2667 is a stop with this reason: the
     # compensation runs through the normal Stop, but nobody stopped it (#2559).

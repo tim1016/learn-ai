@@ -75,7 +75,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     record_exit_recovery,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    EXIT_REDRIVE_DECISION_PREFIX,
+    redrive_decision_prefix,
     redrive_episode_token,
     regular_session_sale_waits_for_open,
 )
@@ -198,7 +198,7 @@ def episode_attempts(
     repo: ClerkSqliteRepository, *, sid: str, episode: dict, episode_token: str,
 ) -> tuple[int, tuple[EpisodeAttempt, ...]]:
     """The single history reader for counts, session waits and send outcomes."""
-    prefix = f"cmd:{sid}:{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-"
+    prefix = f"cmd:{sid}:{redrive_decision_prefix(episode_token)}"
     redrives = 0
     while repo.get_command(f"{prefix}{redrives + 1}") is not None:
         redrives += 1
@@ -392,7 +392,7 @@ async def _recover_stale_exit(
     try:
         accepted = await intake.off_loop(
             _accept_admissible_redrive, repo, broker_symbol=broker_symbol, strategy_instance_id=sid,
-            symbol=cause.symbol, decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{stale.episode_token}-{stale.redrives + 1}",
+            symbol=cause.symbol, decision_id=f"{redrive_decision_prefix(stale.episode_token)}{stale.redrives + 1}",
             entry_order_ref=entries[-1].order_ref, confirmed_shape=shape,
             regular_session_only=stale.regular_session_only,
         )

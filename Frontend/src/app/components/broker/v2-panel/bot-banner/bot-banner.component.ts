@@ -15,6 +15,7 @@ import {
 import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import {
   AlpacaLiveVerdictService,
+  LANE_MODE_WORDING,
   verdictModeChip,
   type LaneModeChip,
 } from '../../../../services/alpaca-live-verdict.service';
@@ -100,9 +101,11 @@ export class BotBannerComponent {
     { status: 'cleared' },
   ));
 
-  /** The lane's world, worded once, for a bot that trades the lane's money. */
-  protected readonly worldChip = computed<LaneModeChip | null>(() =>
-    this.dryRun() ? null : verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
+  /** The bot's world, worded once: a Dry Run's simulated cash, else the lane's own mode. */
+  protected readonly worldChip = computed<LaneModeChip>(() =>
+    this.dryRun()
+      ? { tone: 'dry_run', mode: LANE_MODE_WORDING.dry_run }
+      : verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
   );
 
   /** Deploy again for this bot, under the routed account. */

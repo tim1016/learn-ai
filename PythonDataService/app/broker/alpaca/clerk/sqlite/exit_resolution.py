@@ -178,17 +178,20 @@ OWNER_FLATTEN_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, PANEL_FLATT
 
 
 def redrive_episode_token(uncertainty_id: str) -> str:
-    """The token a stuck-EXIT episode's re-drives are decided under.
+    """The token a stuck-EXIT episode's re-drives are decided under (``redrive_decision_prefix``).
 
-    Each re-drive of the ``EXIT_NOT_FLAT`` episode ``uncertainty_id`` is the
-    decision ``EXIT_REDRIVE_DECISION_PREFIX + token + "-" + n``, so the token
-    names which episode -- and so which stuck EXIT -- a re-drive carries on.
+    It names which episode -- and so which stuck EXIT -- a re-drive carries on.
     """
     return hashlib.sha256(uncertainty_id.encode("utf-8")).hexdigest()[:12]
 
 
+def redrive_decision_prefix(episode_token: str) -> str:
+    """Every re-drive of one episode is decided as this prefix and its attempt number, from 1."""
+    return f"{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-"
+
+
 def redriven_episode_token(decision_id: str) -> str | None:
-    """The episode token a re-drive's decision names, or ``None`` for any other decision."""
+    """The episode token a re-drive's decision names (``redrive_decision_prefix``), or ``None`` for any other."""
     if not decision_id.startswith(EXIT_REDRIVE_DECISION_PREFIX):
         return None
     token, _, _attempt = decision_id.removeprefix(EXIT_REDRIVE_DECISION_PREFIX).rpartition("-")

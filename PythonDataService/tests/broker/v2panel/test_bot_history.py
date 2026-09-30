@@ -275,8 +275,16 @@ async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
     rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
     assert (rehearsal.world, rehearsal.world_label) == ("shadow", "SHADOW · simulated fills on your live account")
     assert rehearsal.status == "finished" and rehearsal.account_id == _ACCOUNT
-    # The account's own bots are read from its own database, as before.
-    assert {"done", "live"} <= {bot.strategy_instance_id for bot in history.bots}
+    # Its page would not open: the Live account's workspace reads only its own
+    # world, and answered a Shadow bot's page "No custody record exists".
+    assert rehearsal.page_unavailable_reason == (
+        "This bot ran in the account's Shadow world, which the account's pages don't open, "
+        "so it has no page of its own. History keeps its record."
+    )
+    # The account's own bots are read from its own database, as before, and
+    # their pages -- and a Dry Run's -- open.
+    assert {"done", "live", "dry-1"} <= {bot.strategy_instance_id for bot in history.bots}
+    assert all(bot.page_unavailable_reason is None for bot in history.bots if bot.strategy_instance_id != "rehearsal")
 
 
 def _shadow_rehearsal(lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -325,13 +333,18 @@ async def test_an_old_shadow_database_no_clerk_migrated_is_read_through_the_cler
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version", [3, 8, SCHEMA_VERSION + 1], ids=["no_registered_path", "offline_v8_ceremony", "newer_build"],
+)
 async def test_a_world_in_a_record_format_no_migration_reaches_is_named_as_such(
-    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, version: int,
 ) -> None:
-    """A file from a newer build is named for what it is, not as unreadable."""
+    """A file no migration brings forward is named for what it is -- and
+    never fails the account's whole read (a v8 file's refusal used to escape
+    as a ``ValueError``)."""
     path = _shadow_rehearsal(lane, monkeypatch)
     conn = sqlite3.connect(path)
-    conn.execute("UPDATE control_meta SET schema_version = ? WHERE id = 1", (SCHEMA_VERSION + 1,))
+    conn.execute("UPDATE control_meta SET schema_version = ? WHERE id = 1", (version,))
     conn.commit()
     conn.close()
 

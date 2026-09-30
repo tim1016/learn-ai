@@ -10242,6 +10242,8 @@ export interface components {
             money_unavailable_reason: string | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Page Unavailable Reason */
+            page_unavailable_reason: string | null;
             /** Result Usd */
             result_usd: string | null;
             /** Runs */
@@ -16315,6 +16317,8 @@ export interface components {
             money_unavailable_reason: string | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
+            /** Page Unavailable Reason */
+            page_unavailable_reason: string | null;
             /** Result Usd */
             result_usd: string | null;
             /** Runs */

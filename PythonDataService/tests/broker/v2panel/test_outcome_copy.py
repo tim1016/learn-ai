@@ -46,6 +46,8 @@ def test_every_feed_refusal_and_custody_proof_has_its_words() -> None:
         ("STOPPED", "STOP_REQUIRES_FLATTEN", False, "Stopped by you"),
         ("STOPPED", "STOPPED_FLAT", True, "Stopped and flattened"),
         ("STOPPED", "SERVICE_SHUTDOWN", False, "Stopped when the service shut down"),
+        # A stop whose custody was never proven names no one who stopped it.
+        ("STOPPED", "STOPPED_PENDING_CUSTODY_PROOF", False, "Stopped"),
         ("STOPPED", "WARMUP_HISTORY_UNAVAILABLE", False, "Refused: warmup history unavailable"),
         ("CRASHED", "FEED_DEATH", False, "Crashed: market data stopped"),
         ("CRASHED", "ValueError", False, "Crashed"),
