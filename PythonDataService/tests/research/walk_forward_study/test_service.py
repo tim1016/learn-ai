@@ -20,6 +20,7 @@ import pytest
 from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.grid_search import repository as sweep_repo
+from app.research.grid_search import service as sweeps
 from app.research.grid_search.models import CellResult, GridSearchSpec, SearchRow
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
@@ -302,7 +303,7 @@ async def test_progress_counts_the_cells_a_failed_fold_actually_recorded(conn, l
 
 async def test_status_presentation_and_resume_refusals(conn, lake: Path, monkeypatch) -> None:
     clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64, digest_scheme=DIGEST_SCHEME)
-    monkeypatch.setattr(service, "resolve_code_identity", lambda: clean)  # what the receipt records
+    monkeypatch.setattr(sweeps, "current_code_identity", lambda: clean)  # what the receipt records
     monkeypatch.setattr(lifecycle, "resolve_code_identity", lambda: clean)  # what Finish compares against
     study_id = await _launch(lake)
     await repo.claim_attempt(conn, study_id, job_id="job-x")

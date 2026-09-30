@@ -9,6 +9,7 @@ the rules do not.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
@@ -17,8 +18,15 @@ import redis
 
 from app.engine.data.policy_store import resolve_data_roots
 from app.jobs.progress import _lease_key, _state_key, get_redis
-from app.research.sweep.identity import CodeIdentity, resolve_code_identity
+from app.research.sweep.identity import (
+    LEGACY_DIGEST_SCHEME,
+    CodeIdentity,
+    EnvironmentIdentityError,
+    resolve_code_identity,
+)
 from app.research.sweep.snapshot import DataSnapshot, verify_data_snapshot
+
+logger = logging.getLogger(__name__)
 
 
 class FencedRecord(Protocol):
@@ -112,11 +120,30 @@ def resume_refusal(
     if uncommitted_changes(row):
         return f"the {noun} was launched from a working tree with uncommitted changes and cannot be resumed; launch a fresh {noun}"
     recorded = CodeIdentity.from_dict(row.receipt["code_identity"])
-    current = identity or resolve_code_identity()
-    if recorded.digest_scheme != current.digest_scheme:
+    try:
+        current = identity or resolve_code_identity()
+    except EnvironmentIdentityError:
+        # The detail view reads this refusal on every load; letting the error
+        # escape 500ed the whole page and hid the recorded cells with it
+        # (#2604). The cause is in the log; the owner gets plain words.
+        logger.warning(
+            "resume refused: this service cannot identify its installed environment",
+            extra={"action": "environment_identity_unreadable", "job_id": row.job_id},
+            exc_info=True,
+        )
         return (
-            f"the {noun} was launched before this service recorded its installed library versions, "
-            f"so a library change since launch cannot be ruled out; launch a fresh {noun}"
+            f"this service cannot identify its installed Python libraries right now, so it cannot prove "
+            f"the {noun} would finish in the environment it launched under; repair the environment, then try again"
+        )
+    if recorded.digest_scheme != current.digest_scheme:
+        if recorded.digest_scheme == LEGACY_DIGEST_SCHEME:
+            return (
+                f"the {noun} was launched before this service recorded its installed library versions, "
+                f"so a library change since launch cannot be ruled out; launch a fresh {noun}"
+            )
+        return (
+            f"the {noun} was recorded under a different identity scheme than this service uses, "
+            f"so its environment cannot be compared with this one; launch a fresh {noun}"
         )
     if recorded.source_digest != current.source_digest:
         return f"the engine or strategy code changed since launch; launch a fresh {noun}"
