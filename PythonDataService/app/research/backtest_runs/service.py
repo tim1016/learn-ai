@@ -102,7 +102,7 @@ def persist_engine_response_sync(
     )
 
 
-def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) -> int | None:
+def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) -> SaveOutcome:
     """The one best-effort write. A LEAN companion also settles its parity group afterwards.
 
     A payload the converter refuses and a write that fails mean the same thing

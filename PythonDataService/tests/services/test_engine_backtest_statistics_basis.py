@@ -14,6 +14,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
+from app.engine.engine import ClosingBarSkip
+from app.engine.strategy.signal_intent import SignalIntentKind
+from app.lean_sidecar.closing_bar import ClosingBarConvention
 from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services.engine_backtest_service import _aggregate_backtest_response
@@ -45,7 +48,7 @@ def _marked_curve() -> list[SimpleNamespace]:
     ]
 
 
-def _result() -> SimpleNamespace:
+def _result(*, closing_bar_skips: list[ClosingBarSkip] | None = None) -> SimpleNamespace:
     """The parts of ``BacktestResult`` the aggregation stage reads."""
     return SimpleNamespace(
         initial_cash=Decimal(10_000),
@@ -58,6 +61,8 @@ def _result() -> SimpleNamespace:
         equity_curve=_marked_curve(),
         insights=[],
         insight_summary={},
+        closing_bar_convention=ClosingBarConvention.SKIP_CLOSING_BAR,
+        closing_bar_skips=closing_bar_skips or [],
     )
 
 
@@ -174,3 +179,19 @@ def test_the_actual_producer_records_conventions_and_preserves_unknown_data_iden
     )
     assert with_manifest.evidence_provenance.data_contract == "lake_complete_sessions/v1"
     assert with_manifest.evidence_provenance.data_availability_hash == "a" * 64
+
+
+def test_the_producer_records_its_closing_bar_convention_and_every_decision_it_set_aside() -> None:
+    """#2607: a run records how it settled closing-bar decisions, and which it set aside."""
+    skip = ClosingBarSkip(bar_close_ms=_NOW_MS + 45 * 60_000, intent=SignalIntentKind.ENTER, close_price=Decimal("99.50"))
+
+    response = _aggregate_backtest_response(
+        result=_result(closing_bar_skips=[skip]), request=_request(), strategy=_strategy(), lake_manifest=None,
+        on_phase=lambda _phase: None, on_log=lambda _line: None,
+    )
+
+    provenance = response.evidence_provenance
+    assert provenance.closing_bar_convention == "skip_closing_bar/v1"
+    assert [(s.bar_close_ms, s.intent, s.close_price) for s in provenance.closing_bar_skips] == [
+        (_NOW_MS + 45 * 60_000, "ENTER", 99.5)
+    ]

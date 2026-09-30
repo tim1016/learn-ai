@@ -9,6 +9,7 @@ independent of the panel's read projections.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -210,12 +211,19 @@ async def get_alpaca_paper_deploy_view(
 async def preview_alpaca_deployment_budget(
     broker: str, account_id: str, request: AlpacaPaperDeployRequest,
 ) -> DeploymentBudgetPreview:
+    """The Deploy form's review: the money preview, with the same-symbol warning beside it.
+
+    The warning is read here, not in ``preview_budget``: consent re-runs that
+    preview at Deploy, and a warning is no part of what consent binds.
+    """
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved = _require_alpaca_deploy_request(view, request)
     try:
-        return budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
+        preview = budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
+        same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
     except BudgetUnavailable as exc:
         raise budget_deploy.budget_error(exc) from exc
+    return preview.model_copy(update={"same_symbol_note": same_symbol_note})
 
 
 def _runner() -> BotTaskRegistry:

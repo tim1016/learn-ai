@@ -65,24 +65,42 @@ def opt_float(value: Any) -> float | None:
     return to_float(value)
 
 
+def str_or_blank(value: Any) -> str:
+    """Read vendor text, or ``""`` for anything that is not non-blank text.
+
+    Never ``str(None) == "None"``, which reads as a real account number,
+    order id or ticker (#2627, #2643). The order mapper reads its text this
+    way: one order missing its id or symbol is the Clerk's to contain on its
+    own, never a reason to refuse every other order in the answer (#2363).
+    """
+    return value if isinstance(value, str) and value.strip() else ""
+
+
+def to_str(value: Any, *, field: str) -> str:
+    """Parse a required Alpaca text field, returned unchanged; refuse anything else."""
+    text = str_or_blank(value)
+    if not text:
+        raise ValueError(f"Alpaca field {field!r} must be a non-blank string, got {value!r}")
+    return text
+
+
 def opt_str(value: Any) -> str | None:
     """Coerce an optional value to ``str``; ``None`` stays ``None``."""
     return None if value is None else str(value)
 
 
-def opt_bool(value: Any) -> bool | None:
+def opt_bool(value: Any, *, field: str) -> bool | None:
     """Parse an optional vendor boolean; reject truthy non-boolean values."""
     if value is None or isinstance(value, bool):
         return value
-    raise TypeError(f"Expected a boolean or null, got {type(value).__name__}")
+    raise TypeError(f"Alpaca field {field!r} must be a boolean or null, got {value!r}")
 
 
-def to_bool(value: Any) -> bool:
+def to_bool(value: Any, *, field: str) -> bool:
     """Parse a required vendor boolean without truthiness coercion."""
-    parsed = opt_bool(value)
-    if parsed is None:
-        raise TypeError("Expected a boolean, got null")
-    return parsed
+    if not isinstance(value, bool):
+        raise TypeError(f"Alpaca field {field!r} must be a boolean, got {value!r}")
+    return value
 
 
 def _decimal_string(value: float) -> str:
@@ -195,9 +213,7 @@ def from_alpaca_account(
     A number that is not a non-blank string is no account at all, in any
     mode: ``str(None)`` once became live account ``"None"`` (#2627).
     """
-    account_number = payload["account_number"]
-    if not isinstance(account_number, str) or not account_number.strip():
-        raise ValueError(f"Alpaca account_number must be a non-blank string, got {account_number!r}")
+    account_number = to_str(payload["account_number"], field="account_number")
     looks_paper = account_number.startswith(_PAPER_ACCOUNT_NUMBER_PREFIX)
     if looks_paper != (account_mode == "paper"):
         raise BrokerAccountModeDisagreement(
@@ -213,7 +229,7 @@ def from_alpaca_account(
         broker=BROKER_ID,
         account_id=account_number,
         account_mode=account_mode,
-        account_status=str(payload["status"]),
+        account_status=to_str(payload["status"], field="status"),
         currency=str(payload.get("currency") or "USD"),
         cash=to_float(payload["cash"]),
         equity=to_float(payload["equity"]),
@@ -228,9 +244,9 @@ def from_alpaca_account(
         initial_margin=opt_float(payload.get("initial_margin")),
         sma=opt_float(payload.get("sma")),
         last_equity=opt_float(payload.get("last_equity")),
-        pattern_day_trader=opt_bool(payload.get("pattern_day_trader")),
-        trading_blocked=to_bool(payload["trading_blocked"]),
-        account_blocked=to_bool(payload["account_blocked"]),
+        pattern_day_trader=opt_bool(payload.get("pattern_day_trader"), field="pattern_day_trader"),
+        trading_blocked=to_bool(payload["trading_blocked"], field="trading_blocked"),
+        account_blocked=to_bool(payload["account_blocked"], field="account_blocked"),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         observed_at_ms=_observed(observed_at_ms),
     )
@@ -245,7 +261,7 @@ def from_alpaca_portfolio_history(
         equity=[to_float(value) for value in payload["equity"]],
         profit_loss=[to_float(value) for value in payload["profit_loss"]],
         base_value=opt_float(payload.get("base_value")),
-        timeframe=str(payload["timeframe"]),
+        timeframe=to_str(payload["timeframe"], field="timeframe"),
     )
 
 
@@ -257,11 +273,11 @@ def from_alpaca_position(
     """Map a raw Alpaca position payload to a ``BrokerPosition`` (signed qty)."""
     return BrokerPosition(
         broker=BROKER_ID,
-        symbol=str(payload["symbol"]),
+        symbol=to_str(payload["symbol"], field="symbol"),
         asset_id=opt_str(payload.get("asset_id")),
         asset_class=opt_str(payload.get("asset_class")),
         quantity=to_float(payload["qty"]),
-        side=str(payload["side"]),
+        side=to_str(payload["side"], field="side"),
         average_entry_price=to_float(payload["avg_entry_price"]),
         market_value=to_float(payload["market_value"]),
         cost_basis=to_float(payload["cost_basis"]),
@@ -347,25 +363,37 @@ def from_alpaca_order(
     *,
     observed_at_ms: int | None = None,
 ) -> BrokerOrder:
-    """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event."""
+    """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event.
+
+    Its text -- id, symbol, side, type, time in force and status -- reads
+    ``""`` when missing (:func:`str_or_blank`), never refusing the answer.
+    Alpaca omits a multi-leg parent's symbol and side and a leg's type, and
+    one bad order must not refuse every other order: that answer holds the
+    account stale with no reductions, the exit freeze #2363 exists to end.
+    The Clerk contains a blank order on its own instead (#2643): a foreign
+    order missing its id, symbol, side, type, time in force or status is
+    recorded unfoldable, and an answer about its own order missing its id,
+    status, symbol or side is withheld as a lost response. ``extended_hours``
+    must be a boolean when present.
+    """
     submitted_at_ms = opt_rfc3339_to_ms(payload.get("submitted_at"))
     filled_at_ms = opt_rfc3339_to_ms(payload.get("filled_at"))
     return BrokerOrder(
         broker=BROKER_ID,
-        order_id=str(payload["id"]),
+        order_id=str_or_blank(payload.get("id")),
         client_order_id=opt_str(payload.get("client_order_id")),
-        symbol=str(payload["symbol"]),
+        symbol=str_or_blank(payload.get("symbol")),
         asset_class=opt_str(payload.get("asset_class")),
-        side=str(payload["side"]),
-        order_type=str(payload.get("order_type") or payload.get("type")),
-        time_in_force=str(payload["time_in_force"]),
+        side=str_or_blank(payload.get("side")),
+        order_type=str_or_blank(payload.get("order_type")) or str_or_blank(payload.get("type")),
+        time_in_force=str_or_blank(payload.get("time_in_force")),
         quantity=opt_float(payload.get("qty")),
         filled_quantity=opt_float(payload.get("filled_qty")) or 0.0,
         limit_price=opt_float(payload.get("limit_price")),
         stop_price=opt_float(payload.get("stop_price")),
-        extended_hours=bool(payload.get("extended_hours") or False),
+        extended_hours=opt_bool(payload.get("extended_hours"), field="extended_hours") or False,
         filled_avg_price=opt_float(payload.get("filled_avg_price")),
-        status=str(payload["status"]),
+        status=str_or_blank(payload.get("status")),
         submitted_at_ms=submitted_at_ms,
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         updated_at_ms=opt_rfc3339_to_ms(payload.get("updated_at")),
@@ -482,9 +510,9 @@ def from_alpaca_activity(
     is_trade = "transaction_time" in payload
     return BrokerActivity(
         broker=BROKER_ID,
-        activity_id=str(payload["id"]),
+        activity_id=to_str(payload["id"], field="id"),
         native_order_id=opt_str(payload.get("order_id")),
-        activity_type=str(payload["activity_type"]),
+        activity_type=to_str(payload["activity_type"], field="activity_type"),
         category="trade_activity" if is_trade else "non_trade_activity",
         symbol=opt_str(payload.get("symbol")),
         side=opt_str(payload.get("side")),
@@ -503,19 +531,22 @@ def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
     aliases it to ``asset_class``); prefer the raw key, fall back to the alias.
     A missing class fails loudly like every other required field — no sentinel
     default that would mask a schema change (the drift guard catches renames).
+    ``tradable`` and ``fractionable`` are required booleans: ``bool("false")``
+    is true (#2643).
     """
+    class_key = "class" if "class" in payload else "asset_class"
     return BrokerAsset(
         broker=BROKER_ID,
-        asset_id=str(payload["id"]),
-        symbol=str(payload["symbol"]),
+        asset_id=to_str(payload["id"], field="id"),
+        symbol=to_str(payload["symbol"], field="symbol"),
         name=opt_str(payload.get("name")),
-        asset_class=str(payload["class"] if "class" in payload else payload["asset_class"]),
+        asset_class=to_str(payload[class_key], field=class_key),
         exchange=opt_str(payload.get("exchange")),
-        status=str(payload["status"]),
-        tradable=bool(payload.get("tradable", False)),
-        fractionable=bool(payload.get("fractionable", False)),
-        shortable=opt_bool(payload.get("shortable")),
-        marginable=opt_bool(payload.get("marginable")),
+        status=to_str(payload["status"], field="status"),
+        tradable=to_bool(payload["tradable"], field="tradable"),
+        fractionable=to_bool(payload["fractionable"], field="fractionable"),
+        shortable=opt_bool(payload.get("shortable"), field="shortable"),
+        marginable=opt_bool(payload.get("marginable"), field="marginable"),
     )
 
 
@@ -532,9 +563,10 @@ def from_alpaca_clock(
 
     An open answer must name its close: liveness reads it as the instant the
     answer stops proving the market open (#2596), so one without it raises
-    rather than proving the market open with no end.
+    rather than proving the market open with no end. ``is_open`` must be a
+    boolean: ``bool("false")`` would prove a closed market open (#2643).
     """
-    is_open = bool(payload["is_open"])
+    is_open = to_bool(payload["is_open"], field="is_open")
     next_close_ms = opt_rfc3339_to_ms(payload.get("next_close"))
     if is_open and next_close_ms is None:
         raise ValueError("Alpaca clock reports the market open but names no next close.")

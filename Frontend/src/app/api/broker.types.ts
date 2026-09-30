@@ -9402,12 +9402,29 @@ export interface components {
             win_rate?: number;
         };
         /**
+         * BacktestRunClosingBarSkipResponse
+         * @description One decision the run's closing-bar rule set aside (#2607).
+         */
+        BacktestRunClosingBarSkipResponse: {
+            /** Barclosems */
+            barCloseMs: number;
+            /** Closeprice */
+            closePrice: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
+        };
+        /**
          * BacktestRunDetailResponse
          * @description Everything the run report renders, plus the bounded trade evidence.
          */
         BacktestRunDetailResponse: {
             /** Brokeragepolicy */
             brokeragePolicy: string | null;
+            /** Closingbarskips */
+            closingBarSkips: components["schemas"]["BacktestRunClosingBarSkipResponse"][];
             /** Commissionperorder */
             commissionPerOrder: number | null;
             /** Datapolicy */
@@ -12536,6 +12553,34 @@ export interface components {
             kind: "close_leg";
         };
         /**
+         * ClosingBarConvention
+         * @description How a run treats a Signal Program decision on the closing bar.
+         *
+         *     Recorded on every backtest run's evidence provenance, so evidence produced
+         *     under a different convention is classified rather than silently compared.
+         * @enum {string}
+         */
+        ClosingBarConvention: "skip_closing_bar/v1" | "lean_next_open/v1";
+        /**
+         * ClosingBarSkipRecord
+         * @description One decision a run's closing-bar convention set aside (#2607).
+         *
+         *     An ENTER produced no trade. An EXIT stayed due: the program decided it
+         *     again from the next session, when its own exit condition said so, instead
+         *     of at this bar's close.
+         */
+        ClosingBarSkipRecord: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Close Price */
+            close_price: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
+        };
+        /**
          * CohortActionResult
          * @description The batch outcome: every leg answered, in request order (ADR 0051 D5).
          */
@@ -14401,6 +14446,8 @@ export interface components {
              * @default 0
              */
             risk_revision?: number;
+            /** Same Symbol Note */
+            same_symbol_note?: string | null;
             /**
              * Shortcuts
              * @default []
@@ -14951,11 +14998,6 @@ export interface components {
              */
             fill_mode?: string;
             /**
-             * Force Flat At
-             * @description At the first minute bar whose wall-clock time reaches this value, the engine cancels all queued / deferred orders, clears active TP/SL brackets, closes every open position at that minute's close, and calls strategy.on_force_flat(). Once per calendar day. Example: '15:58:00' for ET data.
-             */
-            force_flat_at?: string | null;
-            /**
              * From Date
              * @description YYYY-MM-DD override (legacy: start_date)
              */
@@ -14990,11 +15032,6 @@ export interface components {
              * @default true
              */
             save_study?: boolean;
-            /**
-             * Session Entry Cutoff
-             * @description After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.
-             */
-            session_entry_cutoff?: string | null;
             /**
              * Slippage Per Share
              * @description Per-share slippage applied against the trade direction at fill. Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a non-zero value (e.g. 0.02 = 2 ticks for US equities) to model a more realistic execution cost.
@@ -21416,8 +21453,9 @@ export interface components {
          *     decision bar's close for a leg placed as the program decides, and the live
          *     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
          *     or the send-time re-price of an exit sent after its session. A
-         *     regular-hours run's EXIT on the day's last bar goes out after the close
-         *     as such a limit, so Start of a regular-hours run refuses
+         *     regular-hours run's exits outside the session -- a manual Flatten, the
+         *     watchdog's re-drive of a refused exit, an exit that reaches the broker
+         *     after the close -- are such limits, so Start of a regular-hours run refuses
          *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
          *     never carried into a new deployment; resolving it requires Flatten before
          *     a fresh Deploy (#2504).
@@ -23534,6 +23572,12 @@ export interface components {
         };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
+            closing_bar_convention?: components["schemas"]["ClosingBarConvention"] | null;
+            /**
+             * Closing Bar Skips
+             * @default []
+             */
+            closing_bar_skips?: components["schemas"]["ClosingBarSkipRecord"][];
             /** Daily Return Convention */
             daily_return_convention: string;
             /** Data Availability Hash */

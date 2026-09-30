@@ -28,7 +28,10 @@ if TYPE_CHECKING:
 
 from app.config import settings
 from app.lean_sidecar import config as sidecar_config
-from app.lean_sidecar.launcher.models import LaunchResponse
+from app.lean_sidecar.launcher.models import (
+    LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA,
+    LaunchResponse,
+)
 from app.lean_sidecar.launcher_client import DEFAULT_LAUNCHER_URL
 from app.lean_sidecar.workspace import resolve_workspace
 from app.main import app
@@ -213,6 +216,25 @@ def _launcher_success_body(run_id: str) -> dict:
         lean_errors={},
         is_clean=True,
     ).model_dump()
+
+
+def _mock_launcher_healthz(mock: respx.MockRouter) -> None:
+    """Mock the ``GET /healthz`` capability probe the service sends before
+    every launch (:func:`assert_launcher_supports`, read-only workspace data).
+
+    A launcher build that predates the ``capabilities`` field reads as
+    "supports nothing optional" and the run is refused before staging, so
+    every launch-mocking test must also answer this probe.
+    """
+    mock.get("/healthz").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "capabilities": [LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA],
+            },
+        )
+    )
 
 
 class TestCalendarBlockedDatesEndpoint:
@@ -544,6 +566,7 @@ class TestPostTrustedRunHappyPath:
     ) -> None:
         payload = _good_payload("router_happy")
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(return_value=httpx.Response(200, json=_launcher_success_body("router_happy")))
             r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 200, r.text
@@ -569,6 +592,7 @@ class TestPostTrustedRunHappyPath:
         stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(
                 return_value=httpx.Response(
                     400,
@@ -596,6 +620,7 @@ class TestPostTrustedRunHappyPath:
         stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(side_effect=httpx.ConnectError("refused"))
             r = await client.post(
                 "/api/lean-sidecar/trusted-runs",
@@ -620,6 +645,7 @@ class TestPostTrustedRunHappyPath:
         with no manifest, no sidebar entry, and no rejection audit
         trail."""
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(
                 return_value=httpx.Response(
                     400,
@@ -664,6 +690,7 @@ class TestPostTrustedRunHappyPath:
         most common silent-failure path historically — launcher down,
         operator restarts compose, no audit of the staged work."""
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(side_effect=httpx.ConnectError("refused"))
             r = await client.post(
                 "/api/lean-sidecar/trusted-runs",
@@ -695,6 +722,7 @@ class TestPostTrustedRunHappyPath:
         so a 409 here means the slug was hand-edited to a used value."""
         payload = _good_payload("router_reused")
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(
                 return_value=httpx.Response(200, json=_launcher_success_body("router_reused")),
             )
@@ -723,6 +751,7 @@ class TestInspectionEndpoints:
         stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            _mock_launcher_healthz(mock)
             mock.post("/launch").mock(return_value=httpx.Response(200, json=_launcher_success_body("router_inspect")))
             await client.post(
                 "/api/lean-sidecar/trusted-runs",

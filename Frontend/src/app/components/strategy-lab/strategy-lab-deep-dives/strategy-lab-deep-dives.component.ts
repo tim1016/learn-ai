@@ -104,6 +104,10 @@ export class StrategyLabDeepDivesComponent {
         },
       });
     }
+    const completedTrades = this.tradesTruncated()
+      ? `${result.trades.length} recent of ${result.total_trades} completed trades`
+      : `${result.total_trades} completed trades`;
+    const closingBarSkips = result.closing_bar_skips?.length ?? 0;
     sections.push(
       {
         id: "atlas",
@@ -115,9 +119,9 @@ export class StrategyLabDeepDivesComponent {
         label: "Trade ledger",
         summary: {
           kind: "copy",
-          value: this.tradesTruncated()
-            ? `${result.trades.length} recent of ${result.total_trades} completed trades`
-            : `${result.total_trades} completed trades`,
+          value: closingBarSkips > 0
+            ? `${completedTrades} · ${closingBarSkips} decided on the closing bar`
+            : completedTrades,
         },
       },
     );

@@ -564,6 +564,12 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         raise ExternalOrderObservationError("external filled quantity must be finite and non-negative")
     if not order_type:
         raise ExternalOrderObservationError("external order type must be non-empty")
+    # The adapter reads missing text as "" rather than refusing the whole
+    # orders answer (#2643); an order without them is contained here.
+    if not order.status.strip():
+        raise ExternalOrderObservationError("external order status must be non-empty")
+    if not order.time_in_force.strip():
+        raise ExternalOrderObservationError("external order time in force must be non-empty")
     for price_name, price in (
         ("limit", order.limit_price),
         ("stop", order.stop_price),
@@ -594,7 +600,7 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         acknowledged_at_ms=None,
         ack_operator=None,
         evidence_refs=(broker_order_id,),
-        broker_state=order.status.strip().lower() or None,
+        broker_state=order.status.strip().lower(),
         filled_quantity=order.filled_quantity,
     )
 

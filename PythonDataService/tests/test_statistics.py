@@ -413,6 +413,32 @@ class TestPortfolioStatisticsWithCurve:
         assert ps.max_drawdown_pct >= 0
         assert ps.sharpe_ratio is not None
 
+    def test_exact_decimal_money_reads_identically_to_float(self) -> None:
+        """The engine's ``BacktestResult`` carries exact-Decimal money (#2550):
+        ``initial_cash``/``final_equity`` and every ``EquitySnapshot.equity``
+        are ``Decimal``. ``summarize`` accepts them interchangeably with
+        floats (module contract) and answers with the same float statistics —
+        mixing the two types inside a return series is a ``TypeError``, not a
+        statistic."""
+        from decimal import Decimal as D
+
+        days = [date(2024, 1, day) for day in (2, 3, 4, 5)]
+        from app.lean_sidecar.trading_calendar import session_close_ms_utc
+
+        float_curve = [
+            EquityPoint(session_close_ms_utc(days[0]) - 60_000, 105.0),
+            *[EquityPoint(session_close_ms_utc(day), value)
+              for day, value in zip(days, (110.0, 99.0, 108.9, 98.01), strict=True)],
+        ]
+        decimal_curve = [
+            EquityPoint(p.timestamp_ms, D(str(p.equity))) for p in float_curve
+        ]
+
+        float_stats = summarize(100.0, 98.01, [], trading_days=4, equity_curve=float_curve)
+        decimal_stats = summarize(D("100"), D("98.01"), [], trading_days=4, equity_curve=decimal_curve)
+
+        assert decimal_stats == float_stats
+
 
 # ---------------------------------------------------------------------------
 # Snapshot test: full summarize output

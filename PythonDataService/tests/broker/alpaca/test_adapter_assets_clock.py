@@ -18,10 +18,29 @@ from app.broker.alpaca.adapter import (
     from_alpaca_clock,
     rfc3339_to_ms,
 )
+from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerClockEvidence
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
+
+
+class _AssetsClockClient:
+    """The client seam: returns the raw asset rows and clock answer the test built."""
+
+    def __init__(self, *, assets: list[object] | None = None, clock: object = None) -> None:
+        self.assets = assets or []
+        self.clock = clock
+
+    async def list_assets(self, *, status: str | None = None, limit: int | None) -> list[object]:
+        return self.assets
+
+    async def get_asset(self, symbol: str) -> object:
+        return self.assets[0] if self.assets else None
+
+    async def get_clock(self) -> object:
+        return self.clock
 
 
 def test_from_alpaca_asset_maps_every_field_active(
@@ -60,10 +79,32 @@ def test_from_alpaca_asset_inactive(load_alpaca_fixture: AlpacaFixtureLoader) ->
 def test_from_alpaca_asset_accepts_the_sdk_alias_key() -> None:
     # Robust to the SDK-serialized form (`asset_class`) as well as the raw `class`.
     asset = from_alpaca_asset(
-        {"id": "a", "symbol": "AAPL", "asset_class": "us_equity", "status": "active"}
+        {
+            "id": "a",
+            "symbol": "AAPL",
+            "asset_class": "us_equity",
+            "status": "active",
+            "tradable": True,
+            "fractionable": True,
+        }
     )
 
     assert asset.asset_class == "us_equity"
+
+
+def test_from_alpaca_asset_names_the_class_key_it_read() -> None:
+    # The SDK alias is ``asset_class``; the refusal names the key actually read.
+    with pytest.raises(ValueError, match="'asset_class' must be a non-blank string"):
+        from_alpaca_asset(
+            {
+                "id": "a",
+                "symbol": "AAPL",
+                "asset_class": None,
+                "status": "active",
+                "tradable": True,
+                "fractionable": True,
+            }
+        )
 
 
 def test_from_alpaca_asset_missing_class_fails_loud() -> None:
@@ -104,3 +145,129 @@ def test_from_alpaca_clock_accepts_a_closed_answer_without_a_close() -> None:
     )
 
     assert (clock.is_open, clock.next_close_ms) == (False, None)
+
+
+_ASSET_READS = {
+    "list": lambda broker: broker.list_assets(status="active", limit=100),
+    "lookup": lambda broker: broker.get_asset("NJDCY"),
+}
+
+
+@pytest.mark.parametrize("read", sorted(_ASSET_READS))
+@pytest.mark.parametrize("field", ["id", "symbol", "class", "status"])
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["null", "blank", "whitespace"])
+async def test_broker_refuses_an_asset_whose_required_text_is_blank(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    read: str,
+    field: str,
+    value: object,
+) -> None:
+    """A null symbol once became asset "None" (#2643)."""
+    active = load_alpaca_fixture("assets", "assets.json")[0]
+    broker = AlpacaBroker(client=_AssetsClockClient(assets=[{**active, field: value}]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="asset data this app could not read") as info:
+        await _ASSET_READS[read](broker)
+
+    assert info.value.http_status == 503
+    assert isinstance(info.value.__cause__, ValueError)
+    assert f"'{field}'" in str(info.value.__cause__)
+
+
+@pytest.mark.parametrize("read", sorted(_ASSET_READS))
+async def test_broker_names_an_asset_with_no_class_as_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    read: str,
+) -> None:
+    """The asset reads once let the adapter's raw KeyError escape as a 500 (#2643)."""
+    active = load_alpaca_fixture("assets", "assets.json")[0]
+    classless = {key: value for key, value in active.items() if key != "class"}
+    broker = AlpacaBroker(client=_AssetsClockClient(assets=[classless]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="asset data this app could not read") as info:
+        await _ASSET_READS[read](broker)
+
+    assert info.value.detail is not None
+    assert "KeyError" not in info.value.detail
+    assert isinstance(info.value.__cause__, KeyError)
+
+
+_MISSING = object()
+
+
+@pytest.mark.parametrize("read", sorted(_ASSET_READS))
+@pytest.mark.parametrize("field", ["tradable", "fractionable"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("false", id="string-false"),
+        pytest.param("true", id="string-true"),
+        pytest.param(None, id="null"),
+        pytest.param(0, id="zero"),
+        pytest.param(_MISSING, id="missing"),
+    ],
+)
+async def test_broker_refuses_an_asset_flag_that_is_not_a_boolean(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    read: str,
+    field: str,
+    value: object,
+) -> None:
+    """``bool("false")`` once read an untradable asset as tradable (#2643)."""
+    active = load_alpaca_fixture("assets", "assets.json")[0]
+    row = {key: flag for key, flag in {**active, field: value}.items() if flag is not _MISSING}
+    broker = AlpacaBroker(client=_AssetsClockClient(assets=[row]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="asset data this app could not read") as info:
+        await _ASSET_READS[read](broker)
+
+    assert isinstance(info.value.__cause__, KeyError | TypeError)
+
+
+async def test_broker_asset_lookup_still_reads_an_unlisted_symbol_as_none() -> None:
+    broker = AlpacaBroker(client=_AssetsClockClient(assets=[]))  # type: ignore[arg-type]
+
+    assert await broker.get_asset("NOPE") is None
+
+
+@pytest.mark.parametrize(
+    ("clock", "cause_type"),
+    [
+        pytest.param(
+            {"is_open": True, "timestamp": "2026-07-24T10:42:48-04:00", "next_close": None},
+            ValueError,
+            id="open-with-no-close",
+        ),
+        pytest.param({"is_open": False, "next_close": None}, KeyError, id="missing-timestamp"),
+        pytest.param(None, TypeError, id="non-object-answer"),
+    ],
+)
+async def test_broker_names_a_malformed_clock_as_unavailable_evidence(
+    clock: object,
+    cause_type: type[Exception],
+) -> None:
+    """The clock read once let the adapter's raw error escape as a 500 (#2643)."""
+    broker = AlpacaBroker(client=_AssetsClockClient(clock=clock))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="market clock data this app could not read") as info:
+        await broker.get_clock_evidence()
+
+    assert info.value.http_status == 503
+    assert info.value.detail is not None
+    assert cause_type.__name__ not in info.value.detail
+    assert isinstance(info.value.__cause__, cause_type)
+
+
+@pytest.mark.parametrize("is_open", ["false", "true", None, 1, 0], ids=repr)
+async def test_broker_refuses_a_clock_whose_open_flag_is_not_a_boolean(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    is_open: object,
+) -> None:
+    """``bool("false")`` once read a closed market as open (#2643)."""
+    clock = {**load_alpaca_fixture("clock", "clock.json"), "is_open": is_open}
+    broker = AlpacaBroker(client=_AssetsClockClient(clock=clock))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="market clock data this app could not read") as info:
+        await broker.get_clock_evidence()
+
+    assert isinstance(info.value.__cause__, TypeError)

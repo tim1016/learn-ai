@@ -35,10 +35,9 @@ The parity gate (`@pytest.mark.slow` in `PythonDataService/tests/integration/par
 In-scope strategies are long-only. The pairer:
 
 - Treats `Direction.LONG` as entry.
-- Treats `Direction.SHORT` OR `Direction.FLAT` as exit. The engine's force-flat path and bracket TP/SL exits emit `SHORT`; a strategy that explicitly liquidates to zero emits `FLAT`. Both paths exit the open LONG.
+- Treats `Direction.SHORT` OR `Direction.FLAT` as exit. The engine's end-of-algorithm close and bracket TP/SL exits emit `SHORT`; a strategy that explicitly liquidates to zero emits `FLAT`. Both paths exit the open LONG.
 - Raises `NotImplementedError` on pyramiding (second LONG fill before exit).
-- Raises `ValueError` on an unmatched exit or an event stream that ends with an open LONG. The engine's `on_force_flat` session-close hook should preclude the latter.
-- Tags the trade as `is_synthetic_exit=True` when the exit's `OrderEvent.tag == "ForceFlat"`.
+- Raises `ValueError` on an unmatched exit or an event stream that ends with an open LONG.
 
 ## Parity gate
 

@@ -104,3 +104,55 @@ async def test_get_portfolio_history_maps_range_and_normalizes_timestamps(
     query = parse_qs(urlparse(responses.calls[0].request.url).query)
     assert query == {"period": [period], "timeframe": [timeframe]}
     assert journal.records_written == 1
+
+
+@pytest.mark.parametrize(
+    "vendor_body",
+    [
+        pytest.param(
+            {"timestamp": [1_700_000_000], "profit_loss": [0.0], "base_value": 1.0, "timeframe": "1D"},
+            id="missing-equity",
+        ),
+        pytest.param(
+            {
+                "timestamp": [1_700_000_000, 1_700_000_060],
+                "equity": [100_000.0],
+                "profit_loss": [0.0, 1.0],
+                "base_value": 100_000.0,
+                "timeframe": "1D",
+            },
+            id="misaligned-series",
+        ),
+        # A null timeframe once became timeframe "None" (#2643).
+        pytest.param(
+            {"timestamp": [1_700_000_000], "equity": [1.0], "profit_loss": [0.0], "timeframe": None},
+            id="null-timeframe",
+        ),
+        pytest.param(
+            {"timestamp": [1_700_000_000], "equity": [1.0], "profit_loss": [0.0], "timeframe": " "},
+            id="blank-timeframe",
+        ),
+    ],
+)
+@responses.activate
+async def test_a_malformed_portfolio_history_reaches_the_owner_as_a_named_503(
+    tmp_path: Path,
+    vendor_body: dict[str, object],
+) -> None:
+    """The history read once let the adapter's raw error escape as a 500 (#2643)."""
+    journal = CaptureJournal(capture_dir=tmp_path, clock=lambda: 1_700_000_000_000)
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="key", api_secret_key="secret"),
+        journal=journal,
+    )
+    get_broker_registry().register(AlpacaBroker(client))
+    responses.add(responses.GET, f"{_BASE}{_PATH}", json=vendor_body, status=200)
+
+    response = await _get("30D")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "broker": "alpaca",
+        "message": "Alpaca sent portfolio history data this app could not read.",
+        "why": "Part of Alpaca's portfolio history data was missing or in a form this app does not recognize.",
+    }
