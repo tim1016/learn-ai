@@ -315,9 +315,9 @@ const LIVE_MONEY_WITH_NEW = fakeAccountMoney({
 
 /** `paper_deploy_service.exit_steps_summary` for the walk's exit terms at `NOW_MS`. */
 const EXIT_STEPS_SUMMARY =
-  'Regular close (Mon Sep 21 16:00 ET): limit at decision close minus 20 bps. After-hours ends Mon Sep 21 20:00 ET. '
-  + 'Next pre-market (Tue Sep 22 04:00 ET): limit at bid minus 20 bps; hold if the spread exceeds 50 bps. '
-  + 'Next regular open (Tue Sep 22 09:30 ET): cancel the unfilled Clerk-priced limit, confirm cancellation, '
+  'Regular close (Mon Sep 21, 16:00 ET): limit at decision close minus 20 bps. After-hours ends Mon Sep 21, 20:00 ET. '
+  + 'Next pre-market (Tue Sep 22, 04:00 ET): limit at bid minus 20 bps; hold if the spread exceeds 50 bps. '
+  + 'Next regular open (Tue Sep 22, 09:30 ET): cancel the unfilled Clerk-priced limit, confirm cancellation, '
   + 'then sell the remaining quantity at market. A confirmed halt holds exits.';
 
 /** `bot_end.resolved_bot_end_view` at `NOW_MS` (09:53 ET, Mon Sep 21): that session's close minus a minute (#2607). */

@@ -35,7 +35,7 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.schemas.bot_end import BotEnd, BotEndInput
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
-from app.services.bot_end import BotEndRefused, when_words
+from app.services.bot_end import BotEndRefused
 from app.services.bot_run_terminal import prove_end_stop_outcome
 from app.services.bot_runner import (
     BotTaskRegistry,
@@ -44,6 +44,7 @@ from app.services.bot_runner import (
     get_bot_task_registry,
     set_bot_task_registry,
 )
+from app.utils.session_anchors import et_when_words
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
@@ -189,7 +190,7 @@ async def test_editing_a_running_bots_end_takes_effect_without_a_restart_and_cha
     )
 
     assert view.end_at_ms == later.end_at_ms
-    assert view.headline == f"Ends {when_words(later.end_at_ms, now_ms=clock())} · keeps its shares"
+    assert view.headline == f"Ends {et_when_words(later.end_at_ms, now_ms=clock())} · keeps its shares"
     assert registry.pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=later)]
     # No restart: the same task runs the same run.
     assert registry._bots[_SID].task is task and not task.done()

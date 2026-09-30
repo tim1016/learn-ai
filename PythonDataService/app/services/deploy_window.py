@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
-
 from app.lean_sidecar.trading_calendar import next_trading_day
 from app.schemas.run_admission import StartWindowFact
 from app.services.session_authority import scheduled_exchange_phase_at_ms, scheduled_extended_session_bounds
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_when_words
 
 
 def deploy_window(now_ms: int) -> StartWindowFact:
@@ -24,11 +21,8 @@ def deploy_window(now_ms: int) -> StartWindowFact:
     return StartWindowFact(state="CLOSED", next_open_ms=bounds.open_ms)
 
 
-def session_label(instant: int) -> str:
-    return datetime.fromtimestamp(instant / 1000, UTC).astimezone(ZoneInfo("America/New_York")).strftime("%a %b %d %H:%M ET")
-
-
-def start_window_next_step(window: StartWindowFact) -> str:
+def start_window_next_step(window: StartWindowFact, *, now_ms: int) -> str:
+    """The owner's next step for ``window`` as judged at ``now_ms``, which sets the year rule of its words."""
     if window.next_open_ms is None:
         return "Start is allowed in the current session."
-    return f"Next Start or Resume window opens {session_label(window.next_open_ms)}."
+    return f"Next Start or Resume window opens {et_when_words(window.next_open_ms, now_ms=now_ms)}."

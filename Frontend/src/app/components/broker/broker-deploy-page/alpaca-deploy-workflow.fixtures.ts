@@ -24,7 +24,7 @@ export const DEFAULT_END: BotEndView = {
   editable: true,
 };
 
-/** The test double's copy of `bot_end.when_words` — "Wed Nov 15, 15:59 ET" —
+/** The test double's copy of `session_anchors.et_when_words` — "Wed Nov 15, 15:59 ET" —
  * for an instant in the same year as the fixtures' "now", so no year is
  * said. Backend prose, reproduced only to answer as the backend would; the
  * app itself renders the words it is sent and never derives them. */

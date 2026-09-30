@@ -20,7 +20,6 @@ from app.services.bot_end import (
     default_bot_end,
     end_edit_refusal,
     resolve_bot_end,
-    when_words,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import to_ms_utc
@@ -31,7 +30,6 @@ _THURSDAY = date(2026, 10, 1)
 _SATURDAY = date(2026, 10, 3)
 _MONDAY = date(2026, 10, 5)
 _HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: the close is 13:00
-_NEXT_YEAR = date(2027, 1, 5)
 
 
 def _at(day: date, hour: int, minute: int = 0, second: int = 0) -> int:
@@ -206,7 +204,7 @@ def test_resolve_bot_end_reports_a_bug_as_a_bug_not_as_a_date_the_calendar_does_
 
 
 def test_resolve_bot_end_names_the_year_of_a_day_in_another_year() -> None:
-    """#2607 review: a refusal about next year names its year, as ``when_words`` does."""
+    """#2607 review: a refusal about next year names its year, as ``et_when_words`` does."""
     refused = _refusal(_choose(_at(date(2027, 1, 1), 12)), now_ms=_at(_WEDNESDAY, 10))
 
     assert str(refused) == "The market is closed on Fri Jan 1 2027."
@@ -300,12 +298,6 @@ def test_end_edit_refusal_is_the_one_answer_for_the_edit_and_the_view(
 
 
 # ── the owner's words ────────────────────────────────────────────────────────
-
-
-def test_when_words_name_the_weekday_and_date_never_today() -> None:
-    """The owner may not be in ET: "today" in ET can be tomorrow where they are (#2607 review)."""
-    assert when_words(_at(_WEDNESDAY, 15, 59), now_ms=_at(_WEDNESDAY, 10)) == "Wed Sep 30, 15:59 ET"
-    assert when_words(_at(_NEXT_YEAR, 15, 59), now_ms=_at(_WEDNESDAY, 10)) == "Tue Jan 5 2027, 15:59 ET"
 
 
 def test_bot_end_view_of_a_scheduled_sale() -> None:

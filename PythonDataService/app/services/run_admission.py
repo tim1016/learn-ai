@@ -282,7 +282,7 @@ def evaluate_run_admission(
         if window is not None and window.state == "CLOSED":
             return decide(allowed=False, reason_code="DEPLOY_WINDOW_CLOSED",
                           explanation="Regular-session bots may start from pre-market open through the regular close.",
-                          next_step=start_window_next_step(window))
+                          next_step=start_window_next_step(window, now_ms=evaluated_at_ms))
         permitted_liveness = {"TRADABLE", "CLOSED"} if window is not None and window.state == "PREMARKET" else {"TRADABLE"}
         symbol_halted = bot.market_liveness.symbol_status is not None and bot.market_liveness.symbol_status.state == "HALTED"
         if bot.market_liveness.state not in permitted_liveness or symbol_halted:
