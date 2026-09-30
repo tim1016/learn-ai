@@ -86,8 +86,8 @@ def test_decision_minute_open_fills_a_per_minute_decision_after_its_minute_close
 
     The registry-built program stages its ENTER on the 09:45 minute, and the
     engine commits it after the chart consolidator has emitted the 09:44
-    minute, so the last consolidated bar is not the decision bar and the order
-    carries a submission clock one minute early. The fill must still wait for
+    minute and set the clock back to 09:45. The commit must run on the
+    decision bar's own clock, so the order is sent at 09:46 and fills at
     09:46's open, the first price after the 09:45 minute closed -- the same
     minute NEXT_BAR_OPEN fills in, because a one-minute decision has no later
     emitting minute.

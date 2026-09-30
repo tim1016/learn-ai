@@ -42,10 +42,10 @@ class FillMode(Enum):
         bar; a future EligibilityPolicy may add pre/post-market handling.
 
     DECISION_MINUTE_OPEN: Fill at the open of the first bar that starts at
-        or after the decision bar's close -- the earliest price a live order
-        sent the instant the bar closed could get (#2599). For a consolidated
-        bucket that is the minute the backtest emits it on; NEXT_BAR_OPEN is
-        the minute after.
+        or after the order's submission, the decision bar's close -- the
+        earliest price a live order sent the instant the bar closed could get
+        (#2599). For a consolidated bucket that is the minute the backtest
+        emits it on; NEXT_BAR_OPEN is the minute after.
     """
 
     SIGNAL_BAR_CLOSE = "signal_bar_close"

@@ -264,8 +264,9 @@ describe("StrategyLabConfigRailComponent", () => {
     fixture.detectChanges();
 
     expect(advanced.textContent).not.toContain("Commission / order");
+    expect(advanced.textContent).not.toContain("Fill mode");
     expect(advanced.textContent).toContain(
-      "Both engines charge the pinned IBKR equity fee model — commission is not editable.",
+      "Both engines fill at the signal bar's close and charge the pinned IBKR equity fee model — neither is editable.",
     );
   });
 

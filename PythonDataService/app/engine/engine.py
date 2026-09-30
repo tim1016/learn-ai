@@ -386,9 +386,9 @@ class BacktestEngine:
             # replaces the decision reference with its earlier signal close.
             portfolio.update_market_price(symbol, minute_bar.close)
 
-            # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
-            # with this bar as next_bar. DEFERRED_FILL_MODES is the single
-            # source of truth shared with Step 5 below.
+            # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN /
+            # DECISION_MINUTE_OPEN) with this bar as next_bar. DEFERRED_FILL_MODES
+            # is the single source of truth shared with Step 5 below.
             if pending_fills and self.fill_model.mode in DEFERRED_FILL_MODES:
                 still_pending: list[tuple[object, TradeBar]] = []
                 for order, signal_bar in pending_fills:
@@ -424,7 +424,7 @@ class BacktestEngine:
             # phase, preserving historical fill timing while keeping the
             # program's explicit advance/settle boundary available to other
             # runtimes.
-            committed_bar = self._settle_staged_signal_program(strategy, closing_bar_skips)
+            self._settle_staged_signal_program(strategy, closing_bar_skips)
 
             # ----- Drain any pending orders the strategy just submitted.
             #       LIMIT orders move to the resting book; MARKET orders
@@ -461,15 +461,13 @@ class BacktestEngine:
                             assert event is not None
                             _record_fill(order, event)
                         elif self.fill_model.mode == FillMode.DECISION_MINUTE_OPEN:
-                            # The decision bar is the one a Signal Program just
-                            # committed: for a program deciding each minute that
-                            # is this minute, not the last consolidated bar.
-                            # This minute is the first candidate -- the one a
-                            # consolidated bucket is emitted on.
-                            decision_bar = committed_bar if committed_bar is not None else signal_bar
-                            event = self.fill_model.fill_market_order(order, decision_bar, next_bar=minute_bar)
+                            # This minute is the first candidate: a consolidated
+                            # bucket is emitted on the minute that opens at its
+                            # close. An order decided on this minute's own close
+                            # waits for the next one.
+                            event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
                             if event is None:
-                                pending_fills.append((order, decision_bar))
+                                pending_fills.append((order, signal_bar))
                             else:
                                 _record_fill(order, event)
                         elif self.fill_model.mode == FillMode.NEXT_SESSION_OPEN:
@@ -553,7 +551,7 @@ class BacktestEngine:
             pending_fills=pending_fills,
             equity_curve=equity_curve,
             order_events=order_events,
-            register_bracket=_register_bracket_if_needed,
+            record_fill=_record_fill,
             closing_bar_skips=closing_bar_skips,
         )
 
@@ -665,7 +663,7 @@ class BacktestEngine:
         pending_fills: list[tuple[Order, TradeBar]],
         equity_curve: list[EquitySnapshot],
         order_events: list[OrderEvent],
-        register_bracket: Callable[[Order, OrderEvent], None],
+        record_fill: Callable[[Order, OrderEvent], None],
         closing_bar_skips: list[ClosingBarSkip],
     ) -> None:
         """Close out the run once the bar stream is exhausted.
@@ -715,10 +713,7 @@ class BacktestEngine:
                 )
                 event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
                 assert event is not None
-                portfolio.apply_fill(event)
-                order_events.append(event)
-                strategy.on_order_event(event)
-                register_bracket(order, event)
+                record_fill(order, event)
 
         strategy.on_end_of_algorithm()
 
@@ -843,9 +838,7 @@ class BacktestEngine:
         """
         return getattr(consolidator, "_last_fired_bar", None)
 
-    def _settle_staged_signal_program(
-        self, strategy: Strategy, closing_bar_skips: list[ClosingBarSkip]
-    ) -> TradeBar | None:
+    def _settle_staged_signal_program(self, strategy: Strategy, closing_bar_skips: list[ClosingBarSkip]) -> None:
         """Settle a registry-owned staged program at Backtest's legacy seam.
 
         A staged decision commits, except under the closing-bar rule (#2607):
@@ -856,23 +849,27 @@ class BacktestEngine:
         due, and the program decides it again from the next session. Each such
         decision is recorded in ``closing_bar_skips``.
 
-        Returns the bar a committed stage decided on -- the decision bar the
-        orders it just placed fill against under ``DECISION_MINUTE_OPEN`` --
-        or None when nothing committed.
+        A decision commits on its own bar's clock, as a consolidated bar's
+        handler runs on that bar's: a program deciding on the per-minute hook
+        is committed after the chart consolidator has set the clock back to
+        the minute before, and its orders would be stamped as sent before
+        the decision was taken.
         """
         program = strategy.signal_program
         if program is None:
-            return None
+            return
         stage = program.session.active_stage
         if stage is None:
-            return None
+            return
         if (
             not stage.intents
             or self.fill_model.closing_bar_convention is not ClosingBarConvention.SKIP_CLOSING_BAR
             or not is_closing_bar(stage.bar.end_ms)
         ):
+            if strategy.ctx is not None:
+                strategy.ctx.current_time_ms = stage.bar.end_ms
             program.session.commit_if_staged()
-            return stage.bar
+            return
         program.session.settle(Settlement.DISCARD)
         for intent in stage.intents:
             closing_bar_skips.append(
@@ -883,4 +880,3 @@ class BacktestEngine:
                     f"[CLOSING BAR] {intent.kind.value} decided on the session's closing bar "
                     f"{ny_datetime(stage.bar.end_ms)} was not acted on (#2607)"
                 )
-        return None

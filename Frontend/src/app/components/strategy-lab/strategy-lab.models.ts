@@ -182,12 +182,13 @@ function runInputsFrom(facts: RunFacts, currentRange: TickerRange): StrategyLabR
 }
 
 /**
- * Whether a saved run charged no fees at all (#2601). A Python run at a $0 flat
- * fee charged nothing. A LEAN run also records $0, but it charges fees per fill;
- * a paired run records no flat fee, because it charges the pinned IBKR model.
+ * Whether a saved run charged no fees at all (#2601): a Python run at a $0 flat
+ * fee that paid nothing. A LEAN run also records $0, but it charges fees per
+ * fill. A paired run charges the pinned IBKR model; one saved before #2465 may
+ * still record the rail's $0, but it paid fees.
  */
-export function feesNotCharged(run: Pick<BacktestRunDetail, "source" | "commissionPerOrder">): boolean {
-  return run.source === "engine" && run.commissionPerOrder === 0;
+export function feesNotCharged(run: Pick<BacktestRunDetail, "source" | "commissionPerOrder" | "totalFees">): boolean {
+  return run.source === "engine" && run.commissionPerOrder === 0 && run.totalFees === 0;
 }
 
 /** The inputs a saved run was produced with. Throws when its persisted parameters are malformed. */

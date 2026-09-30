@@ -256,50 +256,43 @@ def test_deferred_fill_modes_membership_invariant() -> None:
     assert set(FillMode) == DEFERRED_FILL_MODES | immediate_modes
 
 
-def test_decision_minute_open_fills_at_the_first_bar_opening_at_the_decision_close() -> None:
-    """#2599: a candidate starting at the decision bar's close fills at its own
-    open, stamped at its start -- the first print a live order could get."""
-    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN, slippage_per_share=Decimal("0.01"))
-    decision = _ny_bar(datetime(2026, 2, 9, 9, 44, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
-    emitting = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
-
-    event = model.fill_market_order(_order(Direction.LONG), decision, next_bar=emitting)
-
-    assert event is not None
-    assert event.fill_price == Decimal("100.41")  # the candidate's open + slippage
-    assert event.filled_at_ms == int(datetime(2026, 2, 9, 9, 45, tzinfo=NY).timestamp() * 1000)
-
-
-def test_decision_minute_open_defers_a_candidate_that_opens_before_the_decision_close() -> None:
-    """A bar that opened before the decision bar closed holds prices the order
-    could not have had: the decision bar itself, for a program deciding each
-    minute, is never its own fill."""
-    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN)
-    decision = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
-
-    assert model.fill_market_order(_order(Direction.LONG), decision, next_bar=decision) is None
-    assert model.fill_market_order(_order(Direction.LONG), decision, next_bar=None) is None
-
-
-def test_decision_minute_open_never_fills_before_the_order_was_submitted() -> None:
-    """An order submitted after its reference bar closed -- a strategy deciding
-    on the minute hook, whose last consolidated bar is the minute before --
-    waits for the first bar opening at or after its own submission."""
-    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN)
-    last_consolidated = _ny_bar(datetime(2026, 2, 9, 9, 44, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
-    decided_on = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
-    after = _ny_bar(datetime(2026, 2, 9, 9, 46, tzinfo=NY), "101.0", "101.2", "100.9", "101.1")
-    order = Order(
+def _order_sent_at(sent: datetime) -> Order:
+    return Order(
         order_id=1,
         symbol="SPY",
         quantity=100,
         order_type=OrderType.MARKET,
-        time=datetime(2026, 2, 9, 9, 46, tzinfo=NY),
+        time=sent,
         direction=Direction.LONG,
     )
 
-    assert model.fill_market_order(order, last_consolidated, next_bar=decided_on) is None
-    event = model.fill_market_order(order, last_consolidated, next_bar=after)
+
+def test_decision_minute_open_fills_at_the_first_bar_opening_at_the_submission() -> None:
+    """#2599: an order sent at the decision bar's close fills at the open of the
+    minute that starts then -- the first print a live order could get -- stamped
+    at that minute's start."""
+    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN, slippage_per_share=Decimal("0.01"))
+    decision = _ny_bar(datetime(2026, 2, 9, 9, 44, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
+    emitting = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
+
+    event = model.fill_market_order(_order_sent_at(datetime(2026, 2, 9, 9, 45, tzinfo=NY)), decision, next_bar=emitting)
+
+    assert event is not None
+    assert event.fill_price == Decimal("100.41")  # the candidate's open + slippage
+    assert event.filled_at_ms == emitting.start_ms
+
+
+def test_decision_minute_open_defers_a_bar_that_opened_before_the_order_was_sent() -> None:
+    """A bar that opened before submission holds prices the order could never
+    have had -- for an order decided on a minute's own close, that minute."""
+    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN)
+    decided_on = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
+    after = _ny_bar(datetime(2026, 2, 9, 9, 46, tzinfo=NY), "101.0", "101.2", "100.9", "101.1")
+    order = _order_sent_at(datetime(2026, 2, 9, 9, 46, tzinfo=NY))
+
+    assert model.fill_market_order(order, decided_on, next_bar=decided_on) is None
+    assert model.fill_market_order(order, decided_on, next_bar=None) is None
+    event = model.fill_market_order(order, decided_on, next_bar=after)
     assert event is not None
     assert event.fill_price == Decimal("101.0")
     assert event.filled_at_ms == after.start_ms

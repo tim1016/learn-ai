@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
+import type { FillModeName } from "../../../models/fill-mode";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import type { TradingMarker, TradingPoint } from "../../../shared/trading-chart";
 import { ValidationStagePlaceholderComponent } from "../../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
@@ -29,7 +30,7 @@ export class StrategyLabStageComponent {
   readonly runPhaseDetail = input("");
   readonly symbol = input.required<string>();
   readonly resolution = input.required<string>();
-  readonly fillMode = input.required<string>();
+  readonly fillMode = input.required<FillModeName>();
   readonly engine = input.required<string>();
   readonly dataPolicyNote = input("");
 }

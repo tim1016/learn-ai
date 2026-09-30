@@ -19,9 +19,8 @@ export function isFillModeName(value: unknown): value is FillModeName {
   return typeof value === "string" && Object.hasOwn(FILL_MODE_LABELS, value);
 }
 
-/** The label a picker or receipt shows; a value outside the vocabulary is shown as it was stored. */
-export function fillModeLabel(value: string): string {
-  return isFillModeName(value) ? FILL_MODE_LABELS[value] : value;
+export function fillModeLabel(value: FillModeName): string {
+  return FILL_MODE_LABELS[value];
 }
 
 /** The pickers' options, in the vocabulary's order. */

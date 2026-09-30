@@ -300,12 +300,12 @@ export class StrategyLabRunner {
     const backtest: Record<string, unknown> = {
       strategy_name: strategyName,
       requested_engine: this.config.engine(),
-      fill_mode: this.config.fillMode(),
       initial_cash: this.config.initialCash(),
-      // A paired run charges the pinned IBKR equity fee model; sending a flat
-      // commission for it would be refused at the request boundary (#2465).
+      // A paired run fills at the signal bar's close and charges the pinned
+      // IBKR equity fee model; sending another fill mode or a flat commission
+      // for it would be refused at the request boundary (#2465).
       ...(this.config.engine() === "python"
-        ? { commission_per_order: this.config.commissionPerOrder() }
+        ? { fill_mode: this.config.fillMode(), commission_per_order: this.config.commissionPerOrder() }
         : {}),
       params: this.config.paramValues(),
       auto_fetch: this.config.autoFetch(),

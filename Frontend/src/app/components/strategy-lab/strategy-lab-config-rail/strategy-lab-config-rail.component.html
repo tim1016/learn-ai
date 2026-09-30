@@ -91,7 +91,7 @@
 
       <fieldset class="advanced-params">
         <legend>Execution</legend>
-        @if (engine() !== "lean") {
+        @if (engine() === "python") {
           <label>
             <span>Fill mode</span>
             <select [value]="fillMode()" (change)="onFillModeEvent($event)">
@@ -114,7 +114,7 @@
         } @else if (engine() === "both") {
           <!-- Both engines charge the pinned IBKR equity fee model; a flat
                commission here would be an input the run silently ignores (#2465). -->
-          <p>Both engines charge the pinned IBKR equity fee model — commission is not editable.</p>
+          <p>Both engines fill at the signal bar's close and charge the pinned IBKR equity fee model — neither is editable.</p>
         } @else {
           <p>Fills and fees are defined by the aligned LEAN template.</p>
         }

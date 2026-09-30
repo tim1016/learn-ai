@@ -25,11 +25,12 @@ Four modes are supported:
   fill price.
 
 * ``DECISION_MINUTE_OPEN`` — the order fills at the open of the first bar
-  that starts once the decision bar has closed and the order exists: the
-  earliest price a live order sent at that instant could get (#2599). For a
-  consolidated bucket it is the minute the backtest emits the bucket on, the
-  minute a live bot's order goes out in; ``NEXT_BAR_OPEN`` fills a minute
-  later. The two bound the live fill time from either side.
+  that starts at or after its submission, which the engine stamps at the
+  decision bar's close: the earliest price a live order sent at that instant
+  could get (#2599). For a consolidated bucket it is the minute the backtest
+  emits the bucket on, the minute a live bot's order goes out in;
+  ``NEXT_BAR_OPEN`` fills a minute later. The two bound the live fill time
+  from either side.
 """
 
 from __future__ import annotations
@@ -123,13 +124,12 @@ class FillModel:
 
         Args:
             order: The pending market order.
-            signal_bar: The bar at whose timestamp the order was placed. For
-                ``DECISION_MINUTE_OPEN`` it is the bar the decision was taken on.
+            signal_bar: The bar at whose timestamp the order was placed.
             next_bar: The candidate bar a deferred mode fills against. For
                 ``NEXT_BAR_OPEN`` it is the bar immediately following
                 ``signal_bar``; ``DECISION_MINUTE_OPEN`` is first offered the
-                minute the decision was taken in. If None, or not yet
-                eligible, the fill is deferred (returns None).
+                minute the order was placed in. If None, or not yet eligible,
+                the fill is deferred (returns None).
             current_bar: The engine's current minute bar. Used only by the
                 opt-in LEAN stale-signal path for ``SIGNAL_BAR_CLOSE``.
 
@@ -171,9 +171,9 @@ class FillModel:
             fill_price = next_bar.open
             fill_time_ms = next_bar.start_ms
         elif self.mode == FillMode.DECISION_MINUTE_OPEN:
-            # A bar that opened before the decision bar closed, or before the
-            # order existed, holds prices this order could never have had.
-            if next_bar is None or next_bar.start_ms < max(signal_bar.end_ms, order.submitted_at_ms):
+            # A bar that opened before the order existed holds prices it could
+            # never have had.
+            if next_bar is None or next_bar.start_ms < order.submitted_at_ms:
                 return None
             fill_price = next_bar.open
             fill_time_ms = next_bar.start_ms

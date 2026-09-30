@@ -40,7 +40,7 @@ describe("StrategyLabRunStatsComponent", () => {
 
   it("says a $0-fee Python run's fees were not charged (#2601)", async () => {
     await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun({ commissionPerOrder: 0 }), result: { ...makeResult(), total_fees: 0 }, verdict: null, parity: null, tradesTruncated: false },
+      inputs: { run: makeRun({ commissionPerOrder: 0, totalFees: 0 }), result: { ...makeResult(), total_fees: 0 }, verdict: null, parity: null, tradesTruncated: false },
       providers: [provideZonelessChangeDetection()],
     });
 
@@ -50,6 +50,16 @@ describe("StrategyLabRunStatsComponent", () => {
   it("prices a LEAN run's own per-fill fees although it records no flat fee", async () => {
     await render(StrategyLabRunStatsComponent, {
       inputs: { run: makeRun({ source: "lean-sidecar", engine: "LEAN", commissionPerOrder: 0 }), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.queryByText("Not charged")).toBeNull();
+    expect(screen.getByText("$2.00")).toBeTruthy();
+  });
+
+  it("prices a paired run saved before #2465 that recorded the rail's $0 but paid IBKR fees", async () => {
+    await render(StrategyLabRunStatsComponent, {
+      inputs: { run: makeRun({ commissionPerOrder: 0, totalFees: 2 }), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
       providers: [provideZonelessChangeDetection()],
     });
 

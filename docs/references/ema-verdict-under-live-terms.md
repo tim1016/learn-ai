@@ -505,6 +505,13 @@ reproduced `research`, `fill_decision_minute_open`, `fill_next_bar_open` and
 seam on the same commit. That covers every grade, every fold and every W3mo
 fill. The run-18 and run-33 checks still pass.
 
+One case differs from the old seam: an order from a run's final consolidated
+bar. No later minute exists for it, so the mode does not fill it at the
+bar's close as the seam did. An entry is dropped, and an exit becomes the
+synthetic close at the last price, exactly as under `next_bar_open`. No such
+order occurs in these windows: each ends on a session's closing bar, and
+#2607 sets aside decisions taken on that bar.
+
 **Fees.** Research's default flat fee is now $0 per order, labelled "fees not
 charged" ([#2601](https://github.com/tim1016/learn-ai/issues/2601)). The
 `research` variant still passes $1 per order explicitly so that it keeps
