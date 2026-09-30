@@ -306,7 +306,7 @@ class ClerkSqliteRepository(
         return self._lease_ttl_ms
 
     def close(self) -> None:
-        """Release the execution lease and close the connection.
+        """Release this handle's execution lease and close the connection.
 
         Acquire the same write coordinator every mutation uses so a
         shutdown cannot close the connection out from under an in-flight
@@ -314,11 +314,19 @@ class ClerkSqliteRepository(
         wrapper does not stop the worker thread already inside
         :meth:`renew_execution_lease`, so ``close`` waits for that worker to
         release the lock before touching the connection.
+
+        Only a lease this handle owns is released (#2620): a handle whose
+        lease expired and was taken over must not unfence the successor
+        process that now owns the account. A leaseless handle (no
+        ``lease_owner``) owns nothing, and SQL ``= NULL`` matches no row, so
+        the guarded update is a no-op for it.
         """
         with self._write_lock:
             self._conn.execute(
                 "UPDATE control_meta SET execution_lease_owner = NULL, "
-                "execution_lease_expires_at_ms = NULL WHERE id = 1"
+                "execution_lease_expires_at_ms = NULL "
+                "WHERE id = 1 AND execution_lease_owner = ?",
+                (self._lease_owner,),
             )
             self._conn.commit()
             self._conn.close()

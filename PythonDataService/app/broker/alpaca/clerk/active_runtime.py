@@ -112,6 +112,21 @@ failure, a timeout, its own server error or a rate limit
 composition root re-selects on a bounded backoff until Alpaca answers
 (``authority_reconnect``). Every other startup failure stays terminal.
 """
+_AWAITING_ACTIVATION_REASON_CODES: Final[frozenset[str]] = frozenset({
+    "ACTIVATION_REQUIRED",
+    "SHADOW_ACTIVATION_REQUIRED",
+    "SYNTHETIC_ACTIVATION_REQUIRED",
+    # ``live_envelope.LIVE_ENVELOPE_MISSING``; importing it here is the cycle
+    # described at the top of this module.
+    "LIVE_ENVELOPE_MISSING",
+    "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+})
+"""Refusals that are the owner's step still to take, not a failure (#2620).
+
+The account was never activated, or its activation needs a value set or a
+new cutover. Nothing broke, and the account's Settings is where the step is
+taken; every other refusal means an authority that should serve does not.
+"""
 
 
 class StartupRecoveryTimedOut(TimeoutError):
@@ -175,6 +190,11 @@ class ClerkStartupFailure:
     def reconnecting(self) -> bool:
         """Whether this failure is only Alpaca not answering yet, which startup retries."""
         return self.reason_code == BROKER_UNREACHABLE_RECONNECTING
+
+    @property
+    def awaiting_activation(self) -> bool:
+        """Whether this is the owner's activation step still to take, not a failure."""
+        return self.reason_code in _AWAITING_ACTIVATION_REASON_CODES
 
 
 @dataclass
@@ -618,8 +638,8 @@ def compose_failure_refusal(
     exc: BaseException,
     *,
     account_id: str,
-    authority_generation: int,
-    db_identity_token: str,
+    authority_generation: int | None,
+    db_identity_token: str | None,
 ) -> ActiveClerkRuntime:
     """The one refusal for a composition that raised, on either side of the live fork.
 
@@ -628,6 +648,11 @@ def compose_failure_refusal(
     itself; every other failure is the startup's, and its copy says it is
     final and what ends it. Both sides carried the same six-keyword call with
     the same ternary, which is how the two sentences would have drifted.
+
+    ``authority_generation`` and ``db_identity_token`` are ``None`` only when
+    the control-meta read itself is what raised (#2620): the refusal then
+    carries the account and says what happened, without inventing an
+    identity it could not read.
     """
     transient = transient_startup_failure(exc)
     if transient is not None:

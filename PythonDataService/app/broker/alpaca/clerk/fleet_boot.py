@@ -965,11 +965,14 @@ def _summary_with_live_facts(
 ) -> Mapping[str, object] | None:
     """``summary`` with its per-beat facts replaced by fresh reads.
 
-    Everything else in the bounded summary (``endpoint_mode``,
-    ``authority_state``, ``detail``) is confirm-time state that only changes
-    on a rebind, so only the nickname and the lane counts are touched here —
-    the rest is whatever ``heartbeat_facts`` last computed at confirm/boot. A
-    count missing from ``counts`` is removed rather than left stale.
+    Everything else in the bounded summary (``endpoint_mode``, ``detail``)
+    is confirm-time state that only changes on a rebind; ``authority_state``
+    is confirm-time too except that a reconnect re-states it in place
+    (``report_authority_state``, #2582) — no rebind, no re-confirmation. So
+    only the nickname and the lane counts are touched here — the rest is
+    whatever ``heartbeat_facts`` last computed at confirm/boot, or what the
+    reconnect's re-statement replaced. A count missing from ``counts`` is
+    removed rather than left stale.
     """
     if not isinstance(summary, Mapping):
         return None
@@ -1192,7 +1195,9 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
 
     The confirmed account's nickname gets the same treatment, one level
     deeper: ``boot.reported_facts`` itself only changes when ``confirm_and_
-    report`` runs (a rebind), but a Configuration rename between rebinds must
+    report`` runs (a rebind) or when a reconnect re-states the authority
+    behind the binding (``report_authority_state``, #2582), but a
+    Configuration rename between rebinds must
     still reach the wire (PRD #2182 — "one account name everywhere" is not
     true if the badge and card can go stale for the lane's whole remaining
     lifetime). So every beat re-reads the nickname fresh from the profiles

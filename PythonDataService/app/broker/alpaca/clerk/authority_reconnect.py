@@ -10,10 +10,10 @@ serving with it installed while this loop retries on a capped backoff, for as
 long as it takes (owner decision 2026-09-29: no give-up). One attempt is the
 boot's own steps in the boot's own order -- select, acknowledge, install, boot
 recovery -- so an attempt either leaves a booted authority serving or leaves
-nothing of itself behind: an installed authority whose boot recovery fails is
-retired, and the lane goes back to reconnecting (Alpaca again) or to a final
-refusal that says restart (anything else). Every attempt is logged and
-counted, never silently.
+nothing of itself behind: an authority whose acknowledgement, install or boot
+recovery fails is retired, and the lane goes back to reconnecting (Alpaca
+again) or to a final refusal that says restart (anything else). Every attempt
+is logged and counted, never silently.
 """
 
 from __future__ import annotations
@@ -146,19 +146,34 @@ async def run_authority_reconnect(
             authority_generation=failure.authority_generation,
             db_identity_token=failure.db_identity_token,
         )
-        steps.install(final)
+        # Acknowledged like every other refusal an attempt installs (#2620):
+        # the binding receipt is where a pending Apply is recorded as refused.
+        # A second failure here must not leave the lane serving nothing.
         try:
-            await steps.boot(final)
+            acknowledged = await steps.acknowledge(final)
+        except Exception:
+            logger.exception(
+                "Acknowledging this Clerk's final reconnect refusal failed too; it is "
+                "installed unacknowledged",
+                extra={"action": "clerk_authority_reconnect_final_ack_failed", "account_id": failure.account_id},
+            )
+            acknowledged = final
+        steps.install(acknowledged)
+        try:
+            await steps.boot(acknowledged)
         except Exception:
             # Raised out of the task, this would surface only when shutdown
             # awaits it, and abort custody's teardown there. Start stays
-            # refused either way: no sweep report means no Start.
+            # refused either way -- no sweep report means no Start -- and
+            # says a restart is needed, since no sweep follows (#2620).
             logger.exception(
                 "Boot recovery failed for this Clerk's final refusal too; Start stays refused "
                 "until the Clerk restarts",
                 extra={"action": "clerk_authority_reconnect_final_boot_failed", "account_id": failure.account_id},
             )
-        return final
+        # Acknowledgement can replace the refusal it was handed; the caller
+        # must receive the runtime the lane serves, not the one composed here.
+        return acknowledged
     if runtime.clerk is not None:
         RECONNECT_COUNTERS.installed += 1
         logger.info(
@@ -192,9 +207,10 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
 
     Alpaca not answering the selection installs nothing: the reconnecting
     refusal already installed keeps serving. Anything else is acknowledged,
-    installed and boot-recovered. An installed authority whose boot recovery
-    fails is retired before its refusal replaces it, so no half-booted
-    authority -- sweepless, Start refused for good -- is ever left serving.
+    installed and boot-recovered. An authority whose install, identity read
+    or boot recovery fails is retired before its refusal replaces it, so no
+    half-booted authority -- sweepless, Start refused for good -- is ever
+    left serving; one whose acknowledgement fails is retired uninstalled.
     That refusal is the one a failed boot composition installs
     (``compose_failure_refusal``): reconnecting when Alpaca was the cause,
     else final, and naming the activation the retired authority served, read
@@ -203,38 +219,56 @@ async def _attempt(steps: AuthoritySteps) -> ActiveClerkRuntime:
     selected = await steps.select()
     if selected.reconnecting:
         return selected
-    acknowledged = await steps.acknowledge(selected)
-    steps.install(acknowledged)
-    # A refusal holds no repository, so no lease to release: it is booted as
-    # it stands.
+    try:
+        acknowledged = await steps.acknowledge(selected)
+    except Exception:
+        # Never installed, yet selection already holds its lease (#2671): it
+        # is retired, and the error ends the reconnect like any other
+        # unexpected one -- the catch-all acknowledges its final refusal.
+        await steps.retire(selected)
+        raise
+    # A refusal holds no repository, so no lease to release: it is installed
+    # and booted as it stands.
     repository = acknowledged.sqlite_repository
     if repository is None:
+        steps.install(acknowledged)
         await steps.boot(acknowledged)
         return acknowledged
-    activation = repository.control_meta_snapshot()
+    # The install and the activation identity read are inside the guard too
+    # (#2620): either raising is a failed composition of this attempt, not an
+    # escapee to the catch-all -- which would install the final refusal
+    # without retiring the authority, leaving its lease and consumer open.
+    # Retirement copes with an install that stopped partway.
+    activation = None
     try:
+        steps.install(acknowledged)
+        activation = repository.control_meta_snapshot()
         await steps.boot(acknowledged)
     except Exception as exc:
         refusal = compose_failure_refusal(
             exc,
-            account_id=activation.account_id,
-            authority_generation=activation.authority_generation,
-            db_identity_token=activation.db_identity_token,
+            account_id=repository.account_id,
+            authority_generation=None if activation is None else activation.authority_generation,
+            db_identity_token=None if activation is None else activation.db_identity_token,
         )
         logger.error(
-            "This Clerk's account authority installed, but its boot recovery failed; it is "
-            "retired: %s",
+            "This Clerk's account authority did not finish starting; it is retired: %s",
             exc,
             extra={
                 "action": "clerk_authority_reconnect_boot_failed",
-                "account_id": activation.account_id,
+                "account_id": repository.account_id,
                 "error": str(exc),
                 "reconnecting": refusal.reconnecting,
+                "identity_read": activation is not None,
             },
             exc_info=True,
         )
-        steps.install(refusal)
-        await steps.retire(acknowledged)
+        try:
+            steps.install(refusal)
+        finally:
+            # Retired even when installing its refusal raises; that error
+            # then ends the reconnect in the catch-all (#2620).
+            await steps.retire(acknowledged)
         await steps.boot(refusal)
         return refusal
     return acknowledged

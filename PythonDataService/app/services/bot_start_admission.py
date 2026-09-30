@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
+from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
@@ -297,30 +298,26 @@ async def resolve_start_runtime_fact(
     unresolved_intents_probe: UnresolvedIntentsProbe | None,
     recovery_evaluation: RecoveryEvaluationProbe | None = None,
     account_reconnecting: bool = False,
+    boot_recovery_failed: bool = False,
 ) -> StartRuntimeAdmissionFact:
     """Project boot recovery and recovery intents without mutating runner state.
 
     ``boot_recovery_report`` is the boot sweep's report: absent while the
-    sweep has not run; degraded when it names bots no lifecycle authority
-    could project, which closes the gate until the authority is restored.
+    sweep has not run, or when ``boot_recovery_failed`` says the last one
+    raised; degraded when it names bots no lifecycle authority could
+    project, which closes the gate until the authority is restored.
     ``account_reconnecting`` says that restoration is already under way: the
     account's Clerk could not reach Alpaca when it started and reruns the
     sweep on its own once it answers (#2582).
     """
-    if boot_recovery_required and boot_recovery_report is None:
-        return StartRuntimeAdmissionFact(
-            state="BOOT_RECOVERY_INCOMPLETE",
-            observed_at_ms=observed_at_ms,
-            explanation="Bot runner recovery has not completed after process startup.",
-            next_step="Wait for the boot recovery sweep before Start.",
-        )
-    if (
-        boot_recovery_required
-        and boot_recovery_report.authority_unavailable_instances
-        and account_reconnecting
+    if boot_recovery_required and account_reconnecting and (
+        boot_recovery_report is None or boot_recovery_report.authority_unavailable_instances
     ):
-        # Degraded only until Alpaca answers: the reconnect reruns the sweep
-        # against the authority it installs, so a restart would only repeat it.
+        # Degraded or not yet run, only until Alpaca answers: the reconnect
+        # reruns the sweep against the authority it installs, so a restart
+        # would only repeat it. Said whether or not the Clerk-less first
+        # sweep has produced its report yet (#2620) — with no report, the
+        # old copy read as if a sweep were still coming on its own.
         return StartRuntimeAdmissionFact(
             state="BOOT_RECOVERY_INCOMPLETE",
             observed_at_ms=observed_at_ms,
@@ -332,6 +329,22 @@ async def resolve_start_runtime_fact(
                 "Wait: the Clerk is reconnecting and checks this bot on its own once "
                 "Alpaca answers. No restart is needed."
             ),
+        )
+    if boot_recovery_required and boot_recovery_report is None:
+        if boot_recovery_failed:
+            # The sweep raised, and only a reconnect -- answered above --
+            # reruns one: no sweep is coming to wait for (#2620).
+            return StartRuntimeAdmissionFact(
+                state="BOOT_RECOVERY_INCOMPLETE",
+                observed_at_ms=observed_at_ms,
+                explanation="This account's Clerk has not checked this bot's last run.",
+                next_step=terminal_startup_recovery("its boot recovery failed"),
+            )
+        return StartRuntimeAdmissionFact(
+            state="BOOT_RECOVERY_INCOMPLETE",
+            observed_at_ms=observed_at_ms,
+            explanation="Bot runner recovery has not completed after process startup.",
+            next_step="Wait for the boot recovery sweep before Start.",
         )
     if boot_recovery_required and boot_recovery_report.authority_unavailable_instances:
         # The sweep ran and finished degraded; waiting for it cannot help.
