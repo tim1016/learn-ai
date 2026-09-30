@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.authority_reconnect import (
     ReconnectCounters,
     run_authority_reconnect,
 )
+from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_MISSING
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import StartupBrokerTruthUnavailable
 from app.broker.alpaca.errors import map_api_error
@@ -53,7 +54,7 @@ from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.routers.broker_v2_panel import read_account_money_scoped
 from app.schemas.broker_v2_panel import LaneAttentionItem
 from app.services.bot_boot_recovery import BootAuthorityPreparationError
-from app.services.broker_v2_panel.lane_summary import lane_attention_read
+from app.services.broker_v2_panel.lane_summary import lane_attention_read, lane_counts
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
@@ -734,6 +735,79 @@ async def test_a_reconnect_that_ended_final_keeps_a_home_line_without_activation
     assert line.severity == "blocking"
     # The lane has no repository, so order records answer 503; Settings loads.
     assert line.action.destination == "settings"
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        BrokerAuthError("Alpaca rejected our credentials: forbidden", broker="alpaca"),
+        map_api_error(_api_error(404, "not found"), broker="alpaca"),
+    ],
+    ids=["revoked-key", "unmapped-answer"],
+)
+async def test_a_reconnect_that_ends_on_a_refused_account_read_keeps_a_home_line(
+    tmp_path: Path, refusal: BrokerError
+) -> None:
+    """#2620 review: Alpaca came back and refused the account read itself.
+
+    That refusal is final and carries no activation evidence -- no account
+    was identified -- so Home went from the reconnecting line to nothing,
+    while the lane serves no authority until a restart.
+    """
+
+    class _RefusesOnceItAnswers(_PaperAlpacaThatBlinks):
+        async def get_account(self) -> BrokerAccountSnapshot:
+            if self.outage:
+                return await super().get_account()  # times out, counting the outage down
+            raise refusal
+
+    broker = _RefusesOnceItAnswers(outage=1)
+
+    async def _select() -> ActiveClerkRuntime:
+        return await select_active_clerk_runtime(
+            read=broker, trade=broker, artifacts_root=tmp_path, activation_store=_ActivationStore(_activation()),
+        )
+
+    at_boot = await _select()
+    assert at_boot.reconnecting is True
+
+    final = await _reconnect(at_boot, _CompositionRoot(_select))
+
+    assert final.reconnecting is False
+    assert final.startup_failure is not None
+    assert final.startup_failure.activation_detected is False
+    [line] = (await lane_attention_read()).items
+    assert (line.condition_id, line.severity) == (
+        f"account:authority-failed:{final.startup_failure.reason_code}", "blocking",
+    )
+    assert line.action.destination == "settings"
+    # No account was identified, yet the account card counts the bell's line.
+    assert (await lane_counts()).attention_count == 1
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "ACTIVATION_REQUIRED",
+        "SHADOW_ACTIVATION_REQUIRED",
+        "SYNTHETIC_ACTIVATION_REQUIRED",
+        LIVE_ENVELOPE_MISSING,
+        "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+    ],
+)
+async def test_an_account_awaiting_activation_has_no_home_line(reason_code: str) -> None:
+    """The owner's own step still to take is not a failure, whatever evidence it carries (#2620).
+
+    Home names every authority that is not serving except these: Settings
+    is where activation is taken, and says so.
+    """
+    set_active_clerk_runtime(unavailable_runtime(
+        reason_code, account_id=LIVE_ACCT, recovery="Activate this account in Settings.", activation_detected=True,
+    ))
+
+    attention = await lane_attention_read()
+
+    assert attention.items == []
 
 
 async def test_a_reconnect_that_breaks_stops_promising_a_reconnect(
