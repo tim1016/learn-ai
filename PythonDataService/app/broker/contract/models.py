@@ -230,6 +230,11 @@ class BrokerOrder(_ContractModel):
     filled_at_ms: int | None
     canceled_at_ms: int | None
     expired_at_ms: int | None
+    # Alpaca's replacement linkage (#2656): ``replaced_by`` on an order Alpaca
+    # replaced names the broker order id that took its place; ``replaces`` on
+    # the new order names the one it took. Broker order ids, never client ids.
+    replaced_by: str | None = None
+    replaces: str | None = None
     events: list[BrokerOrderEvent] = Field(default_factory=list)
     observed_at_ms: int
     fill_latency_seconds: float | None = None

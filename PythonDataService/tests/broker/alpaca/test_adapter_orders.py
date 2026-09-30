@@ -147,6 +147,37 @@ def test_every_unreadable_value_on_a_row_is_named_in_order(
     assert order.status == "new"
 
 
+_B = "00000000-0000-0000-0000-00000000000b"
+
+
+@pytest.mark.parametrize(("field", "attribute"), [("replaced_by", "replaced_by"), ("replaces", "replaces")])
+def test_a_replacement_link_maps_a_uuid_and_reads_blank_as_no_link(
+    load_alpaca_fixture: AlpacaFixtureLoader, field: str, attribute: str,
+) -> None:
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+
+    linked = from_alpaca_order({**open_order, field: f"  {_B} "}, observed_at_ms=_OBSERVED)
+    blank = from_alpaca_order({**open_order, field: " "}, observed_at_ms=_OBSERVED)
+
+    assert getattr(linked, attribute) == _B and linked.unreadable_fields == ()
+    assert getattr(blank, attribute) is None and blank.unreadable_fields == ()
+
+
+@pytest.mark.parametrize("value", ["not-a-uuid", 7, True, {"id": _B}])
+@pytest.mark.parametrize("field", ["replaced_by", "replaces"])
+def test_a_replacement_link_that_is_not_a_uuid_string_is_unreadable_and_never_followed(
+    load_alpaca_fixture: AlpacaFixtureLoader, field: str, value: object,
+) -> None:
+    """A non-string is refused, never ``str()``-coerced into an order id to follow (#2656)."""
+    payload = {**load_alpaca_fixture("orders", "orders.json")[1], "status": "replaced", field: value}
+
+    order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+    assert getattr(order, field) is None
+    assert order.unreadable_fields == (field,)
+    assert order.status == "replaced"
+
+
 def test_fill_latency_is_unknown_until_both_broker_clocks_exist(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:

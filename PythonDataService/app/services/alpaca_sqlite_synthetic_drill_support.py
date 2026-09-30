@@ -325,6 +325,9 @@ class SyntheticBroker:
         self.lookup_calls.append(client_order_id)
         return self.orders.get(client_order_id)
 
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return next((item for item in self.orders.values() if item.order_id == order_id), None)
+
     async def list_orders(
         self,
         *,

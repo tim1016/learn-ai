@@ -94,6 +94,10 @@ class _FakeAlpaca:
         self.lookup_call = client_id
         return {"id": "broker-order-1", "client_order_id": client_id, "status": "accepted"}
 
+    def get_order_by_id(self, order_id: str) -> dict:
+        self.broker_id_lookup_call = order_id
+        return {"id": order_id, "client_order_id": "alpaca-generated", "status": "new"}
+
 
 def _client(fake: _FakeAlpaca) -> AlpacaTradingClient:
     return AlpacaTradingClient(client_factory=lambda: fake)
@@ -356,6 +360,35 @@ async def test_get_order_by_client_order_id_5xx_maps_to_unavailable(
 
     with pytest.raises(BrokerUnavailable):
         await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
+
+
+async def test_get_order_by_broker_order_id_returns_raw_payload() -> None:
+    """The broker-id GET a replaced manual order is followed by (#2656)."""
+    fake = _FakeAlpaca()
+    order_id = "00000000-0000-0000-0000-00000000000b"
+
+    payload = await _client(fake).get_order_by_broker_order_id(order_id)
+
+    assert fake.broker_id_lookup_call == order_id
+    assert payload == {"id": order_id, "client_order_id": "alpaca-generated", "status": "new"}
+
+
+@pytest.mark.parametrize(("status", "expected"), [(404, None), (503, BrokerUnavailable)])
+async def test_get_order_by_broker_order_id_404_is_absent_and_5xx_stays_uncertain(
+    make_api_error: ApiErrorFactory, status: int, expected: type[Exception] | None,
+) -> None:
+    fake = _FakeAlpaca()
+
+    def raise_status(order_id: str) -> dict:
+        raise make_api_error(status, message="lookup failed")
+
+    fake.get_order_by_id = raise_status  # type: ignore[method-assign]
+
+    if expected is None:
+        assert await _client(fake).get_order_by_broker_order_id("00000000-0000-0000-0000-00000000000b") is None
+    else:
+        with pytest.raises(expected):
+            await _client(fake).get_order_by_broker_order_id("00000000-0000-0000-0000-00000000000b")
 
 
 async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory) -> None:

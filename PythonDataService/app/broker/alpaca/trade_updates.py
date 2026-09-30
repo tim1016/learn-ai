@@ -843,6 +843,10 @@ def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
             "filled_at": _opt_ms_to_rfc3339(broker_order.filled_at_ms),
             "canceled_at": _opt_ms_to_rfc3339(broker_order.canceled_at_ms),
             "expired_at": _opt_ms_to_rfc3339(broker_order.expired_at_ms),
+            # A recovered ``replaced`` must still name its replacement (#2656):
+            # without the link the Clerk would read a replacement it cannot follow.
+            "replaced_by": broker_order.replaced_by,
+            "replaces": broker_order.replaces,
         },
     }
     if event in {"fill", "partial_fill"}:

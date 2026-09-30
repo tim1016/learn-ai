@@ -586,3 +586,25 @@ class AlpacaTradingClient:
         if result is not None:
             self._clear_uncertain_submission(client_order_id)
         return result
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> dict[str, Any] | None:
+        """GET ``/v2/orders/{order_id}`` for one broker-assigned order id (#2656).
+
+        A manual order Alpaca replaced is followed by its broker order id:
+        the replacement carries no client order id of ours to look up. The
+        SDK's ``get_order_by_id`` hits the same endpoint family over the same
+        capturing session, with the same timeout and ``map_api_error``
+        taxonomy as every other order read. Returns the raw order payload
+        (the adapter maps it), or ``None`` when Alpaca reports the order
+        definitively absent (HTTP 404).
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_id(order_id)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="order lookup by broker order id")

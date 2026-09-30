@@ -321,6 +321,9 @@ class ShadowOrderBook:
     def order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return next((order for order in self.orders() if order.client_order_id == client_order_id), None)
 
+    def order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return next((order for order in self.orders() if order.order_id == order_id), None)
+
     def record(self, client_order_id: str) -> SynthesizedOrderRecord | None:
         """The durable record — order, leg and fill anchor — for one client order id."""
         return next(
@@ -573,6 +576,9 @@ class NoSubmitAlpacaTradePort:
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return self._book.order_by_client_order_id(client_order_id)
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return self._book.order_by_broker_order_id(order_id)
 
 
 class ShadowAccountReadPort:

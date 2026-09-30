@@ -131,6 +131,9 @@ class FakeAlpacaPort:
     async def get_order_by_client_order_id(self, client_order_id):
         return None
 
+    async def get_order_by_broker_order_id(self, order_id):
+        return None
+
 
 class FakeRegistry:
     def __init__(self, port: FakeAlpacaPort | None = None) -> None:

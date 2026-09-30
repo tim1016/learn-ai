@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 import responses
 
+from app.broker.alpaca.adapter import from_alpaca_order
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
@@ -180,6 +181,30 @@ def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
     assert math.isclose(event.quantity, 10.0, abs_tol=1e-9, rel_tol=0.0)
     assert event.price is not None
     assert math.isclose(event.price, 135.80, abs_tol=1e-9, rel_tol=0.0)
+
+
+def test_a_gap_reconciled_replacement_keeps_its_replacement_links() -> None:
+    """A ``replaced`` order recovered through the REST window still names its replacement (#2656).
+
+    Re-shaped without its links, the original would read as replaced by
+    nothing -- a replacement the Clerk cannot follow -- and the order that
+    took its place would lose the ``replaces`` that ties it to its leg.
+    """
+    replaced = _accepted_order(_OWNED_COID).model_copy(
+        update={
+            "order_id": "00000000-0000-0000-0000-00000000000a",
+            "status": "replaced",
+            "replaced_by": "00000000-0000-0000-0000-00000000000b",
+            "updated_at_ms": _FIXED_MS,
+        }
+    )
+
+    payload = _order_to_event_payload(replaced)
+
+    assert payload is not None and payload["event"] == "replaced"
+    mapped = from_alpaca_order(payload["order"], observed_at_ms=_FIXED_MS)
+    assert mapped.replaced_by == "00000000-0000-0000-0000-00000000000b"
+    assert mapped.replaces is None and mapped.unreadable_fields == ()
 
 
 def test_gap_reconcile_never_reshapes_an_order_with_unreadable_values() -> None:

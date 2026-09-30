@@ -272,6 +272,9 @@ class _DecisionBarBoundTradePort:
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return await self._inner.get_order_by_client_order_id(client_order_id)
 
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return await self._inner.get_order_by_broker_order_id(order_id)
+
 
 class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
