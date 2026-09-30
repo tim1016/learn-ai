@@ -11,7 +11,7 @@
     <div class="loss-limit__status" [attr.data-state]="current.entry_state">
       <p><strong>{{ ENTRY_STATE_LABEL[current.entry_state] }}</strong> {{ current.detail }}</p>
       @if (current.hold_loss_limit_usd !== null) {
-        <p>This hold keeps the {{ current.hold_loss_limit_usd | currency:'USD' }} limit it was raised
+        <p>This hold keeps the ${{ current.hold_loss_limit_usd }} limit it was raised
           under, so changing the limit does not clear it. Clearing checks fresh account evidence
           against that limit and the current one.</p>
         <button type="button" [disabled]="busy()" (click)="clearHold()">Clear hold</button>

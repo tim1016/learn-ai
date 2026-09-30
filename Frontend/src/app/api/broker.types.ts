@@ -8310,7 +8310,7 @@ export interface components {
              */
             entry_state: "ready" | "held" | "unknown";
             /** Hold Loss Limit Usd */
-            hold_loss_limit_usd?: number | null;
+            hold_loss_limit_usd?: string | null;
             /** Hold Policy Revision */
             hold_policy_revision?: number | null;
             /** Hold Session Start Ms */
@@ -19371,7 +19371,16 @@ export interface components {
              */
             logic: "AND" | "OR";
         };
-        /** LossHoldClearOutcome */
+        /**
+         * LossHoldClearOutcome
+         * @description The guarded loss-hold clear's outcome.
+         *
+         *     ``day_pnl_usd`` and ``loss_limit_usd`` are the loss rule's floats — the
+         *     bytes the rule compared and the seal recorded. They are machine figures
+         *     that no client renders as money: the dollars the owner reads live in
+         *     ``detail``, authored in Python through the money boundary (#2612), so a
+         *     cent never depends on a browser's float formatting.
+         */
         LossHoldClearOutcome: {
             /** Day Pnl Usd */
             day_pnl_usd: number | null;

@@ -21,7 +21,7 @@ const state: State = {
   hold_loss_limit_usd: null, hold_session_start_ms: null, hold_policy_revision: null,
 };
 const HELD: State = { ...state, entry_state: 'held', detail: 'A standing loss hold still blocks new entries.',
-  hold_loss_limit_usd: 100, hold_session_start_ms: 1788840000000, hold_policy_revision: 2 };
+  hold_loss_limit_usd: '100.00', hold_session_start_ms: 1788840000000, hold_policy_revision: 2 };
 
 const FRACTION = "Share of the day's starting equity (0 to 1)";
 const CAP = 'At most (USD)';
