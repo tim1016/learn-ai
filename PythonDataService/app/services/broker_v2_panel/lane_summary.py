@@ -42,7 +42,7 @@ from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_RECONNECTING_HEADLINE as _AUTHORITY_RECONNECTING_HEADLINE,
 )
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
-from app.broker.alpaca.clerk.sqlite.exit_resolution import REGULAR_SESSION_SALE_WAITS_FOR_OPEN
+from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_WAITS_FOR_OPEN
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
@@ -250,7 +250,7 @@ def _end_sale_items(repository: ClerkSqliteRepository) -> list[LaneAttentionItem
 def _end_sale_item(waiting: EndSaleWaiting, *, opens_at_ms: int, now_ms: int) -> LaneAttentionItem:
     return LaneAttentionItem(
         condition_id=f"end-sale-waits:{waiting.strategy_instance_id}",
-        reason_code=REGULAR_SESSION_SALE_WAITS_FOR_OPEN,
+        reason_code=SCHEDULED_END_WAITS_FOR_OPEN,
         kind="exit",
         severity="warning",
         strategy_instance_id=waiting.strategy_instance_id,

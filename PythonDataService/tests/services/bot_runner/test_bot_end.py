@@ -14,20 +14,36 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.broker.alpaca.clerk import get_alpaca_clerk, set_alpaca_clerk
 from app.broker.alpaca.clerk.models import InstanceCustodyProof
+from app.broker.alpaca.clerk.sqlite import recovery_execution
+from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionRequest, execute_recovery_action
 from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.schemas.bot_end import BotEnd, BotEndInput
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_end import BotEndRefused, when_words
-from app.services.bot_runner import BotTaskRegistry, UnknownBotError, alpaca_v1_action_plan
+from app.services.bot_run_terminal import prove_end_stop_outcome
+from app.services.bot_runner import (
+    BotTaskRegistry,
+    UnknownBotError,
+    alpaca_v1_action_plan,
+    get_bot_task_registry,
+    set_bot_task_registry,
+)
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
@@ -61,6 +77,7 @@ class _EndClerk(_CustodyClerk):
     ``fences`` off models a pass that ran but reached no run; ``fail_next`` a
     pass that failed. ``passes`` counts its reconciliation passes and
     ``fresh_proofs`` the custody proofs that would each run one more.
+    ``published`` off models no pass yet having seen the bot's every transition.
     """
 
     def __init__(self, registry: BotTaskRegistry, *, fences: bool = True) -> None:
@@ -71,6 +88,7 @@ class _EndClerk(_CustodyClerk):
         self.passes = 0
         self.fresh_proofs = 0
         self.published_reads = 0
+        self.published = True
 
     async def reconcile_once(self):  # type: ignore[override]
         self.passes += 1
@@ -89,6 +107,8 @@ class _EndClerk(_CustodyClerk):
 
     async def published_custody(self, sid: str) -> InstanceCustodyProof | None:
         self.published_reads += 1
+        if not self.published:
+            return None
         return self.proof.model_copy(update={"strategy_instance_id": sid})
 
 
@@ -239,6 +259,223 @@ async def test_a_crash_leaves_the_end_for_the_clerk_to_carry_out(tmp_path: Path)
     view = registry.bot_end("alpaca", _SID)
     assert view.status == "scheduled"
     assert view.editable is True
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)], (
+        "a restart lost the end the crash kept"
+    )
+
+
+async def test_a_service_shutdown_keeps_the_end(tmp_path: Path) -> None:
+    """#2607 review: a service shutdown is no operator's Stop. The bot wants to run again after
+    the restart, and its end stands: a fresh registry still reads it."""
+    registry = await _deployed(tmp_path, _Clock())
+
+    await registry.stop_all()
+
+    assert registry.status("alpaca", _SID).running is False
+    desired = _desired_json(tmp_path)
+    assert (desired["desired_state"], desired["end"]) == (
+        "RUNNING", {"end_at_ms": _END.end_at_ms, "end_action": "SELL", "carried_out_at_ms": None},
+    )
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)]
+
+
+async def test_the_lane_wide_stop_cancels_the_end_a_crash_kept(tmp_path: Path) -> None:
+    """#2607 review: a crash records STOPPED and keeps the end for the Clerk. The lane-wide
+    Stop -- installation migration's stop-all, lane retirement, the budget cutover -- is the
+    operator's Stop, so it ends that end too, though the intent it finds is already STOPPED:
+    the end moves with the volume, and the new host's Clerk would sell at the end time."""
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom")), now_ms=_Clock())
+    await _deploy(registry)
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    crashed_reason = _desired_json(tmp_path)["reason"]
+
+    outcome = await registry.stop_every_running_bot(updated_by="inkant", reason="lane_stop_all")
+
+    assert registry.pending_ends([_SID]) == []
+    assert _desired_json(tmp_path)["end"] is None
+    # The intent was STOPPED already: it keeps the crash's record, and the receipt lists no change.
+    assert (_desired_json(tmp_path)["desired_state"], _desired_json(tmp_path)["reason"]) == ("STOPPED", crashed_reason)
+    assert (outcome.intent_stopped, outcome.refused) == ((), ())
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
+
+
+async def test_the_lane_wide_stop_cancels_the_end_of_an_idle_bot_that_never_stopped(tmp_path: Path) -> None:
+    """An idle bot whose intent still says RUNNING (a restart that never resumed it) is recorded
+    STOPPED by the lane-wide Stop, and its end is cancelled with it."""
+    registry = _registry(tmp_path, None, now_ms=_Clock())
+    DesiredStateRepo(stable_desired_state_path(tmp_path, "bot-idle")).set(
+        DesiredState.RUNNING, updated_by="earlier-operator", now_ms=_T0, reason="deploy", end=_END,
+    )
+
+    outcome = await registry.stop_every_running_bot(updated_by="inkant", reason="lane_stop_all")
+
+    assert registry.pending_ends(["bot-idle"]) == []
+    desired = _desired_json(tmp_path, "bot-idle")
+    assert (desired["desired_state"], desired["reason"], desired["end"]) == ("STOPPED", "lane_stop_all", None)
+    assert [(bot.strategy_instance_id, bot.previous_desired_state) for bot in outcome.intent_stopped] == [
+        ("bot-idle", "RUNNING")
+    ]
+
+
+class _PanelFacade:
+    """The account facade as the panel's Stop drives it, with the end watch looking right after its STOP.
+
+    The watch runs every few seconds on its own task; this places its look in
+    the gap between the Clerk's STOP and the runner's process stop, and lets a
+    process stop the look started take the bot's lock first.
+    """
+
+    account_id = "paper-account"
+    repository = SimpleNamespace(get_command=lambda _command_id: None)
+
+    def __init__(self, clerk: _EndClerk, registry: BotTaskRegistry) -> None:
+        self.clerk = clerk
+        self.registry = registry
+
+    async def stop_strategy_run(self, *, strategy_instance_id: str, run_id: str, reason: str | None = None):
+        await self.clerk.stop_strategy_run(strategy_instance_id=strategy_instance_id, run_id=run_id, reason=reason)
+        await self.registry.carry_out_due_ends()
+        await asyncio.sleep(0)
+        return SimpleNamespace(created=True, command=SimpleNamespace(command_id="cmd:stop", updated_at_ms=_T0))
+
+
+async def test_the_panels_stop_as_the_end_comes_cancels_the_end_before_its_stop_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2607 review: the owner's Stop sells nothing at the end time. The panel's Stop commits
+    the Clerk STOP and then stops the process; an end watch looking in between used to read
+    the run as stopped at its end, keep the end, and leave the next pass to sell. The end is
+    cancelled before the STOP commits -- durably, so no restart revives it."""
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry, fences=False)
+    await _deploy(registry)
+    run_id = registry._bots[_SID].binding.run_id
+    clock.move_to(_END.end_at_ms + 2_000)  # the end has come; no Clerk pass has fenced the bot yet
+    monkeypatch.setattr(
+        recovery_execution, "recheck_recovery_action", lambda *_args, **_kwargs: SimpleNamespace(execution_ref=run_id),
+    )
+
+    async def context() -> SimpleNamespace:
+        return SimpleNamespace(strategy_instance_id=_SID)
+
+    assert get_bot_task_registry() is None
+    set_bot_task_registry(registry)
+    try:
+        await execute_recovery_action(
+            _PanelFacade(clerk, registry),  # type: ignore[arg-type]
+            request=RecoveryExecutionRequest(
+                action_id="stop_bot_decisions", concurrency_token="token", execution_ref=run_id, reason="operator stop",
+            ),
+            current_context=context,  # type: ignore[arg-type]
+        )
+    finally:
+        set_bot_task_registry(None)
+    await asyncio.gather(*registry._end_stop_tasks.values())
+
+    assert registry.pending_ends([_SID]) == []
+    outcome = registry.status("alpaca", _SID).duty_outcome
+    assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
+
+
+async def test_the_end_watch_leaves_a_run_an_operator_stopped_to_that_stop(tmp_path: Path) -> None:
+    """#2607 review: only the Clerk's STOP at the end is the end's to finish. A run another
+    Stop ended is never re-stopped "at its end" -- which would keep the end for the next
+    pass to sell -- and the operator's Stop of the process then cancels it."""
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry, fences=False)
+    await _deploy(registry)
+    run_id = registry._bots[_SID].binding.run_id
+    clock.move_to(_END.end_at_ms + 2_000)
+
+    await clerk.stop_strategy_run(strategy_instance_id=_SID, run_id=run_id, reason="operator stop")
+    await registry.carry_out_due_ends()
+    await asyncio.sleep(0)
+    await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+    await asyncio.gather(*registry._end_stop_tasks.values())
+
+    assert registry.pending_ends([_SID]) == []
+    outcome = registry.status("alpaca", _SID).duty_outcome
+    assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
+
+
+async def test_an_operators_stop_of_a_bot_whose_process_is_gone_cancels_its_end(tmp_path: Path) -> None:
+    """#2607 review: Stop is offered while the Clerk run is ACTIVE -- after a crash whose own
+    STOP failed, say -- though this runner has no process left to stop. The Stop still
+    cancels the end, and durably."""
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom")), now_ms=_Clock())
+    await _deploy(registry)
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    assert registry.pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)]
+
+    with pytest.raises(UnknownBotError):
+        await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+
+    assert registry.pending_ends([_SID]) == []
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [], "a restart revived the cancelled end"
+
+
+async def test_an_operators_stop_with_no_process_records_the_same_stop_as_the_lane_wide_one(tmp_path: Path) -> None:
+    """Every operator Stop makes one record: a bot this runner has no process for, whose intent
+    still says RUNNING, is recorded STOPPED with its end cancelled; a bot it never deployed is
+    given no desired state."""
+    registry = _registry(tmp_path, None, now_ms=_Clock())
+    DesiredStateRepo(stable_desired_state_path(tmp_path, "bot-idle")).set(
+        DesiredState.RUNNING, updated_by="earlier-operator", now_ms=_T0, reason="deploy", end=_END,
+    )
+
+    for sid in ("bot-idle", "never-deployed"):
+        with pytest.raises(UnknownBotError):
+            await registry.stop_after_durable_clerk_stop("alpaca", sid, updated_by="operator_recovery", reason="op")
+
+    desired = _desired_json(tmp_path, "bot-idle")
+    assert (desired["desired_state"], desired["reason"], desired["end"]) == ("STOPPED", "op", None)
+    assert DesiredStateRepo(stable_desired_state_path(tmp_path, "never-deployed")).read() is None
+
+
+async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The panel's Stop cancels the end before its STOP fences the bot. An unreadable desired
+    state has no end the Clerk can carry out, so it never keeps the STOP from landing; it is said."""
+    registry = _registry(tmp_path, None)
+    broken = stable_desired_state_path(tmp_path, _SID)
+    broken.parent.mkdir(parents=True)
+    broken.write_text("not json", encoding="utf-8")
+
+    await registry.cancel_end(_SID, updated_by="operator_recovery")
+
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_unreadable"]
+    # A repaired file would carry its end out after all: the repair must clear it.
+    assert "clear its end when repairing the file" in said.getMessage()
+
+
+async def test_a_stop_of_a_running_bot_whose_desired_state_cannot_be_read_still_stops_it(tmp_path: Path) -> None:
+    """#2607 review: the Stop cannot cancel an unreadable desired state's end, and goes on. The
+    process is fenced and stopped and its outcome recorded before the status the Stop answers
+    with -- which reads that file -- raises."""
+    registry = await _deployed(tmp_path, _Clock())
+    managed = registry._bots[_SID]
+    stable_desired_state_path(tmp_path, _SID).write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(DesiredStateCorruptError):
+        await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+
+    assert not managed.run_gate.is_set()
+    assert managed.task.done()
+    assert _SID not in registry._bots
+    outcome = registry._bindings.read_outcome(_SID, managed.binding.run_id)
+    assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
+
+
+def test_cancelling_the_end_of_a_bot_with_no_desired_state_writes_none(tmp_path: Path) -> None:
+    """A Stop of a bot this runner never deployed leaves no desired state behind to read as RUNNING."""
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, "never-deployed"))
+
+    assert repo.cancel_end(updated_by="operator_recovery", now_ms=_T0) is None
+    assert repo.read() is None
 
 
 # ── the Clerk's end schedule ─────────────────────────────────────────────────
@@ -419,6 +656,191 @@ async def test_a_missing_clerk_is_said_once_by_the_end_watch(
     assert len(loud) == 1
     assert loud[0].exc_info is None
     assert registry.status("alpaca", _SID).running is True
+
+
+async def test_one_bot_the_end_watch_cannot_read_never_stalls_the_others(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2607 review (#2363's rule): an unexpected failure reading one bot's run -- a locked
+    database -- is that bot's, said with its stack; the watch still reaches every bot after it."""
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry, fences=False)
+    await _deploy(registry, "bot-a")
+    await _deploy(registry, "bot-b")
+    real = registry._authority_for
+
+    class _LockedProjector:
+        def run_is_active(self, **_kwargs: object) -> bool:
+            raise sqlite3.OperationalError("database is locked")
+
+    class _LockedAuthority:
+        def lifecycle_projector(self) -> _LockedProjector:
+            return _LockedProjector()
+
+    registry._authority_for = (  # type: ignore[method-assign]
+        lambda binding: _LockedAuthority() if binding.strategy_instance_id == "bot-a" else real(binding)
+    )
+    clock.move_to(_END.end_at_ms)
+
+    try:
+        await registry.carry_out_due_ends()
+    finally:
+        registry._authority_for = real  # type: ignore[method-assign]
+
+    assert clerk.passes == 1, "the watch never reached bot-b"
+    failed = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_pass_failed"]
+    assert [(record.strategy_instance_id, record.levelno) for record in failed] == [("bot-a", logging.ERROR)]
+    assert failed[0].exc_info is not None
+
+
+# ── the proof of a stop at the end ───────────────────────────────────────────
+
+
+class _PassSequenceClerk:
+    """A Clerk whose published passes are ``proofs``, one per look; the last one stays."""
+
+    def __init__(self, proofs: list[InstanceCustodyProof]) -> None:
+        self.proofs = proofs
+        self.looks = 0
+
+    async def published_custody(self, sid: str) -> InstanceCustodyProof | None:
+        self.looks += 1
+        return self.proofs.pop(0) if len(self.proofs) > 1 else self.proofs[0]
+
+
+def _trade_binding() -> BrokerBotBinding:
+    return BrokerBotBinding(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID, strategy_key="deployment_validation",
+        broker="alpaca", symbol="SPY", use_rth=True, mode="trade", quantity=1, carryover_policy="FORBID",
+        action_plan=alpaca_v1_action_plan("SPY"), run_id="trade-run-1", created_at_ms=_T0,
+    )
+
+
+async def test_an_end_stops_proof_waits_past_a_pass_that_still_lists_its_sale_as_working(tmp_path: Path) -> None:
+    """#2607 review: the pass that ended the bot put in its sale and may publish before the sale
+    fills. That pass still lists the order as working; the proof waits for one that doesn't,
+    rather than calling a flat bot's custody unprovable."""
+    flat = _custody_proof(exposure={})
+    clerk = _PassSequenceClerk([flat.model_copy(update={"working_order_refs": ("order:end-sale",)}), flat])
+    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+
+    outcome = await prove_end_stop_outcome(
+        _trade_binding(), checkpoint_path=tmp_path / "stop.json", now_ms=lambda: _T0, wait_s=5.0, poll_s=0.0,
+    )
+
+    assert outcome == "STOPPED_FLAT"
+    assert clerk.looks == 2
+
+
+async def test_an_end_stops_proof_records_the_last_pass_it_saw_once_its_wait_is_over(tmp_path: Path) -> None:
+    """A sale still working when the wait ends is the stop's to record as unproven; the sweeps go on."""
+    working = _custody_proof(exposure={"SPY": 1.0}).model_copy(update={"unresolved_intent_refs": ("intent:1",)})
+    set_alpaca_clerk(_PassSequenceClerk([working]))  # type: ignore[arg-type]
+
+    outcome = await prove_end_stop_outcome(
+        _trade_binding(), checkpoint_path=tmp_path / "stop.json", now_ms=lambda: _T0, wait_s=0.0, poll_s=0.0,
+    )
+
+    assert outcome == "STOPPED_CUSTODY_UNPROVABLE"
+    assert json.loads((tmp_path / "stop.json").read_text(encoding="utf-8"))["outcome"] == "STOPPED_CUSTODY_UNPROVABLE"
+
+
+async def test_a_stop_at_its_end_waits_for_its_proof_without_holding_the_bots_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2607 review: the proof waits up to 45 s for the Clerk's pass. A Deploy of the bot takes
+    the process-wide graduation fence and then the bot's lock, so a stop that held the lock
+    that long held every Deploy and the live cutover behind it. The next operation on the bot
+    is answered at once; the proof, when it lands, is still recorded."""
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry)
+    await _deploy(registry, mode="trade")
+    clerk.published = False  # no pass has seen the bot's every transition yet
+    clock.move_to(_END.end_at_ms)
+
+    await registry.carry_out_due_ends()
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    with pytest.raises(BotEndRefused, match="This bot's end has come"):
+        await asyncio.wait_for(
+            registry.edit_bot_end("alpaca", _SID, _sell(None), updated_by="operator"), timeout=2.0,
+        )
+
+    clerk.published = True
+    await asyncio.gather(*registry._end_stop_tasks.values())
+    outcome = registry.status("alpaca", _SID).duty_outcome
+    assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "SCHEDULED_END")
+
+
+async def _stopped_at_its_end_awaiting_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[BotTaskRegistry, _EndClerk, BrokerBotBinding, list[str]]:
+    """A trading bot the Clerk stopped at its end, its stop waiting for its proof with the lock released.
+
+    The last element lists the runs whose outcome was projected over the bot's current one.
+    """
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry)
+    await _deploy(registry, mode="trade")
+    stopped = registry.binding_for_control("alpaca", _SID)
+    clerk.published = False
+    clock.move_to(_END.end_at_ms)
+    await registry.carry_out_due_ends()
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+    projected: list[str] = []
+    monkeypatch.setattr(
+        registry._terminal, "replace_provisional_stop",
+        lambda binding, **_kwargs: projected.append(binding.run_id),
+    )
+    return registry, clerk, stopped, projected
+
+
+async def test_a_stop_at_its_end_proven_after_a_later_run_began_is_recorded_as_the_stopped_runs_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2607 review: while the stop waited for its proof with the lock released, a later run of
+    the bot was launched. The proof is the stopped run's: it is recorded under that run's id --
+    its receipt, and the replay receipt it owes -- where it used to leave the run provisional for
+    good, and nothing is projected over the later run."""
+    caplog.set_level(logging.INFO, logger="app.services.bot_runner")
+    registry, clerk, stopped, projected = await _stopped_at_its_end_awaiting_proof(tmp_path, monkeypatch)
+    owed: list[str] = []
+    monkeypatch.setattr(registry, "_schedule_run_replay_receipt", lambda binding: owed.append(binding.run_id))
+
+    registry._bindings.record_launch(stopped.model_copy(update={"run_id": "a-later-run"}), launch_reason="deploy")
+    clerk.published = True
+    await asyncio.gather(*registry._end_stop_tasks.values())
+
+    receipt = registry._bindings.read_outcome(_SID, stopped.run_id)
+    assert receipt is not None and (receipt.kind, receipt.reason_code) == ("STOPPED", "SCHEDULED_END")
+    assert owed == [stopped.run_id]
+    assert projected == []
+    assert registry._bindings.read_outcome(_SID, "a-later-run") is None
+    assert "bot_end_proof_superseded" in [getattr(record, "action", None) for record in caplog.records]
+
+
+async def test_a_stop_at_its_end_whose_registration_is_gone_says_its_outcome_stays_provisional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No later run began: the bot's registration is gone while its proof was awaited. That is
+    said as it is -- not as "a later run began" -- and so is what it leaves: the stopped run's
+    outcome stays provisional."""
+    registry, clerk, stopped, projected = await _stopped_at_its_end_awaiting_proof(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(registry, "_read_binding", lambda _sid: None)
+    clerk.published = True
+    await asyncio.gather(*registry._end_stop_tasks.values())
+
+    assert projected == []
+    assert registry._bindings.read_outcome(_SID, stopped.run_id) is None
+    actions = [getattr(record, "action", None) for record in caplog.records]
+    assert "bot_end_proof_superseded" not in actions
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_proof_unrecorded"]
+    assert "stays provisional" in said.getMessage()
 
 
 # ── a stopped Dry Run's end ──────────────────────────────────────────────────

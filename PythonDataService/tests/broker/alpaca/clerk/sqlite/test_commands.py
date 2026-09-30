@@ -16,6 +16,7 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     InvalidIdentityError,
     NoActiveRunError,
     UnknownStrategyInstanceError,
+    run_stop_reason,
     submit_start_run,
     submit_stop_run,
 )
@@ -109,6 +110,25 @@ def test_stop_deactivates_the_run(repo: ClerkSqliteRepository) -> None:
     assert submission.command.state == "succeeded"
     assert submission.command.action == "STOP"
     assert repo.active_run(SID) is None
+
+
+def test_run_stop_reason_is_the_reason_its_first_stop_committed_under(repo: ClerkSqliteRepository) -> None:
+    """#2607: the runner tells the Clerk's STOP at a bot's end from any other Stop by this reason."""
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
+    assert run_stop_reason(repo, strategy_instance_id=SID, lifecycle_run_id="run-1") is None  # still ACTIVE
+
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1",
+        operator_reason="scheduled_end",
+    )
+    # A later Stop of the same run is the STOP already committed, under its first reason.
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1",
+        operator_reason="operator stop",
+    )
+
+    assert run_stop_reason(repo, strategy_instance_id=SID, lifecycle_run_id="run-1") == "scheduled_end"
+    assert run_stop_reason(repo, strategy_instance_id=SID, lifecycle_run_id="another-run") is None
 
 
 def test_stop_with_no_active_run_raises_without_writing_a_command(repo: ClerkSqliteRepository) -> None:

@@ -60,6 +60,7 @@ __all__ = [
     "InvalidIdentityError",
     "NoActiveRunError",
     "UnknownStrategyInstanceError",
+    "run_stop_reason",
     "stop_command_resource",
     "submit_retire_strategy_instance",
     "submit_start_run",
@@ -440,3 +441,25 @@ def stop_command_resource(
         intended_end_state=INTENDED_END_STATE_STOPPED,
     )
     return repo.get_command(f"cmd:{idempotency_key}")
+
+
+def run_stop_reason(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+) -> str | None:
+    """The ``operator_reason`` this run's STOP committed under, or ``None``.
+
+    A run is stopped once, under its first STOP's reason (:func:`submit_stop_run`),
+    and an instance's runs stop in turn, so its latest ``RUN_STOPPED`` answers
+    for its latest stopped run. ``None`` when that is another run, when the run
+    has not stopped, or when its STOP carried no reason.
+    """
+    stopped = repo.last_strategy_transition(
+        strategy_instance_id=strategy_instance_id, transition_kind="RUN_STOPPED"
+    )
+    if stopped is None:
+        return None
+    facts = RunStoppedFacts.from_facts_json(stopped["facts_json"])
+    return facts.operator_reason if facts.lifecycle_run_id == lifecycle_run_id else None

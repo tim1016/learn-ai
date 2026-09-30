@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
@@ -189,19 +189,57 @@ class BotRunTerminalRecorder:
         canary_rollback: CanaryRollbackDecision | None = None,
     ) -> None:
         """Replace provisional stop evidence with the Clerk-proven outcome."""
-        outcome = BotDutyOutcome(
+        self._run_evidence.record_terminal(
+            binding.strategy_instance_id,
+            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+            updated_by=_UPDATED_BY,
+            reason=reason_code,
+        )
+
+    def record_replaced_run_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None,
+    ) -> None:
+        """Record the proven stop of a run a later run of the bot already replaced (#2607).
+
+        Only the stopped run's own receipt, keyed by its run id: the lifecycle
+        projection is the later run's now, and a terminal projected there would
+        stand over that run's own.
+        """
+        self._run_evidence.record_terminal_receipt(
+            binding.strategy_instance_id,
+            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+        )
+
+    def _proven_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None,
+    ) -> BotDutyOutcome:
+        return BotDutyOutcome(
             kind="STOPPED",
             reason_code=reason_code,
             recorded_at_ms=self._now_ms(),
             run_id=binding.run_id,
             canary_rollback=canary_rollback,
         )
-        self._run_evidence.record_terminal(
-            binding.strategy_instance_id,
-            outcome,
-            updated_by=_UPDATED_BY,
-            reason=reason_code,
-        )
+
+
+class StopProver(Protocol):
+    """How a stopped run's custody outcome is proven: :func:`prove_terminal_stop_outcome` or :func:`prove_end_stop_outcome`."""
+
+    async def __call__(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        checkpoint_path: Path,
+        now_ms: Callable[[], int],
+    ) -> StopCustodyOutcome: ...
 
 
 async def prove_terminal_stop_outcome(
@@ -246,10 +284,12 @@ async def prove_end_stop_outcome(
     comparison is this stop's proof. A reconcile of the stop's own would run
     one whole account pass per bot, and every bot on the default end stops in
     the same minute. So the stop reads the latest published pass
-    (``published_custody``) until one saw the bot's every transition -- the
-    pass that ended it, or the next sweep when the sale's fill landed after
-    -- and never reconciles itself. None within ``wait_s`` records the
-    custody unproven; the account's sweeps go on proving it.
+    (``published_custody``) until one saw the bot's every transition and no
+    longer lists any of its orders as working or unresolved -- the pass that
+    ended it, or the next sweep once the sale filled -- and never reconciles
+    itself. Past ``wait_s`` the latest pass is recorded as it stands -- a
+    sale still working is custody unproven -- and with none the custody is
+    unproven; the account's sweeps go on proving it.
     """
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
@@ -258,9 +298,10 @@ async def prove_end_stop_outcome(
     while True:
         clerk = get_alpaca_clerk()
         proof = None if clerk is None else await clerk.published_custody(sid)
-        if proof is not None:
+        expired = time.monotonic() >= deadline
+        if proof is not None and (expired or not (proof.working_order_refs or proof.unresolved_intent_refs)):
             return record_stop_outcome(binding, proof, checkpoint_path=checkpoint_path, now_ms=now_ms)
-        if time.monotonic() >= deadline:
+        if expired:
             logger.warning(
                 "A bot stopped at its end before any Clerk pass proved its custody",
                 extra={

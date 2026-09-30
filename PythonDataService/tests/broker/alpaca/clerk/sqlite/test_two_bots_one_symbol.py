@@ -930,8 +930,7 @@ async def test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_ag
     rests, every pass holds A's exit: no order and, outside the regular
     session, no ``EXIT_STUCK``. The owner cancels it through the Clerk at
     18:30; on the first pass after, A's sell goes out as an after-hours limit
-    in the same session -- not at 04:00 the next morning. (A cancel at Alpaca,
-    or an expiry, is #2647: see the xfail below.)
+    in the same session -- not at 04:00 the next morning.
     """
     repo, _clock = clocked_repo
     owner, manual_ref, redrive = await _as_sell_is_refused_behind_the_owners_buy_limit(repo)
@@ -964,22 +963,18 @@ class _NoReconciler:
         raise AssertionError("a lifecycle frame must not trigger reconciliation here")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError,
-    reason="#2647: a manual order that ends at Alpaca leaves its MANUAL_ORDER effect in progress, "
-    "so clerk_work_in_flight keeps refusing the exit",
-)
 @pytest.mark.parametrize("route", ["reconcile_sweep", "trade_updates"])
 async def test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca(
     clocked_repo,  # noqa: F811
     route: str,
 ) -> None:
-    """The owner cancels the buy limit in Alpaca's own UI at 18:30 (reviewer probe, #2622).
+    """The owner cancels the buy limit in Alpaca's own UI at 18:30 (#2622, #2647).
 
     The Clerk learns the order ended, by the next sweep or by its
-    ``trade_updates`` frame, so no order is open on the buy side of SPY and
-    A's sell should go out on the first pass after. It does not yet: the
-    manual order's effect never leaves ``in_progress`` (#2647).
+    ``trade_updates`` frame. Either route ends the manual order's
+    ``MANUAL_ORDER`` effect as well as its order record, so no Clerk work is
+    left in flight and nothing is open on the buy side of SPY: A's sell goes
+    out as an after-hours limit on the first pass after, in the same session.
     """
     repo, _clock = clocked_repo
     owner, manual_ref, redrive = await _as_sell_is_refused_behind_the_owners_buy_limit(repo)

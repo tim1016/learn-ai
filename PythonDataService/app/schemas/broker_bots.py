@@ -206,9 +206,10 @@ class AlpacaPaperDeployRequest(BaseModel):
         subclass's submission key or display lineage -- and never the budget's
         review token or typed phrase, which prove the final click rather than
         describe the bot. Nor the end (#2607): the owner may change it while
-        the bot runs, so it is no term the consent or a resend binds.
-        ``bound_to`` names what else the hash commits to (the account; for
-        consent, also the world).
+        the bot runs, so it is no term the consent binds -- a resend of a
+        submission key binds the end it named through ``bound_to``
+        (``panel_deploy._submission_fingerprint``). ``bound_to`` names what
+        else the hash commits to (the account; for consent, also the world).
         """
         payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields) - {"end"})
         if payload["budget"] is not None:

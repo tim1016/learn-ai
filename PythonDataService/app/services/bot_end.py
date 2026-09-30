@@ -28,6 +28,8 @@ appear only in the words it authors.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 
@@ -117,18 +119,7 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
             detail="A Dry Run never ends holding; it always sells at the last price it saw.",
             next_action="Choose Sell for this Dry Run.",
         )
-    try:
-        return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
-    except BotEndRefused:
-        raise
-    except (LookupError, OverflowError, ValueError) as exc:
-        # The calendar answers only for the dates it covers: a pandas
-        # timestamp past 2262 overflows, and a year past 9999 is no date.
-        raise BotEndRefused(
-            "The market calendar doesn't cover that date.",
-            detail="An end is checked against the market's calendar, which has no sessions for that date.",
-            next_action="Choose a date the market calendar covers.",
-        ) from exc
+    return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
 
 
 def end_edit_refusal(pending: BotEnd | None, *, running: bool, now_ms: int) -> BotEndRefused | None:
@@ -211,9 +202,8 @@ def when_words(instant_ms: int, *, now_ms: int) -> str:
     Always the weekday and date, never "today": the owner may not be in the
     market's time zone, so "today" in ET can be tomorrow where they are.
     """
-    at, now = ny_datetime(instant_ms), ny_datetime(now_ms)
-    year = "" if at.year == now.year else f" {at.year}"
-    return f"{at:%a %b} {at.day}{year}, {at:%H:%M} ET"
+    at = ny_datetime(instant_ms)
+    return f"{_day_words(at.date(), now_ms=now_ms)}, {at:%H:%M} ET"
 
 
 _ACTION_WORDS: dict[BotEndAction, str] = {"SELL": "sells", "KEEP": "keeps its shares"}
@@ -221,28 +211,32 @@ _DONE_WORDS: dict[BotEndAction, str] = {"SELL": "sale put in", "KEEP": "kept its
 
 
 def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> ResolvedBotEnd:
-    """``end_at_ms`` held to the regular session of its ET date; the calendar may raise past its range."""
-    day = et_date_at_ms(end_at_ms)
-    if not is_trading_day(day):
+    """``end_at_ms`` held to the regular session of its ET date."""
+    with _calendar_covers_the_date():
+        day = et_date_at_ms(end_at_ms)
+        trading_day = is_trading_day(day)
+    if not trading_day:
         raise BotEndRefused(
-            f"The market is closed on {_day_words(day)}.",
+            f"The market is closed on {_day_words(day, now_ms=now_ms)}.",
             detail="A bot can only end while the market is open.",
             next_action="Choose a trading day.",
         )
-    window = session_window_for_date(day)
-    last_ms = window.close_ms_utc - BOT_END_LEAD_MS
+    with _calendar_covers_the_date():
+        window = session_window_for_date(day)
+        last_ms = window.close_ms_utc - BOT_END_LEAD_MS
+        moved_to_early_close = last_ms < end_at_ms <= _full_session_last_end_ms(day) and is_early_close(day)
     notice = None
-    if last_ms < end_at_ms <= _full_session_last_end_ms(day) and is_early_close(day):
+    if moved_to_early_close:
         end_at_ms = last_ms
         notice = (
-            f"{_day_words(day)} closes early at {_clock_words(window.close_ms_utc)} ET, "
+            f"{_day_words(day, now_ms=now_ms)} closes early at {_clock_words(window.close_ms_utc)} ET, "
             f"so this bot ends at {_clock_words(last_ms)} ET."
         )
     if not window.open_ms_utc <= end_at_ms <= last_ms:
         raise BotEndRefused(
             "The end must fall within regular hours.",
             detail=(
-                f"On {_day_words(day)} the market is open from {_clock_words(window.open_ms_utc)} to "
+                f"On {_day_words(day, now_ms=now_ms)} the market is open from {_clock_words(window.open_ms_utc)} to "
                 f"{_clock_words(window.close_ms_utc)} ET, so the latest end is {_clock_words(last_ms)} ET."
             ),
             next_action=f"Choose a time from {_clock_words(window.open_ms_utc)} to {_clock_words(last_ms)} ET.",
@@ -311,8 +305,27 @@ def _clock_words(instant_ms: int) -> str:
     return f"{ny_datetime(instant_ms):%H:%M}"
 
 
-def _day_words(day: date) -> str:
-    return f"{day:%a %b} {day.day}"
+def _day_words(day: date, *, now_ms: int) -> str:
+    """A date as the owner reads it: ``Wed Sep 30``, with the year when it is not this one (in ET)."""
+    year = "" if day.year == et_date_at_ms(now_ms).year else f" {day.year}"
+    return f"{day:%a %b} {day.day}{year}"
+
+
+@contextmanager
+def _calendar_covers_the_date() -> Iterator[None]:
+    """Refuse, in plain words, a date the market calendar cannot answer for.
+
+    Wraps only the calendar's reads: a pandas timestamp past 2262 overflows,
+    and a year past 9999 is no date. Any other error is a bug, not a date.
+    """
+    try:
+        yield
+    except (LookupError, OverflowError, ValueError) as exc:
+        raise BotEndRefused(
+            "The market calendar doesn't cover that date.",
+            detail="An end is checked against the market's calendar, which has no sessions for that date.",
+            next_action="Choose a date the market calendar covers.",
+        ) from exc
 
 
 __all__ = [

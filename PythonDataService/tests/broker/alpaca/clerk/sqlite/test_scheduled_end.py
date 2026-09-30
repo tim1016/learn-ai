@@ -21,8 +21,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
 
+from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import scheduled_end
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
@@ -36,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import (
     SCHEDULED_END_REASON,
     EndSaleWaiting,
@@ -46,9 +51,13 @@ from app.broker.alpaca.clerk.sqlite.scheduled_end import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType
+from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
+from app.routers import alpaca_clerk_sqlite
 from app.schemas.bot_end import BotEnd
+from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel import lane_summary
 from app.utils.timestamps import to_ms_utc
+from tests._helpers.bot_runner.custody import _registry as _runner_registry
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _AssertingNoReconciler,
     _broker_order_fixture,
@@ -575,6 +584,76 @@ async def test_an_operators_stop_as_the_end_comes_cancels_the_sale(
     assert market.submitted_legs == []
     assert _end_sales(repo) == []
     assert repo.position(SID, "SPY") == 10
+
+
+async def test_the_raw_stop_route_cancels_the_end_so_the_pass_at_the_end_sells_nothing(
+    repo: ClerkSqliteRepository, tmp_path: Path,
+) -> None:
+    """#2664: the raw ``runs/stop`` route (fleet op ``custody_runs_stop``) is an operator's
+    Stop too. It used to commit its STOP and leave a SELL end pending, so the Clerk's pass at
+    the end time sold the shares the operator meant to keep. It now cancels the end, durably,
+    through the runner that keeps it, before its STOP commits."""
+    await _hold_ten(repo)
+    runner = _runner_registry(tmp_path / "runner", None)
+    desired = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", SID))
+    desired.set(DesiredState.RUNNING, updated_by="deploy", now_ms=repo.clock(), reason="deploy", end=_end("SELL").end)
+    port = _Market()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=port, account_mode="paper")
+    app = FastAPI()
+    app.include_router(alpaca_clerk_sqlite.router)
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    set_bot_task_registry(runner)
+    install_bot_end_schedule(runner)
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            stop = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+                json={"lifecycle_run_id": RUN_ID, "operator_reason": "operator stop"},
+            )
+        _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+        await _pass(repo, port)
+    finally:
+        install_bot_end_schedule(None)
+        set_bot_task_registry(None)
+        set_active_clerk_runtime(None)
+
+    assert stop.status_code == 202
+    assert _stop_reason(repo) == "operator stop"
+    assert port.submitted_legs == []
+    assert _end_sales(repo) == []
+    assert repo.position(SID, "SPY") == 10
+    assert runner.pending_ends([SID]) == []
+    record = desired.read()
+    assert record is not None and (record.desired_state, record.end) == (DesiredState.RUNNING, None)
+
+
+async def test_the_raw_stop_route_leaves_the_end_of_a_bot_this_account_does_not_run(
+    repo: ClerkSqliteRepository, tmp_path: Path,
+) -> None:
+    """#2664: a raw Stop naming a bot this account's authority has no registration for -- a Dry
+    Run's, which runs in its own simulator -- is refused, and cancels no end on its way."""
+    runner = _runner_registry(tmp_path / "runner", None)
+    desired = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", "dry-run-bot"))
+    desired.set(DesiredState.RUNNING, updated_by="deploy", now_ms=repo.clock(), reason="deploy", end=_end("SELL").end)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_Market(), account_mode="paper")
+    app = FastAPI()
+    app.include_router(alpaca_clerk_sqlite.router)
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    set_bot_task_registry(runner)
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            stop = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/dry-run-bot/runs/stop",
+                json={"lifecycle_run_id": RUN_ID, "operator_reason": "operator stop"},
+            )
+    finally:
+        set_bot_task_registry(None)
+        set_active_clerk_runtime(None)
+
+    assert stop.status_code == 404
+    assert runner.pending_ends(["dry-run-bot"]) == [
+        ScheduledEnd(strategy_instance_id="dry-run-bot", end=_end("SELL").end)
+    ]
 
 
 async def test_a_lost_execution_lease_while_finishing_an_end_fails_the_pass(

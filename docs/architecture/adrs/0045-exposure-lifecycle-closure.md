@@ -199,17 +199,36 @@ the one sale a dead run makes by itself; every other dead-run position keeps
 the rule above. On a `sim:` authority the end is a Stop and the Dry Run's
 run-end close does the sale; a Dry Run is never offered KEEP, and a stopped
 Dry Run's end is recorded carried out when it comes, since its run-end close
-already sold. An operator Stop ends the bot and its end with it: Stop does not
-sell, so no sale is left scheduled behind it -- a Stop landing in the minute
-of the end is the STOP already committed, and the pass reads the end again
-before it sells. Changing the end to KEEP after its sale was accepted does not
-stop that sale: once accepted it is its EXIT's, like any sale already sent.
+already sold. Every operator Stop -- the panel's, and the lane-wide Stop that
+installation migration, lane retirement and the budget cutover run -- ends the
+bot and its end with it: Stop does not sell, so no sale is left scheduled
+behind it. Each makes the same record in the bot's desired state
+(`BotTaskRegistry._record_operator_stop_locked`): it cancels the end first --
+durably, whether or not the runner still has the bot's process, and whatever
+the intent already says -- then records STOPPED, a write that never touches
+the end. A crash, a restart or a service shutdown keeps the end, so the Clerk
+still carries it out; a crash records STOPPED with the end kept, and a later
+operator Stop, the lane-wide one included, still cancels it. The panel's Stop
+cancels the end before it commits its STOP and stops the process, so nothing
+that runs in between (the runner's end watch, a Clerk pass) reads the end as
+still to be carried out. The runner stops a process "at its end" only when
+the run's STOP is the Clerk's own at the end (`operator_reason`
+`scheduled_end`, which the raw lifecycle Stop route refuses as reserved); a
+run any other Stop ended is that Stop's. A Stop landing
+after the Clerk's STOP at the end still cancels the end: its STOP is the one
+already committed, and the pass reads the end again before it sells. Changing
+the end to KEEP after its sale was accepted does not stop that sale: once
+accepted it is its EXIT's, like any sale already sent.
 
 The stop at the end is proven by the pass that ended the bot, never by a pass
 of its own: every bot on the default end stops in the same minute, and a
 reconcile each would be one whole account pass per bot. The runner reads the
 latest published pass (`published_custody`) once that pass's final broker
-comparison saw the bot's every transition.
+comparison saw the bot's every transition and no longer lists any of its
+orders as working, and waits for it with the bot's operation lock released. A
+proof that lands after a later run of the bot began is recorded as the stopped
+run's alone -- its receipt and the replay receipt it owes -- never projected
+over the later run's.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing

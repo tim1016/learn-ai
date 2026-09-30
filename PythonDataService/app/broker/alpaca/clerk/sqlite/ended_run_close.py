@@ -7,7 +7,8 @@ bot's owner-scheduled end (``scheduled_end``, #2607). Both need the same two
 things, which live here once:
 
 * **What is owed** (:func:`bot_holdings`): every symbol the bot holds, with the
-  newest owned entry its close is keyed on. The close's decision id is
+  owned entry its close is keyed on -- the one updated last (``updated_at_ms``,
+  the order ``entry_orders_for_strategy`` reads them in). The close's decision id is
   derived from that entry, so a re-run of the pass drives the same EXIT and
   never sells twice, with no "close owed" record of its own to lose. A holding
   whose entries another EXIT still owns is left to that EXIT: a second EXIT
