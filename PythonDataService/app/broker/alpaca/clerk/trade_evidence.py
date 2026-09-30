@@ -160,10 +160,23 @@ class SqliteTradeUpdateEvidenceSink:
     ) -> TradeUpdateDisposition:
         del recovery_window_limit
         async with self._intake:
+            # A frame's exact execution slice is its own order's execution:
+            # credited below, and -- for a manual order's replacement -- the
+            # proof it took the original's place (#2656). A recovered REST
+            # aggregate never carries one.
+            exact_slice = (
+                event
+                if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None
+                else None
+            )
             # The one resolver every route shares: our client id first, then a
             # manual order's Alpaca replacement chain (#2656) -- a replacement
             # carries a client id Alpaca generated, never ours.
-            captured = resolve_captured_order(self._repo, order) if order is not None else None
+            captured = (
+                resolve_captured_order(self._repo, order, own_execution=exact_slice)
+                if order is not None
+                else None
+            )
             if captured is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
@@ -236,13 +249,13 @@ class SqliteTradeUpdateEvidenceSink:
                 )
                 return "order_event"
 
-            if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None:
+            if exact_slice is not None:
                 # One shared append flow with the no-submit adapters' exact
                 # evidence (#2178): identity dedup, auto-supersession and
                 # fail-closed quarantine live in exactly one implementation.
                 append_exact_execution_slice(
                     self._repo,
-                    event=event,
+                    event=exact_slice,
                     order=order,
                     order_ref=order_ref,
                     owner=owner,

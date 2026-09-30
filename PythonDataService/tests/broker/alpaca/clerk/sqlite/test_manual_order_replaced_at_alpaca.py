@@ -4,11 +4,12 @@ The owner edits a Clerk manual order's price or quantity on Alpaca's own
 website, and Alpaca reports the original ``replaced``: the order lives on
 under a new broker id, so ``replaced`` is not an ending (#2647 stands). These
 tests pin that the Clerk follows the replacement chain -- from ``replaced_by``
-on the original and from a replacement's own fills, on the stream, the sweep
-and a Clerk cancel alike -- ends the manual leg exactly once when the chain's
-last order ends, credits each fill exactly once, never treats a replacement
-as a foreign order, never moves the chain on a replacement that did not take
-over, and contains a replacement record it cannot follow.
+on the original and from a replacement's own execution, on the stream, the
+sweep and a Clerk cancel alike -- ends the manual leg exactly once when the
+chain's last order ends, credits each fill exactly once, never treats a
+replacement as a foreign order, never moves the chain on a replacement that
+did not take over (whatever fill count it reports), and contains a
+replacement record it cannot follow.
 
 Every sweep and cancel here runs through ``guard_broker_trade_port``, the
 wrapper the runtime puts around the real port: a capability the guard does
@@ -95,12 +96,16 @@ class _Website(_AlpacaWebsite):
         return self.replacements.get(order_id)
 
     async def cancel(self, order_id: str) -> None:
+        """Alpaca cancels the order now: its answer is stamped at the Clerk's clock, after every earlier one."""
         replacement = self.replacements.get(order_id)
         if replacement is not None:
             self.cancel_calls.append(order_id)
             self.replacements[order_id] = _ended(replacement, self.repo, status="canceled")
             return
         await super().cancel(order_id)
+        for client_order_id, order in self.orders.items():
+            if order.order_id == order_id:
+                self.orders[client_order_id] = _ended(order, self.repo, status="canceled")
 
 
 def _guarded(website: _Website) -> BrokerTradePort:
@@ -390,6 +395,171 @@ async def test_a_rejected_replacement_leaves_the_working_original_in_custody(clo
     assert terminal["transition_kind"] == "MANUAL_ORDER_CANCELED"
 
 
+# ── Only the replacement's own execution proves it took over ─────────────────
+
+
+def _original_partially_filled(
+    repo: ClerkSqliteRepository, website: _Website, order_ref: str, *, filled_quantity: float
+) -> BrokerOrder:
+    """The original, still working, after ``filled_quantity`` of its shares filled."""
+    now = repo.clock()
+    partial = website.orders[order_ref].model_copy(update={
+        "status": "partially_filled", "filled_quantity": filled_quantity, "filled_avg_price": 99.90,
+        "updated_at_ms": now, "observed_at_ms": now,
+    })
+    website.orders[order_ref] = partial
+    return partial
+
+
+def _replacement_carrying(
+    original: BrokerOrder, repo: ClerkSqliteRepository, *, status: str, filled_quantity: float
+) -> BrokerOrder:
+    """A replacement Alpaca booked for an edit, reporting ``filled_quantity`` before any execution of its own."""
+    return _replacement_of(original, repo, replacement_id=_B, status=status).model_copy(update={
+        "filled_quantity": filled_quantity, "filled_avg_price": 99.90 if filled_quantity else None,
+    })
+
+
+async def _observe_pending_replacement(
+    repo: ClerkSqliteRepository, website: _Website, route: str, *, original: BrokerOrder, pending: BrokerOrder,
+) -> None:
+    website.replacements[_B] = pending
+    if route == "trade_updates":
+        await _frame(repo, pending, event_type=pending.status)
+    else:
+        await _reconciliation_pass(
+            repo, website, open_orders=[original, pending], spy_held=original.filled_quantity,
+        )
+
+
+@pytest.mark.parametrize("carried_status", ["pending_new", "accepted", "new"])
+@pytest.mark.parametrize("route", ["trade_updates", "reconcile_sweep"])
+async def test_fills_a_replacement_carries_from_its_original_never_move_the_chain(
+    clocked_repo, route: str, carried_status: str,  # noqa: F811
+) -> None:
+    """A fills 2 of 5; the owner's edit books B reporting A's 2 shares; the replace is then rejected.
+
+    A replacement's cumulative fill count can be the chain's, not its own --
+    so it proves nothing, whatever it says. When the replace loses, A keeps
+    working its last 3 shares: the leg stays on A -- outstanding, entries
+    refused, no ending -- and a Clerk cancel DELETEs A, the order working.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    sid_b, _run_b = _register_second_spy_lane(repo)
+    a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
+    await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a", quantity=2)
+    pending_b = _replacement_carrying(a_partial, repo, status=carried_status, filled_quantity=2)
+
+    await _observe_pending_replacement(repo, website, route, original=a_partial, pending=pending_b)
+    assert repo.order(order_ref).broker_order_id == a_partial.order_id, "carried fills moved the chain"
+    rejected_b = _ended(pending_b, repo, status="rejected")
+    website.replacements[_B] = rejected_b
+    await _frame(repo, rejected_b, event_type="rejected")
+    result = await _reconciliation_pass(repo, website, open_orders=[a_partial], spy_held=2.0)
+
+    assert result.verdict == "clean"
+    assert repo.order(order_ref).broker_order_id == a_partial.order_id
+    assert _replaced_transitions(repo, order_ref) == []
+    assert repo.effect_operation(effect_id).state == "in_progress"
+    assert _manual_endings(repo, order_ref) == []
+    assert _owner_reads(repo).ending is None
+    assert _another_bots_entry(repo, sid_b) == (False, "MANUAL_ORDER_OUTSTANDING")
+    assert not _unexplained_hold_active(repo)
+    assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 2.0}, abs=1e-9, rel=0)
+
+    cancelled = await _clerk_cancel(repo, website, order_ref)
+
+    assert cancelled.cancellation.state == "SUCCEEDED"
+    assert website.cancel_calls == [a_partial.order_id]
+    assert [t["transition_kind"] for t in _manual_endings(repo, order_ref)] == ["MANUAL_ORDER_CANCELED"]
+
+
+@pytest.mark.parametrize("route", ["trade_updates", "reconcile_sweep"])
+async def test_an_original_that_fills_before_its_replacement_reaches_the_venue_ends_the_leg_filled(
+    clocked_repo, route: str,  # noqa: F811
+) -> None:
+    """Alpaca's documented race: the original fills first, so its replacement is rejected.
+
+    B was booked reporting A's first 2 shares; A then fills its other 3. All
+    5 shares filled on A, the order the leg still follows: the leg ends
+    filled, once, and B's rejection -- a replace that never took -- ends
+    nothing.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    sid_b, _run_b = _register_second_spy_lane(repo)
+    a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
+    await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a1", quantity=2)
+    pending_b = _replacement_carrying(a_partial, repo, status="pending_new", filled_quantity=2)
+    await _observe_pending_replacement(repo, website, route, original=a_partial, pending=pending_b)
+
+    a_filled = _filled(a_partial, repo, filled_quantity=5)
+    website.orders[order_ref] = a_filled
+    await _frame(repo, a_filled, event_type="fill", execution_id="exec-a2", quantity=3)
+    rejected_b = _ended(pending_b, repo, status="rejected")
+    website.replacements[_B] = rejected_b
+    await _frame(repo, rejected_b, event_type="rejected")
+    await _reconciliation_pass(repo, website, spy_held=5.0)
+
+    effect = repo.effect_operation(effect_id)
+    assert effect is not None and effect.state == "succeeded"
+    assert [t["transition_kind"] for t in _manual_endings(repo, order_ref)] == ["MANUAL_ORDER_FILLED"]
+    assert _owner_reads(repo).ending is None, "a filled leg names no unfilled ending"
+    assert repo.order(order_ref).broker_order_id == a_filled.order_id
+    assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
+    assert _another_bots_entry(repo, sid_b) == (True, None)
+
+
+@pytest.mark.parametrize("carried", [True, False], ids=["filled_qty_carried", "filled_qty_own"])
+async def test_the_replacements_own_execution_moves_the_chain_to_it(
+    clocked_repo, carried: bool,  # noqa: F811
+) -> None:
+    """B's first execution on its own frame is the proof it took A's place.
+
+    Whether or not Alpaca carries A's 2 shares into B's ``filled_qty``, B's
+    pending report moves nothing and its own execution moves the head, once.
+    The leg then completes on B's ``qty`` -- the chain's total (Alpaca
+    refuses a replace whose qty is not above what already filled) -- when
+    the exact executions across the chain cover it.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    sid_b, _run_b = _register_second_spy_lane(repo)
+    a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
+    await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a", quantity=2)
+    carried_quantity = 2 if carried else 0
+    pending_b = _replacement_carrying(a_partial, repo, status="pending_new", filled_quantity=carried_quantity)
+    await _frame(repo, pending_b, event_type="pending_new")
+    assert repo.order(order_ref).broker_order_id == a_partial.order_id
+
+    b_partial = pending_b.model_copy(update={
+        "status": "partially_filled", "filled_quantity": carried_quantity + 1, "filled_avg_price": 99.90,
+    })
+    await _frame(repo, b_partial, event_type="partial_fill", execution_id="exec-b1", quantity=1)
+
+    assert repo.order(order_ref).broker_order_id == _B
+    assert len(_replaced_transitions(repo, order_ref)) == 1
+    assert repo.effect_operation(effect_id).state == "in_progress"
+    website.orders[order_ref] = a_partial.model_copy(update={"status": "replaced", "replaced_by": _B})
+    b_filled = _filled(b_partial, repo, filled_quantity=carried_quantity + 3)
+    website.replacements[_B] = b_filled
+    await _frame(repo, b_filled, event_type="fill", execution_id="exec-b2", quantity=2)
+    await _reconciliation_pass(repo, website, spy_held=5.0)
+
+    assert repo.effect_operation(effect_id).state == "succeeded"
+    assert [t["transition_kind"] for t in _manual_endings(repo, order_ref)] == ["MANUAL_ORDER_FILLED"]
+    assert len(_replaced_transitions(repo, order_ref)) == 1
+    assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
+    assert _another_bots_entry(repo, sid_b) == (True, None)
+
+
 # ── Fills credit the leg exactly once ─────────────────────────────────────────
 
 
@@ -465,8 +635,8 @@ async def test_a_partial_fill_on_the_original_and_the_rest_on_its_replacement_cr
 ) -> None:
     """A fills 2 of 5; the owner's edit books B, which fills the other 3.
 
-    B's fill frame reaches the Clerk before A's ``replaced`` frame: B's fills
-    are the proof it took over, so the chain advances on them.
+    B's fill frame reaches the Clerk before A's ``replaced`` frame: B's own
+    execution is the proof it took over, so the chain advances on it.
     """
     repo, _clock = clocked_repo
     website = _Website(repo=repo)
@@ -753,11 +923,10 @@ async def test_an_unreadable_replacement_row_neither_moves_the_chain_nor_credits
 ) -> None:
     """The replacement's fill frame reaches the Clerk with a value the adapter could not read.
 
-    Its fills would be the proof it took over -- but an unreadable fill count
-    reads as none, and a row with *any* unreadable value proves nothing, even
-    when its fill count reads. #2679's gate withholds it by the field it
-    names: the original stays the head, nothing is credited, the leg does not
-    end.
+    Its execution would be the proof it took over -- but a row with *any*
+    unreadable value proves nothing, whatever its readable fields say.
+    #2679's gate withholds it by the field it names: the original stays the
+    head, nothing is credited, the leg does not end.
     """
     repo, _clock = clocked_repo
     website = _Website(repo=repo)

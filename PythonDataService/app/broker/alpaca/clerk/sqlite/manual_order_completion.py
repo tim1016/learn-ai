@@ -48,7 +48,13 @@ def manual_order_has_exact_terminal_coverage(
     because the owner may have edited it and ``filled`` means the head filled
     *its* quantity. One figure, never either of two: a head filled at a
     raised quantity is not proven complete by exact fills that only reach
-    the original one.
+    the original one. A replacement's ``qty`` is the whole chain's total,
+    shares its earlier members filled included -- Alpaca refuses a replace
+    whose qty is not above what already filled (sources in
+    :mod:`manual_order_replacement`) -- so the chain's exact executions are
+    compared with it, and no fill count the head reports is read: the rule
+    holds whether or not Alpaca carries the original's ``filled_qty`` into
+    the replacement.
     """
     if broker_state.lower() != "filled":
         return False
