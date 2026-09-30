@@ -11,6 +11,7 @@ from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker_configuration.service import BrokerConfigurationService
 from app.routers import broker_configuration as routes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, complete_fee_evidence
@@ -70,6 +71,41 @@ async def test_apply_is_immediate_receipt_is_effective_and_old_hash_unchanged(ri
     cleared = await client.post(f"{routes.PREFIX}/risk-limits/clear-hold", json=clear_body)
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["entry_state"] == "ready"
+
+
+async def test_every_loss_limit_string_on_settings_names_the_cent_the_rule_judged(risk_client: RiskClient) -> None:
+    """#2612 review: one hold, one limit, one cent on the paragraph, the explanation and the refusal.
+
+    A 1% limit on a $10,008.50 prior close is the float 100.08500000000001:
+    the value the loss rule judged and the sealed hold carries. Every limit
+    string on the Settings page renders that float through the money
+    boundary, so all three read 100.09. An exact ``Decimal`` twin of the
+    limit (100.085, half-even 100.08) once made the clear-hold refusal
+    contradict the hold paragraph directly above it.
+    """
+    client, read, _ = risk_client
+    read.cash = read.last_equity = 10_008.50
+    read.unrealized = -200.0
+    state = (await client.get(f"{routes.PREFIX}/risk-limits")).json()
+    applied = await client.post(f"{routes.PREFIX}/risk-limits/apply", json={
+        "expected_risk_revision": 0, "expected_selection_generation": state["selection_generation"],
+        "loss_fraction": .01, "loss_usd": 1_000,
+    })
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["entry_state"] == "held"
+
+    paragraph = (await client.get(f"{routes.PREFIX}/risk-limits")).json()["hold_loss_limit_usd"]
+    hold = routes.get_active_clerk_runtime().sqlite_repository.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, strategy_instance_id=None,
+    )
+    refused = await client.post(f"{routes.PREFIX}/risk-limits/clear-hold", json={
+        "expected_risk_revision": 1, "expected_selection_generation": state["selection_generation"],
+    })
+
+    assert paragraph == "100.09"
+    assert hold is not None and "against a loss limit of 100.09 USD" in hold["explanation"]
+    assert refused.status_code == 409, refused.text
+    assert "Day P&L -200.00 USD is still at or below the 100.09 USD loss limit" in refused.json()["detail"]["message"]
 
 
 async def test_draft_is_inert_stale_configuration_and_fractional_cents_refuse(risk_client: RiskClient, service: BrokerConfigurationService) -> None:

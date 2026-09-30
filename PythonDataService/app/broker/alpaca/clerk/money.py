@@ -137,11 +137,15 @@ def display_dollars(amount: Decimal) -> str:
 
 
 def recorded_dollars(value: object) -> str:
-    """One recorded money input as the dollars the owner reads.
+    """One recorded figure as the dollars the owner reads.
 
-    The recorded float (or string/Decimal) is normalized on its own — never
-    a previously combined value — then rounded half-even once, exactly as a
-    sealed cause's figures are rendered (#2612).
+    The recorded float (or string/Decimal) is normalized as recorded, a float
+    by its shortest repr (the bytes a seal carries), then rounded half-even
+    once. The figure may be one the loss rule itself combined in float, such
+    as its limit or its day total: this names the cent of the value that was
+    recorded and judged, which at a half-cent tie can differ from the cent of
+    the exact formula. An already-exact figure goes through
+    :func:`display_dollars` instead (#2612).
     """
     return dollars(display_cents(normalize_money(value)))
 

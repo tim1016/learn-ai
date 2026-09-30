@@ -11,7 +11,7 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED
-from app.broker.alpaca.clerk.money import display_dollars
+from app.broker.alpaca.clerk.money import display_dollars, recorded_dollars
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import EnvelopeReading
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.contract.errors import BrokerError
@@ -124,7 +124,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
             detail=f"The account could not be re-observed: {exc}. The hold stands.",
         )
-    day_pnl = reading.day_pnl
+    day_pnl, loss_limit_usd = reading.day_pnl, reading.loss_limit_usd
     # Exactly ``reading.breached is None``, spelled out so both figures are
     # known to exist below: the day is unjudgeable precisely when one is absent.
     if reading.breached is None:
@@ -137,16 +137,17 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
     limit_source = "effective account policy" if reading.policy_revision is not None else (_SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT)
     if reading.breached:
         # The day figure is the exact ``Decimal`` formula Deploy's "today
-        # P&L" renders (#2586), so both screens name the same cent; the
-        # limit is its exact twin on the reading. The loss rule itself
-        # still compares the float above (#2612).
+        # P&L" renders (#2586), so both screens name the same cent. The limit
+        # is the float the loss rule judged, the one a sealed hold carries,
+        # rendered as the hold paragraph and the hold explanation render it,
+        # so every limit string on Settings names one cent (#2612).
         return _from_reading(
             reading,
             outcome="refused",
             reason_code=LIVE_ENVELOPE_LOSS_HOLD_STANDS,
             detail=(
                 f"Day P&L {display_dollars(day_pnl.display_total_usd)} USD is still at or below the "
-                f"{display_dollars(reading.display_loss_limit_usd)} USD loss limit {limit_source}. "
+                f"{recorded_dollars(loss_limit_usd)} USD loss limit {limit_source}. "
                 "The hold stands."
             ),
         )

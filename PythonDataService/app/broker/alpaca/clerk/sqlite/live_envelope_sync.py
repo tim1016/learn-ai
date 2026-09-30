@@ -33,7 +33,6 @@ from app.broker.alpaca.clerk.live_envelope import (
     AccountObservation,
     LiveEnvelopeGate,
     LiveEnvelopeValues,
-    display_loss_limit_usd,
     loss_breached,
     loss_limit_usd,
     observation_is_fresh,
@@ -111,10 +110,6 @@ class EnvelopeReading:
     observation: AccountObservation
     day_pnl: DayPnl | None
     loss_limit_usd: float | None
-    # The limit the owner reads: the same selection and inputs as
-    # ``loss_limit_usd``, in exact ``Decimal`` (#2612). None on exactly the
-    # readings whose float limit is None.
-    display_loss_limit_usd: Decimal | None = None
     # Whether this observation could read the account's arming inputs. Carried
     # on the reading, not asked of the sync afterwards, because it is one of
     # the four reasons the two figures above can be absent -- and the operator
@@ -428,16 +423,12 @@ class LiveEnvelopeSync:
             or (observation.simulation_marks_valid_until_ms is not None and now_ms > observation.simulation_marks_valid_until_ms)
         ))
         values = policy if policy is not None else (self.envelope.in_force if readable and self.envelope.values is not None else None)
-        limit_known = not (unjudgeable or synthetic or observation.last_equity_usd is None)
         reading = EnvelopeReading(
             observation=observation, seal_readable=readable, policy_revision=revision, daily_loss_exempt=synthetic,
             fee_evidence_complete=risk_evidence_ready(self._repo, now_ms=now_ms),
             day_pnl=None if unjudgeable else observed_day_pnl(observation=observation, now_ms=now_ms),
-            loss_limit_usd=None if not limit_known else loss_limit_usd(
+            loss_limit_usd=None if unjudgeable or synthetic or observation.last_equity_usd is None else loss_limit_usd(
                 values, last_equity_usd=observation.last_equity_usd,
-            ),
-            display_loss_limit_usd=None if not limit_known else display_loss_limit_usd(
-                values, last_equity_usd=observation.last_equity_usd
             ),
         )
         if reading.day_pnl is not None and not reading_covers_executions(self._repo, observation):
