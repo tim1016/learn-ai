@@ -241,14 +241,58 @@ def test_next_session_open_applies_long_slippage() -> None:
 def test_deferred_fill_modes_membership_invariant() -> None:
     """DEFERRED_FILL_MODES contains every mode whose fill is gated on a
     subsequent candidate bar (i.e., where fill_market_order can return None).
-    NEXT_BAR_OPEN and NEXT_SESSION_OPEN belong; SIGNAL_BAR_CLOSE does not.
-    A regression where a new deferred-mode is added without adding it to
-    this set would leave the engine main loop unable to re-try the fill."""
+    NEXT_BAR_OPEN, NEXT_SESSION_OPEN and DECISION_MINUTE_OPEN belong;
+    SIGNAL_BAR_CLOSE does not. A regression where a new deferred-mode is added
+    without adding it to this set would leave the engine main loop unable to
+    re-try the fill."""
     assert FillMode.NEXT_BAR_OPEN in DEFERRED_FILL_MODES
     assert FillMode.NEXT_SESSION_OPEN in DEFERRED_FILL_MODES
+    assert FillMode.DECISION_MINUTE_OPEN in DEFERRED_FILL_MODES
     assert FillMode.SIGNAL_BAR_CLOSE not in DEFERRED_FILL_MODES
     # Every FillMode is either a deferred-fill mode or fills immediately.
     # If a future mode lands without classification, this assertion forces
     # an explicit decision.
     immediate_modes = {FillMode.SIGNAL_BAR_CLOSE}
     assert set(FillMode) == DEFERRED_FILL_MODES | immediate_modes
+
+
+def _order_sent_at(sent: datetime) -> Order:
+    return Order(
+        order_id=1,
+        symbol="SPY",
+        quantity=100,
+        order_type=OrderType.MARKET,
+        time=sent,
+        direction=Direction.LONG,
+    )
+
+
+def test_decision_minute_open_fills_at_the_first_bar_opening_at_the_submission() -> None:
+    """#2599: an order sent at the decision bar's close fills at the open of the
+    minute that starts then -- the first print a live order could get -- stamped
+    at that minute's start."""
+    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN, slippage_per_share=Decimal("0.01"))
+    decision = _ny_bar(datetime(2026, 2, 9, 9, 44, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
+    emitting = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
+
+    event = model.fill_market_order(_order_sent_at(datetime(2026, 2, 9, 9, 45, tzinfo=NY)), decision, next_bar=emitting)
+
+    assert event is not None
+    assert event.fill_price == Decimal("100.41")  # the candidate's open + slippage
+    assert event.filled_at_ms == emitting.start_ms
+
+
+def test_decision_minute_open_defers_a_bar_that_opened_before_the_order_was_sent() -> None:
+    """A bar that opened before submission holds prices the order could never
+    have had -- for an order decided on a minute's own close, that minute."""
+    model = FillModel(mode=FillMode.DECISION_MINUTE_OPEN)
+    decided_on = _ny_bar(datetime(2026, 2, 9, 9, 45, tzinfo=NY), "100.4", "100.9", "100.2", "100.8")
+    after = _ny_bar(datetime(2026, 2, 9, 9, 46, tzinfo=NY), "101.0", "101.2", "100.9", "101.1")
+    order = _order_sent_at(datetime(2026, 2, 9, 9, 46, tzinfo=NY))
+
+    assert model.fill_market_order(order, decided_on, next_bar=decided_on) is None
+    assert model.fill_market_order(order, decided_on, next_bar=None) is None
+    event = model.fill_market_order(order, decided_on, next_bar=after)
+    assert event is not None
+    assert event.fill_price == Decimal("101.0")
+    assert event.filled_at_ms == after.start_ms

@@ -281,3 +281,61 @@ def test_next_bar_open_keeps_existing_defer_behavior_on_same_stream() -> None:
     # day-2 09:31 bar's open.
     assert strategy.events[0].filled_at_ms == int(datetime(2026, 2, 10, 9, 31, tzinfo=NY).timestamp() * 1000)
     assert strategy.events[0].fill_price == Decimal("102.2")
+
+
+class _FifteenMinuteStrategy(_EmitOnceStrategy):
+    """Buys on its first 15-minute bucket, as the EMA program decides a bucket."""
+
+    def initialize(self) -> None:
+        self.set_start_date(2026, 2, 9)
+        self.set_end_date(2026, 2, 9)
+        self.set_cash(100_000)
+        assert self.ctx is not None
+        self._symbol = self.ctx.add_equity("AAPL")
+        self.ctx.register_consolidator(self._symbol, timedelta(minutes=15), self._on_daily)
+
+
+def _fifteen_minute_stream() -> list[TradeBar]:
+    """09:30..09:46: the 09:30-09:45 bucket, the minute that emits it, one more.
+
+    Minute ``i`` opens at ``100 + i`` and closes half a dollar higher, so every
+    candidate price is distinct: the bucket's close is 114.5 (the 09:44
+    minute), the emitting 09:45 minute opens at 115 and the 09:46 minute at 116.
+    """
+    day = date(2026, 2, 9)
+    return [
+        _minute(day, 9, 30 + i, open_=f"{100 + i}", high=f"{101 + i}", low=f"{100 + i}", close=f"{100 + i}.5")
+        for i in range(17)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "fill_minute", "fill_price"),
+    [
+        # The bucket's closing print, stamped at the bucket's close.
+        (FillMode.SIGNAL_BAR_CLOSE, 45, "114.5"),
+        # The emitting minute's own open: the first print at or after the close.
+        (FillMode.DECISION_MINUTE_OPEN, 45, "115"),
+        # The minute after the emitting minute.
+        (FillMode.NEXT_BAR_OPEN, 46, "116"),
+    ],
+)
+def test_a_bucket_decision_fills_where_each_mode_says(mode: FillMode, fill_minute: int, fill_price: str) -> None:
+    """#2599: the decision-minute open lands between the other two rules.
+
+    The engine's consolidator emits the 09:30-09:45 bucket on the 09:45 minute,
+    the minute in which a live bot's order goes out. DECISION_MINUTE_OPEN fills
+    at that minute's open; SIGNAL_BAR_CLOSE at the price before it and
+    NEXT_BAR_OPEN a minute after it.
+    """
+    strategy = _FifteenMinuteStrategy()
+
+    BacktestEngine(
+        data_source=_SyntheticStream(_fifteen_minute_stream()),
+        fill_model=FillModel(mode=mode, commission_per_order=Decimal(0)),
+    ).run(strategy)
+
+    assert strategy.signal_bar_end_ms == int(datetime(2026, 2, 9, 9, 45, tzinfo=NY).timestamp() * 1000)
+    assert len(strategy.events) == 1
+    assert strategy.events[0].filled_at_ms == int(datetime(2026, 2, 9, 9, fill_minute, tzinfo=NY).timestamp() * 1000)
+    assert strategy.events[0].fill_price == Decimal(fill_price)

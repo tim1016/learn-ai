@@ -264,8 +264,9 @@ describe("StrategyLabConfigRailComponent", () => {
     fixture.detectChanges();
 
     expect(advanced.textContent).not.toContain("Commission / order");
+    expect(advanced.textContent).not.toContain("Fill mode");
     expect(advanced.textContent).toContain(
-      "Both engines charge the pinned IBKR equity fee model — commission is not editable.",
+      "Both engines fill at the signal bar's close and charge the pinned IBKR equity fee model — neither is editable.",
     );
   });
 
@@ -282,6 +283,37 @@ describe("StrategyLabConfigRailComponent", () => {
 
     expect(advanced.textContent).toContain("Commission / order");
     expect(advanced.textContent).not.toContain("pinned IBKR equity fee model");
+  });
+
+  it("labels a $0 commission as fees not charged, and offers the decision-minute open (#2599, #2601)", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("engine", "python");
+    fixture.componentRef.setInput("commissionPerOrder", 0);
+    const emitted = vi.fn();
+    fixture.componentInstance.fillModeChanged.subscribe(emitted);
+    fixture.detectChanges();
+
+    const advanced = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced disclosure is missing");
+    advanced.open = true;
+    fixture.detectChanges();
+    const select = advanced.querySelector<HTMLSelectElement>(".advanced-params select");
+    if (!select) throw new Error("Fill mode select is missing");
+    select.value = "decision_minute_open";
+    select.dispatchEvent(new Event("change"));
+
+    expect(advanced.textContent).toContain("Fees not charged");
+    expect([...select.options].map((option) => option.text.trim())).toEqual([
+      "Signal bar close",
+      "Next bar open",
+      "Decision minute open",
+    ]);
+    expect(emitted).toHaveBeenCalledWith("decision_minute_open");
+
+    fixture.componentRef.setInput("commissionPerOrder", 1);
+    fixture.detectChanges();
+    expect(advanced.textContent).not.toContain("Fees not charged");
   });
 
   it("offers the QCAlgorithm editor only when an engine that runs LEAN is selected", async () => {

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
@@ -6,7 +6,7 @@ import type { EngineResultData } from "../../lean-engine/engine-results/engine-r
 import { ResultsSidebarComponent } from "../results-sidebar/results-sidebar.component";
 import { ResultsSummaryComponent } from "../results-summary/results-summary.component";
 import { StrategyLabDeepDivesComponent } from "../strategy-lab-deep-dives/strategy-lab-deep-dives.component";
-import type { StrategyLabParityView } from "../strategy-lab.models";
+import { feesNotCharged, type StrategyLabParityView } from "../strategy-lab.models";
 
 /** The workbench left column's results block, beneath the configuration. */
 @Component({
@@ -22,4 +22,5 @@ export class StrategyLabRunStatsComponent {
   readonly verdict = input<RunVerdict | null>(null);
   readonly parity = input<StrategyLabParityView | null>(null);
   readonly tradesTruncated = input(false);
+  protected readonly feesNotCharged = computed(() => feesNotCharged(this.run()));
 }

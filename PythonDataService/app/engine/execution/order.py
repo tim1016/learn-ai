@@ -40,11 +40,18 @@ class FillMode(Enum):
         triggers at end of day T-1's consolidated bar; the order fills at
         the first minute of day T. "Eligible" today means any regular-hours
         bar; a future EligibilityPolicy may add pre/post-market handling.
+
+    DECISION_MINUTE_OPEN: Fill at the open of the first bar that starts at
+        or after the order's submission, the decision bar's close -- the
+        earliest price a live order sent the instant the bar closed could get
+        (#2599). For a consolidated bucket that is the minute the backtest
+        emits it on; NEXT_BAR_OPEN is the minute after.
     """
 
     SIGNAL_BAR_CLOSE = "signal_bar_close"
     NEXT_BAR_OPEN = "next_bar_open"
     NEXT_SESSION_OPEN = "next_session_open"
+    DECISION_MINUTE_OPEN = "decision_minute_open"
 
 
 @dataclass(init=False)

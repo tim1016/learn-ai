@@ -327,7 +327,7 @@ describe("Strategy Lab Workbench", () => {
     // A paired run's fees are the pinned IBKR equity fee model — the rail
     // explains that instead of an editable commission it would ignore (#2465).
     expect(root.querySelector("details.advanced")?.textContent).toContain(
-      "Both engines charge the pinned IBKR equity fee model",
+      "charge the pinned IBKR equity fee model — neither is editable",
     );
     expect((root.querySelector("#strategy-picker") as HTMLSelectElement).value).toBe("ema_crossover_signal");
     expect(root.querySelector(".ticker-box__identity .asset-identity__symbol")?.textContent).toContain("QQQ");
@@ -816,7 +816,6 @@ describe("Strategy Lab saved configuration", () => {
     if (!advanced) throw new Error("Advanced configuration controls are missing");
     advanced.open = true;
     fixture.detectChanges();
-    expect(root.querySelector<HTMLSelectElement>("details.advanced select")?.value).toBe("next_bar_open");
     const executionInputs = root.querySelectorAll<HTMLInputElement>("details.advanced fieldset:last-of-type input");
     expect(executionInputs[0]?.value).toBe("75000");
     // The restored run is paired: its commission is the pinned IBKR equity
@@ -824,7 +823,7 @@ describe("Strategy Lab saved configuration", () => {
     // applied (#2465).
     expect(executionInputs).toHaveLength(1);
     expect(root.querySelector("details.advanced")?.textContent).toContain(
-      "Both engines charge the pinned IBKR equity fee model",
+      "charge the pinned IBKR equity fee model — neither is editable",
     );
     http.verify();
   });
@@ -887,6 +886,13 @@ describe("Strategy Lab saved configuration", () => {
       commissionPerOrder: 0.35,
       dataPolicy: run().dataPolicy,
     });
+  });
+
+  it("restores a decision-minute-open run's fill mode and reads an unknown one as the default (#2599)", () => {
+    const range = { symbol: "SPY", from: "2025-01-01", to: "2025-01-02", resolution: "minute" } as const;
+
+    expect(inputsFromSavedRun(run({ fillMode: "decision_minute_open" }), range).fillMode).toBe("decision_minute_open");
+    expect(inputsFromSavedRun(run({ fillMode: "open" }), range).fillMode).toBe("signal_bar_close");
   });
 
   it("rejects malformed persisted parameters instead of enabling a changed rerun", () => {

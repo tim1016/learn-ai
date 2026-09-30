@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
+import { FILL_MODE_OPTIONS, isFillModeName, type FillModeName } from '../../models/fill-mode';
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
@@ -70,9 +71,9 @@ export class GridSearchSpecEditorComponent {
   readonly strategyKey = signal<string | null>(null);
   readonly fromDate = signal(defaultWindow(Date.now()).from);
   readonly toDate = signal(defaultWindow(Date.now()).to);
-  readonly fillMode = signal('signal_bar_close');
+  readonly fillMode = signal<FillModeName>('signal_bar_close');
   readonly resolution = signal<'minute' | 'daily'>('minute');
-  readonly commissionPerOrder = signal(1);
+  readonly commissionPerOrder = signal(0);
   readonly slippagePerShare = signal(0);
   readonly initialCash = signal(100_000);
   readonly measure = signal<RankingMeasure>('sharpe_ratio');
@@ -80,6 +81,7 @@ export class GridSearchSpecEditorComponent {
   readonly params = signal<readonly ParamRow[]>([]);
 
   protected readonly measures = RANKING_MEASURES;
+  protected readonly fillModes = FILL_MODE_OPTIONS;
   protected readonly eligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible === true));
   protected readonly ineligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible !== true));
   protected readonly resolutions = computed(() => this.selectedStrategy()?.supported_resolutions ?? ['minute']);
@@ -180,7 +182,7 @@ export class GridSearchSpecEditorComponent {
 
   onFillModeEvent(event: Event): void {
     const raw = selectValue(event);
-    if (raw !== null) {
+    if (isFillModeName(raw)) {
       this.fillMode.set(raw);
       this.scheduleEmit();
     }

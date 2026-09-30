@@ -6,6 +6,7 @@ import { firstValueFrom, map } from "rxjs";
 
 import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
+import type { FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
 import { TickerCatalogService } from "../../shared/ticker-catalog";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
@@ -80,9 +81,11 @@ export class StrategyLabConfigStore {
     resolution: "minute",
     autoFetch: true,
   });
-  readonly fillMode = signal<"signal_bar_close" | "next_bar_open">("signal_bar_close");
+  readonly fillMode = signal<FillModeName>("signal_bar_close");
+  /** The fill a run on the selected engine uses: a paired run is pinned to the signal bar's close. */
+  readonly runFillMode = computed<FillModeName>(() => (this.engine() === "both" ? "signal_bar_close" : this.fillMode()));
   readonly initialCash = signal(100000);
-  readonly commissionPerOrder = signal(1);
+  readonly commissionPerOrder = signal(0);
   readonly customLeanSource = signal<string | null>(null);
   readonly activeTab = signal<StrategyLabTab>("configuration");
   readonly configNavCollapsed = signal(loadNavOverride() === "collapsed");

@@ -43,7 +43,7 @@ NEXT_REGULAR_DAY = date(2026, 2, 10)
 HALF_DAY = date(2025, 11, 28)
 AFTER_HALF_DAY = date(2025, 12, 1)
 
-_NON_LEAN_MODES = (FillMode.SIGNAL_BAR_CLOSE, FillMode.NEXT_BAR_OPEN)
+_NON_LEAN_MODES = (FillMode.SIGNAL_BAR_CLOSE, FillMode.NEXT_BAR_OPEN, FillMode.DECISION_MINUTE_OPEN)
 
 
 def _session_minutes(day: date, base_price: Decimal) -> list[TradeBar]:
@@ -226,6 +226,11 @@ def test_a_closing_bar_exit_fires_on_the_next_sessions_first_decision(fill_mode:
         # session's first bucket, not the closing bar the EXIT was first due on.
         assert exit_.filled_at_ms == first_decision_close_ms
         assert exit_.fill_price == _minute_at(day_two, first_decision_close_ms - _MINUTE_MS).close
+    elif fill_mode is FillMode.DECISION_MINUTE_OPEN:
+        # The open of the minute that starts at that bucket's close (#2599) --
+        # never the next session's first minute, which opened before it.
+        assert exit_.filled_at_ms == first_decision_close_ms
+        assert exit_.fill_price == _minute_at(day_two, first_decision_close_ms).open
     else:
         # The minute after the one that completed the next session's first bucket.
         assert exit_.filled_at_ms == first_decision_close_ms + _MINUTE_MS

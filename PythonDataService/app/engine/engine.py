@@ -337,6 +337,12 @@ class BacktestEngine:
                 )
             )
 
+        def _record_fill(order: Order, event: OrderEvent) -> None:
+            portfolio.apply_fill(event)
+            order_events.append(event)
+            strategy.on_order_event(event)
+            _register_bracket_if_needed(order, event)
+
         # ------------------------------------------------------------------
         # 2. Main loop over minute bars.
         # ------------------------------------------------------------------
@@ -380,9 +386,9 @@ class BacktestEngine:
             # replaces the decision reference with its earlier signal close.
             portfolio.update_market_price(symbol, minute_bar.close)
 
-            # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
-            # with this bar as next_bar. DEFERRED_FILL_MODES is the single
-            # source of truth shared with Step 5 below.
+            # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN /
+            # DECISION_MINUTE_OPEN) with this bar as next_bar. DEFERRED_FILL_MODES
+            # is the single source of truth shared with Step 5 below.
             if pending_fills and self.fill_model.mode in DEFERRED_FILL_MODES:
                 still_pending: list[tuple[object, TradeBar]] = []
                 for order, signal_bar in pending_fills:
@@ -390,10 +396,7 @@ class BacktestEngine:
                     if event is None:
                         still_pending.append((order, signal_bar))
                     else:
-                        portfolio.apply_fill(event)
-                        order_events.append(event)
-                        strategy.on_order_event(event)
-                        _register_bracket_if_needed(order, event)
+                        _record_fill(order, event)
                 pending_fills = still_pending
 
             # ----- Per-minute hook — fires before consolidator dispatch so the
@@ -425,8 +428,9 @@ class BacktestEngine:
 
             # ----- Drain any pending orders the strategy just submitted.
             #       LIMIT orders move to the resting book; MARKET orders
-            #       fill now (SIGNAL_BAR_CLOSE) or defer to the next
-            #       minute bar (NEXT_BAR_OPEN).
+            #       fill now (SIGNAL_BAR_CLOSE, and DECISION_MINUTE_OPEN when
+            #       this minute opened after the decision) or defer to a
+            #       later minute bar.
             if portfolio.pending_orders:
                 drained = list(portfolio.drain_pending())
                 limit_orders = [o for o in drained if o.order_type == OrderType.LIMIT]
@@ -455,10 +459,17 @@ class BacktestEngine:
                                 current_bar=minute_bar,
                             )
                             assert event is not None
-                            portfolio.apply_fill(event)
-                            order_events.append(event)
-                            strategy.on_order_event(event)
-                            _register_bracket_if_needed(order, event)
+                            _record_fill(order, event)
+                        elif self.fill_model.mode == FillMode.DECISION_MINUTE_OPEN:
+                            # This minute is the first candidate: a consolidated
+                            # bucket is emitted on the minute that opens at its
+                            # close. An order decided on this minute's own close
+                            # waits for the next one.
+                            event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
+                            if event is None:
+                                pending_fills.append((order, signal_bar))
+                            else:
+                                _record_fill(order, event)
                         elif self.fill_model.mode == FillMode.NEXT_SESSION_OPEN:
                             # Defer until a subsequent minute bar whose trading date is
                             # strictly after signal_bar.end_time.date() (NY-local). The
@@ -508,10 +519,7 @@ class BacktestEngine:
                         fee=self.fill_model.compute_fee(quantity=int(order.quantity), fill_price=order.limit_price),
                         tag=order.tag,
                     )
-                    portfolio.apply_fill(event)
-                    order_events.append(event)
-                    strategy.on_order_event(event)
-                    _register_bracket_if_needed(order, event)
+                    _record_fill(order, event)
                 resting_limit_orders[:] = still_resting
 
             # ----- Score any expired insights against current prices.
@@ -543,7 +551,7 @@ class BacktestEngine:
             pending_fills=pending_fills,
             equity_curve=equity_curve,
             order_events=order_events,
-            register_bracket=_register_bracket_if_needed,
+            record_fill=_record_fill,
             closing_bar_skips=closing_bar_skips,
         )
 
@@ -655,7 +663,7 @@ class BacktestEngine:
         pending_fills: list[tuple[Order, TradeBar]],
         equity_curve: list[EquitySnapshot],
         order_events: list[OrderEvent],
-        register_bracket: Callable[[Order, OrderEvent], None],
+        record_fill: Callable[[Order, OrderEvent], None],
         closing_bar_skips: list[ClosingBarSkip],
     ) -> None:
         """Close out the run once the bar stream is exhausted.
@@ -705,10 +713,7 @@ class BacktestEngine:
                 )
                 event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
                 assert event is not None
-                portfolio.apply_fill(event)
-                order_events.append(event)
-                strategy.on_order_event(event)
-                register_bracket(order, event)
+                record_fill(order, event)
 
         strategy.on_end_of_algorithm()
 
@@ -843,17 +848,26 @@ class BacktestEngine:
         (``app.lean_sidecar.closing_bar``). An ENTER is dropped; an EXIT stays
         due, and the program decides it again from the next session. Each such
         decision is recorded in ``closing_bar_skips``.
+
+        A decision commits on its own bar's clock, as a consolidated bar's
+        handler runs on that bar's: a program deciding on the per-minute hook
+        is committed after the chart consolidator has set the clock back to
+        the minute before, and its orders would be stamped as sent before
+        the decision was taken.
         """
         program = strategy.signal_program
         if program is None:
             return
         stage = program.session.active_stage
+        if stage is None:
+            return
         if (
-            stage is None
-            or not stage.intents
+            not stage.intents
             or self.fill_model.closing_bar_convention is not ClosingBarConvention.SKIP_CLOSING_BAR
             or not is_closing_bar(stage.bar.end_ms)
         ):
+            if strategy.ctx is not None:
+                strategy.ctx.current_time_ms = stage.bar.end_ms
             program.session.commit_if_staged()
             return
         program.session.settle(Settlement.DISCARD)

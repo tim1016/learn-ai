@@ -77,12 +77,13 @@
       </label>
       <label class="field"><span>Fill mode</span>
         <select [value]="fillMode()" (change)="onFillModeEvent($event)" aria-label="Fill mode">
-          <option value="signal_bar_close">Signal bar close</option>
-          <option value="next_bar_open">Next bar open</option>
+          @for (option of fillModes; track option.value) { <option [value]="option.value" [selected]="option.value === fillMode()">{{ option.label }}</option> }
         </select>
       </label>
       <label class="field"><span>Initial cash</span><input #cashInput pInputText type="number" min="0" [value]="initialCash()" (input)="setNumber('cash', cashInput.value)" /></label>
-      <label class="field"><span>Commission / order</span><input #commissionInput pInputText type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="setNumber('commission', commissionInput.value)" /></label>
+      <label class="field"><span>Commission / order</span><input #commissionInput pInputText type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="setNumber('commission', commissionInput.value)" />
+        @if (commissionPerOrder() === 0) { <small class="muted">Fees not charged</small> }
+      </label>
       <label class="field"><span>Slippage / share</span><input #slippageInput pInputText type="number" min="0" step="0.01" [value]="slippagePerShare()" (input)="setNumber('slippage', slippageInput.value)" /></label>
       <label class="field"><span>Ranking measure</span>
         <select [value]="measure()" (change)="onMeasureEvent($event)" aria-label="Ranking measure">

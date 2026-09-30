@@ -23,9 +23,9 @@ Two seams are replaced, and each replacement is the finding it measures:
   it. Every engine read is then bound to the study's snapshot manifest, as a
   walk-forward cell's is.
 * **Engine construction.** ``EngineBacktestRequest`` and ``GridSearchSpec``
-  expose fill mode, a flat commission per order, slippage per share and
-  initial cash. A fixed share quantity, Alpaca's regulatory fees and a fill
-  at the open of the decision minute have no parameter, so
+  expose fill mode (the decision-minute open among them, #2599), a flat
+  commission per order, slippage per share and initial cash. A fixed share
+  quantity and Alpaca's regulatory fees have no parameter, so
   ``_build_backtest_engine`` is wrapped to install them through the engine's
   own ``sizing_model`` / ``fill_model`` seams.
 
@@ -169,16 +169,16 @@ class Terms:
     initial_cash: float = RESEARCH_CASH
 
     @property
-    def request_fill_mode(self) -> str:
-        return "next_bar_open" if self.fill == "next_bar_open" else "signal_bar_close"
-
-    @property
     def commission_per_order(self) -> float:
         return RESEARCH_COMMISSION_PER_ORDER if self.fees == "flat_per_order" else 0.0
 
 
 LIVE_FILL: FillTiming = "decision_minute_open"
-RESEARCH = Terms("research", "Research defaults (100% equity, signal-bar close, $1/order, no spread, $100k)")
+RESEARCH = Terms(
+    "research",
+    "Recorded run 18's research terms (100% equity, signal-bar close, $1/order -- the default before #2601 -- "
+    "no spread, $100k)",
+)
 VARIANTS: tuple[Terms, ...] = (
     RESEARCH,
     Terms(
@@ -280,13 +280,12 @@ class SeamUse:
     """
 
     sized: int = 0
-    minute_open_fills: int = 0
     alpaca_fee_fills: int = 0
 
     def take(self) -> SeamUse:
         """These counts, zeroed for the next run."""
-        taken = SeamUse(self.sized, self.minute_open_fills, self.alpaca_fee_fills)
-        self.sized = self.minute_open_fills = self.alpaca_fee_fills = 0
+        taken = SeamUse(self.sized, self.alpaca_fee_fills)
+        self.sized = self.alpaca_fee_fills = 0
         return taken
 
 
@@ -305,26 +304,18 @@ class FixedQuantitySizing:
         return self.quantity if target_fraction > 0 else 0
 
 
-class LiveTermsFillModel(FillModel):
-    """The research fill model plus the two fill terms it cannot express.
+class AlpacaFeesFillModel(FillModel):
+    """The research fill model, with each fill priced by Alpaca's regulatory fees.
 
-    ``decision_minute_open``: a live run decides a 15-minute bucket on the
-    minute bar that closes it and prices the order at that instant, so the
-    order goes out early in the minute after the bucket. The backtest's lazy
-    consolidator emits the bucket on that same minute; fill at its open. That
-    is the zero-latency (optimistic) bound; ``next_bar_open`` is the
-    one-minute (pessimistic) bound.
-    ``alpaca_fees``: price each fill with the canonical Alpaca regulatory
-    model, settled per ET trade date and component (rounded up to the cent),
-    charged incrementally so each date's charges sum to its settlement.
+    Each fill is charged by the canonical Alpaca regulatory model, settled per
+    ET trade date and component (rounded up to the cent), and charged
+    incrementally so each date's charges sum to its settlement.
 
-    Only fills priced by ``fill_market_order`` see either term. The engine's
+    Only fills priced by ``fill_market_order`` see the term. The engine's
     end-of-algorithm and bracket exits call ``compute_fee`` directly, which
     charges the flat commission — $0 in the Alpaca-fee variants. The strategy
     places no brackets, so that is at most the one end-of-algorithm exit per
-    run. A
-    market order from the final consolidated bar has no current minute
-    (``engine.py:681``) and fills at the signal bar's close.
+    run.
     """
 
     def __init__(
@@ -333,13 +324,9 @@ class LiveTermsFillModel(FillModel):
         mode: FillMode,
         slippage_per_share: Decimal,
         commission_per_order: Decimal,
-        decision_minute_open: bool,
-        alpaca_fees: bool,
         use: SeamUse,
     ) -> None:
         super().__init__(mode=mode, commission_per_order=commission_per_order, slippage_per_share=slippage_per_share)
-        self.decision_minute_open = decision_minute_open
-        self.alpaca_fees = alpaca_fees
         self.use = use
         self._accrued: dict[date, list[FillFees]] = {}
 
@@ -350,31 +337,10 @@ class LiveTermsFillModel(FillModel):
         next_bar: TradeBar | None = None,
         current_bar: TradeBar | None = None,
     ) -> OrderEvent | None:
-        if self.decision_minute_open and self.mode is FillMode.SIGNAL_BAR_CLOSE and current_bar is not None:
-            event = self._fill_at_decision_minute_open(order, current_bar)
-        else:
-            event = super().fill_market_order(order, signal_bar, next_bar, current_bar)
-        if event is not None and self.alpaca_fees:
+        event = super().fill_market_order(order, signal_bar, next_bar, current_bar)
+        if event is not None:
             event.fee = self._alpaca_fee(event)
         return event
-
-    def _fill_at_decision_minute_open(self, order: Order, current_bar: TradeBar) -> OrderEvent:
-        self.use.minute_open_fills += 1
-        price = current_bar.open
-        if order.direction == Direction.LONG:
-            price += self.slippage_per_share
-        elif order.direction == Direction.SHORT:
-            price -= self.slippage_per_share
-        return OrderEvent(
-            order_id=order.order_id,
-            symbol=order.symbol,
-            filled_at_ms=current_bar.start_ms,
-            fill_price=price,
-            fill_quantity=order.quantity,
-            direction=order.direction,
-            fee=self.compute_fee(quantity=int(order.quantity), fill_price=price),
-            tag=order.tag,
-        )
 
     def _alpaca_fee(self, event: OrderEvent) -> Decimal:
         self.use.alpaca_fee_fills += 1
@@ -405,14 +371,12 @@ def live_terms(terms: Terms, roots: dict[bool, list[Path]]) -> Iterator[SeamUse]
 
     def _build(**kwargs: Any) -> Any:
         engine = original_build(**kwargs)
-        if terms.fill == "decision_minute_open" or terms.fees == "alpaca_regulatory":
+        if terms.fees == "alpaca_regulatory":
             config = kwargs["execution_config"]
-            engine.fill_model = LiveTermsFillModel(
+            engine.fill_model = AlpacaFeesFillModel(
                 mode=config.fill_mode,
                 slippage_per_share=config.slippage_per_share,
                 commission_per_order=config.commission_per_order,
-                decision_minute_open=terms.fill == "decision_minute_open",
-                alpaca_fees=terms.fees == "alpaca_regulatory",
                 use=use,
             )
         if terms.fixed_quantity is not None:
@@ -508,7 +472,6 @@ def _require_seams_used(terms: Terms, use: SeamUse, *, trades: int, where: str) 
     taken = use.take()
     replaced = {
         "sized": terms.fixed_quantity is not None,
-        "minute_open_fills": terms.fill == "decision_minute_open",
         "alpaca_fee_fills": terms.fees == "alpaca_regulatory",
     }
     unused = [seam for seam, installed in replaced.items() if installed and getattr(taken, seam) == 0]
@@ -542,7 +505,7 @@ def _grade_request(terms: Terms, window: str) -> EngineBacktestRequest:
         params={"symbol": SYMBOL},
         from_date=start.isoformat(),
         to_date=end.isoformat(),
-        fill_mode=terms.request_fill_mode,
+        fill_mode=terms.fill,
         commission_per_order=terms.commission_per_order,
         slippage_per_share=terms.slippage_per_share,
         initial_cash=terms.initial_cash,
@@ -609,7 +572,7 @@ def launch_study(terms: Terms, roots: list[Path]) -> tuple[StudySpec, NewStudy]:
         param_ranges={},
         start_ms=et_midnight_ms(STUDY_START),
         end_ms=et_midnight_ms(STUDY_END_EXCLUSIVE),
-        fill_mode=terms.request_fill_mode,
+        fill_mode=terms.fill,
         commission_per_order=terms.commission_per_order,
         slippage_per_share=terms.slippage_per_share,
         initial_cash=terms.initial_cash,

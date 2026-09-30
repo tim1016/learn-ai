@@ -14,6 +14,7 @@ from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
 )
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
 NY = ZoneInfo("America/New_York")
 
@@ -78,6 +79,38 @@ def test_two_green_bars_from_0945_enter_next_bar_open_and_exit_cycle() -> None:
     assert events[1].filled_at_ms == int(datetime(2026, 1, 5, 9, 49, tzinfo=NY).timestamp() * 1000)
     assert len(strategy.trade_log) == 1
     assert strategy.trade_log[0].signal_reason == "two_consecutive_green_minute_bars"
+
+
+def test_decision_minute_open_fills_a_per_minute_decision_after_its_minute_closes() -> None:
+    """#2599: a program that decides on each minute never fills inside that minute.
+
+    The registry-built program stages its ENTER on the 09:45 minute, and the
+    engine commits it after the chart consolidator has emitted the 09:44
+    minute and set the clock back to 09:45. The commit must run on the
+    decision bar's own clock, so the order is sent at 09:46 and fills at
+    09:46's open, the first price after the 09:45 minute closed -- the same
+    minute NEXT_BAR_OPEN fills in, because a one-minute decision has no later
+    emitting minute.
+    """
+    registration = _STRATEGY_REGISTRY["deployment_validation"]
+    strategy = registration.build(registration.param_schema())
+    bars = [
+        _bar(9, 44, "101", "102"),
+        _bar(9, 45, "102", "103"),  # second eligible green: ENTER decided on this minute
+        _bar(9, 46, "104", "104.5"),  # first price after the decision
+        _bar(9, 47, "105", "105.5"),
+    ]
+
+    result = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        fill_model=FillModel(mode=FillMode.DECISION_MINUTE_OPEN, commission_per_order=Decimal("0")),
+    ).run(strategy)
+
+    assert strategy.signal_program is not None
+    entry = result.order_events[0]
+    assert entry.direction is Direction.LONG
+    assert entry.filled_at_ms == int(datetime(2026, 1, 5, 9, 46, tzinfo=NY).timestamp() * 1000)
+    assert entry.fill_price == Decimal("104")
 
 
 def _run_signal_only(bars: list[TradeBar]) -> list[str]:

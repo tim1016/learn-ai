@@ -97,7 +97,10 @@ The observed side is compared against the model through the asymmetric band abov
 
 - Engine wiring: `app/engine/execution/fill_model.py` exposes `compute_fee(quantity, fill_price)`
   without side or trade date; the IBKR tier model stays there until a fill-model
-  signature carries both.
+  signature carries both. Deferred by the owner in the 2026-09-30 backlog grill:
+  [#2601](https://github.com/tim1016/learn-ai/issues/2601) instead made research's
+  default flat fee $0 ("fees not charged") for Alpaca-style runs, and the
+  measurement script still installs this model through its own seam.
 - Per-component observed reconciliation once `activity_sub_type` is mapped onto
   `BrokerActivity` (today only the day's total is compared).
 - Port-level activity-read coverage signal (`covered_from_ms`) so the completeness check

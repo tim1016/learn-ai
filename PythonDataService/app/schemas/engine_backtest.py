@@ -17,6 +17,12 @@ from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
 
+COMMISSION_PER_ORDER_DESCRIPTION = (
+    "Flat fee per order. 0, the default, charges no fees: Alpaca charges no "
+    "commission, and its regulatory fees are not modelled (#2601)."
+)
+"""The research flat fee, as every request that carries one describes it."""
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -50,9 +56,12 @@ class EngineBacktestRequest(BaseModel):
     )
     fill_mode: str = Field(
         "signal_bar_close",
-        description="Fill mode: signal_bar_close or next_bar_open",
+        description=(
+            "Fill mode: signal_bar_close, next_bar_open, or decision_minute_open "
+            "(the open of the first minute at or after the decision bar's close)"
+        ),
     )
-    commission_per_order: float = Field(1.0, ge=0)
+    commission_per_order: float = Field(0.0, ge=0, description=COMMISSION_PER_ORDER_DESCRIPTION)
     slippage_per_share: float = Field(
         0.0,
         ge=0,
