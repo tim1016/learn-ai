@@ -818,8 +818,8 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
     """Every entry order whose immutable origin belongs to one strategy, least recently updated first.
 
     Ordered by ``updated_at_ms``, then ``order_ref`` -- not by submission: the
-    last is the entry updated last, which an ended bot's close is keyed on
-    (``ended_run_close.bot_holdings``).
+    last is the entry updated last, which every reduction is keyed on
+    (``exit.newest_reducible_entry``).
     """
     rows = conn.execute(
         "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
@@ -925,8 +925,8 @@ def strategies_with_active_exit(
     """Which of these strategies has an exit in progress — :func:`active_exit_for_strategy`, in one read.
 
     While a strategy has one, the stuck-EXIT watchdog sends it no re-drive:
-    either no entry is free of an active EXIT (``_candidate_entries``) or the
-    EXIT is Clerk work in flight on the symbol (``clerk_work_in_flight``). So
+    that EXIT owns the whole symbol's reduction (``exit.newest_reducible_entry``)
+    and is Clerk work in flight on it (``clerk_work_in_flight``). So
     its ``EXIT_NOT_FLAT`` notice says an exit is working instead of promising
     a time (#2440 review). Asked only about the strategies such a notice
     names, so the usual answer — none — costs no query.

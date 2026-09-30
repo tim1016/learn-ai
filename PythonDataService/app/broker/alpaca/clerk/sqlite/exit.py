@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.program_leg import ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -81,6 +81,46 @@ def _exit_identity(
     return idempotency_key, payload_hash, command_id, effect_idempotency_key
 
 
+@dataclass(frozen=True)
+class ReducibleEntry:
+    """The owned entry one reduction of a bot's symbol is keyed on (:func:`newest_reducible_entry`)."""
+
+    order_ref: str
+    exit_owned: bool
+    """An EXIT already working on this symbol owns its reduction."""
+
+
+def newest_reducible_entry(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, symbol: str
+) -> ReducibleEntry | None:
+    """The entry a reduction of one bot's ``symbol`` targets, or ``None`` when the bot owns none.
+
+    The one rule every step that starts a reduction reads (#2642): a program
+    EXIT, an ended run's close, the operator's safe flatten and the stuck-EXIT
+    watchdog.
+
+    * **Newest**: the entry updated last, the order ``entry_orders_for_strategy``
+      reads them in, so a re-run of the same step keys the same EXIT.
+    * **An EXIT owns the whole symbol**: it cancel-proves every live sibling
+      entry (:func:`_exit_cancellable_entries`), so while one works on *any*
+      of the symbol's entries a second reduction would race it, and one
+      already sent may have filled. ``exit_owned`` says so and the caller
+      waits or refuses. The owned entries are never filtered out: that left an
+      older sibling as the target of a second reduction.
+    """
+    entries = [
+        order
+        for order in repo.entry_orders_for_strategy(strategy_instance_id)
+        if entry_order_symbol(repo, order.order_ref).upper() == symbol.upper()
+    ]
+    if not entries:
+        return None
+    return ReducibleEntry(
+        order_ref=entries[-1].order_ref,
+        exit_owned=any(repo.active_exit_for_order(order.order_ref) is not None for order in entries),
+    )
+
+
 def _exit_cancellable_entries(
     repo: ClerkSqliteRepository,
     *,
@@ -91,7 +131,7 @@ def _exit_cancellable_entries(
     """The entries one EXIT must cancel-prove — narrower than every entry.
 
     ``repo.entry_orders_for_strategy`` stays whole for its other consumers
-    (safe flatten, runtime recovery, the stuck-EXIT watchdog): they need full
+    (:func:`newest_reducible_entry` among them): they need full
     custody evidence, and narrowing that shared read would hide orders they
     exist to find. Cancel-prove planning wants only orders that could still be
     working — a sibling already proven never to have reached the broker holds
@@ -450,4 +490,11 @@ def _reducing_order_ref(
     return reducing.order_ref if reducing is not None else None
 
 
-__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit"]
+__all__ = [
+    "ExitSubmission",
+    "ReducibleEntry",
+    "accept_exit",
+    "newest_reducible_entry",
+    "resolve_accepted_exit",
+    "resolve_exit",
+]

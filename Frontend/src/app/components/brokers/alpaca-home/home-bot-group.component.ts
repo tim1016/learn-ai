@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 
 import type { BoundAccountWorkspaceAddress } from '../../../fleet/account-workspace';
 import type { ChartBar, ChartFillMarker } from '../../broker/v2-panel/gallery/lib/gallery.types';
+import type { StopPhase } from './home-bot-action.component';
 import { HomeBotRowComponent } from './home-bot-row.component';
 import { HomeBotTileComponent } from './home-bot-tile.component';
 import type { HomeBot } from './home-bots';
@@ -23,7 +24,7 @@ import type { HomeBot } from './home-bots';
             <app-home-bot-tile
               [entry]="entry"
               [account]="account()"
-              [pending]="pendingSids().has(entry.bot.strategy_instance_id)"
+              [stopPhase]="stopPhases().get(entry.bot.strategy_instance_id) ?? null"
               [bars]="barsBySymbol().get(entry.bot.symbol) ?? []"
               [markers]="markersBySid().get(entry.bot.strategy_instance_id) ?? []"
               (stopRequested)="stopRequested.emit($event)"
@@ -32,7 +33,7 @@ import type { HomeBot } from './home-bots';
             <app-home-bot-row
               [entry]="entry"
               [account]="account()"
-              [pending]="pendingSids().has(entry.bot.strategy_instance_id)"
+              [stopPhase]="stopPhases().get(entry.bot.strategy_instance_id) ?? null"
               (stopRequested)="stopRequested.emit($event)"
             />
           }
@@ -55,7 +56,7 @@ export class HomeBotGroupComponent {
   readonly label = input.required<string>();
   readonly wall = input(false);
   readonly account = input.required<BoundAccountWorkspaceAddress>();
-  readonly pendingSids = input<ReadonlySet<string>>(new Set());
+  readonly stopPhases = input<ReadonlyMap<string, StopPhase>>(new Map());
   readonly barsBySymbol = input<ReadonlyMap<string, readonly ChartBar[]>>(new Map());
   readonly markersBySid = input<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
   readonly stopRequested = output<string>();

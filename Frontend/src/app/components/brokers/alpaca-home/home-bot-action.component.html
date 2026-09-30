@@ -1,13 +1,15 @@
 @switch (control()) {
   @case ('stop') {
+    @let phase = stopPhase();
+    <!-- Reading keeps the button enabled so the keyboard stays on it (#2634). -->
     <button
       type="button"
       class="home-action home-action--stop"
-      [disabled]="pending()"
-      [attr.aria-busy]="pending()"
+      [disabled]="phase === 'sending'"
+      [attr.aria-busy]="phase !== null"
       [attr.aria-label]="'Stop ' + bot().strategy_instance_id"
       (click)="stopRequested.emit(bot().strategy_instance_id)"
-    >{{ pending() ? 'Stopping…' : 'Stop' }}</button>
+    >{{ stopLabel() }}</button>
   }
   @case ('flatten') {
     <a

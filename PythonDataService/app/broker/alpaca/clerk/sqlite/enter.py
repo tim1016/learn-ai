@@ -124,7 +124,10 @@ logger = logging.getLogger(__name__)
 ACTION_ENTER = "ENTER"
 
 __all__ = [
+    "MARKET_CLOSED",
+    "MARKET_LIVENESS_BLOCKED",
     "EnterSubmission",
+    "EntrySubmissionRefusal",
     "accept_enter",
     "fold_order_evidence",
     "resolve_enter_submission",
@@ -139,6 +142,25 @@ class EnterSubmission:
     effect_operation_id: str | None
     order_ref: str | None
     created: bool  # False for a transport retry / genuine re-request of an existing decision
+
+
+# The two market refusals an ENTER can meet, each filed under its own code at
+# the Clerk's intake and again just before broker contact (#2637).
+MARKET_LIVENESS_BLOCKED = "MARKET_LIVENESS_BLOCKED"
+MARKET_CLOSED = "MARKET_CLOSED"
+
+
+@dataclass(frozen=True)
+class EntrySubmissionRefusal:
+    """Why the check just before broker contact refused an accepted ENTER.
+
+    Filed under ``summary_code``, the reason that actually refused (#2637):
+    the Clerk's intake answers each refusal under its own code, and the same
+    two refusals asked again before broker contact keep theirs.
+    """
+
+    summary_code: str
+    why: str
 
 
 def _enter_identity(
@@ -359,7 +381,7 @@ async def submit_accepted_enter(
     accepted: EnterSubmission,
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
-    before_submit: Callable[[], str | None] | None = None,
+    before_submit: Callable[[], EntrySubmissionRefusal | None] | None = None,
 ) -> EnterSubmission:
     """Drive a previously accepted ENTER outside the intake decision segment."""
     if not accepted.created:
@@ -380,12 +402,15 @@ async def submit_accepted_enter(
                 refusal = before_submit()
             except Exception:
                 logger.exception("Clerk entry preflight failed before broker contact")
-                refusal = "The Clerk could not evaluate current market evidence; no order was sent."
+                refusal = EntrySubmissionRefusal(
+                    summary_code=MARKET_LIVENESS_BLOCKED,
+                    why="The Clerk could not evaluate current market evidence; no order was sent.",
+                )
             if refusal is not None:
                 fold_failed(
                     repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
-                    transition_kind="ENTER_SUBMISSION_REFUSED", summary_code="MARKET_LIVENESS_BLOCKED",
-                    reason="The Clerk refused the entry before contacting the broker.", why=refusal,
+                    transition_kind="ENTER_SUBMISSION_REFUSED", summary_code=refusal.summary_code,
+                    reason="The Clerk refused the entry before contacting the broker.", why=refusal.why,
                 )
                 return _snapshot(repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref)
         try:

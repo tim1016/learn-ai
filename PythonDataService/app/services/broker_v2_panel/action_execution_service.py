@@ -735,8 +735,8 @@ async def execute_action(
         # multi-leg action can still
         # have completed earlier legs (safe_flatten submits leg 1 before leg 2
         # renews); a same-key re-POST is safe there because
-        # execute_safe_flatten_plan re-filters on active_exit_for_order and
-        # refuses a second reduction of an already-exited entry. So this
+        # execute_safe_flatten_plan refuses a symbol an EXIT already owns
+        # (exit.newest_reducible_entry), so no entry is reduced twice. So this
         # releases the key like a pre-execution rejection above, not the
         # ``failed`` burn a real post-execution failure gets. A cohort leg the
         # write path later revives (panel_data_source._revive_lease_or_raise)

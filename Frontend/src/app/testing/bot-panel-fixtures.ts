@@ -201,13 +201,17 @@ function unavailableSqliteAction(
 }
 
 /** The stop the SQLite panel presents for a running bot: the Clerk's
- * `stop_bot_decisions` (`recovery_policy`), with its confirmation. */
-export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): PanelAction {
+ * `stop_bot_decisions` (`recovery_policy`), with its confirmation, which
+ * names the bot it stops (#2634). */
+export function fakeSqliteStopAction(
+  overrides: Partial<PanelAction> = {},
+  { sid = 'spy-momentum-01' }: { sid?: string } = {},
+): PanelAction {
   return fakePanelAction('stop_bot_decisions', {
     label: 'Stop bot decisions',
     explanation: 'Stop the bot making new decisions. Stopping doesn\'t sell its shares.',
     confirmation: {
-      title: 'Stop this bot?',
+      title: `Stop ${sid}?`,
       body: 'Stop the bot making new decisions. Stopping doesn\'t sell its shares.',
       consequence: 'The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account. Its scheduled end is cancelled: nothing is sold at the end time.',
       confirm_label: 'Stop bot decisions',
@@ -225,7 +229,9 @@ export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): Pane
  * blockers — never a generic `stop`. A bot's stop is `stop_bot_decisions`,
  * allowed only while the bot runs.
  */
-export function fakeSqliteBotActions({ running = true }: { running?: boolean } = {}): PanelAction[] {
+export function fakeSqliteBotActions(
+  { running = true, sid = 'spy-momentum-01' }: { running?: boolean; sid?: string } = {},
+): PanelAction[] {
   const noExposure = {
     id: 'NO_ATTRIBUTED_EXPOSURE',
     headline: 'No attributed exposure requires a flatten plan.',
@@ -239,7 +245,7 @@ export function fakeSqliteBotActions({ running = true }: { running?: boolean } =
       + 'Its fills, fees and result stay in Activity. There is no undo.',
     confirmation: {
       title: 'Archive this bot?',
-      body: 'This takes spy-momentum-01 on account PA9 off the roster. It is stopped, with no attributed '
+      body: `This takes ${sid} on account PA9 off the roster. It is stopped, with no attributed `
         + 'exposure and 0 working orders.',
       consequence: 'The registration can start no further runs and its id is never reused. Its history and '
         + 'receipts are kept. This cannot be undone.',
@@ -276,7 +282,7 @@ export function fakeSqliteBotActions({ running = true }: { running?: boolean } =
       detail: 'Open the bot that holds the residue.',
     }),
     running
-      ? fakeSqliteStopAction()
+      ? fakeSqliteStopAction({}, { sid })
       : fakeSqliteStopAction({
         enabled: false,
         blockers: sqliteBlockers({
@@ -284,7 +290,7 @@ export function fakeSqliteBotActions({ running = true }: { running?: boolean } =
           headline: 'Select a bot with an active run; no decision process is currently stoppable.',
           detail: 'Choose an active bot or keep the current stopped state.',
         }),
-      }),
+      }, { sid }),
     fakePanelAction('open_custody_timeline', {
       label: 'Open custody timeline',
       explanation: 'Inspect the immutable operation-first evidence timeline.',

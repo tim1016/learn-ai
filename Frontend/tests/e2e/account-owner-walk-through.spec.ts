@@ -250,7 +250,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // ── Stop, asked in the Clerk's own words, as the bot page asks it. ───────
     await row.getByRole('button', { name: `Stop ${WALKED_BOT}` }).click();
-    const askStop = page.getByRole('dialog', { name: 'Stop this bot?' });
+    const askStop = page.getByRole('dialog', { name: `Stop ${WALKED_BOT}?` });
     await expect(askStop).toContainText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account. Its scheduled end is cancelled: nothing is sold at the end time.');
     await expect(askStop.getByRole('button', { name: 'Cancel' })).toBeFocused();
     await askStop.getByRole('button', { name: 'Stop bot decisions' }).click();

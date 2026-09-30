@@ -66,6 +66,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     accept_recovery_exit,
+    newest_reducible_entry,
     resolve_accepted_exit,
 )
 from app.broker.alpaca.clerk.sqlite.exit_recovery import (
@@ -90,7 +91,6 @@ from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -367,10 +367,10 @@ async def _recover_stale_exit(
     )
     if result is not None:
         return result
-    entries = await run(lambda: [order for order in repo.entry_orders_for_strategy(sid)
-                                if entry_order_symbol(repo, order.order_ref).upper() == cause.symbol
-                                and repo.active_exit_for_order(order.order_ref) is None])
-    if not entries:
+    # An EXIT owning the symbol is the strategy's own, already answered above
+    # and again under intake (``_accept_admissible_redrive``).
+    target = await run(lambda: newest_reducible_entry(repo, sid, cause.symbol))
+    if target is None:
         return RecoveryResult("hold", "RECOVERY_ENTRY_UNAVAILABLE", "No releasable entry evidence is available for this exit.")
     # Read the instant after repository hops, immediately before quote/liveness.
     now_ms = repo.clock()
@@ -393,7 +393,7 @@ async def _recover_stale_exit(
         accepted = await intake.off_loop(
             _accept_admissible_redrive, repo, broker_symbol=broker_symbol, strategy_instance_id=sid,
             symbol=cause.symbol, decision_id=f"{redrive_decision_prefix(stale.episode_token)}{stale.redrives + 1}",
-            entry_order_ref=entries[-1].order_ref, confirmed_shape=shape,
+            entry_order_ref=target.order_ref, confirmed_shape=shape,
             regular_session_only=stale.regular_session_only,
         )
         if accepted is None:

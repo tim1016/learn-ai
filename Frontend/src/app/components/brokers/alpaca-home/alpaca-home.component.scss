@@ -32,6 +32,11 @@
   background: var(--bear-soft);
 }
 
+.home__outcome--info {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
 .home__section {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);

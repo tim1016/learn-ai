@@ -31,9 +31,11 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     RecoveryRunActiveError,
+    ReducibleEntry,
     _accept_exit_capture,
     accept_exit,
     accept_recovery_exit,
+    newest_reducible_entry,
     resolve_accepted_exit,
     resolve_exit,
 )
@@ -472,6 +474,40 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
         pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.position(SID, "SPY") == pytest.approx(0)
+
+
+async def test_every_reduction_targets_the_newest_entry_and_an_exit_on_any_sibling_owns_the_symbol(
+    repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2642: the one rule a program EXIT, an ended run's close, the safe
+    flatten and the stuck-EXIT watchdog read.
+
+    The target is the entry updated last. An EXIT keyed on the *older*
+    sibling still owns the whole symbol, so the answer says so instead of
+    offering the newer entry as a second reduction's target.
+    """
+    assert newest_reducible_entry(repo, SID, "SPY") is None
+    first = await _make_entry(repo, decision_id="enter-1", quantity=5, status="filled", filled_quantity=5)
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *args, **kwargs: None
+    )
+    repo.clock.advance(1_000)
+    second = await _make_entry(repo, decision_id="enter-2", quantity=5, status="filled", filled_quantity=5)
+
+    assert newest_reducible_entry(repo, SID, "spy") == ReducibleEntry(order_ref=second, exit_owned=False)
+    assert newest_reducible_entry(repo, SID, "QQQ") is None
+
+    accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=first,
+    )
+
+    assert newest_reducible_entry(repo, SID, "SPY") == ReducibleEntry(order_ref=second, exit_owned=True)
 
 
 async def test_active_exit_fences_a_concurrent_new_enter(

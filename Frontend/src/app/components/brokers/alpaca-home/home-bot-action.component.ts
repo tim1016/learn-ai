@@ -17,6 +17,16 @@ import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.t
  * stopped still holding money, and nothing once it is done. */
 type BotControl = 'stop' | 'flatten' | null;
 
+/** Where the page's Stop for one bot stands: its Clerk's offer is being
+ * read, or the Stop is being sent. */
+export type StopPhase = 'reading' | 'sending';
+
+const STOP_LABEL: Record<StopPhase | 'idle', string> = {
+  idle: 'Stop',
+  reading: 'Checking…',
+  sending: 'Stopping…',
+};
+
 /**
  * One bot's command on Home, the same on a List row and a Wall tile.
  *
@@ -37,8 +47,8 @@ type BotControl = 'stop' | 'flatten' | null;
 export class HomeBotActionComponent {
   readonly bot = input.required<BotCatalogView>();
   readonly account = input.required<BoundAccountWorkspaceAddress>();
-  /** The page's Stop for this bot is in flight. */
-  readonly pending = input(false);
+  /** Where the page's Stop for this bot stands, if it is in flight. */
+  readonly stopPhase = input<StopPhase | null>(null);
   readonly stopRequested = output<string>();
 
   protected readonly control = computed<BotControl>(() => {
@@ -46,6 +56,8 @@ export class HomeBotActionComponent {
     if (bot.running) return 'stop';
     return bot.group === 'holding' ? 'flatten' : null;
   });
+
+  protected readonly stopLabel = computed(() => STOP_LABEL[this.stopPhase() ?? 'idle']);
 
   protected readonly botLink = computed(
     () => accountWorkspaceBotRoute(this.account(), this.bot().strategy_instance_id).commands,

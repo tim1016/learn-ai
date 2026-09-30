@@ -869,8 +869,40 @@ async def test_a_market_enter_checked_before_broker_contact_a_tenth_of_a_second_
     assert trade.submitted_legs == []
     assert state is EffectOperationState.REJECTED
     refused = transitions[-1]
-    assert refused["transition_kind"] == "ENTER_SUBMISSION_REFUSED"
+    # #2637: filed under the calendar's refusal, not a liveness block that never happened.
+    assert (refused["transition_kind"], refused["summary_code"]) == ("ENTER_SUBMISSION_REFUSED", "MARKET_CLOSED")
     assert json.loads(refused["facts_json"])["why"] == _MARKET_ENTRY_AFTER_THE_CLOSE
+
+
+async def test_a_market_enter_at_the_open_on_a_clerk_clock_running_behind_names_the_lag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2637: an extended-hours run decides on the bar that closes at the open.
+
+    That bar closed inside the regular session, so its ENTER is a market leg.
+    The Clerk's clock trails real time and still reads 0.3 s before the open,
+    where a market order may not go out. Missing the entry is safe; the
+    receipt says the Clerk's clock caused it, not that the session closed.
+    """
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _closed_clock)
+    at_the_open = _bar(9, 30, phase="PRE")
+
+    trade, state, explanation = await _enter(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=at_the_open,
+        stream_health=_stream_health(market_data_healthy=True),
+        clock=lambda: at_the_open.end_ms - 300,
+    )
+
+    assert trade.submitted_legs == []
+    assert state is EffectOperationState.REJECTED
+    assert explanation == (
+        "MARKET_CLOSED: The Clerk's clock is running at least 300 ms behind: it still reads before "
+        "the regular open, though the bar this entry was decided on closed at or after it. A market "
+        "order goes out only inside the regular session, so this entry was missed."
+    )
 
 
 async def test_a_market_enter_with_time_to_reach_the_broker_before_the_close_still_goes_out(

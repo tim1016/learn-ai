@@ -34,12 +34,12 @@ from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape, R
 from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
     accept_recovery_exit,
+    newest_reducible_entry,
     resolve_accepted_exit,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import RECOVERY_FLATTEN_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerTradePort
@@ -132,15 +132,15 @@ async def execute_safe_flatten_plan(
                 "The prepared reduction plan expired; prepare a fresh plan."
             )
         async with intake:
-            entries = [
-                order
-                for order in repo.entry_orders_for_strategy(leg.strategy_instance_id)
-                if entry_order_symbol(repo, order.order_ref).upper() == leg.symbol.upper()
-                and repo.active_exit_for_order(order.order_ref) is None
-            ]
-            if not entries:
+            target = newest_reducible_entry(repo, leg.strategy_instance_id, leg.symbol)
+            if target is None:
                 raise SafeFlattenExecutionError(
                     f"No owned entry order proves a reduction target for {leg.symbol!r}."
+                )
+            if target.exit_owned:
+                raise SafeFlattenExecutionError(
+                    f"An exit is already reducing {leg.symbol}; wait for its outcome, "
+                    "then prepare a fresh plan."
                 )
             try:
                 accepted = accept_recovery_exit(
@@ -148,7 +148,7 @@ async def execute_safe_flatten_plan(
                     account_id=account_id,
                     strategy_instance_id=leg.strategy_instance_id,
                     decision_id=f"{RECOVERY_FLATTEN_DECISION_PREFIX}{decision_token}",
-                    entry_order_ref=entries[-1].order_ref,
+                    entry_order_ref=target.order_ref,
                     # Re-asserted inside the capture transaction: recovery
                     # policy refused presentation with RUN_STILL_ACTIVE, but a
                     # Resume can land between recheck and capture (approved-

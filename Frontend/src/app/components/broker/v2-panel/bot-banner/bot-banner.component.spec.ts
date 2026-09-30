@@ -130,7 +130,7 @@ describe('BotBannerComponent', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop bot decisions' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Stop spy-momentum-01?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Stop bot decisions' }));
     expect(requested).toEqual([{ action: stop, reason: null }]);
     expect(screen.queryByRole('link', { name: 'Deploy again' })).toBeNull();

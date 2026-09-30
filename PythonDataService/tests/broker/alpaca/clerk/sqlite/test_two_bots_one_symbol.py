@@ -45,7 +45,13 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_accepted_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import (
+    EnterSubmission,
+    EntrySubmissionRefusal,
+    accept_enter,
+    submit_accepted_enter,
+    submit_enter,
+)
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
@@ -559,7 +565,10 @@ async def test_an_enter_that_never_reached_the_book_releases_its_cash_claim(
                                         trade=_FakeTradePort(submit_error=_wash_trade_rejection()))
         else:
             await submit_accepted_enter(repo, accepted=accepted, leg=leg, trade=_FakeTradePort(),
-                                        before_submit=lambda: "The market closed before the order was sent.")
+                                        before_submit=lambda: EntrySubmissionRefusal(
+                                            summary_code="MARKET_CLOSED",
+                                            why="The market closed before the order was sent.",
+                                        ))
         submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="b",
                         lifecycle_run_id="run-b", clock=repo.clock)
 
