@@ -62,7 +62,7 @@ from app.broker.alpaca.clerk.sqlite.reads import (
     CANCELLABLE_ENTRY_BROKER_STATES,
     NONTERMINAL_EFFECT_STATES,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.bot_end import BotEnd
 
@@ -121,20 +121,37 @@ def _due_ends(repo: ClerkSqliteRepository, schedule: BotEndSchedule) -> list[Sch
 
 
 def _stop_runs_at_their_end(repo: ClerkSqliteRepository, due: list[ScheduledEnd]) -> list[tuple[str, str]]:
-    """Commit Stop's STOP for each due bot's ACTIVE run; under intake, no broker I/O."""
+    """Commit Stop's STOP for each due bot's ACTIVE run; under intake, no broker I/O.
+
+    One bot's failure is logged and the others are still stopped; a lost
+    execution lease fails the pass, as it fails every other write.
+    """
     fenced: list[tuple[str, str]] = []
     for end in due:
-        active = repo.active_run(end.strategy_instance_id)
-        if active is None:
+        try:
+            active = repo.active_run(end.strategy_instance_id)
+            if active is None:
+                continue
+            submit_stop_run(
+                repo,
+                account_id=repo.account_id,
+                strategy_instance_id=end.strategy_instance_id,
+                lifecycle_run_id=active.lifecycle_run_id,
+                operator_reason=SCHEDULED_END_REASON,
+                clock=repo.clock,
+            )
+        except ExecutionLeaseLost:
+            raise
+        except Exception:
+            logger.exception(
+                "a bot's run could not be stopped at its end; the next pass tries again",
+                extra={
+                    "action": "scheduled_end_stop_failed",
+                    "account_id": repo.account_id,
+                    "strategy_instance_id": end.strategy_instance_id,
+                },
+            )
             continue
-        submit_stop_run(
-            repo,
-            account_id=repo.account_id,
-            strategy_instance_id=end.strategy_instance_id,
-            lifecycle_run_id=active.lifecycle_run_id,
-            operator_reason=SCHEDULED_END_REASON,
-            clock=repo.clock,
-        )
         fenced.append((end.strategy_instance_id, active.lifecycle_run_id))
     return fenced
 
@@ -148,13 +165,22 @@ async def fence_bots_at_their_end(
     """Step 1: stop the run of every bot whose end has come; return the due ends.
 
     Runs before the pass reads the broker, so a bot is stopped at its end even
-    while Alpaca cannot be read; the sale waits for a pass that can.
+    while Alpaca cannot be read; the sale waits for a pass that can. An end
+    schedule that cannot be read is logged and ends nothing this pass: it
+    never fails the account's reconciliation.
     """
     schedule = installed_bot_end_schedule()
     if schedule is None:
         return []
     run = off_loop if off_loop is not None else run_inline
-    due = await run(partial(_due_ends, repo, schedule))
+    try:
+        due = await run(partial(_due_ends, repo, schedule))
+    except Exception:
+        logger.exception(
+            "the bots' ends could not be read; none is carried out this pass",
+            extra={"action": "scheduled_end_schedule_unreadable", "account_id": repo.account_id},
+        )
+        return []
     if not due:
         return []
     for strategy_instance_id, lifecycle_run_id in await intake.off_loop(_stop_runs_at_their_end, repo, due):

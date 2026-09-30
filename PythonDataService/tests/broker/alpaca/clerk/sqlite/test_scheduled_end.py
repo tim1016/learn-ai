@@ -410,6 +410,26 @@ async def test_an_end_found_in_the_last_seconds_before_the_close_waits_for_the_o
     assert repo.effect_operation(_end_sales(repo)[0]).state not in ("succeeded", "failed", "rejected")
 
 
+# ── the step never fails the account's reconciliation ────────────────────────
+
+
+async def test_an_end_schedule_that_cannot_be_read_never_fails_the_pass(
+    repo: ClerkSqliteRepository, schedule: _Schedule, caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _hold_ten(repo)
+    _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+
+    def unreadable(_sids: Sequence[str]) -> list[ScheduledEnd]:
+        raise RuntimeError("a desired-state read broke")
+
+    schedule.pending_ends = unreadable  # type: ignore[method-assign]
+    result = await _pass(repo, _Market())
+
+    assert result.verdict == "clean"
+    assert repo.active_run(SID) is not None
+    assert any(getattr(record, "action", None) == "scheduled_end_schedule_unreadable" for record in caplog.records)
+
+
 # ── the step without an installed schedule ───────────────────────────────────
 
 
