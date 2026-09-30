@@ -10,9 +10,11 @@ import type { BotEndView } from '../v2-panel/lib/broker-v2-panel.service';
  * before an early close.
  *
  * `end` is the backend's words, or `null` while none answer the end on
- * screen; `endAtMs` is the minute to show, which a host may take from the
- * end it sends, so the times never wait on the words. Its lines join the
- * host's own layout (`display: contents`).
+ * screen; `endAtMs` is the minute to show until they do, which a host may
+ * take from the end it sends, so the times never wait on the words. Once
+ * words answer, their own minute is shown — an end moved before an early
+ * close is said at the minute it will be, never the one typed. Its lines
+ * join the host's own layout (`display: contents`).
  */
 @Component({
   selector: 'app-bot-end-summary',
@@ -20,7 +22,7 @@ import type { BotEndView } from '../v2-panel/lib/broker-v2-panel.service';
   imports: [TimestampDisplayComponent],
   template: `
     @let shown = end();
-    @let at = endAtMs();
+    @let at = shown !== null ? shown.end_at_ms : endAtMs();
     @if (shown !== null) { <p class="bot-end-summary__headline">{{ shown.headline }}</p> }
     @if (at !== null) {
       <p class="bot-end-summary__time">

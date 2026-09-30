@@ -19,10 +19,13 @@ let nextEndCardId = 0;
  * Keep (never Keep for a Dry Run). Save sends the choice through `save` —
  * the page's own fenced, one-at-a-time command — and the next panel read
  * shows the new end; a refusal (400) or a state conflict (409) is shown in
- * the backend's words. The page holds Change and Save still (`locked`)
- * while another command on this bot is on its way, so a change of end never
- * races a Stop. The fields are read from the end once, as they open, so a
- * poll never rewrites what the owner is typing.
+ * the backend's words — in the fields while they are open, and on the card
+ * once they are closed, so a refusal that lands after the owner closed them
+ * mid-save is still seen until Change opens them again. The page holds
+ * Change and Save still (`locked`) while another command on this bot is on
+ * its way, so a change of end never races a Stop. The fields are read from
+ * the end once, as they open, so a poll never rewrites what the owner is
+ * typing.
  */
 @Component({
   selector: 'app-bot-end-card',
@@ -65,11 +68,12 @@ export class BotEndCardComponent {
     this.refusal.set(null);
     try {
       await this.save()(choice);
-      this.editor().hide();
     } catch (error) {
       this.refusal.set(deriveActionRejection(error, 'This bot’s end could not be changed.'));
+      return;
     } finally {
       this.saving.set(false);
     }
+    this.editor().hide();
   }
 }

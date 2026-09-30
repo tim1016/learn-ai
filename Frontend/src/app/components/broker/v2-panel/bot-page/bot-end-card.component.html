@@ -5,7 +5,10 @@
       <button type="button" class="bot-end__change" [attr.popovertarget]="editor.id" [disabled]="busy()" (click)="prepare()">Change end</button>
     }
   </div>
-  <app-bot-end-summary [end]="end()" [endAtMs]="end().end_at_ms" detailed />
+  <app-bot-end-summary [end]="end()" detailed />
+  @if (refusal(); as refused) {
+    @if (!editor.isOpen()) { <app-bot-end-refusal [refusal]="refused" announce /> }
+  }
 </section>
 
 <app-bot-end-popover #editor heading="Change this bot’s end" closeLabel="Cancel" [(fields)]="fields" [keepOffered]="keepOffered()" [locked]="busy()">

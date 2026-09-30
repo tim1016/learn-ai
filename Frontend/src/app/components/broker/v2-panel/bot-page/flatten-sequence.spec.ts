@@ -87,7 +87,7 @@ describe('the flatten sequence', () => {
       kind: 'failed', step: 'sell',
       rejection: {
         outcome: 'failure', message: 'No price can be set now.', why: 'Flatten again later.',
-        reasonCode: code, availableAtMs: opensAt,
+        reasonCode: code, availableAtMs: opensAt, nextAction: null,
       },
     });
     expect(reports.at(-1)).toEqual(['sell', 'failed', 'No price can be set now.']);
@@ -178,7 +178,7 @@ describe('a refreshed limit ticket', () => {
 
     expect(refreshed).toEqual({
       kind: 'ended',
-      rejection: { outcome: 'failure', message: 'The bot is flat.', why: 'Review the plan.', reasonCode: 'FLAT', availableAtMs: null },
+      rejection: { outcome: 'failure', message: 'The bot is flat.', why: 'Review the plan.', reasonCode: 'FLAT', availableAtMs: null, nextAction: null },
     });
   });
 

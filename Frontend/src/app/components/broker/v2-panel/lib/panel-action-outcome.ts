@@ -40,7 +40,7 @@ export interface ActionRejection {
    * then the fleet's `next_step` — else the pinned fleet copy's next step, for
    * a surface that says "why" and "next" apart (#2607, a bot's end). Set by
    * `deriveActionRejection`; `why` keeps its own precedence. */
-  readonly nextAction?: string | null;
+  readonly nextAction: string | null;
 }
 
 /** Parses a rejected `runBotAction` call's outcome, message, and remediation. */

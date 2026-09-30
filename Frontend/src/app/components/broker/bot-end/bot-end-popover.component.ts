@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, input, model, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, input, model, signal, viewChild } from '@angular/core';
 
 import { BotEndEditorComponent } from './bot-end-editor.component';
 import type { BotEndFields } from './bot-end-fields';
@@ -40,6 +40,9 @@ export class BotEndPopoverComponent {
 
   readonly id = `bot-end-popover-${nextPopoverId++}`;
   protected readonly titleId = `${this.id}-title`;
+  private readonly openState = signal(false);
+  /** The fields are open over the page. */
+  readonly isOpen = this.openState.asReadonly();
 
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
   private readonly editor = viewChild.required(BotEndEditorComponent);
@@ -56,6 +59,8 @@ export class BotEndPopoverComponent {
 
   /** The fields take the keyboard as they open over the page. */
   protected onToggle(event: Event): void {
-    if ('newState' in event && event.newState === 'open') this.editor().focus();
+    if (!('newState' in event)) return;
+    this.openState.set(event.newState === 'open');
+    if (event.newState === 'open') this.editor().focus();
   }
 }

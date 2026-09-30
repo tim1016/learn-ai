@@ -345,6 +345,9 @@ export const NO_END_STOPPED = {
 /** Deployment Validation's registry note (`registry.py`, #2607). */
 export const DV_EXPERIMENTAL_NOTICE = 'Experimental validation only — not a trading strategy';
 
+/** One error of that 422 as pydantic words it: the contract's `ValidationError`, with the `input`, `ctx` and `url` it does not name. */
+type ValidationErrorAsSent = Schemas['ValidationError'] & { input: unknown; ctx: Record<string, unknown>; url: string };
+
 /** The app's 422 for an explicit `end: null` (`bot_end.refuse_explicit_null_end`), as its validation handler sends it. */
 const EXPLICIT_NULL_END_422 = {
   detail: [{
@@ -356,7 +359,7 @@ const EXPLICIT_NULL_END_422 = {
     ctx: { error: {} },
     url: 'https://errors.pydantic.dev/2.5/v/value_error',
   }],
-};
+} satisfies Schemas['HTTPValidationError'] & { detail: ValidationErrorAsSent[] };
 
 /** The end check's answer in the backend's words: an omitted end is the default end. */
 function endPreview(request: BotEndPreviewRequest): BotEndView {

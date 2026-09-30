@@ -135,6 +135,9 @@ const REFUSAL_OUTCOMES: Readonly<Record<string, DeployError['outcome']>> = {
   deploy_bot_name_unavailable: 'blocked',
 };
 
+/** The code the backend refuses a bot's end with (`bot_end_panel.BOT_END_REFUSED`), at its check or at Deploy. */
+const BOT_END_REFUSED = 'BOT_END_REFUSED';
+
 /** What Confirm says about a Deploy that no receipt answered for. */
 function deployNotice(
   outcome: DeployError['outcome'],
@@ -1587,6 +1590,9 @@ export class AlpacaDeployWorkflowComponent {
       const settled = sent && settlesSubmission(error);
       this.submitError.set(this.toDeployError(error, sent && !settled));
       if (settled) this.releaseSubmission();
+      // The end was refused — a default end that passed while the page stood
+      // open — so How checks it again, shows the refusal, and offers the default.
+      if (deriveActionRejection(error, 'Deploy refused.').reasonCode === BOT_END_REFUSED) this.endPreview.reload();
       if (error instanceof HttpErrorResponse && error.status === 409
         && ['clerk_binding_generation_conflict', 'clerk_routing_epoch_conflict'].includes(error.error?.detail?.reason ?? error.error?.detail?.reason_code)) {
         this.frozenCommand.set(null);

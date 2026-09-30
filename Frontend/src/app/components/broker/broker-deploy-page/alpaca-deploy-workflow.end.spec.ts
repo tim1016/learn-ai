@@ -65,6 +65,24 @@ const PASSED = new HttpErrorResponse({
   }),
 });
 
+/** Deploy's refusal of that end, exactly as `_raise_alpaca_deploy_error` sends it. */
+const DEPLOY_REFUSED_PASSED = new HttpErrorResponse({
+  status: 400,
+  error: {
+    detail: {
+      outcome: 'blocked',
+      receipt_id: null,
+      recorded_at_ms: 1_700_000_100_000,
+      message: 'That end time has already passed.',
+      why: 'A bot\'s end must be later than now.',
+      next_action: 'Choose a time later than now.',
+      admission: null,
+      reason_code: 'BOT_END_REFUSED',
+      submission_settled: true,
+    },
+  },
+});
+
 /** A check that could not be read at all: the runner is down (`PanelUnavailableError`, 503, no code). */
 const UNREADABLE = new HttpErrorResponse({
   status: 503,
@@ -256,6 +274,10 @@ describe('AlpacaDeployWorkflowComponent — the bot’s end (#2607)', () => {
 
     await within(endSummary()).findByText(HALF_DAY_END.headline);
     expect(within(endSummary()).getByText(HALF_DAY_END.notice as string)).toBeTruthy();
+    // The times say the minute it will end, never the one typed.
+    expect(timeLine()).toContain(localTime(HALF_DAY_END.end_at_ms));
+    expect(timeLine()).toContain(etTime(HALF_DAY_END.end_at_ms));
+    expect(timeLine()).not.toContain(etTime(DEFAULT_END.end_at_ms));
   });
 
   it.each([
@@ -314,6 +336,27 @@ describe('AlpacaDeployWorkflowComponent — the bot’s end (#2607)', () => {
     pending.resolve(previewedEnd(lastPreview(service)));
     await within(endSummary()).findByText('No end · runs until you stop it');
     await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+  });
+
+  it('checks the end again when Deploy refuses it, so How shows the refusal and offers the default end', async () => {
+    const service = mockService();
+    await renderWorkflow(service);
+    await within(endSummary()).findByText(DEFAULT_END.headline);
+    await chooseMoney();
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    // The default end's minute goes by while the page stands open.
+    service.previewStartAdmission.mockRejectedValue(DEPLOY_REFUSED_PASSED);
+    service.previewBotEnd.mockRejectedValue(PASSED);
+    const checks = service.previewBotEnd.mock.calls.length;
+
+    fireEvent.click(deployButton());
+
+    const alert = await within(endSummary()).findByRole('alert');
+    expect(alert.textContent).toContain('That end time has already passed.');
+    expect(service.previewBotEnd.mock.calls.length).toBeGreaterThan(checks);
+    expect(within(step('How')).getByText('Check its end')).toBeTruthy();
+    expect(within(endEditor()).getByRole('button', { name: 'Use the default end' })).toBeTruthy();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
   it('holds nothing when the check itself cannot be read, and says so plainly, not as a refusal', async () => {

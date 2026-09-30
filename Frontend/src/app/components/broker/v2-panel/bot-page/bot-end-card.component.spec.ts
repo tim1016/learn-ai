@@ -56,6 +56,26 @@ async function openEditor(fixture: { whenStable(): Promise<unknown> }): Promise<
   return editor();
 }
 
+/** The browser's `toggle` as the fields open or close over the page (jsdom has no popovers). */
+function toggleEditor(newState: 'open' | 'closed'): void {
+  editor().dispatchEvent(Object.assign(new Event('toggle'), { newState }));
+}
+
+function card(): HTMLElement {
+  return screen.getByRole('region', { name: 'End' });
+}
+
+/** The panel's refusal of an end whose minute has gone by (400). */
+const PASSED = new HttpErrorResponse({
+  status: 400,
+  error: panelRefusalBody({
+    message: 'That end time has already passed.',
+    why: 'A bot\'s end must be later than now.',
+    next_action: 'Choose a time later than now.',
+    reason_code: 'BOT_END_REFUSED',
+  }),
+});
+
 describe('BotEndCardComponent (#2607)', () => {
   it('shows the end in the backend’s words, in the viewer’s time and market time', async () => {
     await renderCard({ ...SCHEDULED, notice: 'Wed Sep 30 closes early at 13:00 ET, so this bot ends at 12:59 ET.' });
@@ -210,6 +230,40 @@ describe('BotEndCardComponent (#2607)', () => {
     expect(alert.textContent).toContain('Expected 3 is not 4.');
     expect(alert.textContent?.match(/Reload the lane\./g)).toHaveLength(1);
     expect(alert.textContent).toContain('Clerk Binding Generation Conflict');
+  });
+
+  it('says a refusal once, in the fields, while they are open', async () => {
+    const { fixture } = await renderCard(SCHEDULED, vi.fn<Save>().mockRejectedValue(PASSED));
+    await openEditor(fixture);
+    toggleEditor('open');
+
+    fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
+
+    expect((await within(editor()).findByRole('alert')).textContent).toContain('That end time has already passed.');
+    expect(within(card()).queryByRole('alert')).toBeNull();
+  });
+
+  it('shows on the card a refusal that lands after the owner closed the fields mid-save, until Change opens them again', async () => {
+    let refuse: (error: unknown) => void = () => undefined;
+    const save = vi.fn<Save>().mockImplementation(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    const { fixture } = await renderCard(SCHEDULED, save);
+    await openEditor(fixture);
+    toggleEditor('open');
+    fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+
+    toggleEditor('closed');
+    refuse(PASSED);
+
+    const alert = await within(card()).findByRole('alert');
+    expect(alert.textContent).toContain('That end time has already passed.');
+    expect(alert.textContent).toContain('Next: Choose a time later than now.');
+
+    await openEditor(fixture);
+    toggleEditor('open');
+    await fixture.whenStable();
+    expect(within(card()).queryByRole('alert')).toBeNull();
+    expect(within(editor()).queryByRole('alert')).toBeNull();
   });
 
   it('passes AXE, closed and with its fields open', async () => {
