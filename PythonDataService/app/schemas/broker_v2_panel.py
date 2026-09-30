@@ -223,6 +223,8 @@ class BotCatalogView(BaseModel):
         only the route's response check -- a 500 for the account's whole
         roster. Stamp group facts through here so it fails where it is made.
         """
+        if unknown := facts.keys() - type(self).model_fields.keys():
+            raise TypeError(f"unknown catalog facts: {sorted(unknown)}")
         return type(self).model_validate(self.model_dump() | facts)
 
 
