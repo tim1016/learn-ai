@@ -6,20 +6,20 @@ expires at the close, and Alpaca can reject an order it accepted. Before
 effect stayed ``in_progress`` for ever: every bot's entries were refused as
 ``MANUAL_ORDER_OUTSTANDING`` and a bot's refused exit was held as Clerk work
 in flight on the symbol. These tests pin the one terminal fold that ends it,
-on the ``trade_updates`` route and on the reconciliation sweep.
+on the ``trade_updates`` route and on the reconciliation sweep. The bot exit
+it releases is pinned in ``test_two_bots_one_symbol.py``
+(``…_is_sent_again_once_it_is_cancelled_at_alpaca``).
 """
 
 from __future__ import annotations
 
 import importlib
-import logging
 
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import manual_order_completion, order_projection
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
-from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import ManualOrderCancelResultFacts, OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
@@ -31,14 +31,12 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
     OrderSide,
-    OrderType,
 )
 from app.schemas.manual_orders import ManualOrderLegResponse
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeTradePort
@@ -48,7 +46,6 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
     WATCHDOG_RUN,
     WATCHDOG_SID,
-    _exit_not_flat_redrive_policy,
     _FakeRead,
     _held_position,
     _NoReconciler,
@@ -56,7 +53,6 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _register_second_spy_lane,
     clocked_repo,  # noqa: F401 -- pytest fixture, used by name
 )
-from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import _wash_trade_rejection
 
 _TERMINAL_EFFECT_STATES = {"succeeded", "failed", "rejected"}
 _MANUAL_ENDINGS = {"MANUAL_ORDER_CANCELED", "MANUAL_ORDER_TERMINAL", "MANUAL_ORDER_FILLED"}
@@ -459,52 +455,6 @@ async def test_an_ending_that_lands_while_a_bot_exit_is_being_sent_ends_only_the
         transition for transition in repo.custody_transitions()
         if transition["effect_operation_id"] == exit_a.effect_operation_id
         and transition["transition_kind"] in _MANUAL_ENDINGS
-    ]
-
-
-# ── A bot's refused exit is no longer held behind it ─────────────────────────
-
-
-async def test_a_bot_exit_refused_beside_a_manual_buy_limit_is_sent_again_once_alpaca_cancels_the_limit(
-    clocked_repo, caplog: pytest.LogCaptureFixture,  # noqa: F811
-) -> None:
-    """Alpaca refuses bot A's sell as a potential wash trade against the owner's buy limit.
-
-    The owner then cancels the limit in Alpaca's website. Nothing works SPY
-    any more and the broker holds A's 10 shares, so the stuck-EXIT watchdog
-    re-sends A's sell once the refusal has settled for the policy's re-drive
-    age -- never deferring it as Clerk work in flight on the symbol.
-    """
-    repo, clock = clocked_repo
-    ref_a = await _held_position(repo)
-    website = _AlpacaWebsite(repo=repo)
-    manual = await _buy_limit(repo, website)
-    assert manual.leg.order_ref is not None
-    exit_a = accept_exit(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, decision_id="a-sell",
-                         lifecycle_run_id=WATCHDOG_RUN, entry_order_ref=ref_a)
-    await resolve_exit(repo, effect_operation_id=exit_a.effect_operation_id,
-                       trade=_FakeTradePort(submit_error=_wash_trade_rejection()), pricing=UNPRICEABLE_RECOVERY)
-    assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
-                                   strategy_instance_id=WATCHDOG_SID) is not None
-    refused_at = repo.clock()
-
-    await _frame(repo, _ended_at_alpaca(repo, website, manual.leg.order_ref, "canceled"), event_type="canceled")
-    policy = _exit_not_flat_redrive_policy()
-    redrive = _FakeTradePort()
-    with caplog.at_level(logging.INFO):
-        while not redrive.submitted_legs:
-            assert repo.clock() - refused_at <= policy.after_ms, (
-                "A's exit was held behind a manual order Alpaca had already ended"
-            )
-            await _reconciliation_pass(repo, redrive, spy_held=10)
-            if not redrive.submitted_legs:
-                clock.advance(DEFAULT_RECOVERY_INTERVAL_MS)
-
-    assert [(leg.side, leg.quantity, leg.order_type) for leg in redrive.submitted_legs] == [
-        (OrderSide.SELL, 10, OrderType.MARKET)]
-    assert not [
-        record for record in caplog.records
-        if getattr(record, "action", None) == "exit_redrive_deferred_work_in_flight"
     ]
 
 
