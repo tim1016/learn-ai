@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 
+import type { BotEndFields } from '../bot-end/bot-end-fields';
 import type { DeployBotStrategy, DeploySizingOption } from '../v2-panel/lib/broker-v2-panel.service';
 
 /**
@@ -24,6 +25,9 @@ export interface DeployTicketSettings {
   executionMode: 'dry_run' | 'paper' | 'shadow' | 'live' | null;
   allowCarryover: boolean;
   parameters: Readonly<Record<string, unknown>>;
+  /** The bot's end as the owner set it (#2607), or `null` while it still
+   * follows the account's default end, which the Deploy view authors. */
+  end: BotEndFields | null;
 }
 
 /** Which of the two foldable steps the owner has open for editing. */
@@ -68,6 +72,7 @@ export const EMPTY_DEPLOY_SETTINGS: DeployTicketSettings = {
   executionMode: null,
   allowCarryover: false,
   parameters: {},
+  end: null,
 };
 
 /** A fresh, never-submitted draft with its own submission key. */

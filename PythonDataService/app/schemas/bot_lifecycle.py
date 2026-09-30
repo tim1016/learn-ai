@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Literal
 
 BotDutyOutcomeKind = Literal[
-    "CLOCKED_OUT_FLAT",
     "STOPPED",
     "HALTED",
     "CRASHED",

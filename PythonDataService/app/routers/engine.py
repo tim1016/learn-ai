@@ -108,6 +108,9 @@ class StrategyInfo(BaseModel):
     # the offending PUBLIC parameters. ``recency_supported`` is its flag,
     # kept for existing consumers.
     strategy_category: str = "production_candidate"
+    # The registry entry's owner-facing warning (#2607), shown as-is wherever
+    # Strategy Lab lists or selects the strategy; ``None`` when it has none.
+    experimental_notice: str | None = None
     sweep_eligibility: SweepEligibilityInfo = Field(default_factory=lambda: SweepEligibilityInfo(eligible=False))
     recency_supported: bool = False
 
@@ -144,6 +147,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
                 strategy_category=reg.strategy_category,
+                experimental_notice=reg.experimental_notice,
                 sweep_eligibility=SweepEligibilityInfo(**eligibility.as_dict()),
                 recency_supported=eligibility.eligible,
                 strategy_bars=StrategyBarCadenceInfo(

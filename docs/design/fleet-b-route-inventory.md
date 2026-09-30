@@ -86,6 +86,8 @@ dispatch — wrong-target refuses as `clerk_account_mismatch`, never retargets).
 | `bot_cohort_flatten` | POST | `/accounts/{account_id}/bots/cohort-flatten` | `…/bots/cohort-flatten` | `bot_action` | durable_key |
 | `bots_clear` | POST | `/accounts/{account_id}/bots/clear` | `…/bots/clear` | `bot_action` | durable_key |
 | `bots_deploy_read` | GET | `/accounts/{account_id}/bots/deploy` | `…/bots/deploy` | `deploy` | read |
+| `bot_end_preview` | POST | `/accounts/{account_id}/bots/end-preview` | `…/bots/end-preview` | `deploy` | read (#2607) |
+| `bot_end_edit` | PUT | `/accounts/{account_id}/bots/{sid}/end` | `…/bots/{sid}/end` | `bot_action` | one_shot (#2607; the bot page reads the end from its panel poll) |
 | `bot_panel_read` | GET | `/accounts/{account_id}/bots/{sid}/panel` | `…/bots/{sid}/panel` | `bot_panel_read` | read |
 | `bot_panel_action` | POST | `/accounts/{account_id}/bots/{sid}/actions` | `…/bots/{sid}/actions` | `bot_action` | durable_key |
 | `bot_panel_quiesce_action` | POST | `/accounts/{account_id}/bots/{sid}/actions/quiesce` | `…/bots/{sid}/actions/quiesce` | `bot_action` | durable_key (`QuiesceActionId` only; routes while draining, #2351) |

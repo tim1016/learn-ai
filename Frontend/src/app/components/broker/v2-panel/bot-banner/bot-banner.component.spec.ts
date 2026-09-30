@@ -76,6 +76,16 @@ describe('BotBannerComponent', () => {
     expect(screen.getByRole('status', { name: 'Revision 1 running' }).textContent).toBe('Revision 1 running');
   });
 
+  it('says a Deployment Validation bot is experimental, in its registry entry’s words (#2607)', async () => {
+    const notice = 'Experimental validation only — not a trading strategy';
+    const { rerender } = await renderBanner({ experimental_notice: notice });
+
+    expect(screen.getByRole('note').textContent).toContain(notice);
+
+    await rerender({ partialUpdate: true, inputs: { panel: fakeBotPanelView({ experimental_notice: null }) } });
+    expect(screen.queryByText(notice)).toBeNull();
+  });
+
   it('shows the state once in the topline and recolours it for an off-duty bot', async () => {
     const { container } = await renderBanner({
       mission_verdict: {

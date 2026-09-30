@@ -380,6 +380,17 @@ class _BenchRegistry:
     def dry_run_activity(self, broker: str, sid: str) -> list[object]:
         return []
 
+    def bot_end(self, broker: str, sid: str) -> object:
+        """The owner-set end (#2607): production reads the bot's desired-state file on every panel read."""
+        from app.engine.live.desired_state import DesiredStateRepo, stable_desired_state_path
+        from app.services.bot_end import bot_end_view
+
+        record = DesiredStateRepo(stable_desired_state_path(self.artifacts_root, sid)).read()
+        return bot_end_view(
+            None if record is None else record.end,
+            now_ms=1_700_000_000_000, dry_run=False, running=sid not in self._stopped,
+        )
+
     def bindings_for_broker(self, broker: str) -> list[object]:
         return []
 

@@ -100,7 +100,7 @@ function refusal(
   reasonCode: string | null = null,
   availableAtMs: number | null = null,
 ): ActionRejection {
-  return { outcome: 'failure', message, why, reasonCode, availableAtMs };
+  return { outcome: 'failure', message, why, reasonCode, availableAtMs, nextAction: null };
 }
 
 function refused(message: string, why: string | null = null): StepRefused {

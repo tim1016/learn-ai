@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   BrokerV2PanelService,
+  type BotEndPreviewRequest,
   type DeployBotView,
   type DeployBotBody,
 } from '../v2-panel/lib/broker-v2-panel.service';
@@ -13,7 +14,7 @@ import {
   pickSymbol,
   symbolPicker,
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
+import { DEPLOY_VIEW, previewedEnd } from './alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
 
@@ -83,6 +84,7 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
   return {
     getDeployView: vi.fn().mockResolvedValue(view),
     previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION_STUB),
+    previewBotEnd: vi.fn().mockImplementation(async (_target, body: BotEndPreviewRequest) => previewedEnd(body)),
     deployBudgetBot: vi.fn(),
     previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
       state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,

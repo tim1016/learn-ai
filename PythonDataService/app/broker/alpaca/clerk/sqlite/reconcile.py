@@ -61,6 +61,10 @@ from app.broker.alpaca.clerk.sqlite.run_ownership import (
     RunOwnership,
     retire_runs_whose_runner_is_gone,
 )
+from app.broker.alpaca.clerk.sqlite.scheduled_end import (
+    fence_bots_at_their_end,
+    finish_bots_at_their_end,
+)
 from app.broker.alpaca.clerk.sqlite.stopped_run_entries import (
     cancel_entries_of_inactive_runs,
 )
@@ -786,6 +790,13 @@ class AccountReconciliationResult:
     # pass whose read answered but could not be proven. In-process only --
     # never persisted, never part of what the verdict compares equal on.
     stale_cause: BrokerError | None = field(default=None, compare=False)
+    # The newest custody transition the pass's final broker comparison saw,
+    # read atomically with its verdict; ``None`` for a pass that reached no
+    # verdict. A bot whose own newest transition is no later than this has
+    # not moved since that comparison, so the verdict still proves its
+    # custody (``SqliteAlpacaClerkFacade.published_custody``, #2607).
+    # In-process only, like ``stale_cause``.
+    through_sequence: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1101,6 +1112,10 @@ async def _reconcile_account_serialized(
     run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
+    # A bot whose owner-set end has come is fenced first (#2607): Stop's STOP
+    # is local custody, so it never waits on a broker read that may fail.
+    ends_due = await fence_bots_at_their_end(repo, intake=intake, off_loop=to_thread)
+
     snapshot = await _read_account_snapshot(repo, read, intake=intake)
     if isinstance(snapshot, _StaleSnapshot):
         return snapshot.result()
@@ -1173,6 +1188,13 @@ async def _reconcile_account_serialized(
     # authority, whatever an ended run left is closed at the last price it saw.
     await close_exposure_of_ended_dry_runs(
         repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
+    )
+
+    # The owner-scheduled end sells what a SELL end owes -- at market in the
+    # regular session, else at the next open -- and is recorded carried out
+    # (#2607). The one sale a dead run makes by itself (ADR 0045).
+    await finish_bots_at_their_end(
+        repo, ends_due, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
     )
 
     # A failed ENTER that filled and closed while trade_updates was down is
@@ -1296,6 +1318,7 @@ def _finalize_reconciliation_verdict(
         foreign_order_count=len(plan.foreign_orders),
         drifted_symbols=plan.drifted_symbols,
         indeterminate_symbols=plan.indeterminate_symbols,
+        through_sequence=repo.last_custody_sequence(),
     )
     if trigger != "OPERATOR_RECONCILE_NOW":
         return result

@@ -777,6 +777,52 @@ async def test_stop_after_start_succeeds(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_refuses_the_reason_reserved_for_the_clerks_stop_at_a_bots_end(api: FastAPI) -> None:
+    """#2607 review: ``scheduled_end`` is the Clerk's own reason for its STOP at a bot's end,
+    and the runner reads a run stopped with it as the end's to carry out -- keeping a SELL end
+    pending. An operator's Stop naming it is refused, and nothing is committed under it."""
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        refused = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "scheduled_end"},
+        )
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "operator stop"},
+        )
+        assert refused.status_code == 422
+        assert refused.json()["detail"]["reason"] == "reserved_operator_reason"
+        assert stop.status_code == 202
+        assert stop.json()["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_stop_in_a_process_with_no_bot_runner_lands_and_says_it_cancelled_no_end(
+    api: FastAPI, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2664: the raw Stop cancels the bot's end through the runner before its STOP. A process
+    with no runner has no end schedule to cancel it in; its STOP still lands, and that is said."""
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "operator stop"},
+        )
+
+    assert stop.status_code == 202
+    assert stop.json()["state"] == "succeeded"
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_no_runner"]
+    assert said.strategy_instance_id == SID
+
+
+@pytest.mark.asyncio
 async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_http(
     api: FastAPI,
 ) -> None:
@@ -856,10 +902,18 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
     class _FakeRegistry:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
+            self.end_cancels: list[tuple[str, bool]] = []
 
         def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
             # A bot on the account's own authority, not a Dry Run's.
             return SimpleNamespace(mode="trade", broker=broker)
+
+        async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
+            # Whether the Clerk still held the run ACTIVE: the STOP had not committed yet.
+            repository = get_active_clerk_runtime().clerk.repository
+            self.end_cancels.append(
+                (strategy_instance_id, repository.active_run(strategy_instance_id) is not None)
+            )
 
         async def stop_after_durable_clerk_stop(
             self,
@@ -903,6 +957,8 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
     assert response.status_code == 200
     assert response.json()["applied"] is True
     assert fake_registry.stop_calls == [("alpaca", SID)]
+    # #2607: the owner's Stop cancels the bot's scheduled end before its STOP commits.
+    assert fake_registry.end_cancels == [(SID, True)]
 
 
 @pytest.mark.asyncio
@@ -917,10 +973,14 @@ async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> N
     class _RecordingRegistry:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
+            self.end_cancels: list[str] = []
 
         def binding_for_control(self, broker: str, strategy_instance_id: str) -> SimpleNamespace:
             # A bot on the account's own authority, not a Dry Run's.
             return SimpleNamespace(mode="trade", broker=broker)
+
+        async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
+            self.end_cancels.append(strategy_instance_id)
 
         async def stop_after_durable_clerk_stop(
             self,
@@ -970,6 +1030,8 @@ async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> N
     assert retry.json()["applied"] is False
     # The retry replayed the existing command AND re-drove quiescence.
     assert fake_registry.stop_calls == [("alpaca", SID), ("alpaca", SID)]
+    # The first attempt cancelled the end durably, before its STOP (#2607).
+    assert fake_registry.end_cancels == [SID]
 
 
 @pytest.mark.asyncio

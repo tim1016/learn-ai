@@ -15,6 +15,27 @@ import { operatorBlockerFixture } from './operator-blocker-fixtures';
 
 const OBSERVED_AT_MS = 1_700_000_001_000;
 
+/**
+ * The `detail` `_raise_panel_error` sends for a typed panel refusal
+ * (`routers/broker_v2_panel.py`), exactly — e.g. a refused bot end (#2607):
+ * 400 when the rules refuse it, 409 when the bot's state does, with
+ * `reason_code` `BOT_END_REFUSED`. A refusal with no code sends none. No
+ * generated type describes it: an `HTTPException`'s detail is not in the
+ * OpenAPI contract.
+ */
+export interface PanelRefusalDetail {
+  readonly message: string;
+  readonly why: string | null;
+  readonly next_action: string | null;
+  readonly reason_code?: string;
+}
+
+/** A panel route's refusal body as the page receives it: `{detail: {message, why, next_action, reason_code?}}`.
+ * Plain data, so the e2e world can answer with it too. */
+export function panelRefusalBody(detail: PanelRefusalDetail): { readonly detail: PanelRefusalDetail } {
+  return { detail };
+}
+
 /** A `ChartLiveResponse.feed` (#2355): quiet (`LIVE`) unless a spec is about the chart line.
  * An override that changes `state` also sets `show_notice` / `attention_required`:
  * the backend owns that policy and the client reads it as given. */
@@ -188,7 +209,7 @@ export function fakeSqliteStopAction(overrides: Partial<PanelAction> = {}): Pane
     confirmation: {
       title: 'Stop this bot?',
       body: 'Stop the bot making new decisions. Stopping doesn\'t sell its shares.',
-      consequence: 'The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.',
+      consequence: 'The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account. Its scheduled end is cancelled: nothing is sold at the end time.',
       confirm_label: 'Stop bot decisions',
       required_token: '',
     },

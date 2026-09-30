@@ -12,7 +12,7 @@ import type {
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.component';
-import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
@@ -688,6 +688,9 @@ async function renderShell(
   overrides: {
     directory?: FleetDirectoryDouble;
     runBotAction?: ReturnType<typeof vi.fn>;
+    /** The bot's end on its page (#2607), and the service's change of it. */
+    end?: BotEndView;
+    editBotEnd?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   // A persistent mock, not `mockResolvedValueOnce`: a rebind restarts the
@@ -702,8 +705,10 @@ async function renderShell(
       ...PANEL,
       actions: [STOP_ACTION],
       primary_action: 'stop_bot_decisions',
+      ...(overrides.end ? { end: overrides.end } : {}),
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
+    ...(overrides.editBotEnd ? { editBotEnd: overrides.editBotEnd } : {}),
   };
   const { fixture } = await render(BotPanelShellComponent, {
     inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -719,7 +724,7 @@ async function renderShell(
   });
   await fixture.whenStable();
   fixture.detectChanges();
-  return { fixture };
+  return { fixture, service };
 }
 
 describe('BotPanelShellComponent', () => {
@@ -2274,6 +2279,93 @@ describe('BotPanelShellComponent', () => {
       expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
       expect.anything(), expect.anything(), null,
     );
+  });
+
+  describe('the bot’s end (#2607)', () => {
+    const END: BotEndView = {
+      end_at_ms: Date.UTC(2026, 8, 30, 19, 59),
+      end_action: 'SELL',
+      status: 'scheduled',
+      headline: 'Ends Wed Sep 30, 15:59 ET · sells',
+      explanation: 'At Wed Sep 30, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+      notice: null,
+      editable: true,
+    };
+
+    function changeEnd(): HTMLButtonElement {
+      return screen.getByRole<HTMLButtonElement>('button', { name: 'Change end' });
+    }
+
+    async function saveNoEnd(): Promise<HTMLElement> {
+      await userEvent.click(changeEnd());
+      const editor = screen.getByRole('dialog', { name: 'Change this bot’s end' });
+      await userEvent.click(within(editor).getByRole('checkbox', { name: 'No end — run until I stop it' }));
+      await userEvent.click(within(editor).getByRole('button', { name: 'Save end' }));
+      return editor;
+    }
+
+    it('changes the end as a command on the lane the owner was shown, then re-reads the panel', async () => {
+      const editBotEnd = vi.fn().mockResolvedValue({ ...END, end_at_ms: null, status: 'no_end' });
+      const { service } = await renderShell({ end: END, editBotEnd });
+      const reads = service.getLiveSnapshot.mock.calls.length;
+
+      await saveNoEnd();
+
+      await vi.waitFor(() => expect(editBotEnd).toHaveBeenCalledWith(
+        expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4, idempotencyKey: expect.any(String) }),
+        'sid-001',
+        { end_at_ms: null, end_action: 'SELL' },
+      ));
+      await vi.waitFor(() => expect(service.getLiveSnapshot.mock.calls.length).toBeGreaterThan(reads));
+    });
+
+    it('holds Change still while a Stop is on its way, so a change of end never races it', async () => {
+      const pending = deferred<PanelActionResult>();
+      const { fixture } = await renderShell({ end: END, runBotAction: vi.fn().mockReturnValueOnce(pending.promise) });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(changeEnd().disabled).toBe(true);
+      pending.resolve(fakeActionResult());
+      await vi.waitFor(() => expect(changeEnd().disabled).toBe(false));
+    });
+
+    it('sends no Stop while a change of the end is on its way', async () => {
+      const pending = deferred<BotEndView>();
+      const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+      const { fixture } = await renderShell({ end: END, runBotAction, editBotEnd: vi.fn().mockReturnValueOnce(pending.promise) });
+
+      await saveNoEnd();
+      await fixture.whenStable();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+
+      expect(runBotAction).not.toHaveBeenCalled();
+      pending.resolve({ ...END, end_at_ms: null, status: 'no_end' });
+    });
+
+    it('refreshes the lane and the panel after a stale-generation refusal of the end, and shows it', async () => {
+      const directory = provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      });
+      const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+      const editBotEnd = vi.fn().mockRejectedValue(new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.', next_step: 'Reload the lane.' },
+      }));
+      const { service } = await renderShell({ directory, end: END, editBotEnd });
+      const reads = service.getLiveSnapshot.mock.calls.length;
+
+      const editor = await saveNoEnd();
+
+      expect((await within(editor).findByRole('alert')).textContent).toContain('Expected 3 is not 4.');
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(service.getLiveSnapshot.mock.calls.length).toBeGreaterThan(reads);
+      expect(changeEnd().disabled).toBe(false);
+    });
   });
 
   describe('the one view (#2563)', () => {

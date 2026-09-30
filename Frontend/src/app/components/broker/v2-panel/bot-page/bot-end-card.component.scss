@@ -1,0 +1,42 @@
+@use '../../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.bot-end {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.bot-end__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+
+  h3 { margin: 0; color: var(--text-primary); font-size: var(--fs-md); }
+}
+
+.bot-end__change { @include soft-button; }
+
+.bot-end__refusal { margin-bottom: var(--space-3); }
+
+.bot-end__save {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font: inherit;
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+
+  &:hover:not(:disabled) { background: var(--accent-hover); }
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  &:disabled { background: var(--bg-elevated); color: var(--text-muted); cursor: not-allowed; }
+}

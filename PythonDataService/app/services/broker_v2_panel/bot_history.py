@@ -70,6 +70,7 @@ from app.schemas.bot_history import (
     BotHistoryWorld,
 )
 from app.schemas.broker_bots import BotDutyOutcomeView
+from app.services.bot_end import SCHEDULED_END_REASON_CODE
 from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_v2_panel.catalog_projection_service import (
@@ -121,7 +122,6 @@ _STATUS_LABELS: dict[BotHistoryStatus, str] = {
 #: ``BotDutyOutcomeKind`` (a test holds it to that list). A reason code
 #: worded on its own wins over its kind's words.
 _OUTCOME_HEADLINES: dict[str, str] = {
-    "CLOCKED_OUT_FLAT": "Finished its day flat",
     "STOPPED": "Stopped by you",
     "HALTED": "Halted",
     "CRASHED": "Crashed",
@@ -132,6 +132,7 @@ _OUTCOME_HEADLINES: dict[str, str] = {
 _REASON_HEADLINES: dict[str, str] = {
     "FEED_DEATH": "Crashed because market data stopped",
     "SERVICE_SHUTDOWN": "Stopped when the service shut down",
+    SCHEDULED_END_REASON_CODE: "Ended at its scheduled time",
     # Recorded as a stop, since the compensation runs through the normal
     # Stop, but nobody stopped it: its launch failed (#2559).
     ACTIVATION_FAILED_STOP_REASON_CODE: "Failed to launch",

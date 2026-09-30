@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
+from app.schemas.bot_end import BotEnd
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.deployment_budget import DeployBudgetConsent
@@ -83,7 +84,7 @@ ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
 CustodyBoundActivator = Callable[
-    [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
+    [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot, BotEnd | None], Awaitable[BotStatusView]
 ]
 SessionCapabilityResolver = Callable[[str, str], SessionDataCapability | None]
 
@@ -118,6 +119,10 @@ class StartRequest:
     # producer, not a deliberate invariant.
     strategy_param_origins: dict[str, ParameterOrigin] | None = None
     budget_consent: DeployBudgetConsent | None = None
+    # The owner's end for this deployment (#2607): recorded in the bot's
+    # desired state at activation, never in the binding, so it enters no
+    # configuration hash or seal. ``None`` is no end.
+    end: BotEnd | None = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +226,7 @@ def make_start_request(
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
     budget_consent: DeployBudgetConsent | None = None,
+    end: BotEnd | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -238,6 +244,7 @@ def make_start_request(
         exit_terms=exit_terms,
         strategy_param_origins=strategy_param_origins,
         budget_consent=budget_consent,
+        end=end,
     )
 
 
@@ -571,7 +578,7 @@ class BotStartAdmission:
                 )
             activation_ms = self._now_ms()
             binding = binding.model_copy(update={"created_at_ms": activation_ms})
-            bot = await self._activate(binding, feed, activation_ms, custody)
+            bot = await self._activate(binding, feed, activation_ms, custody, request.end)
         return AdmittedBotStart(bot=bot, admission=decision)
 
     @asynccontextmanager

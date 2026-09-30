@@ -28,8 +28,10 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
+from app.engine.strategy.registry import strategy_experimental_notice
 from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
+from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -54,6 +56,7 @@ from app.schemas.run_admission import (
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.bot_end import SCHEDULED_END_REASON_CODE
 from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
@@ -98,6 +101,10 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_CUSTODY_UNPROVABLE": (
         "Stopped; custody unprovable",
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
+    ),
+    SCHEDULED_END_REASON_CODE: (
+        "Ended at its scheduled time",
+        "The Clerk stopped the bot at the end you set. Its end shows whether it sells or keeps its shares.",
     ),
     IMPOSSIBLE_SOURCE_BAR: (
         "Refused: impossible source bar",
@@ -771,6 +778,7 @@ def build_panel(
     feed_continuity_run_id: str | None = None,
     warmup_join: RetainedWarmupJoin | None = None,
     startup_join: RetainedStartupJoin | None = None,
+    end: BotEndView | None = None,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -885,6 +893,7 @@ def build_panel(
             status.strategy_label
             or status.strategy_key.replace("_", " ").replace("-", " ").title()
         ),
+        experimental_notice=strategy_experimental_notice(status.strategy_key),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,
@@ -924,6 +933,7 @@ def build_panel(
         readiness_ready_count=readiness_ready_count,
         readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
         status=bot_status,
+        end=end,
         exposure=exposure,
         working_orders=working_orders,
         recent_decisions=decision_views,

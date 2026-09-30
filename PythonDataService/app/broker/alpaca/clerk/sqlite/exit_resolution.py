@@ -33,6 +33,14 @@ One EXIT is outside the send-time rule: a Dry Run's run-end close
 the simulation at the last price its run saw, not at a market that could hold
 it, so it always sends (:func:`_send_verdict`), and only a simulation can bind
 its price.
+
+One kind of EXIT is narrower than the rule: one whose acceptance records
+``regular_session_only`` -- the sale at a bot's owner-scheduled end
+(``SCHEDULED_END_DECISION_PREFIX``, minted by ``scheduled_end``, #2607) and
+every watchdog re-drive of it. It goes out only as a market order inside the
+regular session; outside it, it holds -- never re-priced as an
+extended-hours limit -- and sells at the next open (owner default, grill
+2026-09-29: "never after hours").
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ from typing import ClassVar, Literal, NamedTuple
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
     LegShape,
+    ProgramLegPolicy,
     ProgramLegRefused,
     regular_session_shape,
 )
@@ -58,6 +67,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     PricingSnapshot,
     RecoveryPricing,
     ReducingLegVerdict,
+    next_redrive_at_ms,
     reducing_leg_session_end_ms,
     reducing_send_verdict,
     reduction_touch,
@@ -145,13 +155,21 @@ tried in its place — and why none could be — is said by the episode's own
 explanation, never by this shared text: a created order being resubmitted is
 never re-priced at all."""
 
-# The two decision-id namespaces documented on ``exit.accept_recovery_exit``
-# (minted by ``safe_flatten_execution`` and ``exit_watchdog`` respectively).
-# Named here, the module both namespaces classify against, so a rename or a
-# third namespace has exactly one declaration to update.
+# The recovery decision-id namespaces documented on
+# ``exit.accept_recovery_exit`` (minted by ``safe_flatten_execution``,
+# ``exit_watchdog`` and ``scheduled_end`` respectively -- the last the sale at
+# a bot's owner-scheduled end, #2607, whose acceptance records
+# ``regular_session_only``). Named here, the module every namespace
+# classifies against, so a rename or another namespace has exactly one
+# declaration to update.
 RECOVERY_FLATTEN_DECISION_PREFIX = "recovery-flatten-"
 EXIT_REDRIVE_DECISION_PREFIX = "exit-redrive-"
-_RECOVERY_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, EXIT_REDRIVE_DECISION_PREFIX)
+SCHEDULED_END_DECISION_PREFIX = "scheduled-end-"
+_RECOVERY_DECISION_PREFIXES = (
+    RECOVERY_FLATTEN_DECISION_PREFIX,
+    EXIT_REDRIVE_DECISION_PREFIX,
+    SCHEDULED_END_DECISION_PREFIX,
+)
 # The panel's flatten-and-stop decides its EXIT under this namespace (it is
 # colon-bearing, so the facade stores it encoded). With the safe flatten's,
 # the two namespaces an owner's own flatten is recorded under (#2574).
@@ -160,6 +178,28 @@ OWNER_FLATTEN_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, PANEL_FLATT
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
 DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
+
+#: The hold of an EXIT that sells only inside the regular session, met
+#: outside it (``ExitAcceptedFacts.regular_session_only``, #2607).
+SCHEDULED_END_WAITS_FOR_OPEN = "SCHEDULED_END_WAITS_FOR_OPEN"
+
+
+def regular_session_sale_waits_for_open(now_ms: int) -> LegRefusal:
+    """Why a regular-session-only sale is held, and when it can go out: the next regular open.
+
+    A hold, not a failure: the EXIT keeps custody and the pass re-drives it
+    until the regular session opens (#2607).
+    """
+    return LegRefusal(
+        reason_code=SCHEDULED_END_WAITS_FOR_OPEN,
+        explanation=(
+            "This sale is for a bot's scheduled end, which sells only in regular hours, and the market "
+            "is closed. It waits for the next regular session and goes out at the open as a market order; "
+            "it never goes out after hours."
+        ),
+        next_step="Nothing to do: the Clerk sends the sale when the market opens.",
+        available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
 
 
 async def resolve_exit(
@@ -860,12 +900,19 @@ def _send_verdict(
 
     That close fills at a price its run already saw, never at the market, so
     no session, halt or missing quote can hold it (owner decision 2026-09-29).
+    A regular-session-only EXIT (the sale at a scheduled end, and its
+    re-drives) sends only its market leg: where any other EXIT would be
+    re-priced for the session open now, it holds for the next regular
+    session instead (#2607).
     """
     if _exit_intent(facts) == "run_end_close":
         return "send"
-    return reducing_send_verdict(
+    verdict = reducing_send_verdict(
         extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms, liveness=liveness,
     )
+    if facts.regular_session_only and verdict == "wait":
+        return regular_session_sale_waits_for_open(now_ms)
+    return verdict
 
 
 def _created_leg_may_be_sent(
@@ -1811,10 +1858,12 @@ def _exit_intent(facts: ExitAcceptedFacts) -> _ExitIntent:
     """What an EXIT is, read once from the decision id it was accepted under.
 
     ``decision`` -- a deciding program's or the panel's own EXIT, bound to its
-    decision bar. ``recovery`` -- the operator's safe flatten or the
-    watchdog's re-drive, priced from the live quote. ``run_end_close`` -- a
-    Dry Run's simulation closing what an ended run left, at the last price it
-    saw. Both of the latter are recovery EXITs (``accept_recovery_exit``).
+    decision bar. ``recovery`` -- the operator's safe flatten, the watchdog's
+    re-drive or the Clerk's sale at a bot's owner-scheduled end, priced from
+    the live quote (the last in the regular session only, as its acceptance
+    records). ``run_end_close`` -- a Dry Run's simulation closing what an
+    ended run left, at the last price it saw. The last two are recovery EXITs
+    (``accept_recovery_exit``).
     """
     if facts.decision_id.startswith(DRY_RUN_CLOSE_DECISION_PREFIX):
         return "run_end_close"

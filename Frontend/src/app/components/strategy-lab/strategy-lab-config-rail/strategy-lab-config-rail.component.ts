@@ -2,6 +2,7 @@ import { NgTemplateOutlet } from "@angular/common";
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
+import { ExperimentalNoticeComponent } from "../../../shared/experimental-notice/experimental-notice.component";
 import { DEFAULT_ADJUSTMENT_MODE } from '../../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
 import { InstrumentCardComponent } from "../../../shared/ticker-range-picker/parts/instrument-card.component";
@@ -23,7 +24,7 @@ interface StrategyLabPrimaryAction {
 
 @Component({
   selector: "app-strategy-lab-config-rail",
-  imports: [NgTemplateOutlet, InstrumentCardComponent, TimeWindowCardComponent],
+  imports: [ExperimentalNoticeComponent, NgTemplateOutlet, InstrumentCardComponent, TimeWindowCardComponent],
   templateUrl: "./strategy-lab-config-rail.component.html",
   styleUrl: "./strategy-lab-config-rail.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,

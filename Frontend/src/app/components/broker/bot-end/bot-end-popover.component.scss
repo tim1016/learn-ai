@@ -1,0 +1,10 @@
+@use '../../../styles/popover-panel' as *;
+
+// The dialog is its own box over the page; its host takes no room where it sits.
+:host { display: contents; }
+
+.bot-end-popover {
+  @include popover-panel(26rem);
+
+  > app-bot-end-editor { margin-bottom: var(--space-3); }
+}

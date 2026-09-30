@@ -7,6 +7,7 @@ cannot drift into separate guard implementations.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -32,6 +33,8 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenResult,
 )
 from app.broker.contract.errors import BrokerError
+
+logger = logging.getLogger(__name__)
 
 
 class RecoveryExecutionError(Exception):
@@ -186,6 +189,14 @@ async def execute_recovery_action(
             raise RecoveryExecutionError(
                 "The stop target does not match the run authorized by the presented action."
             )
+        # The owner's Stop sells nothing at the end time (#2607): its end is
+        # cancelled before the STOP commits, so nothing that runs between the
+        # STOP and the process stop reads the end as still to be carried out.
+        # Should the STOP then fail, the bot runs on with no end: the end is
+        # the owner's, and they asked to Stop -- they are told the Stop
+        # failed, and the bot runs until they Stop it again. Nothing restores
+        # the end: a restored SELL end would sell what the owner meant to keep.
+        await cancel_bot_end(strategy_instance_id, updated_by="operator_recovery")
         submission = await facade.stop_strategy_run(
             strategy_instance_id=strategy_instance_id,
             run_id=capability.execution_ref,
@@ -291,6 +302,30 @@ async def execute_recovery_action(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
         "it has no direct broker mutation"
     )
+
+
+async def cancel_bot_end(strategy_instance_id: str, *, updated_by: str) -> None:
+    """An operator's Stop cancels the bot's scheduled end, before its STOP commits (#2607).
+
+    Through the registry that keeps the end (``BotTaskRegistry.cancel_end``),
+    whether or not it runs the bot's process: the panel's Stop and the raw
+    ``runs/stop`` route (#2664) both call it. A process with no registry
+    installs no end schedule either (``scheduled_end.install_bot_end_schedule``),
+    so no end is carried out here; the Stop goes on, and that is said -- the
+    Clerk's routes and the runner are installed together, so a Stop that
+    finds no runner is a process set up wrong.
+    """
+    from app.services.bot_runner import get_bot_task_registry
+
+    registry = get_bot_task_registry()
+    if registry is None:
+        logger.error(
+            "A Stop found no bot runner in this process, so it cancelled no end. This process installs no end "
+            "schedule and carries out no end; the Stop went on",
+            extra={"action": "bot_end_cancel_no_runner", "strategy_instance_id": strategy_instance_id},
+        )
+        return
+    await registry.cancel_end(strategy_instance_id, updated_by=updated_by)
 
 
 async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None) -> None:

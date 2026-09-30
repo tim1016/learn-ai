@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.canary_admission import CanaryRollbackDecision
 from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.bot_carryover import StopCustodyOutcome, prove_stop_outcome
+from app.services.bot_carryover import StopCustodyOutcome, prove_stop_outcome, record_stop_outcome
 from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE, BotRunEvidenceService
@@ -20,6 +22,13 @@ from app.services.bot_runtime import ManagedBot
 
 _UPDATED_BY = "bot_runner"
 logger = logging.getLogger(__name__)
+
+#: How long a stop at a bot's end waits for a Clerk pass that saw the bot's
+#: every transition: the pass that ended it, or failing that the account's
+#: next sweeps (every 15 s). Past it the stop records its custody unproven.
+END_STOP_PROOF_WAIT_S = 45.0
+#: How often that wait looks again at the Clerk's latest published pass.
+END_STOP_PROOF_POLL_S = 0.5
 
 
 class BotRunTerminalRecorder:
@@ -180,19 +189,57 @@ class BotRunTerminalRecorder:
         canary_rollback: CanaryRollbackDecision | None = None,
     ) -> None:
         """Replace provisional stop evidence with the Clerk-proven outcome."""
-        outcome = BotDutyOutcome(
+        self._run_evidence.record_terminal(
+            binding.strategy_instance_id,
+            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+            updated_by=_UPDATED_BY,
+            reason=reason_code,
+        )
+
+    def record_replaced_run_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None,
+    ) -> None:
+        """Record the proven stop of a run a later run of the bot already replaced (#2607).
+
+        Only the stopped run's own receipt, keyed by its run id: the lifecycle
+        projection is the later run's now, and a terminal projected there would
+        stand over that run's own.
+        """
+        self._run_evidence.record_terminal_receipt(
+            binding.strategy_instance_id,
+            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+        )
+
+    def _proven_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None,
+    ) -> BotDutyOutcome:
+        return BotDutyOutcome(
             kind="STOPPED",
             reason_code=reason_code,
             recorded_at_ms=self._now_ms(),
             run_id=binding.run_id,
             canary_rollback=canary_rollback,
         )
-        self._run_evidence.record_terminal(
-            binding.strategy_instance_id,
-            outcome,
-            updated_by=_UPDATED_BY,
-            reason=reason_code,
-        )
+
+
+class StopProver(Protocol):
+    """How a stopped run's custody outcome is proven: :func:`prove_terminal_stop_outcome` or :func:`prove_end_stop_outcome`."""
+
+    async def __call__(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        checkpoint_path: Path,
+        now_ms: Callable[[], int],
+    ) -> StopCustodyOutcome: ...
 
 
 async def prove_terminal_stop_outcome(
@@ -220,3 +267,49 @@ async def prove_terminal_stop_outcome(
         checkpoint_path=checkpoint_path,
         now_ms=now_ms,
     )
+
+
+async def prove_end_stop_outcome(
+    binding: BrokerBotBinding,
+    *,
+    checkpoint_path: Path,
+    now_ms: Callable[[], int],
+    wait_s: float = END_STOP_PROOF_WAIT_S,
+    poll_s: float = END_STOP_PROOF_POLL_S,
+) -> StopCustodyOutcome:
+    """The custody outcome of a stop at the bot's end, proven by the Clerk's own pass (#2607).
+
+    The Clerk's pass stopped the run at its end, cancelled its entries and put
+    in its sale, then compared the account with Alpaca once more: that
+    comparison is this stop's proof. A reconcile of the stop's own would run
+    one whole account pass per bot, and every bot on the default end stops in
+    the same minute. So the stop reads the latest published pass
+    (``published_custody``) until one saw the bot's every transition and no
+    longer lists any of its orders as working or unresolved -- the pass that
+    ended it, or the next sweep once the sale filled -- and never reconciles
+    itself. Past ``wait_s`` the latest pass is recorded as it stands -- a
+    sale still working is custody unproven -- and with none the custody is
+    unproven; the account's sweeps go on proving it.
+    """
+    from app.broker.alpaca.clerk import get_alpaca_clerk
+
+    sid = binding.strategy_instance_id
+    deadline = time.monotonic() + wait_s
+    while True:
+        clerk = get_alpaca_clerk()
+        proof = None if clerk is None else await clerk.published_custody(sid)
+        expired = time.monotonic() >= deadline
+        if proof is not None and (expired or not (proof.working_order_refs or proof.unresolved_intent_refs)):
+            return record_stop_outcome(binding, proof, checkpoint_path=checkpoint_path, now_ms=now_ms)
+        if expired:
+            logger.warning(
+                "A bot stopped at its end before any Clerk pass proved its custody",
+                extra={
+                    "action": "end_stop_custody_unproven",
+                    "strategy_instance_id": sid,
+                    "clerk_installed": clerk is not None,
+                    "waited_s": wait_s,
+                },
+            )
+            return "STOPPED_CUSTODY_UNPROVABLE"
+        await asyncio.sleep(poll_s)

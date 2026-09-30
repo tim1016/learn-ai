@@ -1,5 +1,6 @@
 @use '../../../styles/eyebrow-heading' as *;
 @use '../../../styles/filled-controls' as *;
+@use '../../../styles/popover-panel' as *;
 @use '../../../styles/visually-hidden' as *;
 
 // Deploy (PRD #2560 D8): What → How → Money → Confirm. Four columns where the
@@ -39,8 +40,13 @@
 
 .deploy-steps--columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+// Confirm is the tallest step: its review wraps backend prose, and Live adds
+// the typed consent. Widest where it wraps most, and What — short rows that
+// truncate rather than wrap — narrowest, so every step fits 1280×720 (#2607).
 @media (min-width: 75rem) {
-  .deploy-steps--columns { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.15fr); }
+  .deploy-steps--columns {
+    grid-template-columns: minmax(0, 0.8fr) repeat(2, minmax(0, 1fr)) minmax(0, 1.35fr);
+  }
 }
 
 .sr-only { @include visually-hidden; }
@@ -92,7 +98,18 @@
   }
 }
 
-.deploy-exit-terms__steps { color: var(--text-subtle); }
+.deploy-exit-terms__steps-open {
+  @include info-tip;
+  margin-left: var(--space-1);
+  vertical-align: middle;
+  text-transform: none;
+}
+
+.deploy-exit-steps {
+  @include popover-panel(32rem);
+
+  > p { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.5; }
+}
 
 // A number field with its unit inside the fill, clear of the typed digits.
 .deploy-unit {

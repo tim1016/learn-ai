@@ -567,7 +567,7 @@ describe('AlpacaHomeComponent', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Stop this bot?' });
     expect(within(dialog).getByText('Stop the bot making new decisions. Stopping doesn\'t sell its shares.')).toBeTruthy();
-    expect(within(dialog).getByText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account.')).toBeTruthy();
+    expect(within(dialog).getByText('The bot stops making new decisions. A sale already sent can still go through. Cash it isn\'t using goes back to the account. Its scheduled end is cancelled: nothing is sold at the end time.')).toBeTruthy();
     await vi.waitFor(() => expect(document.activeElement).toBe(within(dialog).getByTestId('typed-halt-confirm-cancel')));
     expect(panel.runBotAction).not.toHaveBeenCalled();
 
