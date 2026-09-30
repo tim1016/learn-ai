@@ -1796,8 +1796,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One bot's owner-set end, in the owner's words (#2607) */
-        get: operations["read_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_get"];
+        get?: never;
         /** Change a bot's end or its sell/keep choice now, with no restart and no seal touched (#2607) */
         put: operations["edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put"];
         post?: never;
@@ -8565,7 +8564,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8784,7 +8784,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8893,7 +8894,7 @@ export interface components {
             carryover_explanation: string;
             /** Carryover Label */
             carryover_label: string;
-            default_end?: components["schemas"]["BotEndView"] | null;
+            default_end: components["schemas"]["BotEndView"];
             default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             dry_run_eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
@@ -10102,25 +10103,30 @@ export interface components {
          * BotEndInput
          * @description The owner's choice of end, as Deploy and the bot panel send it.
          *
-         *     ``end_at_ms`` is required and may be ``null``: ``null`` is the explicit
-         *     "no end" choice. A Deploy that sends no end at all gets the default end.
+         *     Both fields are required. ``end_at_ms`` ``null`` is the explicit "no
+         *     end" choice, sent with ``end_action`` ``SELL``: a bot with no end has no
+         *     shares to keep at one. A Deploy that sends no ``end`` at all gets the
+         *     default end.
          */
         BotEndInput: {
             /**
              * End Action
-             * @default SELL
              * @enum {string}
              */
-            end_action?: "SELL" | "KEEP";
+            end_action: "SELL" | "KEEP";
             /** End At Ms */
             end_at_ms: number | null;
         };
         /**
          * BotEndPreviewRequest
          * @description Check an end on the Deploy form before the bot exists.
+         *
+         *     ``end`` omitted previews the default end; an explicit ``null`` is refused
+         *     (:data:`EXPLICIT_NULL_END`).
          */
         BotEndPreviewRequest: {
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             /**
              * Execution Mode
              * @enum {string}
@@ -10131,8 +10137,8 @@ export interface components {
          * BotEndView
          * @description A bot's end in the owner's words, authored by the backend.
          *
-         *     ``headline`` is the one line the panel shows ("Ends today 15:59 ET ·
-         *     sells"); ``explanation`` says what will happen, or what happened.
+         *     ``headline`` is the one line the panel shows ("Ends Wed Sep 30, 15:59 ET
+         *     · sells"); ``explanation`` says what will happen, or what happened.
          *     ``notice`` is set only when the chosen time was moved, e.g. to one minute
          *     before an early close. ``editable`` says whether the panel may offer to
          *     change it now.
@@ -32372,41 +32378,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotDeployPrefill"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotEndView"];
                 };
             };
             /** @description Validation Error */

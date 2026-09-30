@@ -113,12 +113,13 @@ from app.services.bot_clerk_lifecycle import (
 from app.services.bot_dry_run import DryRunActivity
 from app.services.bot_end import (
     SCHEDULED_END_REASON_CODE,
-    BotEndRefused,
     bot_end_view,
+    end_edit_refusal,
     resolve_bot_end,
 )
 from app.services.bot_lifecycle_projection import (
     ActiveSqliteAlpacaLifecycleAuthority,
+    AlpacaLifecycleAuthorityUnavailableError,
     AlpacaLifecycleProjector,
     ProjectionStatus,
 )
@@ -133,6 +134,7 @@ from app.services.bot_run_evidence import (
 )
 from app.services.bot_run_terminal import (
     BotRunTerminalRecorder,
+    prove_end_stop_outcome,
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
@@ -539,8 +541,15 @@ class BotTaskRegistry:
         self._replay_receipt_tasks: set[asyncio.Task[None]] = set()
         # #2607: the stops the Clerk asked for at bots' ends, and the watch
         # that asks each running bot's Clerk for a pass when its end comes.
-        self._end_stop_tasks: set[asyncio.Task[None]] = set()
+        # One stop at a time per bot; the bots whose end could not be read and
+        # the failure each due end last met, each said once (#2607).
+        self._end_stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._end_watch_task: asyncio.Task[None] | None = None
+        self._unreadable_end_sids: set[str] = set()
+        # The stopped bots whose end may still come (``_record_ends_of_stopped_dry_runs``).
+        self._stopped_end_candidates: set[str] = set()
+        self._stopped_end_candidates_seeded = False
+        self._end_watch_failures: dict[str, str] = {}
         # #2155 / #2269: lane-level refusals (drained, awaiting go-live),
         # probed in order per deployment so a flag the lane learns lands on
         # the next operator action without a process restart. Empty (tests,
@@ -1125,7 +1134,11 @@ class BotTaskRegistry:
         outcome = "OPERATOR_STOP"
         canary_rollback: CanaryRollbackDecision | None = None
         if broker == "alpaca" and managed.binding.mode == "trade":
-            outcome = await prove_terminal_stop_outcome(
+            # At its end the Clerk's own pass is the proof: every bot on the
+            # default end stops in the same minute, and a reconcile each
+            # would be one whole account pass per bot (#2607).
+            prove = prove_end_stop_outcome if at_its_end else prove_terminal_stop_outcome
+            outcome = await prove(
                 managed.binding,
                 checkpoint_path=self._carryover_checkpoint_path(strategy_instance_id),
                 now_ms=self._now_ms,
@@ -1291,7 +1304,7 @@ class BotTaskRegistry:
             with suppress(asyncio.CancelledError):
                 await watch
         if self._end_stop_tasks:
-            await asyncio.wait(set(self._end_stop_tasks), timeout=_STOP_TIMEOUT_S)
+            await asyncio.wait(set(self._end_stop_tasks.values()), timeout=_STOP_TIMEOUT_S)
         stopping: list[ManagedBot] = []
         for managed in self._bots.values():
             if managed.task.done():
@@ -1348,40 +1361,33 @@ class BotTaskRegistry:
     ) -> BotEndView:
         """Change a bot's end now: no restart, no seal, no binding touched.
 
-        Allowed while the bot runs, or while an end the Clerk has still to
-        carry out is pending (a bot whose run died). Refused once that end has
-        come -- the Clerk is carrying it out -- and for a bot that has stopped
-        with no end pending. Raises :class:`BotEndRefused` in plain words.
+        Whether it may change now is ``bot_end.end_edit_refusal``'s answer --
+        the one the view's ``editable`` gives too. Raises
+        :class:`BotEndRefused` in plain words.
         """
         async with self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
             repo = self._desired_repo(strategy_instance_id)
             now = self._now_ms()
             record = repo.read()
-            pending = None if record is None else record.pending_end()
-            if pending is not None and pending.end_at_ms <= now:
-                raise BotEndRefused(
-                    "This bot's end has come; the Clerk is carrying it out.",
-                    detail="An end can be changed only before its time.",
-                    next_action="The bot page shows how it ended once the Clerk is done.",
-                    http_status=409,
-                )
-            if pending is None and not self._is_running(strategy_instance_id):
-                raise BotEndRefused(
-                    "This bot has stopped, so it has no end to change.",
-                    detail="A bot's end can be changed while it runs, or while an end is still to come.",
-                    next_action="Deploy the bot again to give it a new end.",
-                    http_status=409,
-                )
-            resolved = resolve_bot_end(choice, now_ms=now, dry_run=binding.mode == "dry_run")
+            refusal = end_edit_refusal(
+                None if record is None else record.pending_end(),
+                running=self._is_running(strategy_instance_id),
+                now_ms=now,
+            )
+            if refusal is not None:
+                raise refusal
+            resolved = resolve_bot_end(
+                choice, now_ms=now, dry_run=binding.mode == "dry_run", use_rth=binding.use_rth,
+            )
             record = repo.set_end(resolved.end, updated_by=updated_by, now_ms=now)
             logger.info(
                 "The owner changed a bot's end",
                 extra={
                     "action": "bot_end_edited",
                     "strategy_instance_id": strategy_instance_id,
-                    "end_at_ms": record.end_at_ms,
-                    "end_action": record.end_action,
+                    "end_at_ms": None if resolved.end is None else resolved.end.end_at_ms,
+                    "end_action": None if resolved.end is None else resolved.end.end_action,
                 },
             )
             return self._bot_end_view(binding, record, now_ms=now, notice=resolved.notice)
@@ -1395,37 +1401,62 @@ class BotTaskRegistry:
         ]
 
     def _pending_end(self, strategy_instance_id: str) -> BotEnd | None:
-        """The bot's end still to be carried out; ``None``, loudly, when its desired state cannot be read.
+        """The bot's end still to be carried out (``_desired_record_for_end``)."""
+        record = self._desired_record_for_end(strategy_instance_id)
+        return None if record is None else record.pending_end()
 
-        Such an end cannot be carried out until the file is repaired.
+    def _desired_record_for_end(self, strategy_instance_id: str) -> DesiredStateRecord | None:
+        """The bot's desired state as its end reads it; ``None`` when absent or unreadable.
+
+        An unreadable file's end cannot be carried out until the file is
+        repaired. That is said once, loudly, when it becomes unreadable -- not
+        on every pass and every look of the watch -- and once more when it
+        can be read again.
         """
         try:
             record = self._desired_repo(strategy_instance_id).read()
         except (ValueError, OSError, DesiredStateCorruptError) as exc:
-            logger.error(
-                "A bot's end could not be read, so the Clerk cannot carry it out",
-                extra={"action": "bot_end_unreadable", "strategy_instance_id": strategy_instance_id, "error": str(exc)},
-            )
+            if strategy_instance_id not in self._unreadable_end_sids:
+                self._unreadable_end_sids.add(strategy_instance_id)
+                logger.error(
+                    "A bot's end could not be read, so the Clerk cannot carry it out",
+                    extra={
+                        "action": "bot_end_unreadable",
+                        "strategy_instance_id": strategy_instance_id,
+                        "error": str(exc),
+                    },
+                )
             return None
-        return None if record is None else record.pending_end()
+        if strategy_instance_id in self._unreadable_end_sids:
+            self._unreadable_end_sids.discard(strategy_instance_id)
+            logger.info(
+                "A bot's end can be read again",
+                extra={"action": "bot_end_readable_again", "strategy_instance_id": strategy_instance_id},
+            )
+        return record
 
     def stop_bot_at_its_end(self, strategy_instance_id: str, lifecycle_run_id: str) -> None:
-        """The Clerk committed the run's STOP at its end: fence the bot now, stop its task next.
-
-        Stop's fence (``run_gate``) is raised at once, so the bot makes no
-        further decision; the rest of Stop -- cancel, terminal evidence,
-        release -- runs as its own task, because it reconciles, and the Clerk's
-        pass that asks for it holds the reconciliation lock.
-        """
+        """The Clerk committed the run's STOP at its end: fence the bot now, stop its task next."""
         managed = self._bots.get(strategy_instance_id)
         if managed is None or managed.task.done() or managed.binding.run_id != lifecycle_run_id:
             return
+        self._start_stop_at_its_end(managed)
+
+    def _start_stop_at_its_end(self, managed: ManagedBot) -> None:
+        """Raise Stop's fence (``run_gate``) at once, then stop the process in a task of its own.
+
+        The fence means the bot makes no further decision. The rest of Stop --
+        cancel, terminal evidence, release -- runs as its own task: the
+        Clerk's pass that asks for it is still running, and the stop's proof
+        is that pass once published. One such task per bot at a time.
+        """
+        sid = managed.binding.strategy_instance_id
         managed.run_gate.clear()
-        task = asyncio.get_running_loop().create_task(
-            self._stop_at_its_end(managed.binding), name=f"bot-end:{strategy_instance_id}"
-        )
-        self._end_stop_tasks.add(task)
-        task.add_done_callback(self._end_stop_tasks.discard)
+        if sid in self._end_stop_tasks:
+            return
+        task = asyncio.get_running_loop().create_task(self._stop_at_its_end(managed.binding), name=f"bot-end:{sid}")
+        self._end_stop_tasks[sid] = task
+        task.add_done_callback(lambda _done: self._end_stop_tasks.pop(sid, None))
 
     def record_end_carried_out(self, end: ScheduledEnd, *, at_ms: int) -> None:
         """The end schedule's report: the Clerk carried ``end`` out."""
@@ -1451,14 +1482,15 @@ class BotTaskRegistry:
         except Exception:
             # Its own task, so nothing above it can report the failure. The
             # run is already stopped at the Clerk and fenced here; what failed
-            # is the process stop and its evidence.
+            # is the process stop and its evidence, which the end watch
+            # retries while the process still runs.
             logger.exception(
                 "A bot could not be stopped at its end; the Clerk already stopped its run",
                 extra={"action": "bot_end_process_stop_failed", "strategy_instance_id": sid, "run_id": binding.run_id},
             )
 
     def start_end_watch(self) -> asyncio.Task[None]:
-        """Start asking each running bot's Clerk for a pass when the bot's end comes."""
+        """Start carrying each due end forward from the runner's side (:meth:`carry_out_due_ends`)."""
         if self._end_watch_task is None or self._end_watch_task.done():
             self._end_watch_task = asyncio.get_running_loop().create_task(self._watch_ends(), name="bot-end-watch")
         return self._end_watch_task
@@ -1472,32 +1504,115 @@ class BotTaskRegistry:
             await asyncio.sleep(_END_WATCH_INTERVAL_S)
 
     async def carry_out_due_ends(self) -> None:
-        """Ask the Clerk of each running bot whose end has come for a pass now.
+        """Carry each end that has come forward from the runner's side; the Clerk's pass does the rest.
 
-        The account's periodic sweep would carry the end out within its
-        interval; a Dry Run's own Clerk has no periodic sweep, so without this
-        its end would wait for the next time its account is opened. Each end
-        is asked for once; a pass that failed is asked for again on the next
-        look. A bot already fenced -- one pass reaches every due bot on its
-        account -- is not asked for at all.
+        For each running bot whose end has come:
+
+        * its run still ACTIVE at the Clerk: ask the bot's Clerk for a pass
+          now, once per end and again after a failed pass. The account's
+          periodic sweep would reach the end within its interval; a Dry Run's
+          own Clerk has no periodic sweep.
+        * its run already stopped at the Clerk -- a pass fenced it, but the
+          process stop it asked for failed or never came: stop the process
+          now. Meanwhile the bot decides nothing: a fenced bot only observes,
+          and the Clerk refuses the next decision of one whose fence never
+          came.
+
+        And a stopped Dry Run whose end has come has it recorded carried out
+        (:meth:`_record_ends_of_stopped_dry_runs`).
         """
         now = self._now_ms()
         for sid, managed in list(self._bots.items()):
-            # Fenced already: one pass reaches every due bot on its account.
-            if managed.task.done() or not managed.run_gate.is_set():
+            if managed.task.done() or sid in self._end_stop_tasks:
                 continue
             pending = self._pending_end(sid)
-            if pending is None or pending.end_at_ms > now or managed.end_pass_asked_for_ms == pending.end_at_ms:
+            if pending is None or pending.end_at_ms > now:
                 continue
-            try:
-                await self._authority_for(managed.binding).reconcile_for_end()
-            except Exception:
-                logger.exception(
-                    "A bot's Clerk could not run its pass at the bot's end; the watch asks again",
-                    extra={"action": "bot_end_pass_failed", "strategy_instance_id": sid},
-                )
+            await self._carry_out_due_end(managed, pending)
+        self._record_ends_of_stopped_dry_runs(now)
+
+    async def _carry_out_due_end(self, managed: ManagedBot, pending: BotEnd) -> None:
+        sid = managed.binding.strategy_instance_id
+        authority = self._authority_for(managed.binding)
+        try:
+            active = authority.lifecycle_projector().run_is_active(
+                strategy_instance_id=sid, run_id=managed.binding.run_id,
+            )
+        except (StartAdmissionUnavailable, AlpacaLifecycleAuthorityUnavailableError) as exc:
+            self._end_watch_failed(sid, exc)
+            return
+        if not active:
+            logger.warning(
+                "A bot's run was stopped at its end while its process still ran; stopping the process now",
+                extra={"action": "bot_end_process_restopped", "strategy_instance_id": sid, "run_id": managed.binding.run_id},
+            )
+            self._start_stop_at_its_end(managed)
+            return
+        if managed.end_pass_asked_for_ms == pending.end_at_ms:
+            return
+        try:
+            await authority.reconcile_for_end()
+        except Exception as exc:
+            self._end_watch_failed(sid, exc)
+            return
+        self._end_watch_failures.pop(sid, None)
+        managed.end_pass_asked_for_ms = pending.end_at_ms
+
+    def _end_watch_failed(self, strategy_instance_id: str, exc: Exception) -> None:
+        """Say why a due end could not be carried forward: once per kind of failure, then quietly.
+
+        The watch looks again every few seconds, so the same failure -- no
+        account Clerk installed, a Dry Run's account closed -- is logged when
+        it starts, with its stack only when it is not one of those expected
+        refusals, and at debug while it lasts.
+        """
+        kind = type(exc).__name__
+        extra = {"action": "bot_end_pass_failed", "strategy_instance_id": strategy_instance_id, "error": str(exc)}
+        if self._end_watch_failures.get(strategy_instance_id) == kind:
+            logger.debug("A bot's end still cannot be carried forward", extra=extra)
+            return
+        self._end_watch_failures[strategy_instance_id] = kind
+        message = "A bot's end has come but its Clerk could not run its pass; the watch asks again"
+        if isinstance(exc, (StartAdmissionUnavailable, AlpacaLifecycleAuthorityUnavailableError)):
+            logger.warning(message, extra=extra)
+        else:
+            logger.error(message, exc_info=exc, extra=extra)
+
+    def _record_ends_of_stopped_dry_runs(self, now_ms: int) -> None:
+        """Record carried out the end of every stopped Dry Run once it comes.
+
+        A stopped Dry Run has nothing left for its end to do: its run is over,
+        and its simulation closed what it held at the last price it saw when
+        the run ended (#2641). Its account may be closed, so no pass of its
+        Clerk would ever come to record the end -- it would read as due
+        forever. A bot whose owner wants it running (a restart's restoration
+        is pending) is left to its run.
+
+        Only candidates are read, never every bot on every look: every bot
+        with a desired state on the first look (what the last process left),
+        then each Dry Run whose run ends here (``_supervise``). A candidate is
+        dropped once it runs, has no end left, or is no Dry Run.
+        """
+        if not self._stopped_end_candidates_seeded:
+            self._stopped_end_candidates_seeded = True
+            self._stopped_end_candidates.update(instances_with_recorded_desired_state(self._artifacts_root))
+        for sid in sorted(self._stopped_end_candidates):
+            record = None if self._is_running(sid) else self._desired_record_for_end(sid)
+            pending = None if record is None else record.pending_end()
+            if record is None or pending is None:
+                self._stopped_end_candidates.discard(sid)
                 continue
-            managed.end_pass_asked_for_ms = pending.end_at_ms
+            if pending.end_at_ms > now_ms or record.desired_state is not DesiredState.STOPPED:
+                continue
+            self._stopped_end_candidates.discard(sid)
+            binding = self._read_binding(sid)
+            if binding is None or binding.mode != "dry_run":
+                continue  # a trading bot's end is its account Clerk's to carry out
+            self.record_end_carried_out(ScheduledEnd(strategy_instance_id=sid, end=pending), at_ms=now_ms)
+            logger.info(
+                "Recorded a stopped Dry Run's end carried out: its simulation closed what it held when its run ended",
+                extra={"action": "dry_run_end_recorded", "strategy_instance_id": sid, "end_at_ms": pending.end_at_ms},
+            )
 
     def _bot_end_view(
         self,
@@ -1507,15 +1622,11 @@ class BotTaskRegistry:
         now_ms: int,
         notice: str | None = None,
     ) -> BotEndView:
-        running = self._is_running(binding.strategy_instance_id)
-        pending = None if record is None else record.pending_end()
         return bot_end_view(
-            None if record is None else record.recorded_end(),
-            carried_out=record is not None and record.end_carried_out_at_ms is not None,
+            None if record is None else record.end,
             now_ms=now_ms,
             dry_run=binding.mode == "dry_run",
-            running=running,
-            editable=(running and pending is None) or (pending is not None and pending.end_at_ms > now_ms),
+            running=self._is_running(binding.strategy_instance_id),
             notice=notice,
         )
 
@@ -1870,6 +1981,9 @@ class BotTaskRegistry:
             # removes it from ``_bots``.
             managed = self._bots.get(sid)
             self._terminal.reap(sid, binding.run_id)
+            if binding.mode == "dry_run":
+                # Its end, if one is still to come, is recorded when it comes (#2607).
+                self._stopped_end_candidates.add(sid)
             # An operator/service STOP performs a second, authoritative
             # terminal projection after this task unwinds. Keep its exact
             # synthetic authority alive until that projection completes;

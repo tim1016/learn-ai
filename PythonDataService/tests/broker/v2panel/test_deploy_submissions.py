@@ -16,6 +16,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import (
@@ -23,6 +24,7 @@ from app.engine.strategy.registry import (
     StrategyCatalogError,
     validate_deploy_codes,
 )
+from app.schemas.broker_bots import AlpacaDeploySubmission
 from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeployBudgetConsent
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -420,6 +422,43 @@ async def test_the_same_key_with_other_settings_is_refused_with_409_and_nothing_
     assert changed.json()["detail"]["submission_settled"] is False
     assert len(budgeted.registry.deploy_calls) == 1
 
+
+async def test_the_same_key_with_another_end_is_refused_with_409_and_nothing_starts(budgeted) -> None:
+    """#2607 review: the end stays out of consent, which the owner may outlive by
+    changing it; but a submission key binds the end its request named, so the same
+    key resent with another end is another Deploy."""
+    no_end = {**_BUDGETED, "end": {"end_at_ms": None, "end_action": "SELL"}}
+
+    async with _client(budgeted.app) as client:
+        first = await client.post(_BOTS, json=no_end)
+        default_end = await client.post(_BOTS, json=_BUDGETED)
+
+    assert first.status_code == 201
+    assert default_end.status_code == 409
+    assert default_end.json()["detail"]["reason_code"] == "deploy_submission_settings_conflict"
+    assert len(budgeted.registry.deploy_calls) == 1
+
+
+async def test_the_same_key_with_the_same_end_is_the_same_deploy(budgeted) -> None:
+    no_end = {**_BUDGETED, "end": {"end_at_ms": None, "end_action": "SELL"}}
+
+    async with _client(budgeted.app) as client:
+        first = await client.post(_BOTS, json=no_end)
+        retry = await client.post(_BOTS, json=no_end)
+
+    assert first.status_code == retry.status_code == 201
+    assert retry.json() == first.json()
+    assert len(budgeted.registry.deploy_calls) == 1
+
+
+def test_a_key_sent_with_no_end_binds_exactly_what_it_bound_before_ends_existed() -> None:
+    """Every key recorded before #2607 still matches its resend: a request with no end
+    binds the settings and the account alone, byte for byte."""
+    request = AlpacaDeploySubmission.model_validate(_BUDGETED)
+
+    assert panel_deploy._submission_fingerprint(ACCT, request) == request.fingerprint(
+        account=canonical_alpaca_account_id(ACCT),
+    )
 
 async def test_a_deploy_refused_before_the_commit_checks_claims_no_name(budgeted, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse_consent(account_id: str, request: object, *, resolved_parameters: dict) -> DeployBudgetConsent:

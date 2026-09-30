@@ -719,6 +719,6 @@ async def test_a_running_dry_run_is_stopped_at_its_end_and_sold_at_the_last_pric
     assert registry.pending_ends([SID]) == []
     assert panel.end is not None and panel.end.status == "ended"
     assert panel.end.explanation == (
-        "The bot stopped at its end, and its simulation sold what it held at the last price it saw."
+        "The bot has stopped, and its simulation sold what it held at the last price it saw."
     )
     assert crashed_dry_run.alpaca.calls == []

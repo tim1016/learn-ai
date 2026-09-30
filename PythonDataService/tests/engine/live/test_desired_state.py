@@ -7,6 +7,7 @@ hygiene, default-when-absent, version bump, and corrupt-file refusal.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from app.engine.live.desired_state import (
     DesiredStateRepo,
     stable_desired_state_path,
 )
-from app.schemas.bot_end import BotEnd
+from app.schemas.bot_end import BotEnd, RecordedEnd
 
 
 def test_stable_path_layout(tmp_path: Path) -> None:
@@ -158,9 +159,23 @@ def test_a_legacy_record_reads_as_no_end(tmp_path: Path) -> None:
     assert record is not None
     assert record.desired_state is DesiredState.RUNNING
     assert record.version == 3
-    assert record.end_at_ms is None
-    assert record.end_carried_out_at_ms is None
+    assert record.end is None
     assert record.pending_end() is None
+
+
+def test_the_end_is_stored_as_one_nested_record(tmp_path: Path) -> None:
+    """One ``end`` object -- the time, sell or keep, and when it was carried out (#2607 review)."""
+    path = stable_desired_state_path(tmp_path, "x")
+    repo = DesiredStateRepo(path)
+
+    repo.set(
+        DesiredState.RUNNING, updated_by="bot_runner", now_ms=1,
+        end=BotEnd(end_at_ms=1_790_000_000_000, end_action="KEEP"),
+    )
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["end"] == {"end_at_ms": 1_790_000_000_000, "end_action": "KEEP", "carried_out_at_ms": None}
+    assert not {"end_at_ms", "end_action", "end_carried_out_at_ms"} & stored.keys()
 
 
 def test_set_records_an_end_and_every_later_state_change_keeps_it(tmp_path: Path) -> None:
@@ -172,7 +187,7 @@ def test_set_records_an_end_and_every_later_state_change_keeps_it(tmp_path: Path
     stopped = repo.set(DesiredState.STOPPED, updated_by="bot_runner", now_ms=2, reason="terminal_outcome:CRASHED")
 
     assert stopped.pending_end() == end
-    assert stopped.end_action == "KEEP"
+    assert stopped.end == RecordedEnd(end_at_ms=1_790_000_000_000, end_action="KEEP")
 
 
 def test_set_with_no_end_clears_it(tmp_path: Path) -> None:
@@ -181,7 +196,7 @@ def test_set_with_no_end_clears_it(tmp_path: Path) -> None:
 
     stopped = repo.set(DesiredState.STOPPED, updated_by="operator", now_ms=2, end=None)
 
-    assert stopped.end_at_ms is None
+    assert stopped.end is None
     assert stopped.pending_end() is None
 
 
@@ -205,8 +220,8 @@ def test_mark_end_carried_out_ends_the_pending_end_once(tmp_path: Path) -> None:
     again = repo.mark_end_carried_out(end, updated_by="account_clerk", now_ms=1_790_000_020_000)
 
     assert first.pending_end() is None
-    assert first.end_carried_out_at_ms == 1_790_000_005_000
-    assert first.end_at_ms == end.end_at_ms  # the carried-out end stays readable
+    # The carried-out end stays readable.
+    assert first.end == RecordedEnd(end_at_ms=end.end_at_ms, carried_out_at_ms=1_790_000_005_000)
     assert first.desired_state is DesiredState.RUNNING  # stopping the bot is the runner's write
     assert again == first
 

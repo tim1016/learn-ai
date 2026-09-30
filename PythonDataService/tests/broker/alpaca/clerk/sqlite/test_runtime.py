@@ -292,6 +292,60 @@ async def test_a_reconciliation_cut_never_covers_another_ledger(tmp_path: Path) 
     other_repo.close()
 
 
+async def test_published_custody_is_the_latest_passs_proof_with_no_pass_of_its_own(tmp_path: Path) -> None:
+    """#2607: a stop at a bot's end is proven by the pass that ended it. The read
+    contacts no broker; a bot that moved after that pass has no such proof."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    _finished_bot(repo, "sid-2")
+    assert await facade.published_custody("sid-1") is None, "nothing published yet proves nothing"
+
+    await facade.reconcile_once()
+    after_pass = broker.read_calls
+    proof = await facade.published_custody("sid-1")
+
+    assert proof is not None
+    assert (proof.strategy_instance_id, proof.reconciliation_verdict) == ("sid-1", "clean")
+    assert broker.read_calls == after_pass, "a proof read reached the broker port"
+
+    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
+
+    assert await facade.published_custody("sid-1") is not None
+    assert await facade.published_custody("sid-2") is None
+    repo.close()
+
+
+async def test_published_custody_covers_a_bot_that_moved_before_the_passs_final_comparison(
+    tmp_path: Path,
+) -> None:
+    """The pass's own writes for a bot -- the STOP at its end, its cancels, its sale --
+    land before its final broker comparison, so that pass proves them (#2607)."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+
+    class _BotStartsMidPass(_CountingBroker):
+        started = False
+
+        async def list_positions(self) -> list:
+            if not self.started:
+                self.started = True
+                submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
+            return await super().list_positions()
+
+    broker = _BotStartsMidPass()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+
+    await facade.reconcile_once()
+
+    assert await facade.published_custody("sid-1") is not None
+    repo.close()
+
 async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()

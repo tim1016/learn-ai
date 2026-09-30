@@ -121,8 +121,13 @@ async def drive_close(
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
     run: OffLoop,
+    regular_session_only: bool = False,
 ) -> ExitSubmission | CloseDeferred:
-    """Accept one close as a recovery EXIT under intake, then resolve it outside intake."""
+    """Accept one close as a recovery EXIT under intake, then resolve it outside intake.
+
+    ``regular_session_only`` is recorded on the EXIT's acceptance
+    (``exit.accept_recovery_exit``).
+    """
     try:
         accepted = await intake.off_loop(
             accept_recovery_exit,
@@ -132,6 +137,7 @@ async def drive_close(
             decision_id=close.decision_id,
             entry_order_ref=close.entry_order_ref,
             forbid_active_run=True,
+            regular_session_only=regular_session_only,
         )
         return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
     except RecoveryRunActiveError:

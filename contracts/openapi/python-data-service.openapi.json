@@ -1110,14 +1110,12 @@
             "type": "string"
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "evidence_override": {
             "anyOf": [
@@ -1707,14 +1705,12 @@
             "type": "string"
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "evidence_override": {
             "anyOf": [
@@ -1934,14 +1930,7 @@
             "type": "string"
           },
           "default_end": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BotEndView"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/BotEndView"
           },
           "default_exit_terms": {
             "anyOf": [
@@ -2023,6 +2012,7 @@
           "execution_modes",
           "strategies",
           "sizing_options",
+          "default_end",
           "action_plan_explanation",
           "carryover_available",
           "carryover_label",
@@ -4827,10 +4817,9 @@
       },
       "BotEndInput": {
         "additionalProperties": false,
-        "description": "The owner's choice of end, as Deploy and the bot panel send it.\n\n``end_at_ms`` is required and may be ``null``: ``null`` is the explicit\n\"no end\" choice. A Deploy that sends no end at all gets the default end.",
+        "description": "The owner's choice of end, as Deploy and the bot panel send it.\n\nBoth fields are required. ``end_at_ms`` ``null`` is the explicit \"no\nend\" choice, sent with ``end_action`` ``SELL``: a bot with no end has no\nshares to keep at one. A Deploy that sends no ``end`` at all gets the\ndefault end.",
         "properties": {
           "end_action": {
-            "default": "SELL",
             "enum": [
               "SELL",
               "KEEP"
@@ -4853,24 +4842,23 @@
           }
         },
         "required": [
-          "end_at_ms"
+          "end_at_ms",
+          "end_action"
         ],
         "title": "BotEndInput",
         "type": "object"
       },
       "BotEndPreviewRequest": {
         "additionalProperties": false,
-        "description": "Check an end on the Deploy form before the bot exists.",
+        "description": "Check an end on the Deploy form before the bot exists.\n\n``end`` omitted previews the default end; an explicit ``null`` is refused\n(:data:`EXPLICIT_NULL_END`).",
         "properties": {
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "execution_mode": {
             "enum": [
@@ -4891,7 +4879,7 @@
       },
       "BotEndView": {
         "additionalProperties": false,
-        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends today 15:59 ET \u00b7\nsells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now.",
+        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now.",
         "properties": {
           "editable": {
             "title": "Editable",
@@ -55496,80 +55484,6 @@
       }
     },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/end": {
-      "get": {
-        "operationId": "read_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BotEndView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "One bot's owner-set end, in the owner's words (#2607)",
-        "tags": [
-          "broker-v2-panel"
-        ]
-      },
       "put": {
         "operationId": "edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put",
         "parameters": [

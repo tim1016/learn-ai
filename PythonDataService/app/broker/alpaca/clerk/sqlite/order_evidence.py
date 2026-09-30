@@ -45,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
-from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
+from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES, NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     clear_execution_price_conflict_order,
@@ -116,11 +116,14 @@ __all__ = [
     "fold_order_submission_response",
     "fold_submit_absence_void",
     "fold_uncertain",
+    "is_working_order",
     "order_never_reached_broker",
     "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
+    "unresolved_order_refs",
+    "working_order_refs",
 ]
 
 
@@ -130,6 +133,56 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     if transition is None:
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+
+
+def is_working_order(order: OrderResource) -> bool:
+    """Whether the broker may still act on this order (:data:`CANCELLABLE_ENTRY_BROKER_STATES`)."""
+    return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
+
+
+def working_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
+    """Every still-working order (ENTRY or REDUCING) of one strategy, as a STOP proof counts it.
+
+    A STOP proof must not report ``clean`` with an empty working set while a
+    live EXIT's reducing order is still ``new``/``partially_filled`` -- that
+    order is not "uncertain" (its effect operation is progressing normally),
+    so :func:`unresolved_order_refs` alone cannot catch it either.
+    """
+    return tuple(
+        order.order_ref for order in repo.orders_for_strategy(strategy_instance_id) if is_working_order(order)
+    )
+
+
+def unresolved_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
+    """Order intents of one strategy whose broker outcome is not yet known.
+
+    One definition for the STOP/Resume proof, the custody snapshot and a
+    bot's scheduled end alike, of two kinds: an order under an ``unknown``
+    effect, and an owned ENTRY with no broker state under a nonterminal
+    effect -- its POST is in flight. ``ENTER_ACCEPTED`` writes the row with
+    ``broker_state`` NULL and the POST runs outside intake, so until the
+    response (or a websocket frame) folds, neither a broker state nor an
+    ``unknown`` effect marks it; a STOP proven in that window read as flat
+    while the order was about to land (#2358). A voided ENTER is terminal and
+    never counted.
+    """
+    uncertain = tuple(
+        order.order_ref
+        for order in repo.uncertain_orders()
+        if (
+            (effect := repo.effect_operation(order.effect_operation_id)) is not None
+            and effect.strategy_instance_id == strategy_instance_id
+        )
+    )
+    in_flight = tuple(
+        order.order_ref
+        for order in repo.entry_orders_for_strategy(strategy_instance_id)
+        if order.broker_state is None
+        and order.order_ref not in uncertain
+        and (effect := repo.effect_operation(order.effect_operation_id)) is not None
+        and effect.state in NONTERMINAL_EFFECT_STATES
+    )
+    return uncertain + in_flight
 
 
 def fence_fills_on_terminal_enters(

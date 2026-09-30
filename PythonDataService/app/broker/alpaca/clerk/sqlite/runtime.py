@@ -123,11 +123,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
-from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
-from app.broker.alpaca.clerk.sqlite.reads import (
-    CANCELLABLE_ENTRY_BROKER_STATES,
-    NONTERMINAL_EFFECT_STATES,
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    is_working_order,
+    unresolved_order_refs,
+    working_order_refs,
 )
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -256,10 +257,16 @@ class MissingEntryCustodyError(RuntimeError):
 
 @dataclass(frozen=True)
 class _PublishedReconciliation:
-    """A reconciliation verdict bound to the instant it was observed."""
+    """A reconciliation verdict bound to the instant it was observed.
+
+    ``cut`` names the ledger point the verdict's final broker comparison saw
+    through (``AccountReconciliationResult.through_sequence``); ``None`` for a
+    pass that reached no verdict.
+    """
 
     result: AccountReconciliationResult
     observed_at_ms: int
+    cut: ReconciliationCut | None = None
 
 
 class SqliteAlpacaClerkFacade:
@@ -1378,7 +1385,16 @@ class SqliteAlpacaClerkFacade:
         succeeded. Reads would stay pure and stop telling the truth.
         """
         self._last_published = _PublishedReconciliation(
-            result=result, observed_at_ms=self._repo.clock()
+            result=result,
+            observed_at_ms=self._repo.clock(),
+            cut=(
+                None
+                if result.through_sequence is None
+                else ReconciliationCut(
+                    ledger=_clerk_generation(self._repo.control_meta_snapshot()),
+                    after_sequence=result.through_sequence,
+                )
+            ),
         )
         return result
 
@@ -1454,6 +1470,25 @@ class SqliteAlpacaClerkFacade:
     async def prove_instance_custody(self, strategy_instance_id: str) -> InstanceCustodyProof:
         result = await self._reconcile()
         return self._proof(strategy_instance_id, result)
+
+    async def published_custody(self, strategy_instance_id: str) -> InstanceCustodyProof | None:
+        """The latest published pass's custody proof of one bot, with no pass of its own (#2607).
+
+        ``None`` unless that pass's final broker comparison saw every custody
+        transition the bot has (``reconciliation_covers`` against the pass's
+        own cut): then its verdict proves the bot's custody as a fresh pass
+        would. A stop at a bot's end reads this instead of reconciling, so
+        every bot ending on one pass is proven by that pass alone.
+        """
+        async with self._intake:
+            published = self._last_published
+            if (
+                published is None
+                or published.cut is None
+                or not self.reconciliation_covers(published.cut, strategy_instance_id)
+            ):
+                return None
+            return self._proof(strategy_instance_id, published.result)
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
         await self._reconcile()
@@ -1634,7 +1669,7 @@ class SqliteAlpacaClerkFacade:
 
         resolved: list[OrderResource] = []
         for order in requested:
-            if _is_working_order(order):
+            if is_working_order(order):
                 order = await cancel_and_prove_owned_entry(
                     self._repo,
                     entry_order_ref=order.order_ref,
@@ -1675,49 +1710,12 @@ class SqliteAlpacaClerkFacade:
         )
 
     def _working_order_refs_for_proof(self, strategy_instance_id: str) -> tuple[str, ...]:
-        """Every still-working order (ENTRY or REDUCING) for custody proof.
-
-        A STOP proof must not report `clean` with an empty working set while
-        a live EXIT's reducing order is still `new`/`partially_filled` —
-        that order is not "uncertain" (its effect operation is progressing
-        normally), so `_unresolved_order_refs` alone cannot catch it either.
-        """
-        return tuple(
-            order.order_ref
-            for order in self._repo.orders_for_strategy(strategy_instance_id)
-            if _is_working_order(order)
-        )
+        """Every still-working order (ENTRY or REDUCING) for custody proof (``working_order_refs``)."""
+        return working_order_refs(self._repo, strategy_instance_id)
 
     def _unresolved_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        """Order intents whose broker outcome is not yet known.
-
-        One definition for the STOP/Resume proof and the custody snapshot
-        alike, of two kinds: an order under an ``unknown`` effect, and an
-        owned ENTRY with no broker state under a nonterminal effect -- its
-        POST is in flight. ``ENTER_ACCEPTED`` writes the row with
-        ``broker_state`` NULL and the POST runs outside intake, so until the
-        response (or a websocket frame) folds, neither a broker state nor an
-        ``unknown`` effect marks it; a STOP proven in that window read as
-        flat while the order was about to land (#2358). A voided ENTER is
-        terminal and never counted.
-        """
-        uncertain = tuple(
-            order.order_ref
-            for order in self._repo.uncertain_orders()
-            if (
-                (effect := self._repo.effect_operation(order.effect_operation_id)) is not None
-                and effect.strategy_instance_id == strategy_instance_id
-            )
-        )
-        in_flight = tuple(
-            order.order_ref
-            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
-            if order.broker_state is None
-            and order.order_ref not in uncertain
-            and (effect := self._repo.effect_operation(order.effect_operation_id)) is not None
-            and effect.state in NONTERMINAL_EFFECT_STATES
-        )
-        return uncertain + in_flight
+        """Order intents whose broker outcome is not yet known (``unresolved_order_refs``)."""
+        return unresolved_order_refs(self._repo, strategy_instance_id)
 
 
 def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
@@ -1809,10 +1807,6 @@ def decision_id_from_durable(durable_decision_id: str) -> str:
         return durable_decision_id
     encoded = durable_decision_id.removeprefix(_ENCODED_DECISION_PREFIX)
     return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
-
-
-def _is_working_order(order: OrderResource) -> bool:
-    return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
 
 
 def _strategy_display_name(strategy_key: str) -> str:

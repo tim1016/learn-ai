@@ -10,19 +10,24 @@ already died (grill 2026-09-29, decision 9). On the pass at or after the end:
    -- the same ``submit_stop_run`` the panel's Stop commits, so the Clerk
    refuses the run's decisions from here and its budget is released (#2540)
    -- and ask the runner to stop the bot's process, as the panel's Stop does
-   after its own STOP commits.
+   after its own STOP commits. The runner proves that stop from this pass
+   once it is published, never with a pass of its own.
 2. **Cancel** the run's working entries: the pass's #2362 step, unchanged,
    cancels every ENTER whose run is no longer ACTIVE.
 3. **Sell** (:func:`finish_bots_at_their_end`, after the Dry Run close): when
-   the owner chose SELL, close every holding with one recovery EXIT under
+   the owner chose SELL and the end is still pending -- the owner's Stop
+   cancels it -- close every holding with one recovery EXIT under
    ``SCHEDULED_END_DECISION_PREFIX``, through ``ended_run_close`` exactly as a
-   Dry Run's run-end close does. The EXIT machine sends it only as a market
-   order inside the regular session; outside it, it holds and sells at the
-   next open, never after hours (``exit_resolution``). A Dry Run's shares are
-   not sold here: #2641's run-end close sells them at the last price the run
-   saw, on this ending as on every other.
-4. **Record** the end carried out, once the run is stopped, no entry can
-   still fill, and every holding a SELL owes has its sale accepted.
+   Dry Run's run-end close does. Its acceptance records
+   ``regular_session_only``: the EXIT machine sends it only as a market order
+   inside the regular session, and outside it holds and sells at the next
+   open, never after hours -- the watchdog's re-drives of it included
+   (``exit_resolution``, ``exit_watchdog``). A Dry Run's shares are not sold
+   here: #2641's run-end close sells them at the last price the run saw, on
+   this ending as on every other.
+4. **Record** the end carried out, once the run is stopped, none of the
+   bot's orders can still fill outside an EXIT's custody, and every holding
+   a SELL owes has its sale accepted.
 
 This is the owner-scheduled exception to #2504's Q3 ("a dead run never sells
 by itself"): only the sale the owner scheduled is made for a run that died.
@@ -35,10 +40,14 @@ none and ends nothing. Every step is idempotent and derived from durable
 facts -- the STOP is keyed on its run, each sale on the holding's newest
 entry -- so a pass that dies half-way is completed by the next one, and an
 end found late (the Clerk was down) is carried out when the Clerk is back.
+
+A sale waiting for the open is also the owner's to know about: the lane's
+attention bell lists it (:func:`end_sales_waiting_for_open`) until it is sent.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -52,16 +61,16 @@ from app.broker.alpaca.clerk.sqlite.ended_run_close import (
     CloseDeferred,
     OwedClose,
     bot_holdings,
+    closes_owed_under,
     drive_close,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX
-from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.models import OrderResource
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
-from app.broker.alpaca.clerk.sqlite.reads import (
-    CANCELLABLE_ENTRY_BROKER_STATES,
-    NONTERMINAL_EFFECT_STATES,
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    REGULAR_SESSION_SALE_WAITS_FOR_OPEN,
+    SCHEDULED_END_DECISION_PREFIX,
 )
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
+from app.broker.alpaca.clerk.sqlite.order_evidence import unresolved_order_refs, working_order_refs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.bot_end import BotEnd
@@ -109,15 +118,18 @@ def installed_bot_end_schedule() -> BotEndSchedule | None:
     return _INSTALLED
 
 
-def _due_ends(repo: ClerkSqliteRepository, schedule: BotEndSchedule) -> list[ScheduledEnd]:
-    """The ends due on this authority: every live registration's, at or before the Clerk's clock."""
-    now_ms = repo.clock()
-    registered = [
+def _live_registrations(repo: ClerkSqliteRepository) -> list[str]:
+    return [
         instance["strategy_instance_id"]
         for instance in repo.strategy_instances()
         if instance["retired_at_ms"] is None
     ]
-    return [end for end in schedule.pending_ends(registered) if end.end.end_at_ms <= now_ms]
+
+
+def _due_ends(repo: ClerkSqliteRepository, schedule: BotEndSchedule) -> list[ScheduledEnd]:
+    """The ends due on this authority: every live registration's, at or before the Clerk's clock."""
+    now_ms = repo.clock()
+    return [end for end in schedule.pending_ends(_live_registrations(repo)) if end.end.end_at_ms <= now_ms]
 
 
 def _stop_runs_at_their_end(repo: ClerkSqliteRepository, due: list[ScheduledEnd]) -> list[tuple[str, str]]:
@@ -211,7 +223,8 @@ async def finish_bots_at_their_end(
     One bot at a time: an unexpected failure is logged with its stack and the
     pass goes on, so one unreadable bot never fails every later pass -- and
     with them the operator's Reconcile now. Its end stays pending, and the
-    next pass carries it out.
+    next pass carries it out. A lost execution lease fails the pass, as it
+    does in the fence and in every other write.
     """
     schedule = installed_bot_end_schedule()
     if schedule is None or not due:
@@ -222,7 +235,7 @@ async def finish_bots_at_their_end(
     for end in due:
         try:
             if sells and end.end.end_action == "SELL":
-                for close in await run(partial(_sales_owed, repo, end)):
+                for close in await run(partial(_sales_owed, repo, schedule, end)):
                     await _sell_one(repo, close, trade=trade, intake=intake, pricing=pricing, run=run)
             if await run(partial(_carried_out, repo, end, sells=sells)):
                 await run(partial(schedule.record_end_carried_out, end, at_ms=repo.clock()))
@@ -236,6 +249,8 @@ async def finish_bots_at_their_end(
                         "end_action": end.end.end_action,
                     },
                 )
+        except ExecutionLeaseLost:
+            raise
         except Exception:
             logger.exception(
                 "a bot's scheduled end could not be carried out; it stays pending and the pass goes on",
@@ -247,15 +262,16 @@ async def finish_bots_at_their_end(
             )
 
 
-def _sales_owed(repo: ClerkSqliteRepository, end: ScheduledEnd) -> list[OwedClose]:
-    """What a SELL end still has to sell; nothing while the bot's run is ACTIVE."""
-    if repo.active_run(end.strategy_instance_id) is not None:
+def _sales_owed(repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: ScheduledEnd) -> list[OwedClose]:
+    """What a SELL end still has to sell: nothing while the bot's run is ACTIVE, or once the end is gone.
+
+    The end is read again right before the sale: the owner's Stop in the
+    same minute cancels it (Stop keeps the shares), and an edit replaces it.
+    """
+    sid = end.strategy_instance_id
+    if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
         return []
-    return [
-        holding.close
-        for holding in bot_holdings(repo, end.strategy_instance_id, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
-        if holding.state == "owed"
-    ]
+    return closes_owed_under(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
 
 
 async def _sell_one(
@@ -273,7 +289,9 @@ async def _sell_one(
         "symbol": close.symbol,
         "decision_id": close.decision_id,
     }
-    resolved = await drive_close(repo, close, trade=trade, intake=intake, pricing=pricing, run=run)
+    resolved = await drive_close(
+        repo, close, trade=trade, intake=intake, pricing=pricing, run=run, regular_session_only=True,
+    )
     if isinstance(resolved, CloseDeferred):
         logger.info(
             "deferred the sale at a bot's scheduled end; the next pass tries again",
@@ -294,15 +312,18 @@ async def _sell_one(
 def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool) -> bool:
     """Whether the Clerk has done everything this end asks.
 
-    The run is stopped; no entry of the bot can still fill outside an EXIT's
-    custody; and, for a SELL end, every holding's sale is accepted -- from
-    then on it is that EXIT's, held for the open if it must be. A holding
-    another EXIT still owns keeps the end pending until that EXIT resolves.
+    The run is stopped; none of the bot's orders -- working, or with an
+    outcome not yet known, by the STOP proof's own definitions -- can still
+    fill outside an EXIT's custody; and, for a SELL end, every holding's sale
+    is accepted -- from then on it is that EXIT's, held for the open if it
+    must be. A holding another EXIT still owns keeps the end pending until
+    that EXIT resolves.
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None:
         return False
-    if any(_entry_may_still_fill(repo, order) for order in repo.entry_orders_for_strategy(sid)):
+    unsettled = {*working_order_refs(repo, sid), *unresolved_order_refs(repo, sid)}
+    if any(_outside_an_exit(repo, order_ref) for order_ref in unsettled):
         return False
     if not sells or end.end.end_action == "KEEP":
         return True
@@ -312,20 +333,57 @@ def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool)
     )
 
 
-def _entry_may_still_fill(repo: ClerkSqliteRepository, order: OrderResource) -> bool:
-    """An entry outside any EXIT's custody that the broker may still fill, or whose POST is in flight."""
-    if repo.active_exit_for_order(order.order_ref) is not None:
-        return False
-    if order.broker_state is None:
-        effect = repo.effect_operation(order.effect_operation_id)
-        return effect is not None and effect.state in NONTERMINAL_EFFECT_STATES
-    return order.broker_state.lower() in CANCELLABLE_ENTRY_BROKER_STATES
+def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
+    """An entry no EXIT owns: a reducing order is always an EXIT's."""
+    order = repo.order(order_ref)
+    return order is not None and order.role == "ENTRY" and repo.active_exit_for_order(order_ref) is None
+
+
+@dataclass(frozen=True)
+class EndSaleWaiting:
+    """A bot's end sale held for the next regular open, not yet sent."""
+
+    strategy_instance_id: str
+    symbol: str
+    quantity: float
+
+
+def end_sales_waiting_for_open(repo: ClerkSqliteRepository) -> list[EndSaleWaiting]:
+    """Every live bot's end sale waiting for the next regular open, read from the ledger (#2607).
+
+    Waiting: the bot's EXIT is still active, its newest market hold is the
+    regular-session sale's (``REGULAR_SESSION_SALE_WAITS_FOR_OPEN``), and no
+    order of that EXIT has been sent. The sale's first send ends the wait,
+    and the EXIT's end ends it too. Blocking: runs off the event loop.
+    """
+    waiting: list[EndSaleWaiting] = []
+    for sid in sorted(repo.strategies_with_active_exit(_live_registrations(repo))):
+        effect = repo.active_exit_for_strategy(sid)
+        hold = repo.last_strategy_transition(strategy_instance_id=sid, transition_kind="EXIT_MARKET_HOLD")
+        if (
+            effect is None
+            or hold is None
+            or hold["effect_operation_id"] != effect.effect_operation_id
+            or hold["summary_code"] != REGULAR_SESSION_SALE_WAITS_FOR_OPEN
+        ):
+            continue
+        if any(
+            order.effect_operation_id == effect.effect_operation_id
+            and repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED")
+            for order in repo.orders_for_strategy(sid)
+        ):
+            continue
+        symbol = json.loads(hold["facts_json"])["symbol"]
+        waiting.append(EndSaleWaiting(sid, symbol, repo.position(sid, symbol)))
+    return waiting
 
 
 __all__ = [
     "SCHEDULED_END_REASON",
     "BotEndSchedule",
+    "EndSaleWaiting",
     "ScheduledEnd",
+    "end_sales_waiting_for_open",
     "fence_bots_at_their_end",
     "finish_bots_at_their_end",
     "install_bot_end_schedule",

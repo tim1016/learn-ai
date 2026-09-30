@@ -790,6 +790,13 @@ class AccountReconciliationResult:
     # pass whose read answered but could not be proven. In-process only --
     # never persisted, never part of what the verdict compares equal on.
     stale_cause: BrokerError | None = field(default=None, compare=False)
+    # The newest custody transition the pass's final broker comparison saw,
+    # read atomically with its verdict; ``None`` for a pass that reached no
+    # verdict. A bot whose own newest transition is no later than this has
+    # not moved since that comparison, so the verdict still proves its
+    # custody (``SqliteAlpacaClerkFacade.published_custody``, #2607).
+    # In-process only, like ``stale_cause``.
+    through_sequence: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1311,6 +1318,7 @@ def _finalize_reconciliation_verdict(
         foreign_order_count=len(plan.foreign_orders),
         drifted_symbols=plan.drifted_symbols,
         indeterminate_symbols=plan.indeterminate_symbols,
+        through_sequence=repo.last_custody_sequence(),
     )
     if trigger != "OPERATOR_RECONCILE_NOW":
         return result

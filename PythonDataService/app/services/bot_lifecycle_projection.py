@@ -198,6 +198,10 @@ class AlpacaLifecycleProjector:
         self._lifecycle_repo_for = lifecycle_repo_for
         self._require_alpaca_identity = require_alpaca_identity
 
+    def run_is_active(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        """Whether the Clerk still holds this exact run ACTIVE: a read, never a projection."""
+        return self._authority.snapshot(strategy_instance_id, run_id).expected_run_state == "ACTIVE"
+
     def project_active(
         self,
         *,

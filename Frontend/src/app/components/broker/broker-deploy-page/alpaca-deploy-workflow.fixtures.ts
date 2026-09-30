@@ -74,6 +74,17 @@ export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = 
 
 export const DEPLOY_VIEW: DeployBotView = {
   default_exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
+  // The end a Deploy that names none gets, as the backend authors it (#2607).
+  default_end: {
+    end_at_ms: 1_700_081_940_000,
+    end_action: 'SELL',
+    status: 'scheduled',
+    headline: 'Ends Wed Nov 15, 15:59 ET · sells',
+    explanation:
+      'At Wed Nov 15, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+    notice: null,
+    editable: true,
+  },
   broker: 'alpaca',
   account_id: 'PA9',
   account_mode: 'paper',

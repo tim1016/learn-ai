@@ -30,6 +30,7 @@ from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
+from app.services.bot_end import resolve_bot_end, resolved_bot_end_view
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.channel_health import (
     REQUIRED_CLERK_CHANNELS,
@@ -832,6 +833,13 @@ def build_alpaca_paper_deploy_view(
         strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
     )
     broker_mode = broker_mode_for(custody_world)
+    # The end a Deploy that names none gets, at the instant this form is
+    # evaluated, for the form to pre-fill (#2607). Every Deploy is regular
+    # hours only.
+    default_end = resolved_bot_end_view(
+        resolve_bot_end(None, now_ms=evaluated_at_ms, dry_run=False, use_rth=True),
+        now_ms=evaluated_at_ms, dry_run=False,
+    )
     return AlpacaPaperDeployView(
         broker="alpaca",
         account_id=account.account_id,
@@ -842,6 +850,7 @@ def build_alpaca_paper_deploy_view(
         dry_run_eligibility=dry_run_eligibility,
         readiness_checks=readiness_checks,
         default_exit_terms=default_exit_terms,
+        default_end=default_end,
         next_deploy_open_ms=window.next_open_ms,
         exit_steps_summary=exit_steps_summary(default_exit_terms, evaluated_at_ms),
         execution_modes=_execution_modes(broker_mode),
