@@ -57,6 +57,7 @@ from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.bot_end import SCHEDULED_END_REASON_CODE
+from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
     channel_state,
@@ -121,6 +122,13 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "Crashed: market data stopped",
         "The IBKR market-data feed stopped delivering bars, so the run ended rather "
         "than decide without them.",
+    ),
+    # The failed-launch compensation runs through the normal Stop, so the kind
+    # is a stop; the words say nobody stopped it (#2559).
+    ACTIVATION_FAILED_STOP_REASON_CODE: (
+        "Failed to launch",
+        "The launch failed partway through, so the service ended the run. "
+        "Nobody stopped it, and nothing is running.",
     ),
 }
 

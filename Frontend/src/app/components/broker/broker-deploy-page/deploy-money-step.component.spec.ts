@@ -227,6 +227,36 @@ describe('Deploy step 3, Money', () => {
     expect(previewBudget).toHaveBeenCalledTimes(bounded + 1);
   });
 
+  it.each([
+    ['awaiting_price', 'Wait for a fresh IBKR price for this instrument, then review the budget.'],
+    ['unavailable', 'The IBKR market-data feed is unavailable, so this instrument cannot be priced. '
+      + 'Restore the connection, then review the budget.'],
+  ] as const)('sends no amount preview while the money read is %s, so no review can carry risk revision 0 (#2559)', async (state, detail) => {
+    vi.useFakeTimers();
+    const wait: DeploymentBudgetPreview = { state, detail, world: 'real_paper', custody_account_id: 'PA9' };
+    const previewBudget = vi.fn().mockResolvedValue(wait);
+    const emitted: (MoneyReview | null)[] = [];
+    await render(DeployMoneyStepComponent, {
+      inputs: { target: TARGET, body: BODY },
+      on: { reviewed: (review: MoneyReview | null) => emitted.push(review) },
+      providers: [{ provide: BrokerV2PanelService, useValue: { previewBudget } }],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText(detail)).toBeTruthy();
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '617.28' } });
+    // Well past the typing settle; short of the first price re-check.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // The wait has no risk revision to consent to, so the typed amount is never
+    // previewed: no request can carry `risk_revision: 0` and read back as
+    // "Risk limits changed".
+    expect(previewBudget).toHaveBeenCalled();
+    expect(previewBudget.mock.calls.every(([, body]) => (body as DeployBotBody).budget === undefined)).toBe(true);
+    expect(emitted.every((review) => review === null)).toBe(true);
+    expect(screen.queryByText('Previewing this amount…')).toBeNull();
+  });
+
   it('says in plain words what the budget limits, and never in internal terms', async () => {
     await setup();
 

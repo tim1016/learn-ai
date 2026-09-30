@@ -586,8 +586,10 @@ async def test_a_failed_custody_authority_is_a_line_not_a_quiet_home() -> None:
     body = response.json()
     assert body["account_id"] == ACCOUNT
     [line] = body["items"]
+    # The lane holds no repository, so order records answer 503; Settings
+    # loads and names the refusal's recovery (#2620).
     assert (line["kind"], line["severity"], line["headline"], line["action"]["destination"]) == (
-        "account", "blocking", "This account's custody authority has failed.", "activity",
+        "account", "blocking", "This account's custody authority has failed.", "settings",
     )
 
 

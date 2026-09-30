@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    SyntheticOpening,
     activate_synthetic_clerk_authority,
     get_alpaca_clerk,
     get_clerk_runtime,
@@ -40,6 +41,7 @@ from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStor
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjector,
@@ -221,26 +223,130 @@ class SyntheticRuntimeAccess:
                 self.owner = None
 
 
-@dataclass(frozen=True)
-class UnboundDryRunIdentity:
-    """A Dry Run found by its private authority's own activation, not a binding.
+@dataclass
+class _SyntheticAccount:
+    """One ``sim:<strategy-instance>`` account's open/use/close lifecycle.
 
-    Deploy commits the ``sim:<strategy-instance>`` budget and run before the
-    runner records the binding, so a crash between the two leaves this
-    identity as the only index. It carries no consent: its authority is only
-    ever opened for a projection of sealed custody, never to activate, admit
-    or launch.
+    The bound authority and an unbound orphan's share it: both open the same
+    store under the same per-strategy lock, and differ only in which
+    openings (``SyntheticOpening``) they may ask for.
     """
 
     strategy_instance_id: str
-    budget_consent: None = None
+    budget_consent: DeployBudgetConsent | None
+    artifacts_root: Path
+    runtime_in_use: Callable[[str], bool]
+    brokers: dict[str, SyntheticBroker]
+    clock: Clock
+    runtime_access: SyntheticRuntimeAccess
+    account_id: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.account_id = synthetic_account_id_for_strategy(self.strategy_instance_id)
+
+    def source_bars(self) -> SourceBarLedger:
+        return SourceBarLedger(artifacts_root=self.artifacts_root, account_id=self.account_id)
+
+    async def ensure_operating(self, *, lease_wait_s: float) -> None:
+        """Compose this account for operation -- its full recovery included -- or raise why it cannot be."""
+        runtime = await self.open(SyntheticOpening.OPERATE, lease_wait_s=lease_wait_s)
+        if runtime.clerk is None:
+            detail = (
+                runtime.startup_failure.recovery
+                if runtime.startup_failure is not None
+                else "Synthetic runtime was not composed."
+            )
+            raise StartAdmissionUnavailable(
+                "Dry Run synthetic authority could not be restored.",
+                detail=detail,
+            )
+
+    @asynccontextmanager
+    async def held_for_request(self, opening: SyntheticOpening) -> AsyncIterator[ActiveClerkRuntime]:
+        """This account for one request; a runtime composed only for it is released after it."""
+        async with self.runtime_access.hold():
+            was_active = get_clerk_runtime(self.account_id) is not None
+            runtime = await self.open(opening)
+            try:
+                yield runtime
+            finally:
+                if not was_active:
+                    await self.release_if_unused()
+
+    async def release_if_unused(self) -> None:
+        async with self.runtime_access.hold():
+            if self.runtime_in_use(self.strategy_instance_id):
+                return
+            runtime = get_clerk_runtime(self.account_id)
+            if runtime is not None:
+                unregister_clerk_runtime(self.account_id)
+                await runtime.close()
+            self.brokers.pop(self.account_id, None)
+
+    async def open(self, opening: SyntheticOpening, *, lease_wait_s: float = 0.0) -> ActiveClerkRuntime:
+        async with self.runtime_access.hold():
+            return await self._open_locked(opening, lease_wait_s=lease_wait_s)
+
+    async def _open_locked(self, opening: SyntheticOpening, *, lease_wait_s: float) -> ActiveClerkRuntime:
+        operating = opening is SyntheticOpening.OPERATE
+        existing = get_clerk_runtime(self.account_id)
+        if existing is not None:
+            if operating:
+                await self._prepare_budget_runtime(existing)
+                if existing.envelope_sync is not None:
+                    if self.budget_consent is None:
+                        await existing.envelope_sync.tick()
+                    existing.envelope_sync.start()
+            return existing
+        broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars(), clock=self.clock)
+        if operating:
+            await activate_synthetic_clerk_authority(
+                account_id=self.account_id,
+                artifacts_root=self.artifacts_root,
+                clock=self.clock,
+                execution_lease_wait_timeout_s=lease_wait_s,
+                execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+            )
+        runtime = await select_synthetic_clerk_runtime(
+            account_id=self.account_id,
+            read=broker,
+            trade=broker,
+            artifacts_root=self.artifacts_root,
+            repository_opener=lambda account_id, root: ClerkSqliteRepository.open(
+                account_id=account_id, artifacts_root=root, clock=self.clock,
+            ),
+            execution_lease_wait_timeout_s=lease_wait_s,
+            execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+            simulation_initial_cash=(None if not operating or self.budget_consent is None else Decimal(self.budget_consent.committed_cents) / 100),
+            opening=opening,
+        )
+        if runtime.clerk is not None:
+            register_clerk_runtime(runtime)
+            self.brokers[self.account_id] = broker
+            if operating:
+                await self._prepare_budget_runtime(runtime)
+        return runtime
+
+    async def _prepare_budget_runtime(self, runtime: ActiveClerkRuntime) -> None:
+        consent = self.budget_consent
+        repo = runtime.sqlite_repository
+        if consent is None or repo is None:
+            return
+        if repo.budget_authority_version() < 2:
+            with repo.write_fence() as conn:
+                if conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
+                    raise StartAdmissionUnavailable("This earlier Dry Run cannot be restarted.", detail="Review a fresh deployment identity and simulated starting cash.")
+                commit_budget_authority_cutover(repo, actor=consent.actor,
+                    reviewed_token=authority_review_token(repo), stop_receipt="fresh-private-authority-with-no-runs")
+        if runtime.envelope_sync is not None:
+            await runtime.envelope_sync.refresh_private_starting_cash(Decimal(consent.committed_cents) / 100)
 
 
 @dataclass
 class SyntheticBindingAuthority(BindingAuthority):
     """A deterministic ``sim:<strategy-instance>`` sealed custody authority."""
 
-    binding: BrokerBotBinding | UnboundDryRunIdentity
+    binding: BrokerBotBinding
     artifacts_root: Path
     lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
     runtime_in_use: Callable[[str], bool]
@@ -251,6 +357,19 @@ class SyntheticBindingAuthority(BindingAuthority):
 
     def __post_init__(self) -> None:
         self.account_id = synthetic_account_id_for_strategy(self.binding.strategy_instance_id)
+
+    @property
+    def _account(self) -> _SyntheticAccount:
+        # Built per use, so it reads the binding's consent as it stands now.
+        return _SyntheticAccount(
+            strategy_instance_id=self.binding.strategy_instance_id,
+            budget_consent=self.binding.budget_consent,
+            artifacts_root=self.artifacts_root,
+            runtime_in_use=self.runtime_in_use,
+            brokers=self.brokers,
+            clock=self.clock,
+            runtime_access=self.runtime_access,
+        )
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._start_custody_guard()
@@ -273,7 +392,7 @@ class SyntheticBindingAuthority(BindingAuthority):
         )
 
     def source_bars(self) -> SourceBarLedger:
-        return SourceBarLedger(artifacts_root=self.artifacts_root, account_id=self.account_id)
+        return self._account.source_bars()
 
     async def ensure_recoverable(self, *, lease_wait_s: float = 0.0) -> None:
         """Compose this Dry Run's authority, or raise why it cannot be.
@@ -283,38 +402,17 @@ class SyntheticBindingAuthority(BindingAuthority):
         of its one deadline, since a restart meets its dead predecessor's
         lease on every Dry Run account (#2582). Zero is a single attempt.
         """
-        runtime = await self._runtime(lease_wait_s=lease_wait_s)
-        if runtime.clerk is None:
-            detail = (
-                runtime.startup_failure.recovery
-                if runtime.startup_failure is not None
-                else "Synthetic runtime was not composed."
-            )
-            raise StartAdmissionUnavailable(
-                "Dry Run synthetic authority could not be restored.",
-                detail=detail,
-            )
+        await self._account.ensure_operating(lease_wait_s=lease_wait_s)
 
     @asynccontextmanager
     async def runtime_for_projection(self) -> AsyncIterator[ActiveClerkRuntime]:
-        async with self.runtime_access.hold():
-            was_active = get_clerk_runtime(self.account_id) is not None
-            runtime = await self._runtime(projection_only=True)
-            try:
-                yield runtime
-            finally:
-                if not was_active:
-                    await self.release_if_unused()
+        # A bound bot's read keeps the store's recovery pass, whose published
+        # verdict its money views project (#1776).
+        async with self._account.held_for_request(SyntheticOpening.PROJECT) as runtime:
+            yield runtime
 
     async def release_if_unused(self) -> None:
-        async with self.runtime_access.hold():
-            if self.runtime_in_use(self.binding.strategy_instance_id):
-                return
-            runtime = get_clerk_runtime(self.account_id)
-            if runtime is not None:
-                unregister_clerk_runtime(self.account_id)
-                await runtime.close()
-            self.brokers.pop(self.account_id, None)
+        await self._account.release_if_unused()
 
     async def release_after_run_end(self) -> None:
         """Close what the ended run left, then release (owner decision 2026-09-29).
@@ -375,7 +473,7 @@ class SyntheticBindingAuthority(BindingAuthority):
     @asynccontextmanager
     async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[AdmissionCustodyCut]:
         async with self.runtime_access.hold():
-            runtime = await self._runtime()
+            runtime = await self._account.open(SyntheticOpening.OPERATE)
             clerk = runtime.clerk
             if clerk is None:
                 raise StartAdmissionUnavailable(
@@ -388,62 +486,40 @@ class SyntheticBindingAuthority(BindingAuthority):
             async with admission(self.binding.strategy_instance_id) as snapshot:
                 yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
 
-    async def _runtime(self, *, projection_only: bool = False, lease_wait_s: float = 0.0) -> ActiveClerkRuntime:
-        async with self.runtime_access.hold():
-            return await self._runtime_locked(projection_only=projection_only, lease_wait_s=lease_wait_s)
 
-    async def _runtime_locked(self, *, projection_only: bool, lease_wait_s: float) -> ActiveClerkRuntime:
-        existing = get_clerk_runtime(self.account_id)
-        if existing is not None:
-            if not projection_only:
-                await self._prepare_budget_runtime(existing)
-                if existing.envelope_sync is not None:
-                    if self.binding.budget_consent is None:
-                        await existing.envelope_sync.tick()
-                    existing.envelope_sync.start()
-            return existing
-        broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars(), clock=self.clock)
-        if not projection_only:
-            await activate_synthetic_clerk_authority(
-                account_id=self.account_id,
-                artifacts_root=self.artifacts_root,
-                clock=self.clock,
-                execution_lease_wait_timeout_s=lease_wait_s,
-                execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
-            )
-        runtime = await select_synthetic_clerk_runtime(
-            account_id=self.account_id,
-            read=broker,
-            trade=broker,
-            artifacts_root=self.artifacts_root,
-            repository_opener=lambda account_id, root: ClerkSqliteRepository.open(
-                account_id=account_id, artifacts_root=root, clock=self.clock,
-            ),
-            execution_lease_wait_timeout_s=lease_wait_s,
-            execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
-            simulation_initial_cash=(None if projection_only or self.binding.budget_consent is None else Decimal(self.binding.budget_consent.committed_cents) / 100),
-            projection_only=projection_only,
-        )
-        if runtime.clerk is not None:
-            register_clerk_runtime(runtime)
-            self.brokers[self.account_id] = broker
-            if not projection_only:
-                await self._prepare_budget_runtime(runtime)
-        return runtime
+@dataclass(frozen=True)
+class UnboundDryRunAuthority:
+    """A Dry Run found by its private authority's own activation, not a binding.
 
-    async def _prepare_budget_runtime(self, runtime: ActiveClerkRuntime) -> None:
-        consent = self.binding.budget_consent
-        repo = runtime.sqlite_repository
-        if consent is None or repo is None:
-            return
-        if repo.budget_authority_version() < 2:
-            with repo.write_fence() as conn:
-                if conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone():
-                    raise StartAdmissionUnavailable("This earlier Dry Run cannot be restarted.", detail="Review a fresh deployment identity and simulated starting cash.")
-                commit_budget_authority_cutover(repo, actor=consent.actor,
-                    reviewed_token=authority_review_token(repo), stop_receipt="fresh-private-authority-with-no-runs")
-        if runtime.envelope_sync is not None:
-            await runtime.envelope_sync.refresh_private_starting_cash(Decimal(consent.committed_cents) / 100)
+    Deploy commits the ``sim:<strategy-instance>`` budget and run before the
+    runner records the binding, so a crash between the two leaves this
+    authority as the only index (#2559). With no binding and no consent it
+    can never admit or launch, and it offers exactly two openings:
+
+    - ``runtime_for_projection`` -- a read. The store opens without its
+      mutating startup recovery: nothing retired, nothing reconciled, no
+      custody transition appended.
+    - ``ensure_recoverable`` -- boot's restoration. It re-proves the
+      activation and runs the full recovery that retires the orphaned run and
+      fails its command, so a restart, never whichever read comes first,
+      releases the orphan.
+    """
+
+    _account: _SyntheticAccount
+
+    @property
+    def strategy_instance_id(self) -> str:
+        return self._account.strategy_instance_id
+
+    @property
+    def account_id(self) -> str:
+        return self._account.account_id
+
+    def runtime_for_projection(self) -> AbstractAsyncContextManager[ActiveClerkRuntime]:
+        return self._account.held_for_request(SyntheticOpening.READ_ONLY)
+
+    async def ensure_recoverable(self, *, lease_wait_s: float = 0.0) -> None:
+        await self._account.ensure_operating(lease_wait_s=lease_wait_s)
 
 
 @dataclass
@@ -461,7 +537,15 @@ class BindingAuthoritySelector:
 
     def for_binding(self, binding: BrokerBotBinding) -> BindingAuthority:
         if binding.mode == "dry_run":
-            return self._synthetic(binding)
+            return SyntheticBindingAuthority(
+                binding=binding,
+                artifacts_root=self.artifacts_root,
+                lifecycle_repo_for=self.lifecycle_repo_for,
+                runtime_in_use=self.runtime_in_use,
+                brokers=self.synthetic_brokers,
+                clock=self.clock,
+                runtime_access=self._runtime_access(binding.strategy_instance_id),
+            )
         return PrimaryAccountBindingAuthority(
             binding=binding,
             projector=self.real_projector,
@@ -470,23 +554,33 @@ class BindingAuthoritySelector:
             custody_kind=primary_custody_kind,
         )
 
-    def for_unbound_dry_run(self, strategy_instance_id: str) -> SyntheticBindingAuthority | None:
+    def for_unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority | None:
         """The private authority a Deploy activated before recording its binding, if any."""
         activation = SyntheticActivationStore(self.artifacts_root).latest(
             synthetic_account_id_for_strategy(strategy_instance_id)
         )
-        return None if activation is None else self._synthetic(UnboundDryRunIdentity(strategy_instance_id))
+        return None if activation is None else self.unbound_dry_run(strategy_instance_id)
 
-    def _synthetic(self, identity: BrokerBotBinding | UnboundDryRunIdentity) -> SyntheticBindingAuthority:
-        return SyntheticBindingAuthority(
-            binding=identity,
+    def unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority:
+        """The authority of a Dry Run whose activation the caller already found.
+
+        Boot's enumeration lists the activations once and builds each orphan's
+        authority from that listing: a second read of the ledger here is a
+        second way for a bad ledger to fail boot (#2559).
+        """
+        return UnboundDryRunAuthority(_SyntheticAccount(
+            strategy_instance_id=strategy_instance_id,
+            budget_consent=None,
             artifacts_root=self.artifacts_root,
-            lifecycle_repo_for=self.lifecycle_repo_for,
             runtime_in_use=self.runtime_in_use,
             brokers=self.synthetic_brokers,
             clock=self.clock,
-            runtime_access=self.synthetic_runtime_access.setdefault(identity.strategy_instance_id, SyntheticRuntimeAccess()),
-        )
+            runtime_access=self._runtime_access(strategy_instance_id),
+        ))
+
+    def _runtime_access(self, strategy_instance_id: str) -> SyntheticRuntimeAccess:
+        """The one lock per ``sim:`` account, shared by its bound and unbound authorities."""
+        return self.synthetic_runtime_access.setdefault(strategy_instance_id, SyntheticRuntimeAccess())
 
 
 __all__ = [
@@ -494,6 +588,6 @@ __all__ = [
     "BindingAuthoritySelector",
     "PrimaryAccountBindingAuthority",
     "SyntheticBindingAuthority",
-    "UnboundDryRunIdentity",
+    "UnboundDryRunAuthority",
     "primary_custody_kind",
 ]

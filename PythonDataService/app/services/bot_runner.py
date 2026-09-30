@@ -33,6 +33,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -40,8 +41,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import SIM_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    SyntheticActivationStore,
     get_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
@@ -88,7 +91,9 @@ from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import (
     BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+    BindingAuthority,
     BindingAuthoritySelector,
+    UnboundDryRunAuthority,
 )
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -128,6 +133,7 @@ from app.services.bot_registry_projection import (
     read_dry_run_activity,
 )
 from app.services.bot_run_evidence import (
+    ACTIVATION_FAILED_STOP_REASON_CODE,
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
 )
@@ -266,6 +272,23 @@ class LaneStopOutcome:
     intent_stopped: tuple[LaneIntentStoppedBot, ...]
     refused: tuple[LaneStopRefusal, ...]
     still_running: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _DryRunRestoration:
+    """One Dry Run boot restores: its own account, then the repair its runs get (#2582)."""
+
+    strategy_instance_id: str
+    authority: BindingAuthority | UnboundDryRunAuthority
+    #: Runs once the account is open. A bound Dry Run's runs get the sweep's
+    #: own repair, its binding's run the fallback candidate; an unbound
+    #: orphan's get none, because its opening's full recovery already retired
+    #: the run and failed its command (#2559).
+    repair: Callable[[], Awaitable[tuple[str, ...]]]
+
+
+async def _nothing_to_repair() -> tuple[str, ...]:
+    return ()
 
 
 def _release_run_owner(run_owner: asyncio.Future[None]) -> None:
@@ -463,12 +486,13 @@ class BotTaskRegistry:
         # recovery sweep has run, and none while recovery left an uncertain
         # outcome (the probe re-evaluates per deploy, so a later resolution
         # unblocks without a restart). The sweep's report is the gate fact:
-        # absent means pending; present means complete, or degraded when it
-        # names bots no lifecycle authority could project. Tests that do not
-        # exercise recovery opt out explicitly with
-        # ``boot_recovery_required=False``.
+        # absent means pending -- or failed, when the last sweep raised; present
+        # means complete, or degraded when it names bots no lifecycle
+        # authority could project. Tests that do not exercise recovery opt out
+        # explicitly with ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_report: BootRecoveryReport | None = None
+        self._boot_recovery_failed = False
         # Each Dry Run boot restores off the serving path (#2582), by bot,
         # until its own restoration settles: absent once restored, and for
         # every bot boot never had to restore. Start refuses the rest.
@@ -824,7 +848,7 @@ class BotTaskRegistry:
                 _release_run_owner(run_owner)
             cleanup_proven = False
             try:
-                await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+                await commit_stop_before_task_cancel(binding, reason=ACTIVATION_FAILED_STOP_REASON_CODE)
                 cleanup_proven = True
             except Exception:
                 logger.error(
@@ -846,8 +870,9 @@ class BotTaskRegistry:
                         binding.broker,
                         binding.strategy_instance_id,
                         updated_by=_UPDATED_BY,
-                        reason="activation_failed_after_registration",
+                        reason=ACTIVATION_FAILED_STOP_REASON_CODE,
                         clerk_stop_already_committed=True,
+                        outcome_reason_code=ACTIVATION_FAILED_STOP_REASON_CODE,
                     )
                 except Exception:
                     logger.error(
@@ -908,6 +933,7 @@ class BotTaskRegistry:
             observed_at_ms=observed_at_ms,
             boot_recovery_required=self._boot_recovery_required,
             boot_recovery_report=self._boot_recovery_report,
+            boot_recovery_failed=self._boot_recovery_failed,
             unresolved_intents_probe=self._unresolved_intents_probe,
             recovery_evaluation=self._recovery_evaluation,
             account_reconnecting=primary is not None and primary.reconnecting,
@@ -1072,6 +1098,7 @@ class BotTaskRegistry:
         updated_by: str,
         reason: str | None,
         clerk_stop_already_committed: bool,
+        outcome_reason_code: str = "OPERATOR_STOP",
     ) -> BotStatusView:
         """Serialized STOP implementation with terminal Clerk custody proof.
 
@@ -1106,7 +1133,17 @@ class BotTaskRegistry:
         if await self._stop_process_locked(
             managed, reason=reason, clerk_stop_already_committed=clerk_stop_already_committed
         ):
-            outcome, canary_rollback = await self._prove_stop(managed.binding, prove_terminal_stop_outcome)
+            # ``outcome_reason_code`` names who ended the run (#2559): the
+            # failed-launch compensation passes the activation-failure code, an
+            # operator's stop keeps OPERATOR_STOP. It is an internal flag, never
+            # derived from operator-typed prose. In trade mode the Clerk's custody
+            # proof replaces it: that proof (flat, carryover kept, flatten
+            # required) drives the panel's next step, and one reason slot cannot
+            # carry both, so a trade-mode failed launch still reads as a stop
+            # (#2667).
+            outcome, canary_rollback = await self._prove_stop(
+                managed.binding, prove_terminal_stop_outcome, untraded_outcome=outcome_reason_code
+            )
             await self._record_stop(managed.binding, reason_code=outcome, canary_rollback=canary_rollback)
         return self.status(broker, strategy_instance_id)
 
@@ -1165,15 +1202,15 @@ class BotTaskRegistry:
         return True
 
     async def _prove_stop(
-        self, binding: BrokerBotBinding, prove: StopProver
+        self, binding: BrokerBotBinding, prove: StopProver, *, untraded_outcome: str = "OPERATOR_STOP"
     ) -> tuple[str, CanaryRollbackDecision | None]:
-        """A stopped run's custody outcome, and a canary's rollback verdict; ``OPERATOR_STOP`` unless it traded.
+        """A stopped run's custody outcome, and a canary's rollback verdict; ``untraded_outcome`` unless it traded.
 
         ``prove`` is the stop's own proof: a fresh Clerk proof for an operator's
         Stop, the Clerk's own pass for the stop at the bot's end (#2607).
         """
         if binding.broker != "alpaca" or binding.mode != "trade":
-            return "OPERATOR_STOP", None
+            return untraded_outcome, None
         outcome = await prove(
             binding,
             checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
@@ -1820,11 +1857,18 @@ class BotTaskRegistry:
         # answer an earlier sweep gave: a reconnected account authority runs
         # this again (#2582), and Start must not read the Clerk-less report.
         self._boot_recovery_report = None
-        report = await self._boot_recovery.run(
-            recover=recover,
-            reconcile=reconcile,
-            unresolved_intents_probe=unresolved_intents_probe,
-        )
+        self._boot_recovery_failed = False
+        try:
+            report = await self._boot_recovery.run(
+                recover=recover,
+                reconcile=reconcile,
+                unresolved_intents_probe=unresolved_intents_probe,
+            )
+        except Exception:
+            # Nothing reruns a sweep that raised but a reconnect, so Start
+            # stops saying "wait" for one (#2620).
+            self._boot_recovery_failed = True
+            raise
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
         self._boot_recovery_report = report
@@ -2207,26 +2251,16 @@ class BotTaskRegistry:
                 )
             yield runtime
 
-    @asynccontextmanager
-    async def unbound_synthetic_runtime_for_projection(
-        self,
-        strategy_instance_id: str,
-    ) -> AsyncIterator[ActiveClerkRuntime | None]:
-        """Project the Dry Run authority a Deploy committed before recording its binding.
+    def unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority | None:
+        """The Dry Run authority a Deploy committed before recording its binding, if any.
 
         Deploy commits the private ``sim:`` authority's budget and run before
         the launch writes the binding, so a crash in between leaves only that
-        authority's own activation to find it by. The read opens its sealed
-        store projection-only -- never activating, admitting or launching --
-        and yields ``None`` when no private authority was ever activated for
-        this identity.
+        authority's own activation to find it by. ``None`` when no private
+        authority was ever activated for this identity. The authority it
+        answers can only be read, never admitted or launched (#2559).
         """
-        authority = self._authorities.for_unbound_dry_run(strategy_instance_id)
-        if authority is None:
-            yield None
-            return
-        async with authority.runtime_for_projection() as runtime:
-            yield runtime
+        return self._authorities.for_unbound_dry_run(strategy_instance_id)
 
     def start_dry_run_restoration(self) -> asyncio.Task[None]:
         """Restore every Dry Run's own simulated account after boot, off the serving path (#2582).
@@ -2237,17 +2271,80 @@ class BotTaskRegistry:
         now -- Start refuses it until its own restoration settles -- and a
         background task restores them one at a time: open its account,
         waiting out a held lease, then give its runs the sweep's own repair.
+
+        A Deploy that crashed between its budget commit and its binding
+        record left a private ``sim:`` authority no binding indexes; those
+        orphans join the same restoration (#2559), so a restart releases
+        them through the recovery path instead of the next read doing it.
         """
         dry_runs = [binding for binding in self._bindings.list_for_broker("alpaca") if binding.mode == "dry_run"]
+        restorations = [
+            _DryRunRestoration(
+                binding.strategy_instance_id, self._authority_for(binding), partial(self._repair_restored_dry_run, binding),
+            )
+            for binding in dry_runs
+        ]
+        restorations += [
+            _DryRunRestoration(orphan.strategy_instance_id, orphan, _nothing_to_repair)
+            for orphan in self._unbound_dry_run_authorities(bound={binding.strategy_instance_id for binding in dry_runs})
+        ]
         self._dry_run_restorations = dict.fromkeys(
-            (binding.strategy_instance_id for binding in dry_runs), "restoring"
+            (restoration.strategy_instance_id for restoration in restorations), "restoring"
         )
         self._dry_run_restoration_task = asyncio.create_task(
-            self._restore_dry_runs(dry_runs), name="dry-run-boot-restoration"
+            self._restore_dry_runs(restorations), name="dry-run-boot-restoration"
         )
         return self._dry_run_restoration_task
 
-    async def _restore_dry_runs(self, dry_runs: list[BrokerBotBinding]) -> None:
+    def _unbound_dry_run_authorities(self, *, bound: set[str]) -> list[UnboundDryRunAuthority]:
+        """Private ``sim:`` authorities a crash left with no binding (#2559).
+
+        Found by their own activations, skipped when a binding indexes them:
+        those take the bound path above, which reads the freshest binding
+        rather than this boot-time snapshot. Runs synchronously inside the
+        lifespan, before the restoration task, so -- like that task -- it is
+        an isolation boundary for every exception: an unreadable ledger or one
+        orphan that cannot be matched is a logged skip, never a lane that does
+        not start (#2582). Each orphan's authority is built from this one
+        listing; the ledger's own consistency is proven where the orphan is
+        opened, inside the restoration's per-bot boundary.
+        """
+        orphans: list[UnboundDryRunAuthority] = []
+        try:
+            account_ids = SyntheticActivationStore(self._artifacts_root).account_ids()
+        except Exception as exc:
+            logger.error(
+                "Dry Run activations could not be listed at boot; unbound orphans wait for the next restart",
+                extra={"action": "boot_dry_run_activations_unreadable", "error": str(exc)},
+                exc_info=True,
+            )
+            return orphans
+        for account_id in account_ids:
+            # The store admits only ``sim:`` accounts.
+            sid = account_id.removeprefix(SIM_ACCOUNT_PREFIX)
+            if sid in bound:
+                continue
+            try:
+                if self._read_binding(sid) is not None:
+                    continue
+                orphans.append(self._authorities.unbound_dry_run(sid))
+            except Exception as exc:
+                logger.error(
+                    "A Dry Run activation could not be matched to a binding at boot; it is skipped",
+                    extra={
+                        "action": "boot_dry_run_activation_unmatched",
+                        "account_id": account_id,
+                        "error": str(exc),
+                    },
+                    exc_info=True,
+                )
+        return orphans
+
+    async def _repair_restored_dry_run(self, binding: BrokerBotBinding) -> tuple[str, ...]:
+        """The sweep's own repair for a restored Dry Run's runs; its binding's run is the fallback candidate."""
+        return await self._boot_recovery.repair_restored_dry_run(self._binding_recovery_candidates(binding).values())
+
+    async def _restore_dry_runs(self, restorations: list[_DryRunRestoration]) -> None:
         """Restore each Dry Run under one lease deadline; one bot's failure is only its own.
 
         The dead process's leases all lapse within one lease lifetime of its
@@ -2258,14 +2355,11 @@ class BotTaskRegistry:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S
-        for binding in dry_runs:
-            sid = binding.strategy_instance_id
-            authority = self._authority_for(binding)
+        for restoration in restorations:
+            sid, authority = restoration.strategy_instance_id, restoration.authority
             try:
                 await authority.ensure_recoverable(lease_wait_s=max(0.0, deadline - loop.time()))
-                interrupted = await self._boot_recovery.repair_restored_dry_run(
-                    self._binding_recovery_candidates(binding).values()
-                )
+                interrupted = await restoration.repair()
             except Exception as exc:
                 self._dry_run_restorations[sid] = (
                     "account_held" if isinstance(exc, ExecutionLeaseHeld) else "not_restored"

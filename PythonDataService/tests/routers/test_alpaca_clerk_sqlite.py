@@ -1619,3 +1619,103 @@ async def test_an_extended_limit_on_any_other_recovery_action_is_refused(api: Fa
         )
 
     assert response.status_code == 422
+
+
+# ── A Dry Run whose Deploy crashed before its binding (#2559) ───────────────
+
+
+@pytest.fixture
+async def orphaned_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """An account whose Dry Run Deploy committed in its simulator, then died unbound.
+
+    The private ``sim:`` store holds the committed run; no binding indexes it,
+    so only its own activation finds it. Yields that store's id and custody
+    transition count before any request.
+    """
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.services.bot_runner import BotTaskRegistry
+    from app.services.broker_v2_panel import bot_custody
+    from tests.services.test_dry_run_boot_isolation import _dry_run_binding
+
+    sid = "orphan-dry-run"
+    binding = _dry_run_binding().model_copy(update={"strategy_instance_id": sid, "sealed_account_id": f"sim:{sid}"})
+    deploying = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    authority = deploying._authority_for(binding)
+    await authority.ensure_recoverable()
+    runtime = get_clerk_runtime(f"sim:{sid}")
+    assert runtime is not None and isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    runtime.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+    await runtime.clerk.register_strategy_run(binding)
+    await authority.release_if_unused()
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path / "account")
+    port = FakeAlpacaPort()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port, account_mode="paper")
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, _sqlite_repository=repo))
+    restarted = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: restarted)
+
+    def transitions() -> int:
+        sim = ClerkSqliteRepository.open(account_id=f"sim:{sid}", artifacts_root=tmp_path)
+        try:
+            return len(sim.custody_transitions())
+        finally:
+            sim.close()
+
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app, sid, transitions
+    finally:
+        await close_synthetic_clerk_runtimes()
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_per_bot_actions_refuse_an_unbound_dry_run_and_its_reads_stay_reads(
+    orphaned_dry_run, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2661 review (M3): the orphan's store opens only for a read, which skips
+    the recovery that would release it, so the routes that act refuse it in
+    plain words and reach nothing; a read still opens it and writes nothing."""
+    app, sid, transitions = orphaned_dry_run
+    before = transitions()
+    executed = AsyncMock()
+    monkeypatch.setattr(alpaca_clerk_sqlite, "execute_recovery_action", executed)
+    plan = _historical_recovery_plan(account_id=f"sim:{sid}", strategy_instance_id=sid)
+    bot = f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{sid}"
+
+    async with _client(app) as client:
+        execute = await client.post(
+            f"{bot}/recovery-actions/execute",
+            json={"action_id": "execute_safe_flatten", "concurrency_token": "token"},
+        )
+        confirm = await client.post(
+            f"{bot}/historical-execution-recovery/confirm",
+            json={
+                "plan": HistoricalExecutionRecoveryPlanResponse.model_validate(plan).model_dump(),
+                "confirmation_token": plan.confirmation_token,
+            },
+        )
+        snapshot = await client.get(f"{bot}/snapshot")
+
+    for refused in (execute, confirm):
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["detail"] == {
+            "reason": "bot_custody_authority_unavailable",
+            "message": "This Dry Run never finished launching, so it cannot be acted on.",
+            # A fact, not "restart": a restart that already released this Dry
+            # Run leaves it refused, and the prescription would loop.
+            "next_step": (
+                "Its launch stopped before the bot was recorded. Each time the Clerk starts, it ends "
+                "a Dry Run like this one and releases the budget it held."
+            ),
+        }
+    executed.assert_not_awaited()
+    # The read reaches the orphan's own store -- its committed run is there --
+    # and, like the refusals, appends no custody transition.
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["account_id"] == f"sim:{sid}"
+    assert [run["state"] for run in snapshot.json()["runs"]] == ["ACTIVE"]
+    assert transitions() == before

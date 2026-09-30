@@ -467,6 +467,33 @@ def test_execution_lease_blocks_a_second_concurrent_open(tmp_path: Path) -> None
     other.close()
 
 
+def test_a_stale_handle_s_close_does_not_release_the_new_owner_s_lease(tmp_path: Path) -> None:
+    """The lease is the live writer's fence, so only its holder releases it (#2620).
+
+    A handle whose lease expired and was taken over used to clear whatever
+    lease row it found on close, silently unfencing the successor process.
+    """
+    clock = _clock_seq()
+    stale = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-A"
+    )
+    # process-A's lease expires; process-B takes over the account.
+    stale._conn.execute("UPDATE control_meta SET execution_lease_expires_at_ms = 1 WHERE id = 1")
+    stale._conn.commit()
+    live = ClerkSqliteRepository.open(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-B"
+    )
+
+    stale.close()  # the taken-over handle shuts down after the takeover
+
+    owner, expires_at = live._conn.execute(
+        "SELECT execution_lease_owner, execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+    ).fetchone()
+    assert owner == "process-B", "a stale handle released the successor's lease"
+    assert expires_at is not None, "a stale handle expired the successor's lease"
+    live.close()
+
+
 def test_expired_lease_allows_a_new_process_to_take_over(tmp_path: Path) -> None:
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(
