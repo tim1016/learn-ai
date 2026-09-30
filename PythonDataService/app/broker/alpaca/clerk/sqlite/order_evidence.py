@@ -45,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
-from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
+from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES, NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     clear_execution_price_conflict_order,
@@ -116,11 +116,15 @@ __all__ = [
     "fold_order_submission_response",
     "fold_submit_absence_void",
     "fold_uncertain",
+    "is_working_order",
     "order_never_reached_broker",
     "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
+    "unresolved_order_refs",
+    "withhold_unnamed_order",
+    "working_order_refs",
 ]
 
 
@@ -130,6 +134,56 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     if transition is None:
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+
+
+def is_working_order(order: OrderResource) -> bool:
+    """Whether the broker may still act on this order (:data:`CANCELLABLE_ENTRY_BROKER_STATES`)."""
+    return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
+
+
+def working_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
+    """Every still-working order (ENTRY or REDUCING) of one strategy, as a STOP proof counts it.
+
+    A STOP proof must not report ``clean`` with an empty working set while a
+    live EXIT's reducing order is still ``new``/``partially_filled`` -- that
+    order is not "uncertain" (its effect operation is progressing normally),
+    so :func:`unresolved_order_refs` alone cannot catch it either.
+    """
+    return tuple(
+        order.order_ref for order in repo.orders_for_strategy(strategy_instance_id) if is_working_order(order)
+    )
+
+
+def unresolved_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
+    """Order intents of one strategy whose broker outcome is not yet known.
+
+    One definition for the STOP/Resume proof, the custody snapshot and a
+    bot's scheduled end alike, of two kinds: an order under an ``unknown``
+    effect, and an owned ENTRY with no broker state under a nonterminal
+    effect -- its POST is in flight. ``ENTER_ACCEPTED`` writes the row with
+    ``broker_state`` NULL and the POST runs outside intake, so until the
+    response (or a websocket frame) folds, neither a broker state nor an
+    ``unknown`` effect marks it; a STOP proven in that window read as flat
+    while the order was about to land (#2358). A voided ENTER is terminal and
+    never counted.
+    """
+    uncertain = tuple(
+        order.order_ref
+        for order in repo.uncertain_orders()
+        if (
+            (effect := repo.effect_operation(order.effect_operation_id)) is not None
+            and effect.strategy_instance_id == strategy_instance_id
+        )
+    )
+    in_flight = tuple(
+        order.order_ref
+        for order in repo.entry_orders_for_strategy(strategy_instance_id)
+        if order.broker_state is None
+        and order.order_ref not in uncertain
+        and (effect := repo.effect_operation(order.effect_operation_id)) is not None
+        and effect.state in NONTERMINAL_EFFECT_STATES
+    )
+    return uncertain + in_flight
 
 
 def fence_fills_on_terminal_enters(
@@ -240,6 +294,8 @@ def fold_order_evidence(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if simulated_authority:
         _fold_simulated_execution_evidence(
             repo,
@@ -871,8 +927,11 @@ def fold_order_submission_response(
     observation, so withholding it would create a filled order with no
     durable position attribution. That port capability — never the
     aggregate's own spelling — is what routes the fold to the simulated
-    exact path (#2178).
+    exact path (#2178). A response missing its broker order id, status,
+    symbol or side folds as a lost one (:func:`withhold_unnamed_order`).
     """
+    if withhold_unnamed_order(repo, effect_operation_id=effect_operation_id, order=order):
+        return
     if trade_port_folds_simulated_evidence(trade):
         fold_order_evidence(
             repo,
@@ -923,6 +982,55 @@ def fold_uncertain(
             facts_json=facts.to_facts_json(),
         )
     )
+
+
+def withhold_unnamed_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+) -> bool:
+    """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
+
+    Nothing of it can be folded: the acknowledgement keeps the first broker
+    order id it sees, so a blank one would be this order's broker identity
+    for ever; a blank status is no lifecycle state; and both fill folds take
+    the answer's symbol and side, so a blank symbol would credit a fill in
+    no instrument and a blank side is refused by the fills table, raising
+    out of the sweep or the stream. It is treated exactly like a lost
+    response -- nothing recorded, the effect folded ``unknown`` -- so the
+    sweep's exact lookup by ``client_order_id`` recovers the order once the
+    broker names it. The order type and time in force are not withheld: no
+    fold of our own order reads them. Every entrance of evidence about our
+    own order asks this first; a foreign order is contained by the
+    external-order fold. Returns whether the answer was withheld.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("broker order id", order.order_id),
+            ("status", order.status),
+            ("symbol", order.symbol),
+            ("side", order.side),
+        )
+        if not value.strip()
+    ]
+    if not missing:
+        return False
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
+    logger.warning(
+        "A broker answer about the Clerk's own order was incomplete and was withheld",
+        extra={
+            "action": "unnamed_order_evidence_withheld",
+            "order_ref": order_ref,
+            "effect_operation_id": effect_operation_id,
+            "missing": missing,
+        },
+    )
+    fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
+    return True
 
 
 @dataclass(frozen=True)

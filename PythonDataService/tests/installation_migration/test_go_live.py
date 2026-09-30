@@ -32,6 +32,7 @@ from app.services.go_live_hold import (
     read_go_live_hold,
 )
 from app.services.lane_go_live import lane_go_live_hold
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.installation_migration._support import (
     LIVE_VOLUME,
     PAPER_VOLUME,
@@ -257,7 +258,9 @@ async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts
     for clerk_id, registry in registries.items():
         monkeypatch.setenv(CLERK_DIR_ENV_VAR, str(roots[clerk_id]))
         with pytest.raises(RunAdmissionRefusedError) as refused:
-            await registry.deploy(broker="alpaca", strategy_instance_id="ema-1", symbol="SPY")
+            await registry.deploy(
+                broker="alpaca", strategy_instance_id="ema-1", symbol="SPY", exit_terms=DEPLOY_EXIT_TERMS
+            )
         assert refused.value.reason_code == LANE_GO_LIVE_PENDING
 
     lanes = FakeGoLiveLanes(lanes=source.lanes.lanes, roots=roots)
@@ -269,6 +272,8 @@ async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts
         # start — a later admission gate (no clerk in this test) does.
         assert registry.any_running() is False
         with pytest.raises(BotRunnerError) as later:
-            await registry.deploy(broker="alpaca", strategy_instance_id="ema-1", symbol="SPY")
+            await registry.deploy(
+                broker="alpaca", strategy_instance_id="ema-1", symbol="SPY", exit_terms=DEPLOY_EXIT_TERMS
+            )
         assert later.value.reason_code is None
         assert "go-live" not in str(later.value)

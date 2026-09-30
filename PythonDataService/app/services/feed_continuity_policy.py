@@ -92,12 +92,26 @@ def late_decision(
     whichever connection produced it (#2303, #2345). ``observed_at_ms`` judges
     an earlier instant instead of now -- only delivery admission passes it.
     """
-    allowance_ms = DELIVERY_ALLOWANCE_MS if policy is None else policy.delivery_allowance_ms
+    allowance_ms = _delivery_allowance_ms(policy)
     observed_at_ms = now_ms_utc() if observed_at_ms is None else observed_at_ms
     lateness_ms = observed_at_ms - decision_bar_close_ms
     if lateness_ms <= allowance_ms:
         return None
     return LateDecision(observed_at_ms=observed_at_ms, lateness_ms=lateness_ms, allowance_ms=allowance_ms)
+
+
+def decision_valid_until_ms(policy: ContinuityPolicy | None, decision_bar_close_ms: int) -> int:
+    """The last instant a decision on a bar that closed at ``decision_bar_close_ms`` is on time.
+
+    The bound :func:`late_decision` judges against, stated as an instant for a
+    decision that must be judged again later: an ENTER waiting on an account
+    reading (#2623) waits no longer than this.
+    """
+    return decision_bar_close_ms + _delivery_allowance_ms(policy)
+
+
+def _delivery_allowance_ms(policy: ContinuityPolicy | None) -> int:
+    return DELIVERY_ALLOWANCE_MS if policy is None else policy.delivery_allowance_ms
 
 
 async def admit_on_delivery(

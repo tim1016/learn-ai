@@ -66,6 +66,7 @@
           [trades]="result().trades"
           [totalTradeCount]="result().total_trades"
           [tradesTruncated]="tradesTruncated()"
+          [closingBarSkips]="result().closing_bar_skips ?? []"
         />
       }
     }

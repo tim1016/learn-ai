@@ -9,6 +9,7 @@ independent of the panel's read projections.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -50,7 +51,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel import budget_deploy
-from app.services.broker_v2_panel.bot_end_panel import preview_default_end, resolve_deploy_end
+from app.services.broker_v2_panel.bot_end_panel import resolve_deploy_end
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
     DeploySubmission,
@@ -196,7 +197,7 @@ async def get_alpaca_paper_deploy_view(
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
     context = get_active_alpaca_binding()
-    view = build_alpaca_paper_deploy_view(
+    return build_alpaca_paper_deploy_view(
         account,
         clerk,
         validation_entries,
@@ -205,19 +206,24 @@ async def get_alpaca_paper_deploy_view(
         custody_world=custody_world,
         golden_validation_scopes=await _current_golden_validation_scopes(symbol),
     )
-    # The end a Deploy that names none gets, for the form to pre-fill (#2607).
-    return view.model_copy(update={"default_end": preview_default_end()})
 
 
 async def preview_alpaca_deployment_budget(
     broker: str, account_id: str, request: AlpacaPaperDeployRequest,
 ) -> DeploymentBudgetPreview:
+    """The Deploy form's review: the money preview, with the same-symbol warning beside it.
+
+    The warning is read here, not in ``preview_budget``: consent re-runs that
+    preview at Deploy, and a warning is no part of what consent binds.
+    """
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved = _require_alpaca_deploy_request(view, request)
     try:
-        return budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
+        preview = budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
+        same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
     except BudgetUnavailable as exc:
         raise budget_deploy.budget_error(exc) from exc
+    return preview.model_copy(update={"same_symbol_note": same_symbol_note})
 
 
 def _runner() -> BotTaskRegistry:
@@ -282,7 +288,19 @@ def _sending(submission_key: str) -> Iterator[None]:
 
 
 def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) -> str:
-    return request.fingerprint(account=canonical_alpaca_account_id(account_id))
+    """What one submission key binds: the settings, the account, and the end the request named.
+
+    The end stays out of the settings' own ``fingerprint`` -- consent and the
+    budget review never bind it, since the owner may change it while the bot
+    runs -- but a key resent with another end is a different Deploy, refused
+    like any other change of settings (#2607). The request's own ``end`` is
+    bound, not the end it resolved to, so the default end (none named) binds
+    nothing, and every key recorded before the end existed still matches.
+    """
+    account = canonical_alpaca_account_id(account_id)
+    if request.end is None:
+        return request.fingerprint(account=account)
+    return request.fingerprint(account=account, end=request.end.model_dump_json())
 
 
 def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
@@ -513,6 +531,8 @@ async def preview_alpaca_paper_start_admission(
     """
     view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
+    # The end the Deploy would refuse is refused here too (#2607).
+    resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run")
     registry = _runner()
     try:
         sid = DeploySubmissionLedger(registry.artifacts_root).provisional_name(

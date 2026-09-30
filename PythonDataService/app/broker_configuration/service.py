@@ -136,7 +136,7 @@ def _require_one_allowance_document(
     A live revision's pair is inside its envelope, which the arming ceremony
     seals; a paper revision with no envelope carries its own pair (#2440). A
     second copy beside either would leave two answers to "what prices this
-    revision's after-close exit?", so it is refused here, and the schema's
+    revision's out-of-session exits?", so it is refused here, and the schema's
     CHECK refuses the same row again.
     """
     if paper_xh_allowances is None:

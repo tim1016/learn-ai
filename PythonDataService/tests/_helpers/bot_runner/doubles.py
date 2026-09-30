@@ -326,6 +326,11 @@ class _CustodyClerk:
         assert sid == self.proof.strategy_instance_id
         return self.proof
 
+    async def published_custody(self, sid: str) -> InstanceCustodyProof | None:
+        """The latest pass's proof, which in this double always saw the bot's every transition."""
+        assert sid == self.proof.strategy_instance_id
+        return self.proof
+
     @asynccontextmanager
     async def start_admission_snapshot(self, sid: str):
         assert sid == self.proof.strategy_instance_id

@@ -21,7 +21,7 @@ import os
 from collections.abc import Callable
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -33,7 +33,7 @@ from app.engine.live.identity import (
     validate_strategy_instance_id,
 )
 from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
-from app.schemas.bot_end import BotEnd, BotEndAction
+from app.schemas.bot_end import BotEnd, RecordedEnd
 
 # Re-exported so existing callers can keep importing it from here.
 __all__ = [
@@ -128,14 +128,12 @@ class DesiredStateRecord(BaseModel):
     updated_by: str
     reason: str | None = None
     # The owner's one-time end for this deployment (#2607): the instant the
-    # Clerk stops the bot, and whether it sells or keeps its shares then. The
-    # owner's schedule, not a sealed term -- it is editable while the bot runs
-    # and enters no binding, hash or seal. Absent (every record written before
-    # #2607) is "no end". ``end_carried_out_at_ms`` is when the Clerk carried
-    # it out; a carried-out end stays readable but is no longer pending.
-    end_at_ms: int | None = None
-    end_action: BotEndAction = "SELL"
-    end_carried_out_at_ms: int | None = None
+    # Clerk stops the bot, whether it sells or keeps its shares then, and when
+    # the Clerk carried it out. The owner's schedule, not a sealed term -- it
+    # is editable while the bot runs and enters no binding, hash or seal.
+    # Absent (every record written before #2607) is "no end"; a carried-out
+    # end stays readable but is no longer pending.
+    end: RecordedEnd | None = None
     version: int = 1
 
     @model_validator(mode="before")
@@ -156,13 +154,7 @@ class DesiredStateRecord(BaseModel):
 
     def pending_end(self) -> BotEnd | None:
         """The end the Clerk still has to carry out, if any."""
-        if self.end_at_ms is None or self.end_carried_out_at_ms is not None:
-            return None
-        return BotEnd(end_at_ms=self.end_at_ms, end_action=self.end_action)
-
-    def recorded_end(self) -> BotEnd | None:
-        """The end this record names, pending or carried out."""
-        return None if self.end_at_ms is None else BotEnd(end_at_ms=self.end_at_ms, end_action=self.end_action)
+        return None if self.end is None else self.end.pending()
 
 
 class DesiredStateRepo:
@@ -253,14 +245,17 @@ class DesiredStateRepo:
         """
 
         def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord:
-            ends = _end_fields(existing) if end is END_UNCHANGED else _new_end_fields(end)
             return DesiredStateRecord(
                 desired_state=state,
                 updated_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
                 version=version,
-                **ends,
+                end=(
+                    (None if existing is None else existing.end)
+                    if end is END_UNCHANGED
+                    else _scheduled(end)
+                ),
             )
 
         record = self._read_modify_write(build)
@@ -277,7 +272,7 @@ class DesiredStateRepo:
                 updated_by=updated_by,
                 reason=None if existing is None else existing.reason,
                 version=version,
-                **_new_end_fields(end),
+                end=_scheduled(end),
             )
 
         record = self._read_modify_write(build)
@@ -295,13 +290,13 @@ class DesiredStateRepo:
         """
 
         def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord | None:
-            if existing is None or existing.pending_end() != end:
+            if existing is None or existing.end is None or existing.pending_end() != end:
                 return None
             return existing.model_copy(
                 update={
                     "updated_at_ms": now_ms,
                     "updated_by": updated_by,
-                    "end_carried_out_at_ms": now_ms,
+                    "end": existing.end.model_copy(update={"carried_out_at_ms": now_ms}),
                     "version": version,
                 }
             )
@@ -352,19 +347,6 @@ class DesiredStateRepo:
         fsync_parent_dir(safe_path)
 
 
-def _end_fields(record: DesiredStateRecord | None) -> dict[str, Any]:
-    """The end a record carries, to write forward unchanged."""
-    if record is None:
-        return {}
-    return {
-        "end_at_ms": record.end_at_ms,
-        "end_action": record.end_action,
-        "end_carried_out_at_ms": record.end_carried_out_at_ms,
-    }
-
-
-def _new_end_fields(end: BotEnd | None) -> dict[str, Any]:
+def _scheduled(end: BotEnd | None) -> RecordedEnd | None:
     """A newly chosen end, not yet carried out; ``None`` is no end."""
-    if end is None:
-        return {}
-    return {"end_at_ms": end.end_at_ms, "end_action": end.end_action}
+    return None if end is None else RecordedEnd.scheduled(end)

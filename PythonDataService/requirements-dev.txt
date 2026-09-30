@@ -6,7 +6,13 @@
 -r requirements-light.txt
 
 # Testing
-pytest
+# Held below 9.1: pytest 9.1.x drops tests/research/conftest.py for an explicit
+# tests/research/<pkg>/test_x.py when a tests/research/<dir> path and then a
+# root-level tests/test_*.py precede it on the command line, so its `conn`
+# fixture is "not found" (repro on #2649: `pytest tests/research/ml
+# tests/test_statistics.py tests/research/backtest_runs/test_service_db.py`).
+# 9.0.x collects the same command correctly. Lift once pytest fixes it.
+pytest>=9.0,<9.1
 pytest-asyncio
 pytest-cov
 pytest-xdist>=3.6  # `-n auto` in scripts.run_fast_tests keeps the PR gate under two minutes

@@ -318,6 +318,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
+    "regular_session_only": False,
 }
 
 
@@ -391,6 +392,12 @@ class ExitAcceptedFacts:
     reference_bid: float | None = None
     reference_ask: float | None = None
     reference_quote_observed_at_ms: int | None = None
+    # An EXIT whose market leg may go out only inside the regular session
+    # (#2607): the sale at a bot's owner-scheduled end, and every re-drive of
+    # it. Outside the session it holds for the next regular open instead of
+    # being re-priced as an extended-hours limit. Absent (every other EXIT,
+    # and every acceptance recorded before it existed) is ``False``.
+    regular_session_only: bool = False
 
     @property
     def operator_priced(self) -> bool:

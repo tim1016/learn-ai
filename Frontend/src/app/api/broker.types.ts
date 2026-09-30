@@ -1796,8 +1796,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One bot's owner-set end, in the owner's words (#2607) */
-        get: operations["read_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_get"];
+        get?: never;
         /** Change a bot's end or its sell/keep choice now, with no restart and no seal touched (#2607) */
         put: operations["edit_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_put"];
         post?: never;
@@ -8605,7 +8604,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8824,7 +8824,8 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
@@ -8935,7 +8936,7 @@ export interface components {
             carryover_explanation: string;
             /** Carryover Label */
             carryover_label: string;
-            default_end?: components["schemas"]["BotEndView"] | null;
+            default_end: components["schemas"]["BotEndView"];
             default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             dry_run_eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
@@ -9443,12 +9444,29 @@ export interface components {
             win_rate?: number;
         };
         /**
+         * BacktestRunClosingBarSkipResponse
+         * @description One decision the run's closing-bar rule set aside (#2607).
+         */
+        BacktestRunClosingBarSkipResponse: {
+            /** Barclosems */
+            barCloseMs: number;
+            /** Closeprice */
+            closePrice: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
+        };
+        /**
          * BacktestRunDetailResponse
          * @description Everything the run report renders, plus the bounded trade evidence.
          */
         BacktestRunDetailResponse: {
             /** Brokeragepolicy */
             brokeragePolicy: string | null;
+            /** Closingbarskips */
+            closingBarSkips: components["schemas"]["BacktestRunClosingBarSkipResponse"][];
             /** Commissionperorder */
             commissionPerOrder: number | null;
             /** Datapolicy */
@@ -10144,25 +10162,30 @@ export interface components {
          * BotEndInput
          * @description The owner's choice of end, as Deploy and the bot panel send it.
          *
-         *     ``end_at_ms`` is required and may be ``null``: ``null`` is the explicit
-         *     "no end" choice. A Deploy that sends no end at all gets the default end.
+         *     Both fields are required. ``end_at_ms`` ``null`` is the explicit "no
+         *     end" choice, sent with ``end_action`` ``SELL``: a bot with no end has no
+         *     shares to keep at one. A Deploy that sends no ``end`` at all gets the
+         *     default end.
          */
         BotEndInput: {
             /**
              * End Action
-             * @default SELL
              * @enum {string}
              */
-            end_action?: "SELL" | "KEEP";
+            end_action: "SELL" | "KEEP";
             /** End At Ms */
             end_at_ms: number | null;
         };
         /**
          * BotEndPreviewRequest
          * @description Check an end on the Deploy form before the bot exists.
+         *
+         *     ``end`` omitted previews the default end; an explicit ``null`` is refused
+         *     (:data:`EXPLICIT_NULL_END`).
          */
         BotEndPreviewRequest: {
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             /**
              * Execution Mode
              * @enum {string}
@@ -10173,8 +10196,8 @@ export interface components {
          * BotEndView
          * @description A bot's end in the owner's words, authored by the backend.
          *
-         *     ``headline`` is the one line the panel shows ("Ends today 15:59 ET ·
-         *     sells"); ``explanation`` says what will happen, or what happened.
+         *     ``headline`` is the one line the panel shows ("Ends Wed Sep 30, 15:59 ET
+         *     · sells"); ``explanation`` says what will happen, or what happened.
          *     ``notice`` is set only when the chosen time was moved, e.g. to one minute
          *     before an early close. ``editable`` says whether the panel may offer to
          *     change it now.
@@ -12574,6 +12597,34 @@ export interface components {
             kind: "close_leg";
         };
         /**
+         * ClosingBarConvention
+         * @description How a run treats a Signal Program decision on the closing bar.
+         *
+         *     Recorded on every backtest run's evidence provenance, so evidence produced
+         *     under a different convention is classified rather than silently compared.
+         * @enum {string}
+         */
+        ClosingBarConvention: "skip_closing_bar/v1" | "lean_next_open/v1";
+        /**
+         * ClosingBarSkipRecord
+         * @description One decision a run's closing-bar convention set aside (#2607).
+         *
+         *     An ENTER produced no trade. An EXIT stayed due: the program decided it
+         *     again from the next session, when its own exit condition said so, instead
+         *     of at this bar's close.
+         */
+        ClosingBarSkipRecord: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Close Price */
+            close_price: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
+        };
+        /**
          * CohortActionResult
          * @description The batch outcome: every leg answered, in request order (ADR 0051 D5).
          */
@@ -14439,6 +14490,8 @@ export interface components {
              * @default 0
              */
             risk_revision?: number;
+            /** Same Symbol Note */
+            same_symbol_note?: string | null;
             /**
              * Shortcuts
              * @default []
@@ -14989,11 +15042,6 @@ export interface components {
              */
             fill_mode?: string;
             /**
-             * Force Flat At
-             * @description At the first minute bar whose wall-clock time reaches this value, the engine cancels all queued / deferred orders, clears active TP/SL brackets, closes every open position at that minute's close, and calls strategy.on_force_flat(). Once per calendar day. Example: '15:58:00' for ET data.
-             */
-            force_flat_at?: string | null;
-            /**
              * From Date
              * @description YYYY-MM-DD override (legacy: start_date)
              */
@@ -15028,11 +15076,6 @@ export interface components {
              * @default true
              */
             save_study?: boolean;
-            /**
-             * Session Entry Cutoff
-             * @description After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.
-             */
-            session_entry_cutoff?: string | null;
             /**
              * Slippage Per Share
              * @description Per-share slippage applied against the trade direction at fill. Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a non-zero value (e.g. 0.02 = 2 ticks for US equities) to model a more realistic execution cost.
@@ -21454,8 +21497,9 @@ export interface components {
          *     decision bar's close for a leg placed as the program decides, and the live
          *     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
          *     or the send-time re-price of an exit sent after its session. A
-         *     regular-hours run's EXIT on the day's last bar goes out after the close
-         *     as such a limit, so Start of a regular-hours run refuses
+         *     regular-hours run's exits outside the session -- a manual Flatten, the
+         *     watchdog's re-drive of a refused exit, an exit that reaches the broker
+         *     after the close -- are such limits, so Start of a regular-hours run refuses
          *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
          *     never carried into a new deployment; resolving it requires Flatten before
          *     a fresh Deploy (#2504).
@@ -23572,6 +23616,12 @@ export interface components {
         };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
+            closing_bar_convention?: components["schemas"]["ClosingBarConvention"] | null;
+            /**
+             * Closing Bar Skips
+             * @default []
+             */
+            closing_bar_skips?: components["schemas"]["ClosingBarSkipRecord"][];
             /** Daily Return Convention */
             daily_return_convention: string;
             /** Data Availability Hash */
@@ -32418,41 +32468,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotDeployPrefill"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_bot_end_scoped_api_brokers__broker__accounts__account_id__bots__sid__end_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotEndView"];
                 };
             };
             /** @description Validation Error */

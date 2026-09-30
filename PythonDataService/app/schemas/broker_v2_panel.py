@@ -669,7 +669,7 @@ class BotPanelView(BaseModel):
     # custody holds no seal (a pre-seal or non-SQLite registration).
     exit_terms: ExitTerms | None = None
     # This bot's owner-set end and its sell/keep choice (#2607), in the
-    # owner's words -- "Ends today 15:59 ET · sells". Not a sealed term: the
+    # owner's words -- "Ends Wed Sep 30, 15:59 ET · sells". Not a sealed term: the
     # panel changes it through ``PUT .../bots/{sid}/end``.
     end: BotEndView | None = None
     # Where the bot is now -- running, holding, finished, or cleared from

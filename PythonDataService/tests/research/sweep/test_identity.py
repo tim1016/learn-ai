@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -200,3 +201,16 @@ def test_the_real_service_resolves_a_complete_identity() -> None:
     assert identity.digest_scheme == DIGEST_SCHEME
     assert identity.tree_state in ("clean", "dirty", "unknown")
     assert CodeIdentity.from_dict(identity.as_dict()) == identity
+
+
+@pytest.mark.parametrize("module_name", ["app.lean_sidecar.closing_bar", "app.lean_sidecar.trading_calendar"])
+def test_the_closing_bar_rule_and_its_calendar_are_part_of_the_source_identity(module_name: str) -> None:
+    """#2607: the engine sets a closing-bar decision aside by this predicate over the calendar.
+
+    Either file changing changes a backtest's trades, so a sweep receipt made
+    before the change must not read as the same code.
+    """
+    module_file = Path(importlib.import_module(module_name).__file__ or "")
+    relative = module_file.resolve().relative_to(identity_module.SERVICE_ROOT).as_posix()
+
+    assert any(relative == path or relative.startswith(f"{path}/") for path in identity_module.IDENTITY_SOURCE_PATHS)

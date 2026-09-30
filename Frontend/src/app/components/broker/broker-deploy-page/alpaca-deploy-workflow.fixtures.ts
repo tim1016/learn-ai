@@ -14,11 +14,12 @@ import type { BotEndPreviewRequest, BotEndView, DeployBotView } from '../v2-pane
  * close, 15:59 ET — worded as the backend words it
  * (`bot_end.resolved_bot_end_view`, #2607). */
 export const DEFAULT_END: BotEndView = {
-  end_at_ms: Date.UTC(2023, 10, 15, 20, 59),
+  end_at_ms: 1_700_081_940_000,
   end_action: 'SELL',
   status: 'scheduled',
-  headline: 'Ends tomorrow 15:59 ET · sells',
-  explanation: 'At 15:59 ET tomorrow the Clerk stops the bot, cancels its working orders and sells its shares at market.',
+  headline: 'Ends Wed Nov 15, 15:59 ET · sells',
+  explanation:
+    'At Wed Nov 15, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
   notice: null,
   editable: true,
 };
@@ -114,6 +115,7 @@ export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = 
 
 export const DEPLOY_VIEW: DeployBotView = {
   default_exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
+  // The end a Deploy that names none gets, as the backend authors it (#2607).
   default_end: DEFAULT_END,
   broker: 'alpaca',
   account_id: 'PA9',

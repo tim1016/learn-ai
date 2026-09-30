@@ -288,6 +288,11 @@ def submit_stop_run(
     lookup inside ``commit_first_transition`` runs *before* this function
     re-reads the active run, so a lost-response retry replays the completed
     Stop even though the run it targeted is no longer active.
+
+    A run is stopped once, whatever the reason: a second STOP of the same run
+    under another reason -- the owner's Stop landing in the minute the Clerk
+    stopped the run at its scheduled end (#2607) -- is the STOP already
+    committed, returned as it was, never a conflict.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("lifecycle_run_id", lifecycle_run_id)
@@ -333,13 +338,17 @@ def submit_stop_run(
             facts_json=facts.to_facts_json(),
         )
 
-    return _commit(
-        repo,
+    outcome = repo.commit_first_transition(
         command_id=command_id,
         idempotency_key=idempotency_key,
         payload_hash=payload_hash,
         build_transition=build_transition,
     )
+    if isinstance(outcome, CommandExistingConflict | CommandExistingSame):
+        # The key names this run's STOP alone; only its reason can differ.
+        return CommandSubmission(command=outcome.command, created=False)
+    assert isinstance(outcome, CommandCreated)
+    return CommandSubmission(command=outcome.command, created=True)
 
 
 def submit_retire_strategy_instance(

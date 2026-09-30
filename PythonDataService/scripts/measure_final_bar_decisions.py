@@ -1,27 +1,25 @@
-"""Measure final-bar decisions in backtests of the live strategies (#2467).
+"""Measure closing-bar decisions in backtests of the live strategies (#2467, #2607).
 
 A read-only research instrument. It answers three questions from data
 already held on this machine, with no vendor fetch and no running service:
 
 1. **Share.** For each strategy that has run on a clerk lane, how many
-   backtest trades are decided on the session's final bar? The backtest fills
-   such a decision at that bar's close; live decides it after the close.
-2. **Models.** What does each candidate backtest model do to those trades:
-   fill at the close (today), skip the ENTER and price the EXIT as the
-   after-hours limit live now sends (#2440), fill at the next open, or skip
-   both?
+   decisions fall on the session's closing bar? Live decides that bar only
+   after the close, so since #2607 neither live nor the backtest acts on it.
+2. **Models.** The engine's own closing-bar rule (every non-LEAN backtest:
+   an ENTER is skipped, an EXIT stays due for the program to decide again)
+   against the LEAN-compatibility profile, which fills the same decision at
+   the next session's first-minute open.
 3. **Closing prints.** For the sessions whose live-observed IBKR minutes are
    held, how does the lake's final minute compare with what live saw, and do
    the lake's buckets reproduce the trace digests live recorded?
 
-The session close always comes from the canonical calendar
-(``app.lean_sidecar.trading_calendar``), so an early-close half-day's final
-bar is its 12:59 minute. After-hours prices come from the lake's own
-extended-hours minutes; the after-hours end comes from
-``session_authority.order_session_state_at_ms`` (17:00 on an early-close day).
-An after-hours fill is credited only to minutes that start after the close:
-live decides the final bar just after it, so the minute that starts at the
-close opens on prints that predate the order (``after_the_decision``).
+The closing bar is the engine's own predicate
+(``app.lean_sidecar.closing_bar.is_closing_bar``) over the canonical calendar,
+so an early-close half-day's closing bar ends at its own close. The
+after-hours legs this script measured for #2467 were deleted with the model
+they priced: #2607 chose to set the decision aside rather than price it after
+the close.
 
 Symbol, bucket width and warmup lookback come from the strategies measured
 and their registered signal-program contracts, not from literals.
@@ -62,24 +60,21 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
     ShadowTraceDivergenceError,
     run_shadow_trace_evaluation,
 )
-from app.broker.alpaca.marketable_limit import marketable_limit_price
-from app.broker.contract.models import OrderSide
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine, BacktestResult, pin_strategy_window
-from app.engine.execution.execution_config import ExecutionConfig
+from app.engine.engine import BacktestEngine, BacktestResult, ClosingBarSkip, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
-from app.engine.strategy.signal_program import Settlement, trace_root
+from app.engine.strategy.signal_program import trace_root
+from app.lean_sidecar.closing_bar import is_closing_bar
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
     is_early_close,
@@ -89,18 +84,14 @@ from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
 )
 from app.marketdata.feed import warmup_window_start_ms
-from app.services.session_authority import order_session_state_at_ms
 from app.utils.timestamps import ny_datetime
 
 logger = logging.getLogger(__name__)
 
 MINUTE_MS = 60_000
 BPS = Decimal(10_000)
-#: Exit allowances swept for the after-hours model. There is no built-in
-#: default (#2440): the operator sets ``xh_exit_bps`` per account revision.
-EXIT_ALLOWANCES_BPS: tuple[Decimal, ...] = (Decimal(0), Decimal(5), Decimal(10), Decimal(25), Decimal(50))
 
-Model = Literal["close", "live", "next_open", "skip_all"]
+Model = Literal["engine", "lean_next_open"]
 
 
 @dataclass(frozen=True)
@@ -179,121 +170,14 @@ def session_date_of(timestamp_ms: int) -> date:
     return ny_datetime(timestamp_ms).date()
 
 
-def is_final_bar_close(bar_close_ms: int) -> bool:
-    """True when ``bar_close_ms`` is its session's regular close (canonical calendar)."""
-    day = session_date_of(bar_close_ms)
-    return is_trading_day(day) and bar_close_ms == session_close_ms_utc(day)
-
-
-def after_the_decision(bar: TradeBar, close_ms: int) -> bool:
-    """True when every print in ``bar`` postdates a final-bar decision taken at ``close_ms``.
-
-    Live decides the final bar just after its close (``paper-ema-spy-0924``
-    recorded 16:00:00.595), so the after-hours limit it sends exists only
-    partway into the minute that starts at the close. That minute's open --
-    the first print at or after the close -- is a price the order could not
-    reach. The first minute a fill can be credited to is the first one that
-    starts after the close.
-    """
-    return bar.start_ms > close_ms
-
-
-def after_hours_end_ms(close_ms: int) -> int:
-    """When an after-hours DAY limit sent at ``close_ms`` ends (20:00, or 17:00 on an early close)."""
-    state = order_session_state_at_ms(now_ms=close_ms, extended_window=ALPACA_EXTENDED_HOURS_WINDOW)
-    if state.phase != "POST" or state.next_transition_ms is None:
-        raise ValueError(f"{close_ms} is not an after-hours instant: {state.phase}")
-    return state.next_transition_ms
-
-
 # ---------------------------------------------------------------------------
-# Backtest runs under each final-bar model
+# Backtest runs under each closing-bar convention
 # ---------------------------------------------------------------------------
-@dataclass
-class DiscardedDecision:
-    bar_close_ms: int
-    kind: str
-
-
-#: The engine's private per-bar settlement hook this script overrides. Checked
-#: at import so a rename in ``app/engine/engine.py`` fails loudly here instead
-#: of silently measuring the unmodified engine.
-_ENGINE_SETTLEMENT_HOOK = "_commit_staged_signal_program"
-if not callable(getattr(BacktestEngine, _ENGINE_SETTLEMENT_HOOK, None)):
-    raise ImportError(
-        f"BacktestEngine.{_ENGINE_SETTLEMENT_HOOK} no longer exists; FinalBarPolicyEngine cannot apply its models"
-    )
-
-
-class FinalBarPolicyEngine(BacktestEngine):
-    """The production engine, settling a final-bar decision the way a model says.
-
-    ``discard`` names the intent kinds whose final-bar stage is settled
-    DISCARD instead of COMMIT -- the same settlement the live runner applies
-    when its liveness gate refuses an ENTER (``bot_trade_strategy``). A
-    discarded EXIT keeps its countdown, so the strategy decides EXIT again on
-    its next bar, exactly as a live rejected EXIT would be retried.
-    ``discard_before_ms`` discards every decision before that instant, which
-    is how a live run's warmup treats historical candidates.
-
-    It overrides a private engine hook, so it is research scaffolding, not a
-    model: delete it when #2467's backtest follow-up (#2607) makes the
-    engine settle final-bar decisions itself. ``settlement_calls`` lets every
-    caller prove the override actually ran (``require_settlement_hook``).
-    """
-
-    def __init__(
-        self,
-        *args: Any,
-        discard: frozenset[SignalIntentKind] = frozenset(),
-        discard_before_ms: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._discard = discard
-        self._discard_before_ms = discard_before_ms
-        self.discarded: list[DiscardedDecision] = []
-        self.settlement_calls = 0
-
-    def require_settlement_hook(self) -> None:
-        """Refuse a run in which the engine never called the overridden hook."""
-        if self.settlement_calls == 0:
-            raise RuntimeError(
-                f"BacktestEngine never called {_ENGINE_SETTLEMENT_HOOK}; the final-bar model was not applied"
-            )
-
-    def _commit_staged_signal_program(self, strategy: Strategy) -> None:  # type: ignore[override]
-        self.settlement_calls += 1
-        program = strategy.signal_program
-        if program is None:
-            return
-        stage = program.session.active_stage
-        if stage is not None and stage.intents:
-            kind = stage.intents[0].kind
-            close_ms = stage.bar.end_ms
-            warmup = self._discard_before_ms is not None and close_ms < self._discard_before_ms
-            if warmup or (kind in self._discard and is_final_bar_close(close_ms)):
-                program.session.settle(Settlement.DISCARD)
-                if not warmup:
-                    self.discarded.append(DiscardedDecision(bar_close_ms=close_ms, kind=kind.value))
-                return
-        program.session.commit_if_staged()
-
-
 def build_strategy(live: LiveStrategy, start: date, end: date) -> Strategy:
     registration = _STRATEGY_REGISTRY[live.strategy_key]
     strategy = registration.build(registration.param_schema.model_validate(live.params))
     pin_strategy_window(strategy, start, end)
     return strategy
-
-
-#: Which final-bar decisions each model settles DISCARD instead of filling.
-_MODEL_DISCARDS: dict[Model, frozenset[SignalIntentKind]] = {
-    "close": frozenset(),
-    "next_open": frozenset(),
-    "live": frozenset({SignalIntentKind.ENTER}),
-    "skip_all": frozenset({SignalIntentKind.ENTER, SignalIntentKind.EXIT}),
-}
 
 
 def run_model(
@@ -303,18 +187,18 @@ def run_model(
     reader: LeanMinuteDataReader,
     start: date,
     end: date,
-) -> tuple[BacktestResult, Strategy, list[DiscardedDecision]]:
+) -> tuple[BacktestResult, Strategy]:
+    """Run ``live`` under the engine's own closing-bar rule, or under the LEAN profile.
+
+    ``engine`` is every non-LEAN backtest since #2607: a closing-bar decision
+    is set aside and recorded on ``BacktestResult.closing_bar_skips``.
+    ``lean_next_open`` is the LEAN-compatibility path: it commits the decision
+    and fills it at the next session's first-minute open.
+    """
     strategy = build_strategy(live, start, end)
-    # ``next_open`` is the LEAN-compatibility path the engine already has: a
-    # signal bar emitted only after a session gap fills at the current
-    # minute's open. Every other model keeps today's signal-bar-close fill.
-    fill_model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=model == "next_open")
-    engine = FinalBarPolicyEngine(
-        data_source=reader, execution_config=ExecutionConfig(), fill_model=fill_model, discard=_MODEL_DISCARDS[model]
-    )
-    result = engine.run(strategy, retain_bars=False)
-    engine.require_settlement_hook()
-    return result, strategy, engine.discarded
+    fill_model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=model == "lean_next_open")
+    result = BacktestEngine(data_source=reader, fill_model=fill_model).run(strategy, retain_bars=False)
+    return result, strategy
 
 
 @dataclass
@@ -324,8 +208,6 @@ class TradeRow:
     entry_price: str
     exit_price: str
     pnl_points: str
-    final_bar_entry: bool
-    final_bar_exit: bool
     synthetic_exit: bool
 
 
@@ -339,8 +221,6 @@ def trade_rows(strategy: Strategy) -> list[TradeRow]:
                 entry_price=str(trade.entry_price),
                 exit_price=str(trade.exit_price),
                 pnl_points=str(trade.exit_price - trade.entry_price),
-                final_bar_entry=is_final_bar_close(trade.entry_time_ms),
-                final_bar_exit=is_final_bar_close(trade.exit_time_ms),
                 synthetic_exit=bool(trade.is_synthetic_exit),
             )
         )
@@ -348,17 +228,15 @@ def trade_rows(strategy: Strategy) -> list[TradeRow]:
 
 
 # ---------------------------------------------------------------------------
-# After-hours and next-open prices for a final-bar decision
+# Next-open prices for a closing-bar decision
 # ---------------------------------------------------------------------------
 @dataclass
 class CloseContext:
     """What the lake shows around one session close.
 
     ``close_minute_*`` is the minute that starts at the close (16:00, or
-    13:00 on a half-day). Its open is the first print at or after the close,
-    which predates a final-bar order, so it is recorded for comparison only.
-    ``after_decision_*`` is the first minute that starts after the close:
-    the earliest price a final-bar order can be credited with.
+    13:00 on a half-day), from the extended-hours lake. ``next_open`` is the
+    price the LEAN profile fills a closing-bar decision at.
     """
 
     session_date: str
@@ -369,13 +247,8 @@ class CloseContext:
     close_minute_open: str | None
     close_minute_close: str | None
     close_minute_volume: int | None
-    after_decision_start_ms: int | None
-    after_decision_open: str | None
-    after_decision_volume: int | None
     next_open_ms: int | None
     next_open: str | None
-    after_hours_bars: int
-    after_hours_high: str | None
 
 
 class LakeSessions:
@@ -391,12 +264,6 @@ class LakeSessions:
             self._cache[day] = self._reader.read_day(self._symbol, day)
         return self._cache[day]
 
-    def after_decision_bars(self, day: date) -> list[TradeBar]:
-        """The after-hours minutes a final-bar order can fill in: after the decision, before the after-hours end."""
-        close_ms = session_close_ms_utc(day)
-        ah_end = after_hours_end_ms(close_ms)
-        return [b for b in self.bars(day) if after_the_decision(b, close_ms) and b.end_ms <= ah_end]
-
     def context(self, day: date) -> CloseContext | None:
         close_ms = session_close_ms_utc(day)
         open_ms = session_open_ms_utc(day)
@@ -405,7 +272,6 @@ class LakeSessions:
         if not rth or rth[-1].end_ms != close_ms:
             return None
         close_minute = next((b for b in day_bars if b.start_ms == close_ms), None)
-        after = self.after_decision_bars(day)
         following = next_trading_day(day)
         next_bars = [
             b
@@ -421,35 +287,9 @@ class LakeSessions:
             close_minute_open=str(close_minute.open) if close_minute else None,
             close_minute_close=str(close_minute.close) if close_minute else None,
             close_minute_volume=close_minute.volume if close_minute else None,
-            after_decision_start_ms=after[0].start_ms if after else None,
-            after_decision_open=str(after[0].open) if after else None,
-            after_decision_volume=after[0].volume if after else None,
             next_open_ms=next_bars[0].start_ms if next_bars else None,
             next_open=str(next_bars[0].open) if next_bars else None,
-            after_hours_bars=len(after),
-            after_hours_high=str(max(b.high for b in after)) if after else None,
         )
-
-    def after_hours_sell_fill(
-        self, day: date, *, anchor: Decimal, allowance_bps: Decimal
-    ) -> tuple[Decimal | None, Decimal | None]:
-        """(touch fill, marketable fill) for a sell limit sent just after the close.
-
-        The limit is ``marketable_limit_price`` -- the live anchor formula.
-        Only minutes that start after the decision are eligible
-        (``after_the_decision``). *Touch* is ``fill_models.limit_touch_fill``'s
-        rule: the first eligible minute whose high reaches the limit fills at
-        the limit. *Marketable* credits the price improvement a limit below
-        the market gets: the first eligible minute's open when it is at or
-        above the limit, else the touch price. ``None`` when nothing reached
-        the limit before the after-hours end.
-        """
-        limit = marketable_limit_price(side=OrderSide.SELL, anchor=anchor, allowance_bps=allowance_bps)
-        after = self.after_decision_bars(day)
-        if not any(bar.high >= limit for bar in after):
-            return None, None
-        marketable = after[0].open if after[0].open >= limit else limit
-        return limit, marketable
 
 
 def bps_of(delta: Decimal, base: Decimal) -> float:
@@ -736,7 +576,7 @@ def grouping_parity(ledger: Path, live: LiveStrategy) -> GroupingParity:
         compared = divergence.index
     else:
         compared = evaluation.compared_count
-        final_bar_traces = sum(is_final_bar_close(t.bar_close_ms) for t in evaluation.traces)
+        final_bar_traces = sum(is_closing_bar(t.bar_close_ms) for t in evaluation.traces)
     return GroupingParity(
         ledger=ledger.parent.name,
         strategy_key=live.strategy_key,
@@ -775,10 +615,13 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
     """Recompute each EMA run's trace digests from lake buckets and compare with its receipts.
 
     The live warmup window is the strategy's sealed ``warmup_lookback_days``
-    before the run's start (``marketdata.feed.warmup_window_start_ms``);
-    historical candidates in it are discarded, as live warmup discards them.
-    Equal digests mean the lake's bucket closes reproduce, digit for digit,
-    every indicator value live computed from IBKR bars.
+    before the run's start (``marketdata.feed.warmup_window_start_ms``). The
+    engine's evaluation boundary at the run's start clears the lifecycle the
+    warmup built, as live warmup's ``on_force_flat`` does, and every later
+    decision commits (``BacktestEngine.for_decision_identity``), as a trace
+    digest is taken before any refusal. Equal digests mean the lake's bucket
+    closes reproduce, digit for digit, every indicator value live computed
+    from IBKR bars.
     """
     conn = sqlite3.connect(f"file:{receipts_db}?mode=ro&immutable=1", uri=True)
     try:
@@ -813,9 +656,8 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
         last_ms = max(close for close, _, _ in run_receipts)
         live = LiveStrategy(label=sid, strategy_key=key, params={"symbol": config["symbol"], **config["strategy_params"]}, evidence="")
         strategy = build_strategy(live, session_date_of(warmup_start_ms), session_date_of(last_ms))
-        engine = FinalBarPolicyEngine(data_source=_WindowReader(reader, warmup_start_ms), discard_before_ms=started_ms)
-        engine.run(strategy, retain_bars=False)
-        engine.require_settlement_hook()
+        engine = BacktestEngine.for_decision_identity(_WindowReader(reader, warmup_start_ms))
+        engine.run(strategy, evaluation_start_ms=started_ms, retain_bars=False)
         assert strategy.signal_program is not None
         traces = {t.bar_close_ms: t for t in strategy.signal_program.session.traces}
         reproduced = 0
@@ -828,7 +670,7 @@ def replay_receipts(receipts_db: Path, lake_root: Path) -> list[ReceiptReplay]:
             same = trace is not None and trace_root([trace]) == digest
             reproduced += same
             same_decision += candidate != _UNMAPPED and trace is not None and trace.staged_candidate == candidate
-            if is_final_bar_close(close_ms):
+            if is_closing_bar(close_ms):
                 final_total += 1
                 final_reproduced += same
             if not same and first_mismatch is None:
@@ -872,18 +714,19 @@ class StrategyMeasurement:
     evidence: str
     sessions: int
     early_close_sessions: int
-    fills: int
     trades: int
-    final_bar_enter: int
-    final_bar_exit: int
-    final_bar_trades: int
-    final_bar_trade_share: float
+    closing_bar_enter: int
+    closing_bar_exit: int
     models: dict[str, dict[str, Any]] = field(default_factory=dict)
-    final_bar_decisions: list[dict[str, Any]] = field(default_factory=list)
+    closing_bar_decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _points(rows: Sequence[TradeRow]) -> Decimal:
     return sum((Decimal(r.pnl_points) for r in rows if not r.synthetic_exit), Decimal(0))
+
+
+def _skip_record(skip: ClosingBarSkip) -> dict[str, Any]:
+    return {"bar_close_ms": skip.bar_close_ms, "intent": skip.intent.value, "close_price": str(skip.close_price)}
 
 
 def measure_strategy(
@@ -894,12 +737,17 @@ def measure_strategy(
     start: date,
     end: date,
 ) -> StrategyMeasurement:
-    close_result, close_strategy, _ = run_model(live, "close", reader=reader, start=start, end=end)
-    rows = [r for r in trade_rows(close_strategy) if not r.synthetic_exit]
+    """The engine's own closing-bar rule against the LEAN profile, for one live configuration.
+
+    The decisions the rule set aside are read from the engine's own record
+    (``BacktestResult.closing_bar_skips``), never re-derived here.
+    """
+    engine_result, engine_strategy = run_model(live, "engine", reader=reader, start=start, end=end)
+    _, lean_strategy = run_model(live, "lean_next_open", reader=reader, start=start, end=end)
+    engine_rows = [r for r in trade_rows(engine_strategy) if not r.synthetic_exit]
+    lean_rows = [r for r in trade_rows(lean_strategy) if not r.synthetic_exit]
+    skips = engine_result.closing_bar_skips
     all_days = [d for d in reader.iter_dates(live.params["symbol"], start, end) if is_trading_day(d)]
-    final_enter = sum(r.final_bar_entry for r in rows)
-    final_exit = sum(r.final_bar_exit for r in rows)
-    final_trades = sum(r.final_bar_entry or r.final_bar_exit for r in rows)
     measurement = StrategyMeasurement(
         label=live.label,
         strategy_key=live.strategy_key,
@@ -907,112 +755,50 @@ def measure_strategy(
         evidence=live.evidence,
         sessions=len(all_days),
         early_close_sessions=sum(is_early_close(d) for d in all_days),
-        fills=len(close_result.order_events),
-        trades=len(rows),
-        final_bar_enter=final_enter,
-        final_bar_exit=final_exit,
-        final_bar_trades=final_trades,
-        final_bar_trade_share=final_trades / len(rows) if rows else 0.0,
+        trades=len(engine_rows),
+        closing_bar_enter=sum(skip.intent is SignalIntentKind.ENTER for skip in skips),
+        closing_bar_exit=sum(skip.intent is SignalIntentKind.EXIT for skip in skips),
+        models={
+            "engine": {
+                "trades": len(engine_rows),
+                "points": str(_points(engine_rows)),
+                "closing_bar_skips": [_skip_record(skip) for skip in skips],
+            },
+            "lean_next_open": {"trades": len(lean_rows), "points": str(_points(lean_rows))},
+        },
     )
     logger.info(
-        "measured final-bar share",
-        extra={"action": "final_bar_share", "label": live.label, "trades": len(rows), "final": final_trades},
+        "measured closing-bar decisions",
+        extra={"action": "closing_bar_share", "label": live.label, "trades": len(engine_rows), "skips": len(skips)},
     )
-    measurement.models["close"] = {"trades": len(rows), "points": str(_points(rows))}
-    if final_trades == 0:
-        return measurement
-
-    for model in ("live", "next_open", "skip_all"):
-        _, strategy, discarded = run_model(live, model, reader=reader, start=start, end=end)
-        model_rows = [r for r in trade_rows(strategy) if not r.synthetic_exit]
-        entry = {
-            "trades": len(model_rows),
-            "points": str(_points(model_rows)),
-            "discarded": [asdict(d) for d in discarded],
-        }
-        if model == "live":
-            entry["after_hours_exit"] = _after_hours_exit_models(model_rows, sessions)
-        measurement.models[model] = entry
-
-    for row in rows:
-        if not (row.final_bar_entry or row.final_bar_exit):
-            continue
-        close_ms = row.exit_ms if row.final_bar_exit else row.entry_ms
-        context = sessions.context(session_date_of(close_ms))
-        measurement.final_bar_decisions.append(
-            {
-                "kind": "EXIT" if row.final_bar_exit else "ENTER",
-                "trade": asdict(row),
-                "close_context": asdict(context) if context is not None else None,
-            }
+    for skip in skips:
+        context = sessions.context(session_date_of(skip.bar_close_ms))
+        measurement.closing_bar_decisions.append(
+            {"skip": _skip_record(skip), "close_context": asdict(context) if context is not None else None}
         )
     return measurement
 
 
-def _after_hours_exit_models(rows: Sequence[TradeRow], sessions: LakeSessions) -> dict[str, Any]:
-    """Re-price each final-bar EXIT of the live-model run as the after-hours sell limit live sends."""
-    out: dict[str, Any] = {}
-    final_exits = [r for r in rows if r.final_bar_exit]
-    for allowance in EXIT_ALLOWANCES_BPS:
-        touch_points = Decimal(0)
-        marketable_points = Decimal(0)
-        unfilled = 0
-        touch_bps: list[float] = []
-        marketable_bps: list[float] = []
-        for row in final_exits:
-            close = Decimal(row.exit_price)
-            touch, marketable = sessions.after_hours_sell_fill(
-                session_date_of(row.exit_ms), anchor=close, allowance_bps=allowance
-            )
-            if touch is None or marketable is None:
-                unfilled += 1
-                continue
-            touch_points += touch - close
-            marketable_points += marketable - close
-            touch_bps.append(bps_of(touch - close, close))
-            marketable_bps.append(bps_of(marketable - close, close))
-        out[str(allowance)] = {
-            "final_bar_exits": len(final_exits),
-            "unfilled": unfilled,
-            "touch_points_vs_close": str(touch_points),
-            "marketable_points_vs_close": str(marketable_points),
-            "touch_bps_vs_close": describe(touch_bps),
-            "marketable_bps_vs_close": describe(marketable_bps),
-        }
-    return out
-
-
 def session_wide_distributions(sessions: LakeSessions, days: Sequence[date]) -> dict[str, Any]:
-    """Every session in the window: prices after the close against the final minute's close.
+    """Every session in the window: prices at and after the close against the final minute's close.
 
-    ``after_decision_open`` is the proxy a final-bar exit can be credited
-    with. ``close_minute_open`` is the first print at or after the close; it
-    predates a final-bar order and is reported only to show what counting it
-    would overstate. Volumes are the medians of the final minute, the minute
-    that starts at the close, and the first minute after the decision.
+    ``close_minute_*`` is the minute that starts at the close; ``next_open``
+    is the price the LEAN profile fills a closing-bar decision at. Volumes are
+    the medians of the final minute and the minute that starts at the close.
     """
-    after_decision_open: list[float] = []
     close_minute_open: list[float] = []
     close_minute_close: list[float] = []
     next_open: list[float] = []
     final_volume: list[int] = []
     close_minute_volume: list[int] = []
-    after_decision_volume: list[int] = []
-    no_minute_after_decision = 0
-    fill_rates: dict[str, dict[str, Any]] = {}
-    contexts: list[tuple[date, CloseContext]] = []
+    contexts = 0
     for day in days:
         context = sessions.context(day)
         if context is None:
             continue
-        contexts.append((day, context))
+        contexts += 1
         close = Decimal(context.close)
         final_volume.append(context.final_minute_volume)
-        if context.after_decision_open is None or context.after_decision_volume is None:
-            no_minute_after_decision += 1
-        else:
-            after_decision_open.append(bps_of(Decimal(context.after_decision_open) - close, close))
-            after_decision_volume.append(context.after_decision_volume)
         if context.close_minute_open is not None and context.close_minute_close is not None:
             close_minute_open.append(bps_of(Decimal(context.close_minute_open) - close, close))
             close_minute_close.append(bps_of(Decimal(context.close_minute_close) - close, close))
@@ -1020,35 +806,15 @@ def session_wide_distributions(sessions: LakeSessions, days: Sequence[date]) -> 
             close_minute_volume.append(context.close_minute_volume)
         if context.next_open is not None:
             next_open.append(bps_of(Decimal(context.next_open) - close, close))
-    for allowance in EXIT_ALLOWANCES_BPS:
-        filled = 0
-        marketable_bps: list[float] = []
-        for day, context in contexts:
-            close = Decimal(context.close)
-            touch, marketable = sessions.after_hours_sell_fill(day, anchor=close, allowance_bps=allowance)
-            if touch is not None and marketable is not None:
-                filled += 1
-                marketable_bps.append(bps_of(marketable - close, close))
-        fill_rates[str(allowance)] = {
-            "sessions": len(contexts),
-            "sell_limit_filled": filled,
-            "marketable_bps_vs_close": describe(marketable_bps),
-        }
     return {
-        "sessions": len(contexts),
-        "sessions_without_a_minute_after_the_decision": no_minute_after_decision,
-        "after_decision_open_bps_vs_close": describe(after_decision_open),
+        "sessions": contexts,
+        "close_minute_open_bps_vs_close": describe(close_minute_open),
         "close_minute_close_bps_vs_close": describe(close_minute_close),
-        "close_minute_open_bps_vs_close_predates_the_order": describe(close_minute_open),
         "next_open_bps_vs_close": describe(next_open),
         "median_volume": {
             "final_minute": statistics.median(final_volume) if final_volume else None,
             "close_minute": statistics.median(close_minute_volume) if close_minute_volume else None,
-            "first_minute_after_the_decision": (
-                statistics.median(after_decision_volume) if after_decision_volume else None
-            ),
         },
-        "after_hours_sell_limit": fill_rates,
     }
 
 
@@ -1081,7 +847,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     missing = sorted(set(expected) - set(days))
 
     report: dict[str, Any] = {
-        "generated_for": "issue #2467",
+        "generated_for": "issues #2467 and #2607",
         "window": {"start": args.start.isoformat(), "end": args.end.isoformat(), "symbol": symbol},
         "lake_sessions": len(days),
         "calendar_sessions": len(expected),
@@ -1115,7 +881,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if grouping:
         report["grouping_parity"] = grouping
     args.out.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
-    logger.info("wrote final-bar measurement", extra={"action": "final_bar_report", "path": str(args.out)})
+    logger.info("wrote closing-bar measurement", extra={"action": "closing_bar_report", "path": str(args.out)})
     return 0
 
 
@@ -1125,8 +891,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "LIVE_STRATEGIES",
-    "FinalBarPolicyEngine",
     "LakeFileReader",
-    "is_final_bar_close",
     "main",
 ]

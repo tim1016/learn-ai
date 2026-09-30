@@ -86,6 +86,7 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     notes: null,
     trades: [makeTrade()],
     tradesTruncated: false,
+    closingBarSkips: [],
     parityVerdicts: [],
     ...overrides,
   };

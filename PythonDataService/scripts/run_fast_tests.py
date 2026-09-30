@@ -39,6 +39,18 @@ FAST_TEST_PATHS = (
     # Its conftest primes POLYGON_API_KEY and the Signal Program source
     # anchor, the same two facts tests/conftest.py primes for the main root.
     "app/engine/strategy/spec/tests",
+    # #2619: suites only the daily run collected went red for weeks while
+    # every PR stayed green. The cheap, dependency-light ones join the gate
+    # so a signature change (deploy(exit_terms=...)), a launch preflight
+    # probe, or a fixture-hash drift fails the PR that causes it, not the
+    # next morning's run. Postgres-backed suites (backtest_runs/
+    # test_service_db, the grid-search receipt-minting parity test) stay
+    # daily-only: they skip without POSTGRES_URL by design.
+    "tests/installation_migration",
+    "tests/lean_sidecar",
+    "tests/research/ml",
+    "app/engine/tests",
+    "tests/test_statistics.py",
 )
 DAILY_ONLY_PATHS = (
     "tests/unit/data_lake",

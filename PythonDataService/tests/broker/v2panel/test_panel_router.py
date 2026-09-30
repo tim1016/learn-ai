@@ -200,9 +200,7 @@ class _FakeRegistry:
     def bot_end(self, broker: str, sid: str) -> BotEndView:
         """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
         self.status(broker, sid)
-        return bot_end_view(
-            None, carried_out=False, now_ms=_T0, dry_run=False, running=self._running, editable=self._running,
-        )
+        return bot_end_view(None, now_ms=_T0, dry_run=False, running=self._running)
 
     def bindings_for_broker(self, broker: str) -> list:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""

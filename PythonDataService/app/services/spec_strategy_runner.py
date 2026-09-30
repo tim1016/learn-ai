@@ -130,7 +130,6 @@ def pair_engine_fills(events: Sequence[OrderEvent]) -> list[EngineTrade]:
         entry_qty = Decimal(open_entry.fill_quantity)
         gross_pnl = (event.fill_price - open_entry.fill_price) * entry_qty
         net_pnl = gross_pnl - (open_entry.fee + event.fee)
-        is_synthetic = event.tag == "ForceFlat"
         trades.append(
             EngineTrade(
                 trade_number=trade_number,
@@ -141,7 +140,6 @@ def pair_engine_fills(events: Sequence[OrderEvent]) -> list[EngineTrade]:
                 quantity=entry_qty,
                 pnl=net_pnl,
                 signal_reason=event.tag or "",
-                is_synthetic_exit=is_synthetic,
             )
         )
         open_entry = None

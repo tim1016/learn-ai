@@ -737,13 +737,14 @@ async def test_already_durable_duplicate_restores_degraded_evidence_health(
 
 async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path: Path) -> None:
     # A frame whose event/timestamp map cleanly but whose embedded ``order`` is
-    # malformed (missing required fields) must be a parse error — captured,
+    # malformed (a value it cannot map) must be a parse error — captured,
     # counted, ``_seen`` unpoisoned — and must NOT abort the drain of the frames
     # that follow it. (Regression: the order was once mapped outside the parse
     # guard and after ``_seen`` was set, so a bad order silently lost the event
-    # and truncated the stream.)
+    # and truncated the stream.) Missing text alone maps blank and is contained
+    # per order instead (#2643), so the malformation is a boolean fill count.
     bad = _load_frames()[0]
-    bad["data"]["order"] = {"id": "malformed-1"}  # no symbol/side/tif/status
+    bad["data"]["order"] = {"id": "malformed-1", "filled_qty": True}
     good = _load_frames()[0]  # a valid owned frame delivered AFTER the bad one
     consumer, clerk, _ = await _consumer(tmp_path, [bad, good])
     await _warm(clerk)
@@ -764,7 +765,8 @@ async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
     tmp_path: Path,
 ) -> None:
     malformed = _load_frames()[0]
-    malformed["data"]["order"] = {"id": "malformed-1"}
+    # A value the order cannot map; missing text alone is contained per order (#2643).
+    malformed["data"]["order"] = {"id": "malformed-1", "filled_qty": True}
     async with _running_consumer(tmp_path) as (source, consumer):
         await source.send(malformed)
         await _wait_for_execution_health(healthy=False)

@@ -423,6 +423,10 @@ async def select_synthetic_clerk_runtime(
             intake=intake,
         )
         envelope = LiveEnvelopeGate(values=None, custody_is_simulated=True)
+        # Built before the facade, which asks it for a reading when an ENTER
+        # waits on executions newer than the last one (#2623).
+        envelope_sync = LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=envelope,
+            simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -433,6 +437,7 @@ async def select_synthetic_clerk_runtime(
             # A simulator is a paper environment by construction (ADR 0054).
             account_mode="paper",
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+            entry_reading=envelope_sync.read_for_entry,
         )
         sweep = ReconciliationSweep(
             repo=repository,
@@ -461,8 +466,6 @@ async def select_synthetic_clerk_runtime(
             # relies on the boot scan for its terminal-evidence closure —
             # the same posture every authority had before ADR 0050.
         )
-        envelope_sync = LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=envelope,
-            simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
         # Explicit transient consent can price the first deployment before
         # its command commits. Recovery uses the durable commitment instead.
         if not projection_only:

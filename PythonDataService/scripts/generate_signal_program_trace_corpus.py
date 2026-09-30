@@ -22,8 +22,10 @@ program-specific branches. For the given ``--program`` registry key it:
    see ``_select_cells``);
 4. for each selected cell, builds the program from
    ``contract.validated_settings`` plus that cell's own ticker as ``symbol``,
-   replays the cell's raw minute bars through ``BacktestEngine``, and records
-   the resulting ``EvaluationTrace`` count and root; and
+   replays the cell's raw minute bars through
+   ``BacktestEngine.for_decision_identity`` (every decision committed -- the
+   closing-bar rule is applied after decision identity, never inside it), and
+   records the resulting ``EvaluationTrace`` count and root; and
 5. assembles the corpus JSON, in the same schema and key order as the
    existing ``ema-signal-session`` fixture, and either writes it
    (``atomic_write_bytes``) or diffs it against the committed file
@@ -168,7 +170,7 @@ def _entry_for_cell(
     params = registration.param_schema(**{**contract.validated_settings, "symbol": cell.ticker})
     strategy = registration.build(params)
     minute_bars = _minute_bars(cells_root / cell.cell_id, cell.ticker)
-    BacktestEngine(InMemoryDataReader(minute_bars)).run(strategy)
+    BacktestEngine.for_decision_identity(InMemoryDataReader(minute_bars)).run(strategy)
     program = getattr(strategy, "signal_program", None)
     if program is None:
         raise CorpusGenerationError(

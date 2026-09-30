@@ -1,23 +1,22 @@
-"""#2596 through the runner: a regular-hours ENTER decided on the session's last bar is refused.
+"""#2607 through the runner: a regular-hours ENTER decided on the session's last bar is refused.
 
 The last bar closes *at* the regular close, so its decision lands a fraction of
-a second after it. Alpaca's clock is read once a second, and its last answer
-before the close still says OPEN -- inside the 5-second freshness bound for the
-first seconds after the close. That answer used to carry the ENTER through the
-strategy gate, the Clerk's recheck and the check before broker contact as a
-market DAY order, which Alpaca queues for the next open: an overnight entry
-nobody decided. The answer names the close it expires at, and every gate now
-reads it; the Clerk also refuses a market ENTER that could not reach the broker
-inside the calendar's regular session, which catches a Clerk clock running
-behind, where the broker's answer still reads open.
+a second after it: it is the closing bar, and the runner never sends a
+closing-bar decision (``bot_trade_strategy._refused_on_the_closing_bar``).
+The ENTER is discarded and receipted ``CLOSING_BAR`` before the strategy's
+liveness gate or the Clerk is reached, reading only the canonical calendar.
+
+The Clerk's market-closed gate (#2596) stays as the backstop behind that
+screen -- a market ENTER that could not reach the broker inside the regular
+session is still refused there -- and its own suite
+(``test_runtime_program_leg.py``) pins it on the facade.
 
 The real ``run_trade_bot`` drives the sealed ``ema_crossover_signal`` program
 into a real ``SqliteAlpacaClerkFacade`` over a fake broker, on the retained
 LEAN input that makes QQQ's first ENTER on 2026-02-03's last 15-minute bucket
 -- the ENTER LEAN itself submitted at the close and filled at the next open.
 An ordinary ENTER still goes out: ``test_trade_bot_last_bar_exit.py`` enters
-through the same clock and Clerk sixteen minutes before the close, and the
-Clerk's own suite (``test_runtime_program_leg.py``) pins the mid-session leg.
+through the same clock and Clerk sixteen minutes before the close.
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionRecei
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -52,14 +52,6 @@ _DECISION_DELAY_MS = 600
 # The replayed clock jumps a bar at a time, overnight included, with no lease
 # heartbeat in between; the Clerk's execution lease must outlive the span.
 _REPLAY_LEASE_TTL_MS = 2 * 86_400_000
-_CLOSED_AFTER_CLOCK_READ = (
-    "The regular session has closed. The broker clock was last read before the close, "
-    "so it no longer shows the market open."
-)
-_MARKET_ENTRY_AFTER_THE_CLOSE = (
-    "The regular session has closed, or closes within seconds. A market order sent now "
-    "could reach the broker after the close and wait there until the next open."
-)
 
 
 class _RecordingBroker(_SqliteRuntimeBroker):
@@ -134,50 +126,32 @@ async def _run(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "decision_delay_ms",
+    [_DECISION_DELAY_MS, -_DECISION_DELAY_MS],
+    ids=["clock-read-open-before-the-close", "clock-running-behind"],
+)
 async def test_a_regular_hours_enter_decided_on_the_last_bar_is_refused_and_nothing_is_sent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, decision_delay_ms: int
 ) -> None:
-    """The clock was read OPEN just before the close; the decision lands after it."""
-    close_ms = session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY)
+    """The runner refuses the closing-bar ENTER before any clock or Clerk is read.
 
-    broker, receipts = await _run(tmp_path, monkeypatch, ema_bars_through_a_last_bar_enter())
-
-    assert broker.submitted_legs == []
-    last = receipts[-1]
-    assert (last["outcome"], last["reason_code"], last["decision_bar_close_ms"]) == (
-        "blocked",
-        "MARKET_CLOSED",
-        close_ms,
-    )
-    liveness = last["market_liveness"]
-    assert liveness["state"] == "CLOSED"
-    assert liveness["market_clock"]["state"] == "OPEN"
-    assert liveness["market_clock"]["next_close_ms"] == close_ms
-    assert liveness["reason"] == _CLOSED_AFTER_CLOCK_READ
-
-
-@pytest.mark.asyncio
-async def test_a_last_bar_enter_on_a_clock_running_behind_is_refused_by_the_clerk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The host clock reads 15:59:59.4 when the 16:00 decision lands.
-
-    To that clock the broker's last answer is still open and has not reached
-    the close it named, so the strategy gate and the Clerk's liveness recheck
-    both admit the ENTER. The market order could not reach the broker before
-    the close, so the Clerk refuses it on the calendar.
+    Both clocks that let a last-bar ENTER slip through before #2596 -- the
+    broker's last answer read OPEN just before the close, and a host clock
+    that reads 15:59:59.4 when the 16:00 decision lands -- now meet the
+    closing-bar screen first, which reads only the calendar.
     """
     close_ms = session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY)
 
     broker, receipts = await _run(
-        tmp_path, monkeypatch, ema_bars_through_a_last_bar_enter(), decision_delay_ms=-_DECISION_DELAY_MS
+        tmp_path, monkeypatch, ema_bars_through_a_last_bar_enter(), decision_delay_ms=decision_delay_ms
     )
 
     assert broker.submitted_legs == []
     last = receipts[-1]
     assert (last["outcome"], last["reason_code"], last["decision_bar_close_ms"]) == (
         "blocked",
-        "MARKET_CLOSED",
+        CLOSING_BAR_REASON_CODE,
         close_ms,
     )
-    assert last["refusal_reason"] == _MARKET_ENTRY_AFTER_THE_CLOSE
+    assert "market_liveness" not in last

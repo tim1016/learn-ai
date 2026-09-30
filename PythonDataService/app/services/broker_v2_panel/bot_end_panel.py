@@ -1,9 +1,10 @@
-"""The bot end as the panel serves it: the Deploy form's check, a bot's end, and changing it (#2607).
+"""The bot end as the panel serves it: the Deploy form's check and changing a bot's end (#2607).
 
 Transport-facing only: the rules are ``app.services.bot_end``, the end lives
 in the runner's desired state, and the Clerk carries it out
-(``clerk.sqlite.scheduled_end``). This module scopes each read to the account
-and translates refusals into the panel's typed errors.
+(``clerk.sqlite.scheduled_end``). This module scopes each request to the
+account and translates refusals into the panel's typed errors. A bot's end
+itself is read with its panel (``BotPanelView.end``).
 """
 
 from __future__ import annotations
@@ -31,17 +32,14 @@ BOT_END_REFUSED = "BOT_END_REFUSED"
 
 
 def resolve_deploy_end(end: BotEndInput | None, *, dry_run: bool) -> ResolvedBotEnd:
-    """The end a Deploy records, or the panel's refusal in the owner's words."""
+    """The end a Deploy records, or the panel's refusal in the owner's words.
+
+    Every Deploy is regular hours only (``use_rth=True``), as its end is.
+    """
     try:
-        return resolve_bot_end(end, now_ms=now_ms_utc(), dry_run=dry_run)
+        return resolve_bot_end(end, now_ms=now_ms_utc(), dry_run=dry_run, use_rth=True)
     except BotEndRefused as exc:
         raise _refused(exc) from exc
-
-
-def preview_default_end() -> BotEndView:
-    """The end a Deploy that names none gets now, for the Deploy form to pre-fill."""
-    now_ms = now_ms_utc()
-    return resolved_bot_end_view(resolve_bot_end(None, now_ms=now_ms, dry_run=False), now_ms=now_ms, dry_run=False)
 
 
 async def preview_bot_end(broker: str, account_id: str, request: BotEndPreviewRequest) -> BotEndView:
@@ -50,18 +48,10 @@ async def preview_bot_end(broker: str, account_id: str, request: BotEndPreviewRe
     now_ms = now_ms_utc()
     dry_run = request.execution_mode == "dry_run"
     try:
-        resolved = resolve_bot_end(request.end, now_ms=now_ms, dry_run=dry_run)
+        resolved = resolve_bot_end(request.end, now_ms=now_ms, dry_run=dry_run, use_rth=True)
     except BotEndRefused as exc:
         raise _refused(exc) from exc
     return resolved_bot_end_view(resolved, now_ms=now_ms, dry_run=dry_run)
-
-
-async def read_bot_end(broker: str, account_id: str, sid: str) -> BotEndView:
-    await validate_account_scope(broker, account_id, sid)
-    try:
-        return _runner().bot_end(broker, sid)
-    except RunnerUnknownBotError as exc:
-        raise UnknownBotError(str(exc), detail=exc.detail) from exc
 
 
 async def edit_bot_end(broker: str, account_id: str, sid: str, choice: BotEndInput) -> BotEndView:
@@ -97,7 +87,5 @@ __all__ = [
     "BOT_END_REFUSED",
     "edit_bot_end",
     "preview_bot_end",
-    "preview_default_end",
-    "read_bot_end",
     "resolve_deploy_end",
 ]

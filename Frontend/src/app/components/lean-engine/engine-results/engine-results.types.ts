@@ -89,6 +89,13 @@ export interface EngineTrade {
   signal_reason: string;
 }
 
+/** One decision the closing-bar rule set aside (#2607). */
+export interface EngineClosingBarSkip {
+  bar_close_ms: number;
+  intent: "ENTER" | "EXIT";
+  close_price: number;
+}
+
 export interface EngineResultData {
   success: boolean;
   strategy_name: string;
@@ -105,6 +112,7 @@ export interface EngineResultData {
   lean_statistics: LeanStatistics | null;
   lean_analysis?: LeanAnalysisFinding[];
   trades: EngineTrade[];
+  closing_bar_skips?: EngineClosingBarSkip[];
   log_lines: string[];
   validation_analytics?: EngineValidationAnalytics | null;
   error?: string;

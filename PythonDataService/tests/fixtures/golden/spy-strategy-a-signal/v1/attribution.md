@@ -36,11 +36,16 @@ originally captured to reconcile.
   `ema_crossover_signal` and `sma_crossover`. The generator neither sets nor
   overrides a window: `scripts/generate_signal_program_trace_corpus.py`'s
   `_entry_for_cell` builds the registered strategy and hands the cell's
-  minute bars to `BacktestEngine(InMemoryDataReader(...))`, whose
+  minute bars to `BacktestEngine.for_decision_identity(InMemoryDataReader(...))`, whose
   `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
   window the strategy configured for itself. All six programs promoted in
   this slice therefore replay the same window over the same ten cells and
   produce the same 35,900 total traces.
+- Decision identity: the replay commits every staged decision
+  (`BacktestEngine.for_decision_identity`, the LEAN-compatibility
+  profile's convention). The closing-bar rule (#2607) is an execution
+  disposition applied after decision identity, in live and in every other
+  backtest, so it never changes this corpus.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   there is no external reference this promotion is tolerance-compared
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the

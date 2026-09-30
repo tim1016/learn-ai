@@ -196,6 +196,27 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
     )
 
 
+def persisted_execution_configuration(
+    *,
+    compatibility_profile: str | None,
+    warmup_from_date: str | None,
+    slippage_per_share: float,
+    limit_penetration: float,
+) -> dict[str, Any]:
+    """Freeze a run's execution settings in the one receipt shape both engines persist.
+
+    The Python engine's persist path and the LEAN companion's write the same
+    shape, so ``parity.compare_inputs`` can compare the two receipts for
+    equality.
+    """
+    return {
+        "compatibility_profile": compatibility_profile,
+        "warmup_from_date": warmup_from_date,
+        "slippage_per_share": slippage_per_share,
+        "limit_penetration": limit_penetration,
+    }
+
+
 def _evidence_provenance(raw: object) -> str | None:
     # Imports/backfills lacking producer metadata remain unknown forever.
     if raw is None:

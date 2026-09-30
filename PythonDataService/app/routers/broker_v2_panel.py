@@ -131,12 +131,16 @@ router = APIRouter(prefix="/api/brokers", tags=["broker-v2-panel"])
 
 
 def _raise_panel_error(error: panel_errors.PanelDataError) -> NoReturn:
+    reason_code = error.reason_code if isinstance(error, panel_errors.PanelRunnerError) else None
     raise HTTPException(
         status_code=error.http_status,
         detail={
             "message": str(error),
             "why": error.detail,
             "next_action": error.next_action,
+            # A typed refusal names its code (e.g. ``BOT_END_REFUSED``); a
+            # refusal with none keeps the body it always had.
+            **({} if reason_code is None else {"reason_code": reason_code}),
         },
     )
 
@@ -499,18 +503,6 @@ async def read_deploy_prefill_scoped(broker: str, account_id: str, sid: str) -> 
 async def preview_bot_end_scoped(broker: str, account_id: str, request: BotEndPreviewRequest) -> BotEndView:
     try:
         return await bot_end_panel.preview_bot_end(broker, account_id, request)
-    except panel_errors.PanelDataError as error:
-        _raise_panel_error(error)
-
-
-@router.get(
-    "/{broker}/accounts/{account_id}/bots/{sid}/end",
-    response_model=BotEndView,
-    summary="One bot's owner-set end, in the owner's words (#2607)",
-)
-async def read_bot_end_scoped(broker: str, account_id: str, sid: str) -> BotEndView:
-    try:
-        return await bot_end_panel.read_bot_end(broker, account_id, sid)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 

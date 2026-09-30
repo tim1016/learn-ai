@@ -127,16 +127,13 @@ def _same_activity_evidence(left: BrokerActivity, right: BrokerActivity) -> bool
 
 
 def _validate_transfer_payload(payload: object) -> None:
-    """Require identity and finality before a transfer can affect day P&L."""
+    """Require finality before a transfer can affect day P&L.
+
+    Identity is the adapter's: ``from_alpaca_activity`` refuses a row without
+    a non-blank id, as it does for every activity (#2643).
+    """
     if not isinstance(payload, Mapping):
         raise TypeError("Alpaca transfer activity row must be an object")
-    activity_id = payload.get("id")
-    if not isinstance(activity_id, str) or not activity_id.strip():
-        raise BrokerEvidenceUnavailable(
-            "Alpaca transfer activity evidence had no valid activity id.",
-            broker=BROKER_ID,
-            detail="A transfer row cannot be identified without a nonempty broker id.",
-        )
     if payload.get("status") != "executed":
         raise BrokerEvidenceUnavailable(
             "An Alpaca transfer activity was not executed.",
@@ -401,12 +398,8 @@ class AlpacaBroker:
                     )
                 )
                 previous_page_oldest_ms = page_oldest_ms
-                next_page_token = payloads[-1].get("id")
-                if (
-                    not isinstance(next_page_token, str)
-                    or not next_page_token
-                    or next_page_token in issued_page_tokens
-                ):
+                next_page_token = mapped[-1].activity_id
+                if next_page_token in issued_page_tokens:
                     raise BrokerEvidenceUnavailable(
                         "Alpaca transfer activity history was incomplete.",
                         broker=BROKER_ID,
@@ -427,7 +420,8 @@ class AlpacaBroker:
                 page_token=page_token,
                 **activity_filter,
             )
-            for activity in _mapped_activities(payloads):
+            page = _mapped_activities(payloads)
+            for activity in page:
                 if (
                     activity.activity_id not in seen_activity_ids
                     and activity.occurred_at_ms is not None
@@ -437,12 +431,8 @@ class AlpacaBroker:
                     activities.append(activity)
             if len(payloads) < limit:
                 break
-            next_page_token = payloads[-1].get("id")
-            if (
-                not isinstance(next_page_token, str)
-                or not next_page_token
-                or next_page_token == page_token
-            ):
+            next_page_token = page[-1].activity_id
+            if next_page_token == page_token:
                 break
             page_token = next_page_token
         return activities
@@ -497,8 +487,8 @@ class AlpacaBroker:
                 previous_page_oldest_ms = page_oldest_ms
             if window_proven or len(payloads) < page_size:
                 return BrokerActivityEvidence(activities=activities, history_complete=True)
-            next_token = payloads[-1].get("id")
-            if not isinstance(next_token, str) or not next_token or next_token == page_token:
+            next_token = page[-1].activity_id
+            if next_token == page_token:
                 return BrokerActivityEvidence(activities=activities, history_complete=False)
             page_token = next_token
         return BrokerActivityEvidence(activities=activities, history_complete=False, next_page_token=page_token)
@@ -510,16 +500,20 @@ class AlpacaBroker:
         limit: int | None = 100,
     ) -> list[BrokerAsset]:
         payloads = await self._client.list_assets(status=status, limit=limit)
-        return [adapter.from_alpaca_asset(payload) for payload in payloads]
+        return _mapped_evidence(
+            "asset", lambda: [adapter.from_alpaca_asset(payload) for payload in payloads]
+        )
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         """Return one Alpaca asset, or ``None`` when the symbol is unlisted."""
         payload = await self._client.get_asset(symbol)
-        return None if payload is None else adapter.from_alpaca_asset(payload)
+        if payload is None:
+            return None
+        return _mapped_evidence("asset", lambda: adapter.from_alpaca_asset(payload))
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
-        return adapter.from_alpaca_clock(payload)
+        return _mapped_evidence("market clock", lambda: adapter.from_alpaca_clock(payload))
 
     async def get_portfolio_history(
         self, history_range: PortfolioHistoryRange
@@ -530,7 +524,9 @@ class AlpacaBroker:
             period=period,
             timeframe=timeframe,
         )
-        return adapter.from_alpaca_portfolio_history(payload)
+        return _mapped_evidence(
+            "portfolio history", lambda: adapter.from_alpaca_portfolio_history(payload)
+        )
 
     # ── Trade port (phase 2) ────────────────────────────────────────────────
 

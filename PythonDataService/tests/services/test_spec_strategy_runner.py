@@ -93,21 +93,6 @@ class TestPairEngineFills:
         assert len(trades) == 1
         assert trades[0].pnl == Decimal("-10")
 
-    def test_force_flat_tag_marks_synthetic_exit(self) -> None:
-        entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10)
-        exit_ = _event(
-            order_id=2,
-            time=datetime(2025, 1, 6, 14, 45, tzinfo=UTC),
-            direction=Direction.SHORT,
-            fill_price="101",
-            fill_quantity=-10,
-            tag="ForceFlat",
-        )
-
-        trades = pair_engine_fills([entry, exit_])
-
-        assert trades[0].is_synthetic_exit is True
-
     def test_fee_subtracted_from_pnl(self) -> None:
         entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10, fee="0.50")
         exit_ = _event(

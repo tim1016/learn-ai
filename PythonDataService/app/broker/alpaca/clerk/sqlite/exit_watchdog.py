@@ -28,6 +28,23 @@ raised. Every refusal is decided before ``accept_recovery_exit``, so a
 refused re-drive never parks an EXIT. #2504 measures persistent refusals in
 observed regular-session failure time. Holds and unobserved time never spend
 that durable budget, and the strategy's own working EXIT is always a hold.
+
+Owner decision 2026-09-29 (#2622): an exit Alpaca refused while the Clerk's
+own records showed an order open on the other side of its symbol (Alpaca's
+wash-trade protection; the refusal records those orders, #2621) waits only
+for that side to clear. It is sent again on the first pass after no such
+order is open, in any session -- no settle age, no wait for the next
+session. While one is still open the pass is a hold, until the settle age
+has passed in the regular session, where the ordinary failure path takes
+over. A re-drive refused before the settle age is a hold too, so failure
+time starts where it always has and escalation keeps its timing.
+
+#2607: an episode of a regular-session-only EXIT -- the sale at a bot's
+owner-scheduled end, whose acceptance records it -- is re-driven only by the
+market leg inside the regular session, the refusal above included: "in any
+session" never reaches it. Outside the session it holds for the next regular
+open instead of pricing an extended-hours limit, and each re-drive records
+the same property, so it holds too if it meets the close.
 """
 
 from __future__ import annotations
@@ -58,10 +75,14 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     latest_exit_recovery,
     record_exit_recovery,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    EXIT_REDRIVE_DECISION_PREFIX,
+    regular_session_sale_waits_for_open,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
+    OrderSubmitFailedFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -70,6 +91,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
+from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
@@ -128,6 +150,13 @@ class EpisodeAttempt:
     extended_hours: bool
     valid_until_ms: int | None
     redrive: bool
+    # Its EXIT sells only inside the regular session
+    # (``ExitAcceptedFacts.regular_session_only``, #2607).
+    regular_session_only: bool = False
+
+
+type OppositeSide = Literal["open", "ended"]
+"""Where the other side of a refused exit's symbol stands (:func:`opposite_side_after_refusal`)."""
 
 
 @dataclass(frozen=True)
@@ -141,10 +170,21 @@ class _StaleExit:
     attempts: tuple[EpisodeAttempt, ...]
     ready_at_ms: int
     stopped: bool
+    # ``None`` unless the episode's order was refused behind an opposite-side
+    # order (#2622), and also when the open orders could not be read.
+    opposite_side: OppositeSide | None
+    # The refusal has settled for the policy's re-drive age: only from here on
+    # does a refused re-drive spend regular-session failure time (#2622 review).
+    settled_at_ms: int
 
     @property
     def regular_failures(self) -> int:
         return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
+
+    @property
+    def regular_session_only(self) -> bool:
+        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too."""
+        return any(a.regular_session_only for a in self.attempts)
 
 
 @dataclass(frozen=True)
@@ -177,15 +217,16 @@ def episode_attempts(
         if row is None:
             continue
         created = ExitReducingOrderCreatedFacts.from_facts_json(row["facts_json"])
+        accepted_row = repo.first_effect_transition(effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED")
+        accepted = None if accepted_row is None else ExitAcceptedFacts.from_facts_json(accepted_row["facts_json"])
         bound = created.valid_until_ms
-        if created.extended_hours and bound is None:
-            accepted = repo.first_effect_transition(effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED")
-            if accepted is not None:
-                bound = ExitAcceptedFacts.from_facts_json(accepted["facts_json"]).reducing_valid_until_ms
+        if created.extended_hours and bound is None and accepted is not None:
+            bound = accepted.reducing_valid_until_ms
         attempts.append(EpisodeAttempt(
             order.order_ref,
             repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
             effect.state == "failed", created.extended_hours, bound, redrive,
+            regular_session_only=accepted is not None and accepted.regular_session_only,
         ))
     return redrives, tuple(attempts)
 
@@ -213,9 +254,49 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
         stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
-        ready = repo.clock() if not stopped and replacement_ready(repo, facts.evidence_refs) else episode["observed_at_ms"] + policy.after_ms
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped))
+        opposite = opposite_side_after_refusal(
+            repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
+        )
+        settled = episode["observed_at_ms"] + policy.after_ms
+        send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
+        ready = repo.clock() if not stopped and send_now else settled
+        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled))
     return stale
+
+
+def reducing_side(quantity: float) -> OrderSide:
+    """The side that takes a signed attributed ``quantity`` toward flat: sell a long, buy back a short."""
+    return OrderSide.SELL if quantity > 0 else OrderSide.BUY
+
+
+def opposite_side_after_refusal(
+    repo: ClerkSqliteRepository, evidence_refs: tuple[str, ...], *, symbol: str, side: OrderSide,
+) -> OppositeSide | None:
+    """Whether a ``side`` exit refused behind an opposite-side order is still blocked (#2622).
+
+    Alpaca refuses a new order while an order on the other side of its
+    symbol is open in the account, whoever placed it. On such a refusal the
+    Clerk records the orders its own records showed open there (#2621); an
+    episode's evidence names its latest order. ``open`` while any order on
+    the other side of ``side`` is open -- that one, or one opened since, which
+    would refuse the re-send again; ``ended`` once none is. ``None`` when the
+    episode's order was not refused behind one (any other refusal, or an
+    order the broker ended), which keeps the watchdog's ordinary timing, and
+    when the open orders cannot be read.
+    """
+    for order_ref in evidence_refs:
+        row = repo.last_order_transition(order_ref=order_ref, transition_kind="EXIT_NOT_FLAT")
+        if row is None or not OrderSubmitFailedFacts.from_facts_json(row["facts_json"]).opposite_open_order_refs:
+            continue
+        try:
+            return "open" if repo.open_opposite_side_orders(symbol=symbol, side=side) else "ended"
+        except OrderProjectionReadError:
+            logger.exception("Clerk could not read its open orders for a refused exit; it keeps the ordinary retry timing", extra={
+                "action": "exit_watchdog_opposite_orders_unreadable", "account_id": repo.account_id,
+                "order_ref": order_ref, "symbol": symbol, "side": side.value,
+            })
+            return None
+    return None
 
 
 def evaluate_recovery_wait(
@@ -230,6 +311,16 @@ def evaluate_recovery_wait(
     verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
+    if stale.regular_session_only and verdict != "send":
+        waits = regular_session_sale_waits_for_open(now_ms)
+        return RecoveryResult("hold", waits.reason_code, waits.explanation, waits.available_at_ms)
+    if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
+        # Past the settle age in the regular session the ordinary failure path
+        # takes over, so an order that keeps working escalates as before.
+        return RecoveryResult("hold", "EXIT_OTHER_ORDER_WORKING", (
+            "Alpaca refused this exit while an opposite order on this symbol was open in this account; "
+            "the Clerk sends it again once no such order is open."
+        ))
     if now_ms < stale.ready_at_ms:
         return RecoveryResult("hold", "RECOVERY_RETRY_WAIT", "The Clerk is allowing the previous exit's evidence to settle.",
                               next_redrive_at_ms(not_before_ms=stale.ready_at_ms, policy=policy))
@@ -237,7 +328,7 @@ def evaluate_recovery_wait(
         age_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
         if stale.regular_failures >= age_policy.max_count:
             return RecoveryResult("failure", "EXIT_REDRIVES_EXHAUSTED", "Automatic regular-session exit attempts were exhausted.")
-    else:
+    elif stale.opposite_side is None:
         bound = max((a.valid_until_ms for a in stale.attempts if a.submitted and a.extended_hours
                      and a.valid_until_ms is not None and a.valid_until_ms > now_ms), default=None)
         if bound is not None:
@@ -267,8 +358,11 @@ async def _recover_stale_exit(
     sid, cause = stale.strategy_instance_id, stale.cause
     own_working = await run(lambda: repo.active_exit_for_strategy(sid) is not None)
     now_ms = repo.clock()
+    # A regular-session-only episode is priced as the regular session alone
+    # would price it: its market leg, never an extended-hours limit (#2607).
+    policy = ProgramLegPolicy.regular_only() if stale.regular_session_only else pricing.policy_for(sid)
     result = evaluate_recovery_wait(
-        stale, now_ms=now_ms, own_exit_working=own_working, policy=pricing.policy_for(sid),
+        stale, now_ms=now_ms, own_exit_working=own_working, policy=policy,
         liveness=pricing.read_liveness(cause.symbol, now_ms),
     )
     if result is not None:
@@ -281,11 +375,12 @@ async def _recover_stale_exit(
     # Read the instant after repository hops, immediately before quote/liveness.
     now_ms = repo.clock()
     touch = (
-        PricingSnapshot(pricing.policy_for(sid), None, pricing.read_liveness(cause.symbol, now_ms))
-        if market_leg_sendable(now_ms) else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
+        PricingSnapshot(policy, None, pricing.read_liveness(cause.symbol, now_ms))
+        if market_leg_sendable(now_ms) or stale.regular_session_only
+        else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
     )
     try:
-        shape = touch.price(side=OrderSide.SELL if stale.remaining > 0 else OrderSide.BUY,
+        shape = touch.price(side=reducing_side(stale.remaining),
                             symbol=cause.symbol, quantity=stale.remaining, now_ms=now_ms)
     except ProgramLegRefused as exc:
         logger.info("deferred a stuck-EXIT re-drive: no reduction can be priced", extra={
@@ -299,11 +394,16 @@ async def _recover_stale_exit(
             _accept_admissible_redrive, repo, broker_symbol=broker_symbol, strategy_instance_id=sid,
             symbol=cause.symbol, decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{stale.episode_token}-{stale.redrives + 1}",
             entry_order_ref=entries[-1].order_ref, confirmed_shape=shape,
+            regular_session_only=stale.regular_session_only,
         )
         if accepted is None:
             return None
         if isinstance(accepted, _RedriveRefused):
-            outcome = accepted.outcome if market_leg_sendable(repo.clock()) else "hold"
+            # An exit ready before its refusal settled (#2622) spends no
+            # failure time early, so escalation keeps its timing.
+            refused_at_ms = repo.clock()
+            counts = market_leg_sendable(refused_at_ms) and refused_at_ms >= stale.settled_at_ms
+            outcome = accepted.outcome if counts else "hold"
             previous = await run(lambda: latest_exit_recovery(repo, strategy_instance_id=sid, uncertainty_id=stale.episode["uncertainty_id"]))
             if outcome == "failure" and (previous is None or previous.first_failure_at_ms is None):
                 logger.warning(accepted.message, extra={
@@ -380,6 +480,7 @@ def _accept_admissible_redrive(
     decision_id: str,
     entry_order_ref: str,
     confirmed_shape: ConfirmedRecoveryShape | None,
+    regular_session_only: bool = False,
 ) -> ExitSubmission | _RedriveRefused | None:
     """Accept the re-drive EXIT only when the broker and the REDUCE gate admit it.
 
@@ -436,7 +537,7 @@ def _accept_admissible_redrive(
         strategy_instance_id=strategy_instance_id,
         reduction_intent=ReductionIntent(
             symbol=symbol,
-            side="SELL" if remaining > 0 else "BUY",
+            side=reducing_side(remaining).value.upper(),
             quantity=abs(remaining),
         ),
     )
@@ -453,6 +554,7 @@ def _accept_admissible_redrive(
         decision_id=decision_id,
         entry_order_ref=entry_order_ref,
         confirmed_shape=confirmed_shape,
+        regular_session_only=regular_session_only,
     )
 
 

@@ -742,9 +742,8 @@ def market_leg_sendable(now_ms: int) -> bool:
 
     Alpaca queues a market DAY order that arrives outside the regular session
     for the next open, so outside it every reducing leg is a priced limit.
-    Judged at :func:`send_arrival_ms`. The one question the send-time rule,
-    the watchdog's choice to price a re-drive, and the runtime's
-    unpriced-exit warning all ask (#2440 review).
+    Judged at :func:`send_arrival_ms`. The one question the send-time rule
+    and the watchdog's choice to price a re-drive both ask (#2440 review).
     """
     return regular_session_open(now_ms) and regular_session_open(send_arrival_ms(now_ms))
 

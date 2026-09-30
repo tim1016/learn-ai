@@ -113,6 +113,24 @@ async def test_broker_names_a_malformed_position_as_unavailable_evidence(
     assert isinstance(info.value.__cause__, KeyError | TypeError | ValueError)
 
 
+@pytest.mark.parametrize("field", ["symbol", "side"])
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["null", "blank", "whitespace"])
+async def test_broker_refuses_a_position_whose_identity_is_not_text(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    field: str,
+    value: object,
+) -> None:
+    """A null symbol once became a position in "None" (#2643)."""
+    long_position = load_alpaca_fixture("positions", "positions.json")[0]
+    broker = AlpacaBroker(client=_PositionsClient([{**long_position, field: value}]))  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="position data this app could not read") as info:
+        await broker.list_positions()
+
+    assert isinstance(info.value.__cause__, ValueError)
+    assert f"'{field}'" in str(info.value.__cause__)
+
+
 async def test_malformed_position_logs_the_adapter_cause_for_the_operator(
     load_alpaca_fixture: AlpacaFixtureLoader,
     caplog: pytest.LogCaptureFixture,

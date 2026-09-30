@@ -13,10 +13,14 @@ from app.broker.alpaca.adapter import (
     et_date_to_ms,
     now_ms,
     occurred_at_ms,
+    opt_bool,
     opt_float,
     opt_rfc3339_to_ms,
     rfc3339_to_ms,
+    str_or_blank,
+    to_bool,
     to_float,
+    to_str,
 )
 
 
@@ -62,6 +66,57 @@ def test_numeric_helpers_reject_booleans(parser: Callable[[Any], float | None], 
     # become $1 or $0 of broker evidence.
     with pytest.raises(TypeError, match="not a boolean"):
         parser(value)
+
+
+def test_to_str_returns_the_vendor_text_unchanged() -> None:
+    assert to_str("SPY", field="symbol") == "SPY"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("", id="blank"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param(12345, id="number"),
+        pytest.param(True, id="boolean"),
+    ],
+)
+def test_to_str_refuses_a_value_that_is_not_text(value: object) -> None:
+    # ``str(None) == "None"``: a null identity field would otherwise become a
+    # real-looking order id, symbol or account number (#2643).
+    with pytest.raises(ValueError, match="'symbol' must be a non-blank string"):
+        to_str(value, field="symbol")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("SPY", "SPY", id="text"),
+        pytest.param(None, "", id="null"),
+        pytest.param("", "", id="blank"),
+        pytest.param("   ", "", id="whitespace"),
+        pytest.param(12345, "", id="number"),
+        pytest.param(True, "", id="boolean"),
+    ],
+)
+def test_str_or_blank_reads_anything_but_text_as_blank_never_none(value: object, expected: str) -> None:
+    # Per-order text the Clerk contains when it is missing: ``str(None)``
+    # once made a real-looking ticker "NONE" (#2643).
+    assert str_or_blank(value) == expected
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+def test_to_bool_names_the_field_it_refuses(value: object) -> None:
+    with pytest.raises(TypeError, match="'is_open' must be a boolean"):
+        to_bool(value, field="is_open")
+
+
+def test_opt_bool_names_the_field_it_refuses_and_keeps_null_unknown() -> None:
+    assert opt_bool(None, field="shortable") is None
+    assert opt_bool(False, field="shortable") is False
+    with pytest.raises(TypeError, match="'shortable' must be a boolean or null"):
+        opt_bool("false", field="shortable")
 
 
 def test_et_date_anchors_at_ny_midnight() -> None:

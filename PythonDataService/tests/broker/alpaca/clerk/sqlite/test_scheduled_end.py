@@ -18,26 +18,36 @@ import json
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, RecoveryPricing
+from app.broker.alpaca.clerk.sqlite import scheduled_end
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX, resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    EXIT_REDRIVE_DECISION_PREFIX,
+    SCHEDULED_END_DECISION_PREFIX,
+    resolve_exit,
+)
+from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.scheduled_end import (
     SCHEDULED_END_REASON,
+    EndSaleWaiting,
     ScheduledEnd,
+    end_sales_waiting_for_open,
     install_bot_end_schedule,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType
 from app.schemas.bot_end import BotEnd
+from app.services.broker_v2_panel import lane_summary
 from app.utils.timestamps import to_ms_utc
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _AssertingNoReconciler,
@@ -50,6 +60,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _walk_clock_to,
 )
 from tests.broker.alpaca.clerk.sqlite.test_exit_send_session import _live_touch
+from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import _wash_trade_rejection
 
 ACCOUNT_ID = "PA-END"
 SID = "end-bot"
@@ -442,3 +453,188 @@ async def test_a_pass_with_no_schedule_installed_ends_nothing(repo: ClerkSqliteR
 
     assert repo.active_run(SID) is not None
     assert market.submitted_legs == []
+
+
+# ── a sale that sells only in regular hours, however it is re-driven ────────
+
+
+def _accepted(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitAcceptedFacts:
+    row = repo.first_effect_transition(effect_operation_id=effect_operation_id, transition_kind="EXIT_ACCEPTED")
+    assert row is not None
+    return ExitAcceptedFacts.from_facts_json(row["facts_json"])
+
+
+async def test_a_refused_end_sale_is_redriven_as_a_market_order_at_the_next_open_never_after_hours(
+    repo: ClerkSqliteRepository, schedule: _Schedule,
+) -> None:
+    """#2607 review: Alpaca refuses the sale at 15:59; the watchdog's re-drive of it
+    sells only as the sale itself does -- a market order in the regular session --
+    never an extended-hours limit priced after the close or in the pre-market,
+    however live the quote. So the end's "ended" words stay true."""
+    await _hold_ten(repo)
+    schedule.ends[SID] = _end("SELL")
+    _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+    refusing = _FakeTradePort(submit_error=_wash_trade_rejection())
+
+    await _pass(repo, refusing)
+
+    [sale] = _end_sales(repo)
+    assert repo.effect_operation(sale).state == "failed"
+    assert _accepted(repo, sale).regular_session_only is True
+    assert [end for end, _at_ms in schedule.carried_out] == [_end("SELL")]
+
+    redrive = _FakeTradePort()
+    pricing = _live_touch()
+    for instant in (
+        _at(_WEDNESDAY, 16, 1), _at(_WEDNESDAY, 16, 6), _at(_WEDNESDAY, 19, 30),
+        _at(_THURSDAY, 4, 5), _at(_THURSDAY, 8), _at(_THURSDAY, 9, 29),
+    ):
+        _walk_clock_to(repo, instant)
+        await _pass(repo, redrive, pricing=pricing)
+    assert redrive.submitted_legs == [], "the refused end sale was re-driven outside the regular session"
+
+    _walk_clock_to(repo, _at(_THURSDAY, 9, 30, 5))
+    await _pass(repo, redrive, pricing=pricing)
+
+    [leg] = redrive.submitted_legs
+    assert (leg.side, leg.quantity, leg.order_type, leg.extended_hours) == (OrderSide.SELL, 10, OrderType.MARKET, False)
+    [redriven] = [
+        row[0] for row in repo._conn.execute(
+            "SELECT effect_operation_id FROM effect_operations WHERE strategy_instance_id = ? AND kind = 'EXIT'", (SID,),
+        ).fetchall() if EXIT_REDRIVE_DECISION_PREFIX in row[0]
+    ]
+    assert _accepted(repo, redriven).regular_session_only is True
+
+
+async def test_an_end_found_after_a_half_day_close_waits_for_the_next_sessions_open(
+    repo: ClerkSqliteRepository, schedule: _Schedule,
+) -> None:
+    """Found at 13:00:30 on a half-day, inside its post-market: nothing goes out
+    that afternoon, the weekend or Monday's pre-market; Monday's open sells at market."""
+    half_day, monday = date(2026, 11, 27), date(2026, 11, 30)
+    await _hold_ten(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID, operator_reason="runner_gone",
+    )
+    schedule.ends[SID] = _end("SELL", end_at_ms=_at(half_day, 12, 59))
+    market = _Market()
+    pricing = _live_touch()
+
+    for instant in (_at(half_day, 13, 0, 30), _at(date(2026, 11, 28), 11), _at(monday, 4, 0, 5)):
+        _walk_clock_to(repo, instant)
+        await _pass(repo, market, pricing=pricing)
+    assert market.submitted_legs == []
+
+    _walk_clock_to(repo, _at(monday, 9, 30, 5))
+    await _pass(repo, market, pricing=pricing)
+
+    assert [(leg.order_type, leg.extended_hours) for leg in market.submitted_legs] == [(OrderType.MARKET, False)]
+
+
+# ── the owner's Stop in the minute of the end ────────────────────────────────
+
+
+def test_an_operators_stop_after_the_end_stopped_the_run_is_the_stop_already_committed(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2607 review: the owner's Stop landing in the minute the Clerk stopped the run
+    at its end names the same run under another reason. It is that STOP, never a conflict."""
+    first = submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID,
+        operator_reason=SCHEDULED_END_REASON,
+    )
+
+    second = submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID, operator_reason="operator_stop",
+    )
+
+    assert second.created is False
+    assert second.command.command_id == first.command.command_id
+    assert _stop_reason(repo) == SCHEDULED_END_REASON
+
+
+async def test_an_operators_stop_as_the_end_comes_cancels_the_sale(
+    repo: ClerkSqliteRepository, schedule: _Schedule,
+) -> None:
+    """#2607 review: the owner's Stop cancels the end -- Stop keeps the shares -- so a
+    Stop landing while the pass carries the end out leaves nothing to sell."""
+    await _hold_ten(repo)
+    schedule.ends[SID] = _end("SELL")
+
+    def owners_stop_lands(strategy_instance_id: str, lifecycle_run_id: str) -> None:
+        schedule.stopped.append((strategy_instance_id, lifecycle_run_id))
+        schedule.ends.pop(strategy_instance_id)  # the owner's Stop clears the bot's end
+
+    schedule.stop_bot_at_its_end = owners_stop_lands  # type: ignore[method-assign]
+    _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+    market = _Market()
+
+    await _pass(repo, market)
+
+    assert repo.active_run(SID) is None
+    assert market.submitted_legs == []
+    assert _end_sales(repo) == []
+    assert repo.position(SID, "SPY") == 10
+
+
+async def test_a_lost_execution_lease_while_finishing_an_end_fails_the_pass(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2607 review: as in the fence and in every other write, a lost lease is the pass's failure, never one bot's."""
+    await _hold_ten(repo)
+    schedule.ends[SID] = _end("SELL")
+    _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+
+    def lease_lost(*_args: object, **_kwargs: object) -> bool:
+        raise ExecutionLeaseLost("the execution lease lapsed", account_id=ACCOUNT_ID)
+
+    monkeypatch.setattr(scheduled_end, "_carried_out", lease_lost)
+
+    with pytest.raises(ExecutionLeaseLost):
+        await _pass(repo, _Market())
+
+
+# ── the attention bell: a sale waiting for the open ──────────────────────────
+
+
+async def test_a_sale_waiting_for_the_open_rings_the_attention_bell_until_it_is_sent(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner decision 2026-09-29 ("Alert bell too"): the waiting sale is one bell line,
+    naming the bot, the symbol and the open it goes out at; it clears once sent."""
+    await _hold_ten(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID,
+        operator_reason="service_restart_recovery",
+    )
+    schedule.ends[SID] = _end("SELL")
+    market = _Market()
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    _walk_clock_to(repo, _at(_WEDNESDAY, 17))
+    await _pass(repo, market, pricing=_live_touch())
+
+    assert end_sales_waiting_for_open(repo) == [EndSaleWaiting(strategy_instance_id=SID, symbol="SPY", quantity=10.0)]
+    [line] = [
+        item for item in (await lane_summary.lane_attention_read()).items
+        if item.reason_code == "SCHEDULED_END_WAITS_FOR_OPEN"
+    ]
+    assert line.condition_id == f"end-sale-waits:{SID}"
+    assert line.reason_code == "SCHEDULED_END_WAITS_FOR_OPEN"
+    assert (line.kind, line.severity, line.symbol, line.action.destination) == ("exit", "warning", "SPY", "bot")
+    assert line.headline == (
+        f"{SID} reached its end while the market was closed. "
+        "Its sale of 10 SPY goes out at the open, Thu Oct 1, 09:30 ET."
+    )
+
+    _walk_clock_to(repo, _at(_THURSDAY, 9, 30, 5))
+    await _pass(repo, market, pricing=_live_touch())
+
+    assert len(_sold_market(market)) == 1
+    assert end_sales_waiting_for_open(repo) == []
+    assert not [
+        item for item in (await lane_summary.lane_attention_read()).items
+        if item.reason_code == "SCHEDULED_END_WAITS_FOR_OPEN"
+    ]

@@ -577,13 +577,15 @@ class ClerkCustodySnapshot(BaseModel):
 
 
 class ReconciliationCut(BaseModel):
-    """One account reconciliation pass, named by the ledger point it began after.
+    """One account reconciliation pass, named by a ledger point its broker observation covers.
 
     ``ledger`` is the authority's ledger identity (its generation and database
     token), so a cut is never read against another authority's ledger.
-    ``after_sequence`` is the newest custody transition written before the
-    pass began: a bot whose own newest transition is no later than it has not
-    moved since the pass observed the broker (see
+    ``after_sequence`` is a custody transition the pass observed the broker
+    after: the newest written before the pass began (``reconcile_through``),
+    or the newest its final comparison saw (a published pass, #2607). A bot
+    whose own newest transition is no later than it has not moved since the
+    pass observed the broker (see
     ``SqliteAlpacaClerkFacade.reconciliation_covers``).
     """
 
