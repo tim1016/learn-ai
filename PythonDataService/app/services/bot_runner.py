@@ -2228,7 +2228,9 @@ class BotTaskRegistry:
         The restoration now holds that lock while it waits out a lease, and a
         Start that waited for it would wait out the lease too -- #2582's
         contract is the opposite: the refusal is immediate, translated the
-        same way the admission flow translates it.
+        same way the admission flow translates it. It is the one place Start
+        refuses one: both Start entries answer it before the lock, and a
+        restoration that has left ``restoring`` never returns to it.
         """
         try:
             refuse_unrestored_dry_run(self.dry_run_restoration_state(strategy_instance_id))
@@ -2243,9 +2245,6 @@ class BotTaskRegistry:
         self,
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
-        # Before the Dry Run's own account is opened for Start: a Start never
-        # meets an account boot is still restoring or could not restore.
-        refuse_unrestored_dry_run(self._dry_run_restorations.get(binding.strategy_instance_id))
         return self._authority_for(binding).start_custody_guard()
 
     def _start_custody_projection(

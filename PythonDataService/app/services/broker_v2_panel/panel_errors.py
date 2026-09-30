@@ -38,6 +38,10 @@ class PanelUnavailableError(PanelDataError):
     http_status = 503
 
 
+class DryRunRestoringError(PanelUnavailableError):
+    """A Dry Run boot is still restoring (503): its own read, never its lane's roster (#2668)."""
+
+
 class AccountMismatchError(PanelDataError):
     """The path ``account_id`` does not match the broker's account (404)."""
 

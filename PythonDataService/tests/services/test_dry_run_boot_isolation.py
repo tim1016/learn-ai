@@ -316,41 +316,57 @@ async def test_a_dry_run_whose_authority_cannot_be_built_is_its_own_failure(
     assert booting.dry_run_restoration_state("live-dry-dv-b-0930") is None
 
 
-async def test_an_archive_of_a_bot_whose_restoration_waits_on_a_held_lease_cannot_interleave(
+async def test_an_archive_of_a_bot_mid_restoration_waits_for_its_repair(
     restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Archive holds the bot's operation lock, and the restoration now holds it too (#2668).
 
-    Without the lock, an Archive could run while the restoration was still
-    inside its lease wait -- the two interleaving over one account. Archive
-    now waits for the restoration to settle, and then runs: the predecessor's
-    lease below lapses while the restoration waits it out, so the bot is
-    restored and Archive answers only after that.
+    The restoration's lease wait already holds the account's runtime lock,
+    which Archive's custody read takes as well; its repair of the bot's runs
+    does not. Without the operation lock, an Archive read the bot's custody
+    while the restoration was still repairing its runs -- the two
+    interleaving over one account. Archive now waits for the restoration to
+    settle, and only then reads.
     """
     from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
     from app.services.bot_runner_errors import BotRunnerError
 
-    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 5.0)
-    # The dead process's lease: it lapses while the restoration is waiting it out.
-    predecessor = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=600)
-    try:
-        restoring = restarted_lane.registry.start_dry_run_restoration()
-        await asyncio.sleep(0.2)  # the restoration is now inside its lease wait
-        archiving = asyncio.create_task(restarted_lane.registry.archive("alpaca", SID))
+    registry = restarted_lane.registry
+    repairing, release_repair = asyncio.Event(), asyncio.Event()
 
-        await asyncio.sleep(0.3)
-        assert not archiving.done(), "Archive must wait for the bot's restoration to settle"
+    async def _repair_until_released(_binding: BrokerBotBinding) -> tuple[str, ...]:
+        repairing.set()
+        await release_repair.wait()
+        return ()
 
-        # The fixture's bot never fully deployed, so Archive's own outcome is
-        # one of its typed refusals; what is pinned here is the ordering.
-        with contextlib.suppress(BotRunnerError, UnknownStrategyInstanceError):
-            await asyncio.wait_for(archiving, timeout=10.0)
-        await asyncio.wait_for(restoring, timeout=10.0)
-        assert restarted_lane.registry.dry_run_restoration_state(SID) is None, (
-            "the restoration waited out the lease and settled before Archive ran"
-        )
-    finally:
-        predecessor.close()
+    # Bound when the restoration's list is drawn, so replaced before it starts.
+    monkeypatch.setattr(registry, "_repair_restored_dry_run", _repair_until_released)
+    restoring = registry.start_dry_run_restoration()
+    await asyncio.wait_for(repairing.wait(), timeout=5.0)
+
+    archive_custody = registry._archive_custody
+    custody_read = asyncio.Event()
+
+    def _archive_custody_spy(binding: BrokerBotBinding, reconciled: object) -> object:
+        custody_read.set()
+        return archive_custody(binding, reconciled)
+
+    monkeypatch.setattr(registry, "_archive_custody", _archive_custody_spy)
+    archiving = asyncio.create_task(registry.archive("alpaca", SID))
+    # Archive's first step runs to its first wait. Nothing it does before its
+    # custody read awaits, so an Archive the lock does not hold off has read
+    # custody by the time this resumes.
+    await asyncio.sleep(0)
+    assert not custody_read.is_set(), "Archive read the bot's custody while its restoration was mid-repair"
+
+    release_repair.set()
+    # The fixture's bot never fully deployed, so Archive's own outcome is
+    # one of its typed refusals; what is pinned here is the ordering.
+    with contextlib.suppress(BotRunnerError, UnknownStrategyInstanceError):
+        await asyncio.wait_for(archiving, timeout=10.0)
+    await asyncio.wait_for(restoring, timeout=10.0)
+    assert custody_read.is_set(), "Archive runs once the bot's restoration settles"
+    assert registry.dry_run_restoration_state(SID) is None
 
 
 async def test_a_panel_read_of_a_bot_still_being_restored_answers_at_once(
