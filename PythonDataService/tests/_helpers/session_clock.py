@@ -25,7 +25,11 @@ IN_SESSION_DAY = date(2026, 9, 25)
 
 def pin_wall_clock_in_session(monkeypatch: pytest.MonkeyPatch) -> int:
     """Start the wall clock at 09:31 ET on :data:`IN_SESSION_DAY`; return that instant."""
-    start_ms = session_open_ms_utc(IN_SESSION_DAY) + 60_000
+    return pin_wall_clock_at(monkeypatch, session_open_ms_utc(IN_SESSION_DAY) + 60_000)
+
+
+def pin_wall_clock_at(monkeypatch: pytest.MonkeyPatch, start_ms: int) -> int:
+    """Start the wall clock at ``start_ms``; a later call moves it, as a restart days later would."""
     started = monotonic()
     monkeypatch.setattr(
         timestamps, "time", SimpleNamespace(time=lambda: start_ms / 1000 + monotonic() - started)

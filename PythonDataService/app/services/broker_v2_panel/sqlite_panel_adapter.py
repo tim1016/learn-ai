@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
+from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.action_policy import archive_action
@@ -833,14 +834,19 @@ def terminal_exposure_notices(
         ]
         if held:
             positions = ", ".join(f"{position.attributed_qty:g} {position.symbol}" for position in held)
+            closing = (
+                "The Clerk is still working this bot's exit order; Flatten becomes available "
+                "if that order ends without closing the position."
+                if _exit_in_progress(projection, sid)
+                else "Use Flatten to close this position."
+            )
             notices.append(
                 ExposureNoticeView(
                     kind="position_unmanaged",
                     label="Bot is not managing this position",
                     explanation=(
                         f"The Clerk attributes {positions} to this bot. The run has ended and "
-                        "will not make further decisions. Use Flatten to close this position "
-                        "before starting another run."
+                        f"will not make further decisions. {closing}"
                     ),
                 )
             )
@@ -855,6 +861,15 @@ def terminal_exposure_notices(
         "strategy_instance_id": sid, "symbol": symbol,
         "action_label": "Flatten" if notice.kind == "position_unmanaged" else "Open bot",
     }) for notice in notices]
+
+
+def _exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
+    """The Clerk keeps working an ended run's exit (#2504), so Flatten waits for it."""
+    return any(
+        operation.kind == "EXIT" and operation.state in NONTERMINAL_EFFECT_STATES
+        for operation in projection.operations
+        if operation.strategy_instance_id == sid
+    )
 
 
 # Every fix it names is on the bot's own page (hurdle H29): it never sends
@@ -873,8 +888,8 @@ _ENTRY_ORDER_WORKING = ExposureNoticeView(
     kind="entry_order_working",
     label="An entry order is still working",
     explanation=(
-        "An entry order this bot placed is still working at the broker. If it fills, the "
-        "ended run will not manage the position it opens. Cancel it if you do not want it."
+        "An entry order this bot placed is still working at the broker. The Clerk is "
+        "cancelling it; if it fills first, the ended run will not manage the position it opens."
     ),
 )
 
