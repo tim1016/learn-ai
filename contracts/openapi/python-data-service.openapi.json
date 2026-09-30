@@ -29339,8 +29339,7 @@
               "mapping": {
                 "confirm_in_form": "#/components/schemas/ConfirmInFormAction",
                 "navigate": "#/components/schemas/NavigateAction",
-                "remove": "#/components/schemas/RemoveAction",
-                "retire_replace": "#/components/schemas/RetireReplaceAction"
+                "remove": "#/components/schemas/RemoveAction"
               },
               "propertyName": "kind"
             },
@@ -29350,9 +29349,6 @@
               },
               {
                 "$ref": "#/components/schemas/ConfirmInFormAction"
-              },
-              {
-                "$ref": "#/components/schemas/RetireReplaceAction"
               },
               {
                 "$ref": "#/components/schemas/RemoveAction"
@@ -35258,21 +35254,6 @@
         "title": "ResolvedSignalParameter",
         "type": "object"
       },
-      "RetireReplaceAction": {
-        "additionalProperties": false,
-        "description": "Move: retire this bot and start a fresh deploy flow with lineage kept.",
-        "properties": {
-          "kind": {
-            "const": "retire_replace",
-            "title": "Kind"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "title": "RetireReplaceAction",
-        "type": "object"
-      },
       "ReturnDistributionInsufficientCoverageResponse": {
         "properties": {
           "detail": {
@@ -40482,31 +40463,6 @@
           }
         },
         "title": "StageAdvanceCriterionResponse",
-        "type": "object"
-      },
-      "StartRunRequest": {
-        "properties": {
-          "lifecycle_run_id": {
-            "minLength": 1,
-            "title": "Lifecycle Run Id",
-            "type": "string"
-          },
-          "operator_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Operator Reason"
-          }
-        },
-        "required": [
-          "lifecycle_run_id"
-        ],
-        "title": "StartRunRequest",
         "type": "object"
       },
       "StartupJoinView": {
@@ -49278,87 +49234,9 @@
         ]
       }
     },
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
-      "post": {
-        "description": "Reserve and admit a Start command. Idempotent on\n``(account_id, strategy_instance_id, lifecycle_run_id)`` \u2014 the frontend\nmints ``lifecycle_run_id`` once and resends the same value on retry.",
-        "operationId": "start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "strategy_instance_id",
-            "required": true,
-            "schema": {
-              "title": "Strategy Instance Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartRunRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommandResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Run",
-        "tags": [
-          "alpaca-clerk-sqlite"
-        ]
-      }
-    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
       "post": {
-        "description": "Reserve and admit a Stop command for ``body.lifecycle_run_id`` \u2014\ncaller-supplied, exactly like Start (corrective foundation slice).",
+        "description": "Reserve and admit a Stop command for ``body.lifecycle_run_id`` \u2014\ncaller-supplied (corrective foundation slice).",
         "operationId": "stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post",
         "parameters": [
           {
@@ -60617,107 +60495,6 @@
           }
         },
         "summary": "Fleet Custody Bot Recovery Execute",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).",
-        "operationId": "fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Custody Runs Start",
         "tags": [
           "broker-clerks"
         ]

@@ -224,28 +224,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Run
-         * @description Reserve and admit a Start command. Idempotent on
-         *     ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
-         *     mints ``lifecycle_run_id`` once and resends the same value on retry.
-         */
-        post: operations["start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
         parameters: {
             query?: never;
@@ -258,7 +236,7 @@ export interface paths {
         /**
          * Stop Run
          * @description Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
-         *     caller-supplied, exactly like Start (corrective foundation slice).
+         *     caller-supplied (corrective foundation slice).
          */
         post: operations["stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post"];
         delete?: never;
@@ -2888,26 +2866,6 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute (custody_command).
          */
         post: operations["fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Custody Runs Start
-         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).
-         */
-        post: operations["fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20817,7 +20775,7 @@ export interface components {
         /** OperatorMove */
         OperatorMove: {
             /** Action */
-            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["RemoveAction"];
             confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Label */
             label: string;
@@ -23244,17 +23202,6 @@ export interface components {
             unit: string;
             /** Value */
             value: string | number | boolean;
-        };
-        /**
-         * RetireReplaceAction
-         * @description Move: retire this bot and start a fresh deploy flow with lineage kept.
-         */
-        RetireReplaceAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "retire_replace";
         };
         /** ReturnDistributionInsufficientCoverageResponse */
         ReturnDistributionInsufficientCoverageResponse: {
@@ -25705,13 +25652,6 @@ export interface components {
              * @default
              */
             required_repr?: string;
-        };
-        /** StartRunRequest */
-        StartRunRequest: {
-            /** Lifecycle Run Id */
-            lifecycle_run_id: string;
-            /** Operator Reason */
-            operator_reason?: string | null;
         };
         /**
          * StartupJoinView
@@ -29436,44 +29376,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecoveryActionExecuteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StartRunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandResponse"];
                 };
             };
             /** @description Validation Error */
@@ -34645,46 +34547,6 @@ export interface operations {
         };
     };
     fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post: {
         parameters: {
             query?: never;
             header?: {
