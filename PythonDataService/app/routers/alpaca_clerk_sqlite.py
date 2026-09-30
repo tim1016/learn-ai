@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
+    cancel_bot_end,
     execute_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -346,10 +347,12 @@ async def stop_run(
     """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
     caller-supplied, exactly like Start (corrective foundation slice)."""
     if body.operator_reason == SCHEDULED_END_REASON:
-        # The Clerk's own reason for its STOP at a bot's end (#2607): the
-        # runner reads a run stopped with it as the end's to carry out, so an
-        # operator's Stop naming it would leave the bot's end -- a sale --
-        # pending behind it.
+        # The Clerk's own reason for its STOP at a bot's end (#2607), and the
+        # one STOP the runner takes as the end's (``_carry_out_due_end``): it
+        # stops the process as the end's stop, keeping an end still pending
+        # for the Clerk to carry out. An operator's Stop naming it would be
+        # journaled as the end's -- and, were its end left pending (a desired
+        # state unreadable at the Stop, repaired later), carried out as one.
         raise HTTPException(
             status_code=422,
             detail={
@@ -363,6 +366,15 @@ async def stop_run(
     # The account's own authority only, exactly like Start: a Dry Run's run
     # stops inside its simulator through the bot registry.
     repo = await _repo(account_id)
+    if await asyncio.to_thread(repo.strategy_instance, strategy_instance_id) is not None:
+        # An operator's Stop sells nothing at the end time (#2664): the bot's
+        # end is cancelled before its STOP commits, exactly as the panel's
+        # Stop cancels it, so no Clerk pass between the two sells a SELL end.
+        # Should the STOP then be refused, the end stays cancelled: the
+        # operator asked to Stop. A bot this authority has no registration
+        # for -- a Dry Run's -- is refused below, its end untouched. This Stop
+        # does not stop the bot's process in the runner; the panel's Stop does.
+        await cancel_bot_end(strategy_instance_id, updated_by="operator_runs_stop")
     try:
         submission = await asyncio.to_thread(
             submit_stop_run,

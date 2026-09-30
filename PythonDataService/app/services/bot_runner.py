@@ -1082,7 +1082,9 @@ class BotTaskRegistry:
         """
         self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
-        if managed is not None and not managed.task.done() and managed.binding.broker != broker:
+        if managed is not None and managed.task.done():
+            managed = None  # its task ended: no process left to stop
+        if managed is not None and managed.binding.broker != broker:
             raise UnknownBotError(
                 f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
                 detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
@@ -1096,7 +1098,7 @@ class BotTaskRegistry:
             # The Stop goes on: its STOP fences the bot, and no end is carried
             # out while the file cannot be read.
             _say_stop_cannot_cancel_end(strategy_instance_id, exc)
-        if managed is None or managed.task.done():
+        if managed is None:
             raise UnknownBotError(
                 f"Bot '{strategy_instance_id}' is not running.",
                 detail="Only a running bot can be stopped; see its status for the last outcome.",
@@ -1475,12 +1477,12 @@ class BotTaskRegistry:
     async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
         """The owner's Stop cancels the bot's scheduled end: nothing is sold at the end time.
 
-        The panel's Stop calls this before it commits the run's STOP, as
-        :meth:`stop` records its intent first: between that STOP and the
-        process stop, neither the end watch nor a Clerk pass may read the end
-        as still to be carried out. The rest of the Stop's record -- its
-        STOPPED intent -- lands with the process stop
-        (:meth:`stop_after_durable_clerk_stop`). Durable in the bot's desired
+        The panel's Stop and the raw ``runs/stop`` route (#2664) call this
+        before they commit the run's STOP, as :meth:`stop` records its intent
+        first: between that STOP and the process stop, neither the end watch
+        nor a Clerk pass may read the end as still to be carried out. The rest
+        of the panel Stop's record -- its STOPPED intent -- lands with the
+        process stop (:meth:`stop_after_durable_clerk_stop`). Durable in the bot's desired
         state, so no restart revives it, and whether or not this runner has
         the bot's process.
         """
@@ -1507,8 +1509,11 @@ class BotTaskRegistry:
 
         Returns the intent it replaced, ``None`` when it replaced none. Raises
         ``DesiredStateCorruptError`` when the desired state cannot be read.
-        Only the Clerk's stop at the end writes STOPPED without this, keeping
-        the end for the Clerk to record carried out (:meth:`_stop_at_its_end`).
+        Every other STOPPED write keeps the end, since none is an operator's
+        Stop: a run's crash or unverified exit (``BotRunTerminalRecorder``),
+        boot recovery's repair of an interrupted or terminal run
+        (``BotBootRecovery``), and the Clerk's stop at the end, which keeps it
+        for the Clerk to record carried out (:meth:`_stop_at_its_end`).
         """
         self._cancel_end_locked(strategy_instance_id, updated_by=updated_by)
         repo = self._desired_repo(strategy_instance_id)

@@ -801,6 +801,28 @@ async def test_stop_refuses_the_reason_reserved_for_the_clerks_stop_at_a_bots_en
 
 
 @pytest.mark.asyncio
+async def test_stop_in_a_process_with_no_bot_runner_lands_and_says_it_cancelled_no_end(
+    api: FastAPI, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2664: the raw Stop cancels the bot's end through the runner before its STOP. A process
+    with no runner has no end schedule to cancel it in; its STOP still lands, and that is said."""
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        stop = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "operator stop"},
+        )
+
+    assert stop.status_code == 202
+    assert stop.json()["state"] == "succeeded"
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_no_runner"]
+    assert said.strategy_instance_id == SID
+
+
+@pytest.mark.asyncio
 async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_http(
     api: FastAPI,
 ) -> None:

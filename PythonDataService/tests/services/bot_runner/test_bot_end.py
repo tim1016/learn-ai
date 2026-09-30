@@ -25,7 +25,12 @@ from app.broker.alpaca.clerk.models import InstanceCustodyProof
 from app.broker.alpaca.clerk.sqlite import recovery_execution
 from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionRequest, execute_recovery_action
 from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.schemas.bot_end import BotEnd, BotEndInput
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -254,6 +259,24 @@ async def test_a_crash_leaves_the_end_for_the_clerk_to_carry_out(tmp_path: Path)
     view = registry.bot_end("alpaca", _SID)
     assert view.status == "scheduled"
     assert view.editable is True
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)], (
+        "a restart lost the end the crash kept"
+    )
+
+
+async def test_a_service_shutdown_keeps_the_end(tmp_path: Path) -> None:
+    """#2607 review: a service shutdown is no operator's Stop. The bot wants to run again after
+    the restart, and its end stands: a fresh registry still reads it."""
+    registry = await _deployed(tmp_path, _Clock())
+
+    await registry.stop_all()
+
+    assert registry.status("alpaca", _SID).running is False
+    desired = _desired_json(tmp_path)
+    assert (desired["desired_state"], desired["end"]) == (
+        "RUNNING", {"end_at_ms": _END.end_at_ms, "end_action": "SELL", "carried_out_at_ms": None},
+    )
+    assert _registry(tmp_path, None).pending_ends([_SID]) == [ScheduledEnd(strategy_instance_id=_SID, end=_END)]
 
 
 async def test_the_lane_wide_stop_cancels_the_end_a_crash_kept(tmp_path: Path) -> None:
@@ -427,6 +450,24 @@ async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
     [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_unreadable"]
     # A repaired file would carry its end out after all: the repair must clear it.
     assert "clear its end when repairing the file" in said.getMessage()
+
+
+async def test_a_stop_of_a_running_bot_whose_desired_state_cannot_be_read_still_stops_it(tmp_path: Path) -> None:
+    """#2607 review: the Stop cannot cancel an unreadable desired state's end, and goes on. The
+    process is fenced and stopped and its outcome recorded before the status the Stop answers
+    with -- which reads that file -- raises."""
+    registry = await _deployed(tmp_path, _Clock())
+    managed = registry._bots[_SID]
+    stable_desired_state_path(tmp_path, _SID).write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(DesiredStateCorruptError):
+        await registry.stop_after_durable_clerk_stop("alpaca", _SID, updated_by="operator_recovery", reason="op")
+
+    assert not managed.run_gate.is_set()
+    assert managed.task.done()
+    assert _SID not in registry._bots
+    outcome = registry._bindings.read_outcome(_SID, managed.binding.run_id)
+    assert outcome is not None and (outcome.kind, outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
 
 
 def test_cancelling_the_end_of_a_bot_with_no_desired_state_writes_none(tmp_path: Path) -> None:
