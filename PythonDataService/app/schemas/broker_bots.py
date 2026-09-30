@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.schemas.action_plan import ActionPlan
+from app.schemas.bot_end import BotEndInput, BotEndView
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
 from app.schemas.exit_terms import ExitTermsInput
@@ -161,6 +162,10 @@ class AlpacaPaperDeployRequest(BaseModel):
     # Strategy Lab already use. Never contains `symbol`: the deploy request's
     # own `symbol` field above is authoritative and is injected separately.
     parameters: dict[str, Any] = Field(default_factory=dict)
+    # The owner's end for this bot (#2607): omitted, the default end (today's
+    # close minus one minute); ``{"end_at_ms": null}``, no end. The owner's
+    # schedule, not a sealed term: it stays out of ``fingerprint``.
+    end: BotEndInput | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -193,10 +198,12 @@ class AlpacaPaperDeployRequest(BaseModel):
         Hashes the settings alone: only this model's own fields -- never a
         subclass's submission key or display lineage -- and never the budget's
         review token or typed phrase, which prove the final click rather than
-        describe the bot. ``bound_to`` names what else the hash commits to
-        (the account; for consent, also the world).
+        describe the bot. Nor the end (#2607): the owner may change it while
+        the bot runs, so it is no term the consent or a resend binds.
+        ``bound_to`` names what else the hash commits to (the account; for
+        consent, also the world).
         """
-        payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields))
+        payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields) - {"end"})
         if payload["budget"] is not None:
             payload["budget"].pop("review_token", None)
             payload["budget"].pop("live_confirmation", None)
@@ -428,6 +435,9 @@ class AlpacaPaperDeployView(BaseModel):
     sizing_options: tuple[AlpacaPaperSizingOption, ...]
     default_exit_terms: ExitTermsInput | None = None
     exit_steps_summary: str = "Set exit terms to review this bot’s exit steps."
+    # The end a Deploy that names none gets (#2607), in the owner's words:
+    # the form pre-fills it.
+    default_end: BotEndView | None = None
     next_deploy_open_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     action_plan_explanation: str
     carryover_available: bool

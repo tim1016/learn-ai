@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
+from app.schemas.bot_end import BotEndInput, BotEndPreviewRequest, BotEndView
 from app.schemas.bot_history import AccountBotHistory
 from app.schemas.broker_bots import (
     SUBMISSION_KEY_PATTERN,
@@ -79,6 +80,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
     bot_clear,
+    bot_end_panel,
     bot_history,
     budget_deploy,
     cohort_flatten,
@@ -487,6 +489,42 @@ async def read_deploy_prefill_scoped(broker: str, account_id: str, sid: str) -> 
         return await panel_deploy.deploy_prefill(broker, account_id, sid)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots/end-preview",
+    response_model=BotEndView,
+    summary="Check the end a Deploy would record: the default, a move to before an early close, or a refusal (#2607)",
+)
+async def preview_bot_end_scoped(broker: str, account_id: str, request: BotEndPreviewRequest) -> BotEndView:
+    try:
+        return await bot_end_panel.preview_bot_end(broker, account_id, request)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/end",
+    response_model=BotEndView,
+    summary="One bot's owner-set end, in the owner's words (#2607)",
+)
+async def read_bot_end_scoped(broker: str, account_id: str, sid: str) -> BotEndView:
+    try:
+        return await bot_end_panel.read_bot_end(broker, account_id, sid)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+
+
+@router.put(
+    "/{broker}/accounts/{account_id}/bots/{sid}/end",
+    response_model=BotEndView,
+    summary="Change a bot's end or its sell/keep choice now, with no restart and no seal touched (#2607)",
+)
+async def edit_bot_end_scoped(broker: str, account_id: str, sid: str, request: BotEndInput) -> BotEndView:
+    try:
+        return await bot_end_panel.edit_bot_end(broker, account_id, sid, request)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
 
 
 @router.post(

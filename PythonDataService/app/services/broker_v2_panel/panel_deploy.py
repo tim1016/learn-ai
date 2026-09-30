@@ -50,6 +50,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel import budget_deploy
+from app.services.broker_v2_panel.bot_end_panel import preview_default_end, resolve_deploy_end
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
     DeploySubmission,
@@ -195,7 +196,7 @@ async def get_alpaca_paper_deploy_view(
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
     context = get_active_alpaca_binding()
-    return build_alpaca_paper_deploy_view(
+    view = build_alpaca_paper_deploy_view(
         account,
         clerk,
         validation_entries,
@@ -204,6 +205,8 @@ async def get_alpaca_paper_deploy_view(
         custody_world=custody_world,
         golden_validation_scopes=await _current_golden_validation_scopes(symbol),
     )
+    # The end a Deploy that names none gets, for the form to pre-fill (#2607).
+    return view.model_copy(update={"default_end": preview_default_end()})
 
 
 async def preview_alpaca_deployment_budget(
@@ -373,6 +376,7 @@ async def deploy_alpaca_paper_bot(
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
             view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
             resolved_params = _require_alpaca_deploy_request(view, request)
+            end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
             except BudgetUnavailable as exc:
@@ -397,6 +401,7 @@ async def deploy_alpaca_paper_bot(
                 strategy_params=resolved_params.effective,
                 exit_terms=request.exit_terms.seal(),
                 strategy_param_origins=resolved_params.origins,
+                end=end,
                 **({"budget_consent": consent} if consent is not None else {}),
             )
         except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
