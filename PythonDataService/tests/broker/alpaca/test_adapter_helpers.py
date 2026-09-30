@@ -68,6 +68,16 @@ def test_numeric_helpers_reject_booleans(parser: Callable[[Any], float | None], 
         parser(value)
 
 
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+def test_numeric_helpers_refuse_a_number_too_large_for_a_float_as_unreadable(
+    parser: Callable[[Any], float | None],
+) -> None:
+    # ``float(10**400)`` raises ``OverflowError``, which no mapper's caller
+    # is written to catch: it escaped as a raw error (#2627, #2648 review).
+    with pytest.raises(ValueError, match="too large"):
+        parser(10**400)
+
+
 def test_to_str_returns_the_vendor_text_unchanged() -> None:
     assert to_str("SPY", field="symbol") == "SPY"
 

@@ -1506,28 +1506,36 @@ async def test_reconcile_account_reports_stale_and_fails_closed_on_broker_read_f
 
 
 class _MalformedSnapshotClient:
-    """An Alpaca client seam whose open positions carry an unmappable row."""
+    """An Alpaca client seam whose open orders or positions carry an unmappable row."""
 
-    async def list_orders(self, **_query: object) -> list[dict[str, object]]:
-        return []
+    def __init__(self, malformed: Literal["orders", "positions"]) -> None:
+        self._malformed = malformed
+
+    async def list_orders(self, **_query: object) -> list[object]:
+        # Not an object at all: there is no order to contain under any id.
+        # Missing text and unreadable values are contained per order instead
+        # (#2643, #2648).
+        return ["not-an-order"] if self._malformed == "orders" else []
 
     async def list_positions(self) -> list[dict[str, str]]:
-        return [{"symbol": "SPY"}]
+        return [{"symbol": "SPY"}] if self._malformed == "positions" else []
 
 
-async def test_reconcile_holds_the_account_stale_on_a_malformed_positions_snapshot(
+@pytest.mark.parametrize("malformed", ["orders", "positions"])
+async def test_reconcile_holds_the_account_stale_on_a_malformed_broker_snapshot(
     repo: ClerkSqliteRepository,
+    malformed: Literal["orders", "positions"],
 ) -> None:
     """A raw adapter error once skipped the stale hold entirely (#2627).
 
     It escaped the reconciler's ``BrokerError`` handling into the sweep's
     catch-all, so new exposure was not held and exit recovery not paused.
-    An unmappable *order* row no longer reaches this path: it maps degraded
-    and is contained per order (#2648), like missing text before it (#2643).
+    An order row with missing text or an unreadable value no longer reaches
+    this path: it is contained per order (#2643, #2648).
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
-    read = AlpacaBroker(client=_MalformedSnapshotClient())  # type: ignore[arg-type]
+    read = AlpacaBroker(client=_MalformedSnapshotClient(malformed))  # type: ignore[arg-type]
 
     result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
@@ -1626,10 +1634,11 @@ async def test_reconcile_contains_one_order_with_unreadable_values_and_keeps_rea
     """One row a value of which cannot be parsed once refused the whole orders read (#2648).
 
     That was ``BROKER_SNAPSHOT_STALE``, which admits no reduction: one bad
-    broker record froze exits account-wide. The row now maps degraded -- no
-    status, so the Clerk cannot state it truthfully -- and is contained alone
-    under its id with reductions admitted, the same per-order rule missing
-    text follows (#2643), and the rest of the snapshot is judged as usual.
+    broker record froze exits account-wide. The row now maps with that value
+    named unreadable, so the Clerk cannot state it truthfully, and is
+    contained alone under its id with reductions admitted, the same
+    per-order rule missing text follows (#2643), and the rest of the
+    snapshot is judged as usual.
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
@@ -1667,11 +1676,12 @@ async def test_an_answer_about_our_own_order_with_unreadable_values_stays_unknow
 ) -> None:
     """An unreadable value in an answer about our own order once refused the whole read (#2648).
 
-    The answer now maps degraded -- no status -- and is withheld the way a
-    missing identity is (#2643): the ENTER folds ``unknown``, nothing of the
-    unreadable row becomes evidence, and the sweep's exact lookup by
-    ``client_order_id`` recovers the order and its fill once the broker
-    answers readably.
+    The answer now maps with that value named unreadable and is withheld the
+    way a missing identity is (#2643): the ENTER folds ``unknown`` under a
+    reason naming the unreadable field -- never a status the broker did send
+    (#2648 review) -- nothing of the unreadable row becomes evidence, and the
+    sweep's exact lookup by ``client_order_id`` recovers the order and its
+    fill once the broker answers readably.
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
@@ -1695,6 +1705,16 @@ async def test_an_answer_about_our_own_order_with_unreadable_values_stays_unknow
     assert order is not None and order.broker_order_id is None
     kinds = [row["transition_kind"] for row in repo.transitions_for_order(order_ref)]
     assert "ORDER_SUBMIT_UNCERTAIN" in kinds and "ORDER_SUBMIT_ACKED" not in kinds
+    [withheld] = [
+        json.loads(row["facts_json"])["why"]
+        for row in repo.transitions_for_order(order_ref)
+        if row["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+    ]
+    [field] = unreadable
+    assert withheld == (
+        f"broker reported this order with values this app could not read ({field}); "
+        "withholding its evidence"
+    )
 
     # The sweep's exact lookup is withheld the same way while the answer stays unreadable...
     await reconcile_account(repo, read=_FakeRead(), trade=unreadable_broker, pricing=UNPRICEABLE_RECOVERY)

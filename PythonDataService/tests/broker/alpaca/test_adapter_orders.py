@@ -107,14 +107,44 @@ def test_a_boolean_fill_count_never_reads_as_a_quantity(
 ) -> None:
     # ``payload.get("filled_qty") or 0`` once turned ``false`` into a quiet 0.0
     # while ``true`` became one filled share (#2606). A boolean now marks the
-    # row unreadable (#2648): it never becomes a quantity, and the row's blank
-    # status is the Clerk's containment signal (#2643).
+    # row unreadable (#2648): it never becomes a quantity, and the Clerk
+    # contains the row by the field it names.
     payload = {**load_alpaca_fixture("orders", "orders.json")[1], "filled_qty": filled_qty}
 
     order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
 
     assert order.filled_quantity == 0.0
-    assert order.status == ""
+    assert order.unreadable_fields == ("filled_qty",)
+
+
+def test_a_negative_price_keeps_its_sign_while_a_negative_share_count_is_unreadable(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    # Only share counts must be non-negative (#2648 review): a multi-leg
+    # order's net limit price may be a credit, so a price keeps its sign.
+    open_order = load_alpaca_fixture("orders", "orders.json")[1]
+
+    priced = from_alpaca_order({**open_order, "limit_price": "-1.25"}, observed_at_ms=_OBSERVED)
+    counted = from_alpaca_order({**open_order, "qty": "-1"}, observed_at_ms=_OBSERVED)
+
+    assert priced.limit_price == -1.25 and priced.unreadable_fields == ()
+    assert counted.quantity is None and counted.unreadable_fields == ("qty",)
+
+
+def test_every_unreadable_value_on_a_row_is_named_in_order(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = {
+        **load_alpaca_fixture("orders", "orders.json")[1],
+        "updated_at": "later",
+        "qty": True,
+        "extended_hours": "no",
+    }
+
+    order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+    assert order.unreadable_fields == ("extended_hours", "qty", "updated_at")
+    assert order.status == "new"
 
 
 def test_fill_latency_is_unknown_until_both_broker_clocks_exist(
@@ -247,10 +277,10 @@ async def test_broker_names_a_malformed_order_as_unavailable_evidence(
     assert isinstance(info.value.__cause__, TypeError)
 
 
-# One order's unreadable value -> what the degraded row reads as. A boolean
+# One order's unreadable value -> the broker field the row names. A boolean
 # never becomes a quantity (#2606) and ``"false"`` never becomes ``True``
-# (#2643); the blank status is the per-order containment signal (#2643,
-# #2648).
+# (#2643); a number too large for a float, a non-finite number and a
+# negative share count are unreadable too, never a raw error or a value.
 _UNREADABLE_ORDER_VALUE_SHAPES: dict[str, dict[str, object]] = {
     "boolean-fill-count": {"filled_qty": True},
     "unparseable-submitted-at": {"submitted_at": "yesterday"},
@@ -258,6 +288,11 @@ _UNREADABLE_ORDER_VALUE_SHAPES: dict[str, dict[str, object]] = {
     "boolean-quantity": {"qty": False},
     "non-numeric-limit-price": {"limit_price": "one dollar"},
     "non-boolean-extended-hours": {"extended_hours": "false"},
+    "overflowing-quantity": {"qty": 10**400},
+    "nan-fill-count": {"filled_qty": "NaN"},
+    "infinite-limit-price": {"limit_price": "Infinity"},
+    "negative-quantity": {"qty": "-5"},
+    "negative-fill-count": {"filled_qty": -1},
 }
 
 
@@ -269,23 +304,28 @@ async def test_one_order_with_unreadable_values_maps_degraded_and_the_clerk_cont
     """One row a value of which will not parse once refused every other order in the answer (#2648).
 
     That refusal held the account stale with no reductions (#2363). The row
-    now maps degraded -- no status, unreadable values absent -- and the rest
-    of the answer maps fully, exactly as missing text already does (#2643).
+    now maps degraded -- the unreadable value absent and named, the broker's
+    own status kept -- and the rest of the answer maps fully, exactly as
+    missing text already does (#2643). The Clerk's refusal names the real
+    cause, not a status the broker did send (#2648 review).
     """
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
-    poisoned = {**open_order, "id": "bad-order", **_UNREADABLE_ORDER_VALUE_SHAPES[shape]}
+    update = _UNREADABLE_ORDER_VALUE_SHAPES[shape]
+    [field] = update
+    poisoned = {**open_order, "id": "bad-order", **update}
     broker = AlpacaBroker(client=_OrdersClient([poisoned, open_order]))  # type: ignore[arg-type]
 
     degraded, readable = await broker.list_orders(status="open", limit=500)
 
     assert degraded.order_id == "bad-order"
-    assert degraded.status == ""
+    assert degraded.unreadable_fields == (field,)
+    assert degraded.status == open_order["status"]
     assert degraded.filled_quantity == 0.0
     assert degraded.extended_hours is False
     assert degraded.events == []
     assert readable.order_id == open_order["id"]
-    assert readable.status == open_order["status"]
-    with pytest.raises(ExternalOrderObservationError, match="status must be non-empty"):
+    assert readable.unreadable_fields == ()
+    with pytest.raises(ExternalOrderObservationError, match=f"could not read: {field}$"):
         _observation_from_broker_order(degraded)
 
 
@@ -297,8 +337,7 @@ async def test_a_non_boolean_extended_hours_flag_maps_degraded_never_true(
     """``bool("false")`` once read a regular-hours order as extended-hours (#2643).
 
     A non-boolean flag now reads absent and marks the row unreadable (#2648):
-    never ``True``, and the row's blank status is the Clerk's containment
-    signal.
+    never ``True``, and the Clerk contains the row by the field it names.
     """
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
     broker = AlpacaBroker(client=_OrdersClient([{**open_order, "extended_hours": flag}]))  # type: ignore[arg-type]
@@ -307,7 +346,7 @@ async def test_a_non_boolean_extended_hours_flag_maps_degraded_never_true(
 
     [degraded] = mapped
     assert degraded.extended_hours is False
-    assert degraded.status == ""
+    assert degraded.unreadable_fields == ("extended_hours",)
 
 
 _ABSENT = object()

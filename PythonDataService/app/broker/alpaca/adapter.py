@@ -15,9 +15,11 @@ mapper (``from_alpaca_account``, ``from_alpaca_position``, …) built on them.
 
 from __future__ import annotations
 
+import functools
 import logging
+import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
@@ -54,11 +56,16 @@ def to_float(value: Any) -> float:
     """Parse a required Alpaca numeric (string or number) to ``float``.
 
     A JSON boolean is refused: ``float(True) == 1.0``, so a corrupt money field
-    would otherwise become $1 or $0 of broker evidence.
+    would otherwise become $1 or $0 of broker evidence. A JSON integer too
+    large for a float is a ``ValueError`` like any other unreadable numeric,
+    never a raw ``OverflowError`` no caller is written to catch (#2627, #2648).
     """
     if isinstance(value, bool):
         raise TypeError("Expected an Alpaca numeric, not a boolean")
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError as exc:
+        raise ValueError("Alpaca numeric is too large to read as a number") from exc
 
 
 def opt_float(value: Any) -> float | None:
@@ -361,46 +368,44 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     return body
 
 
-def _lenient_order_float(
-    payload: Mapping[str, Any],
-    field: str,
-    unreadable: dict[str, str],
-) -> float | None:
-    """Read one order numeric; a value that will not parse reads absent (#2648).
+def _finite_float(value: Any) -> float | None:
+    """Parse an optional order numeric that must be a finite number when present (#2648)."""
+    number = opt_float(value)
+    if number is not None and not math.isfinite(number):
+        raise ValueError(f"Alpaca numeric must be finite, got {number!r}")
+    return number
 
-    The failure is recorded in ``unreadable`` so the row maps degraded rather
-    than refusing every other order in the answer (#2363); ``None`` is the
-    absent form every consumer already understands.
+
+def _order_quantity(value: Any) -> float | None:
+    """Parse an optional share count: finite and non-negative when present (#2648).
+
+    Prices keep their sign -- a multi-leg order's net price may be negative --
+    so only quantities are held to it.
+    """
+    quantity = _finite_float(value)
+    if quantity is not None and quantity < 0:
+        raise ValueError(f"Alpaca quantity must be non-negative, got {quantity!r}")
+    return quantity
+
+
+def _read_or_absent[T](
+    payload: Mapping[str, Any],
+    unreadable: dict[str, str],
+    field: str,
+    parse: Callable[[Any], T | None],
+) -> T | None:
+    """Read one order value, or ``None`` when it will not parse (#2648).
+
+    ``parse`` raises ``TypeError``/``ValueError`` on a value it cannot read;
+    the failure is recorded in ``unreadable`` under the broker's field name,
+    so the row maps degraded rather than refusing every other order in the
+    answer (#2363). ``None`` is the absent form every consumer already
+    understands. A parser that must refuse a non-string (a link id, say)
+    raises instead of ``str()``-coercing it.
     """
     try:
-        return opt_float(payload.get(field))
+        return parse(payload.get(field))
     except (TypeError, ValueError) as exc:
-        unreadable[field] = f"{type(exc).__name__}: {exc}"
-        return None
-
-
-def _lenient_order_rfc3339(
-    payload: Mapping[str, Any],
-    field: str,
-    unreadable: dict[str, str],
-) -> int | None:
-    """Read one order timestamp; a string that will not parse reads absent (#2648)."""
-    try:
-        return opt_rfc3339_to_ms(payload.get(field))
-    except (TypeError, ValueError) as exc:
-        unreadable[field] = f"{type(exc).__name__}: {exc}"
-        return None
-
-
-def _lenient_order_bool(
-    payload: Mapping[str, Any],
-    field: str,
-    unreadable: dict[str, str],
-) -> bool | None:
-    """Read one order flag; a non-boolean reads absent, never truthy (#2648, #2643)."""
-    try:
-        return opt_bool(payload.get(field), field=field)
-    except TypeError as exc:
         unreadable[field] = f"{type(exc).__name__}: {exc}"
         return None
 
@@ -419,32 +424,36 @@ def from_alpaca_order(
     account stale with no reductions, the exit freeze #2363 exists to end.
 
     Its values -- quantities, prices, timestamps and ``extended_hours`` --
-    read the same way (#2648): a value that cannot be parsed reads absent
-    and marks the row **degraded**, its status blank, because the Clerk
-    cannot state that order truthfully either. The Clerk contains a degraded
-    or blank order on its own instead: a foreign order is recorded
-    unfoldable (#2363/#2643), and an answer about this app's own order is
-    withheld as a lost response, recoverable by ``client_order_id``. A
-    boolean never becomes a quantity (#2606) and ``"false"`` never becomes
-    ``True`` (#2643); a degraded row synthesizes no fill event. A payload
-    that is not an object at all is a contract violation and still raises --
-    there is no order there to contain.
+    read the same way (#2648): a value that cannot be parsed (a boolean or
+    non-numeric count, a non-finite or out-of-range number, a negative
+    quantity, an unparseable time, a non-boolean flag) reads absent and is
+    named in ``unreadable_fields``. The broker's own status is kept, so the
+    order's lifecycle stays visible and a change in it is still activity.
+    The Clerk contains such a row, or one missing its text, on its own: a
+    foreign order is recorded unfoldable (#2363/#2643), and an answer about
+    this app's own order is withheld as a lost response, recoverable by
+    ``client_order_id``. A boolean never becomes a quantity (#2606) and
+    ``"false"`` never becomes ``True`` (#2643); a row with an unreadable
+    value synthesizes no fill event. A payload that is not an object at all
+    is a contract violation and still raises -- there is no order there to
+    contain.
     """
     if not isinstance(payload, Mapping):
         raise TypeError(f"Alpaca order payload must be an object, got {type(payload).__name__}")
     unreadable: dict[str, str] = {}
-    quantity = _lenient_order_float(payload, "qty", unreadable)
-    filled_quantity = _lenient_order_float(payload, "filled_qty", unreadable) or 0.0
-    limit_price = _lenient_order_float(payload, "limit_price", unreadable)
-    stop_price = _lenient_order_float(payload, "stop_price", unreadable)
-    filled_avg_price = _lenient_order_float(payload, "filled_avg_price", unreadable)
-    extended_hours = _lenient_order_bool(payload, "extended_hours", unreadable) or False
-    submitted_at_ms = _lenient_order_rfc3339(payload, "submitted_at", unreadable)
-    created_at_ms = _lenient_order_rfc3339(payload, "created_at", unreadable)
-    updated_at_ms = _lenient_order_rfc3339(payload, "updated_at", unreadable)
-    filled_at_ms = _lenient_order_rfc3339(payload, "filled_at", unreadable)
-    canceled_at_ms = _lenient_order_rfc3339(payload, "canceled_at", unreadable)
-    expired_at_ms = _lenient_order_rfc3339(payload, "expired_at", unreadable)
+    read = functools.partial(_read_or_absent, payload, unreadable)
+    quantity = read("qty", _order_quantity)
+    filled_quantity = read("filled_qty", _order_quantity) or 0.0
+    limit_price = read("limit_price", _finite_float)
+    stop_price = read("stop_price", _finite_float)
+    filled_avg_price = read("filled_avg_price", _finite_float)
+    extended_hours = read("extended_hours", functools.partial(opt_bool, field="extended_hours")) or False
+    submitted_at_ms = read("submitted_at", opt_rfc3339_to_ms)
+    created_at_ms = read("created_at", opt_rfc3339_to_ms)
+    updated_at_ms = read("updated_at", opt_rfc3339_to_ms)
+    filled_at_ms = read("filled_at", opt_rfc3339_to_ms)
+    canceled_at_ms = read("canceled_at", opt_rfc3339_to_ms)
+    expired_at_ms = read("expired_at", opt_rfc3339_to_ms)
     if unreadable:
         logger.warning(
             "An Alpaca order row carried values this app could not parse; the row is marked unreadable",
@@ -470,9 +479,7 @@ def from_alpaca_order(
         stop_price=stop_price,
         extended_hours=extended_hours,
         filled_avg_price=filled_avg_price,
-        # The one containment signal the Clerk already knows (#2643): a row
-        # this app cannot state truthfully carries no lifecycle state.
-        status="" if unreadable else str_or_blank(payload.get("status")),
+        status=str_or_blank(payload.get("status")),
         submitted_at_ms=submitted_at_ms,
         created_at_ms=created_at_ms,
         updated_at_ms=updated_at_ms,
@@ -482,6 +489,7 @@ def from_alpaca_order(
         events=[] if unreadable else _order_events(payload),
         observed_at_ms=_observed(observed_at_ms),
         fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),
+        unreadable_fields=tuple(sorted(unreadable)),
     )
 
 

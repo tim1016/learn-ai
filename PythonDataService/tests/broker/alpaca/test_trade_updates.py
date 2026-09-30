@@ -32,6 +32,7 @@ from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
     _MIN_HELD_CONNECTION_MS,
     TradeUpdatesConsumer,
+    _broker_order_fingerprint_fields,
     _from_gap_recovery_event,
     _inject_frame_faults,
     _order_to_event_payload,
@@ -181,6 +182,38 @@ def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
     assert math.isclose(event.quantity, 10.0, abs_tol=1e-9, rel_tol=0.0)
     assert event.price is not None
     assert math.isclose(event.price, 135.80, abs_tol=1e-9, rel_tol=0.0)
+
+
+def test_gap_reconcile_never_reshapes_an_order_with_unreadable_values() -> None:
+    """A filled order whose fill count would not parse is not re-fed as a zero fill (#2648 review).
+
+    The adapter keeps the broker's own status on such a row, so the status
+    alone no longer keeps it out of the REST recovery re-map, which would
+    turn its absent fill count into a readable ``qty: 0.0``.
+    """
+    order = _filled_broker_order("unreadable-fill", _OWNED_COID).model_copy(
+        update={"filled_quantity": 0.0, "unreadable_fields": ("filled_qty",)}
+    )
+
+    assert _order_to_event_payload(order) is None
+
+
+def test_an_unreadable_row_is_not_an_exact_redelivery_of_its_readable_twin() -> None:
+    """A degraded row and a readable one whose value really is zero are different evidence (#2648 review).
+
+    Readable orders keep exactly the fingerprint shape they always had, so
+    no variant digest a running consumer computes changes.
+    """
+    readable = _accepted_order(_OWNED_COID)
+    degraded = readable.model_copy(update={"unreadable_fields": ("filled_qty",)})
+
+    assert sorted(_broker_order_fingerprint_fields(readable)) == [
+        "canceled_at_ms", "client_order_id", "created_at_ms", "expired_at_ms",
+        "filled_at_ms", "filled_avg_price", "filled_quantity", "limit_price",
+        "order_id", "order_type", "quantity", "side", "status", "stop_price",
+        "submitted_at_ms", "symbol", "time_in_force", "updated_at_ms",
+    ]
+    assert _broker_order_fingerprint_fields(degraded) != _broker_order_fingerprint_fields(readable)
 
 
 class _FakeBroker:
