@@ -143,7 +143,7 @@ Each `account_mode != "paper"` refusal becomes an explicit admitted-set per cont
 - **Shadow = existing Dry Run plus read-only live observation.** Cheaper, but proves none of the live plumbing this ADR exists to prove; the first exercise of the live decision path would be with real orders.
 - **`ALPACA_MODE=live` alone as arming.** The exact "config accident" D7 rejected.
 - **Account-level arming.** Would let an instance that never shadowed trade on the strength of a sibling's receipt.
-- **A per-order notional cap.** Owner rejected on 2026-09-07. The cash bound already bounds every order by settled cash.
+- **A per-order notional cap.** Owner rejected on 2026-09-07. The cash bound already bounds every order by broker-observed cash. (Corrected 2026-09-30, #2625: the text said *settled* cash, but the bound reads Alpaca's `cash`, which reflects a fill within milliseconds, long before settlement.)
 - **A symbol allowlist, or one symbol at a time.** Owner rejected: every symbol a sealed program is bound to is in scope.
 - **Regular-hours-only on live.** Owner rejected; Decision 5 makes extended hours real rather than merely permitted.
 - **Envelope defaults in code.** Owner rejected: every value comes from the environment file, is required when live, and is sealed at arming.

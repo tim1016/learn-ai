@@ -4,9 +4,6 @@ PRD #593 §"Parity diagnostics" / issue #597: warnings are non-blocking,
 hard schema errors stay in Pydantic. This module exercises the pure
 function only — the HTTP boundary is tested separately under
 ``tests/routers/test_preview_action_plan.py``.
-
-Prior art: tests/engine/execution/test_order_sizer.py (pure-function
-template for engine helpers).
 """
 
 from __future__ import annotations

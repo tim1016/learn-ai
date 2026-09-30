@@ -128,3 +128,12 @@ it with `SimpleFloorSizing` so any future drift surfaces immediately.
 No new fixture is required — `LeanSetHoldingsSizing` is the canonical
 quantity-math authority (pinned at `atol=0` by the 20-entry SPY golden);
 this cutover only changes *which path the live engine takes through it*.
+
+## 2026-09-30 — Live-path adapter deleted (#2602)
+
+The live consumer of the 2026-06-13 cutover retired with the IBKR
+order path (#1583), and nothing replaced it. #2602 deleted
+`order_sizer.py` (`OrderSizer`, the `SizingPolicy` union and its tests),
+including the regression test named above. `LeanSetHoldingsSizing` and
+its 20-entry SPY golden fixture are unchanged; Engine Lab and the LEAN
+cross-runner still consume it.
