@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
@@ -17,7 +17,11 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import StopCustodyOutcome, prove_stop_outcome, record_stop_outcome
 from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
-from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE, BotRunEvidenceService
+from app.services.bot_run_evidence import (
+    ACTIVATION_FAILED_STOP_REASON_CODE,
+    PROVISIONAL_STOP_REASON_CODE,
+    BotRunEvidenceService,
+)
 from app.services.bot_runtime import ManagedBot
 
 _UPDATED_BY = "bot_runner"
@@ -29,6 +33,28 @@ logger = logging.getLogger(__name__)
 END_STOP_PROOF_WAIT_S = 45.0
 #: How often that wait looks again at the Clerk's latest published pass.
 END_STOP_PROOF_POLL_S = 0.5
+
+StopKind = Literal["STOPPED", "FAILED_LAUNCH"]
+
+
+class StopCause(NamedTuple):
+    """Who ended a run that the normal Stop ends (#2667).
+
+    ``kind`` is the terminal fact recorded; ``untraded_reason`` its reason
+    where no custody proof is owed (a Dry Run). A trade-mode run's reason is
+    the Clerk's custody proof whoever ended it -- the panel's next step
+    depends on it -- so who ended the run is carried by the kind instead.
+    """
+
+    kind: StopKind
+    untraded_reason: str
+
+
+#: The owner's Stop.
+OPERATOR_STOP = StopCause("STOPPED", "OPERATOR_STOP")
+#: The compensation for a launch that failed after its Clerk STOP (#2559):
+#: it runs through the normal Stop, but nobody stopped the run.
+FAILED_LAUNCH_STOP = StopCause("FAILED_LAUNCH", ACTIVATION_FAILED_STOP_REASON_CODE)
 
 
 class BotRunTerminalRecorder:
@@ -185,13 +211,14 @@ class BotRunTerminalRecorder:
         self,
         binding: BrokerBotBinding,
         *,
+        kind: StopKind,
         reason_code: str,
         canary_rollback: CanaryRollbackDecision | None = None,
     ) -> None:
         """Replace provisional stop evidence with the Clerk-proven outcome."""
         self._run_evidence.record_terminal(
             binding.strategy_instance_id,
-            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+            self._proven_stop(binding, kind=kind, reason_code=reason_code, canary_rollback=canary_rollback),
             updated_by=_UPDATED_BY,
             reason=reason_code,
         )
@@ -211,18 +238,19 @@ class BotRunTerminalRecorder:
         """
         self._run_evidence.record_terminal_receipt(
             binding.strategy_instance_id,
-            self._proven_stop(binding, reason_code=reason_code, canary_rollback=canary_rollback),
+            self._proven_stop(binding, kind="STOPPED", reason_code=reason_code, canary_rollback=canary_rollback),
         )
 
     def _proven_stop(
         self,
         binding: BrokerBotBinding,
         *,
+        kind: StopKind,
         reason_code: str,
         canary_rollback: CanaryRollbackDecision | None,
     ) -> BotDutyOutcome:
         return BotDutyOutcome(
-            kind="STOPPED",
+            kind=kind,
             reason_code=reason_code,
             recorded_at_ms=self._now_ms(),
             run_id=binding.run_id,

@@ -6,6 +6,8 @@ Budget authority cutover, only a fresh Deploy with a reviewed budget and Live
 consent can authorize a new run. Old JSONL grants remain read-only, and their
 original hashes and predecessor facts are preserved. The description below is
 retained as provenance for those records; its former commands are not available.
+Nothing checks permission against an arming any more (#2629) — see
+[What remains](#what-remains-2629).
 
 ## What it is
 
@@ -28,11 +30,33 @@ month is the configuration accident this ADR was written to prevent.
 read it at every live ENTER; that check is deleted. Only an account switched
 to budgets admits an ENTER (PRD #2540): one still on authority version 1
 refuses every ENTER under `BUDGETS_NOT_SWITCHED_ON` until its owner switches
-it in Settings. The ledger is still read -- it seals a version-1 account's
-envelope and extended-hours allowances, and old `blocked` receipts under the
-arming codes stay readable. See [alpaca-live-authority](alpaca-live-authority.md).
+it in Settings. See [alpaca-live-authority](alpaca-live-authority.md).
 
-## Where it runs
+## What remains (#2629)
+
+The arming gate (`live_arming_gate.py`), its per-tick refresh
+(`sqlite/arming_refresh.py`), the envelope seal (`LiveEnvelopeGate.sealed`
+and its `LIVE_ENVELOPE_DISAGREEMENT` refusal), the Start-time arming fact
+(`live_arming_admission.py`), the status rule (`arming_status`,
+`sessions_used`) and the Apply-time arming invalidations (`arming_policy.py`)
+are deleted. A version-1 account still refuses every ENTER under
+`BUDGETS_NOT_SWITCHED_ON`. What is left only reads history:
+
+- `PythonDataService/app/broker/alpaca/clerk/live_arming.py` — the two record
+  shapes, verified exactly as they were sealed, `latest_arming`, and the ENTER
+  refusal codes old `blocked` receipts were recorded under
+  (`ARMING_ADMISSION_REASON_CODES`, still transient in `sqlite/uncertainty.py`).
+- `PythonDataService/app/broker/alpaca/clerk/live_arming_ledger.py` — the
+  read-only reader of `<clerk_dir>/accounts/arming/<live_account_id>/live_arming.jsonl`.
+- Its one reader: the one-time exit-terms upgrade
+  (`SqliteAlpacaClerkFacade.upgrade_legacy_exit_terms`), which prices a bot
+  armed before exit terms existed from its own newest arming. The entry
+  allowance resolver no longer reads it: a `sim:` Dry Run bound to a live
+  account prices its entries from that account's current envelope.
+
+The sections below describe the retired design.
+
+## Where it ran
 
 - `PythonDataService/app/broker/alpaca/clerk/live_arming.py` — the two records,
   their sealing and verification, the reason codes, and the pure status rule
@@ -187,7 +211,7 @@ session, the half day (Fri 2026-11-27) is, and the arming lapses on Mon
 An arming performed on a non-trading ET date simply starts counting at the next
 session, which is what the inclusive count over the calendar already says.
 
-## How the envelope gets sealed
+## How the envelope was sealed (retired by #2629)
 
 Slice 5 shipped `envelope_agreement` with `sealed` permanently `None`, so it
 could only ever answer `unsealed` and `LIVE_ENVELOPE_DISAGREEMENT` was

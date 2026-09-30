@@ -1,10 +1,11 @@
 """Panel projection — the full 5s-poll bot control panel view (spec §7).
 
 ``build_panel`` composes the bot-health card, the account/clerk card, the six-
-station transaction rail, the journal-tail reference, and the presented actions
-(with the panel-state ``revision`` those actions bind to). It is a pure
-function over its inputs so the router seam test drives it with journal
-fixtures — no live clerk/registry required.
+station transaction rail, the journal-tail reference, and the panel-state
+``revision``. It is a pure function over its inputs so the router seam test
+drives it with journal fixtures — no live clerk/registry required. Its
+presented actions are ``sqlite_panel_adapter.adapt_sqlite_panel``'s, which
+every served panel passes through (#2635).
 
 The ``revision`` is a deterministic function of the durable panel state
 (journal length + lifecycle transition + desired state + hold state). A POST
@@ -25,11 +26,9 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
     ActionId,
     copy_for,
-    duty_outcome_copy_key,
     hold_reason_for,
 )
 from app.engine.strategy.registry import strategy_experimental_notice
-from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
@@ -43,7 +42,6 @@ from app.schemas.broker_v2_panel import (
     MarketPulseView,
     MissionVerdictView,
     PanelAction,
-    ReadinessCheckView,
     RecentDecisionView,
     RecentFillView,
     TransactionRail,
@@ -56,24 +54,21 @@ from app.schemas.run_admission import (
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
-from app.services.bot_end import SCHEDULED_END_REASON_CODE
-from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
     channel_state,
     evaluate_channel_health,
 )
 from app.services.broker_v2_panel.feed_continuity_projection import (
-    WARMUP_REFUSAL_COPY,
     build_feed_continuity,
     build_startup_join,
     build_warmup_join,
 )
+from app.services.broker_v2_panel.outcome_copy import outcome_card_copy
 from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
 )
-from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
     derive_stations,
@@ -84,53 +79,6 @@ from app.services.source_bar_ledger import (
     RetainedStartupJoin,
     RetainedWarmupJoin,
 )
-
-_STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
-    "STOPPED_FLAT": (
-        "Stopped flat",
-        "The runtime is stopped and the Clerk proved zero attributed exposure.",
-    ),
-    "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE": (
-        "Stopped with approved carryover",
-        "The runtime is stopped and exact attributed exposure is preserved by a durable checkpoint.",
-    ),
-    "STOP_REQUIRES_FLATTEN": (
-        "Stopped; flatten required",
-        "The runtime is stopped with attributed exposure. Use Flatten to resolve that exposure.",
-    ),
-    "STOPPED_CUSTODY_UNPROVABLE": (
-        "Stopped; custody unprovable",
-        "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
-    ),
-    SCHEDULED_END_REASON_CODE: (
-        "Ended at its scheduled time",
-        "The Clerk stopped the bot at the end you set. Its end shows whether it sells or keeps its shares.",
-    ),
-    IMPOSSIBLE_SOURCE_BAR: (
-        "Refused: impossible source bar",
-        "The market-data feed delivered a bar that cannot be real -- a non-finite or "
-        "non-positive price, a high below its low, a print outside the bar's range, or a "
-        "negative volume -- so the run was stopped rather than allowed to decide on it. "
-        "This is a data-quality refusal, not a market verdict: nothing about the strategy "
-        "changed. Check IB Gateway's connection and market-data farm health, then deploy again "
-        "once its bars arrive clean.",
-    ),
-    **WARMUP_REFUSAL_COPY,
-    # A crash the market-data feed caused says so (hurdle H29): the generic
-    # crash copy disclaims any market-data verdict, which here is the cause.
-    "FEED_DEATH": (
-        "Crashed: market data stopped",
-        "The IBKR market-data feed stopped delivering bars, so the run ended rather "
-        "than decide without them.",
-    ),
-    # The failed-launch compensation runs through the normal Stop, so the kind
-    # is a stop; the words say nobody stopped it (#2559).
-    ACTIVATION_FAILED_STOP_REASON_CODE: (
-        "Failed to launch",
-        "The launch failed partway through, so the service ended the run. "
-        "Nobody stopped it, and nothing is running.",
-    ),
-}
 
 
 def compute_revision(
@@ -175,13 +123,9 @@ def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
     outcome = status.duty_outcome
     if outcome is None:
         return None
-    copy = copy_for(duty_outcome_copy_key(outcome.kind))
-    label, explanation = _STOP_OUTCOME_COPY.get(
-        outcome.reason_code,
-        (copy.label, copy.explanation),
-    )
+    label, explanation = outcome_card_copy(outcome.kind, outcome.reason_code)
     return DutyOutcomeView(
-        kind=outcome.kind,  # type: ignore[arg-type]
+        kind=outcome.kind,
         reason_code=outcome.reason_code,
         label=label,
         explanation=explanation,
@@ -302,34 +246,6 @@ def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingO
         for entry in latest_by_ref.values()
         if entry.order is not None
     ]
-
-
-def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
-    """Count current Clerk-owned working orders across every namespace."""
-
-    terminal_refs = {
-        entry.order_ref
-        for entry in entries
-        if entry.order_ref
-        and entry.kind is ClerkEntryKind.ORDER_EVENT
-        and entry.event is not None
-        and entry.event.event_type in _TERMINAL_ORDER_EVENTS
-    }
-    latest_by_ref: dict[str, OrderJournalEntry] = {}
-    for entry in entries:
-        if (
-            entry.order_ref
-            and entry.order_ref not in terminal_refs
-            and entry.order is not None
-        ):
-            latest_by_ref[entry.order_ref] = entry
-    return sum(
-        1
-        for entry in latest_by_ref.values()
-        if entry.order is not None
-        and entry.order.status.lower()
-        not in {"filled", "canceled", "expired", "rejected", "replaced"}
-    )
 
 
 def _recent_decision_views(
@@ -610,35 +526,6 @@ def _decision_last_bar_at_ms(decision: DecisionReceipt | None) -> int | None:
     return None
 
 
-def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
-    """Project present-tense enforcement checks from the canonical action guards."""
-    checks: list[ReadinessCheckView] = []
-    for action in actions:
-        blocker = action.blockers[0] if action.blockers else None
-        checks.append(
-            ReadinessCheckView(
-                operation=action.action_id,
-                label=action.label,
-                ready=action.enabled,
-                scope=(blocker.condition.scope if blocker else "bot"),
-                authority="Panel action policy",
-                explanation=(
-                    action.explanation
-                    if action.enabled
-                    else (
-                        blocker.headline
-                        if blocker is not None
-                        else "This operation is unavailable in the current state."
-                    )
-                ),
-                evidence=(blocker.condition.evidence if blocker else {}),
-                evaluated_at_ms=now_ms,
-                cure=(blocker.detail if blocker is not None else None),
-            )
-        )
-    return checks
-
-
 def _mission_verdict(
     status: BotStatusView,
     clerk: ClerkCard,
@@ -860,18 +747,6 @@ def build_panel(
 
     working_orders = _working_orders(status.strategy_instance_id, entries)
     channel_health = evaluate_channel_health(clerk_status.channel_healths, now_ms)
-    actions = build_actions(
-        status,
-        clerk,
-        revision=revision,
-        channel_fresh=channel_health.ready,
-        exposure=exposure,
-        account_id=account_id,
-        working_order_count=len(working_orders),
-        account_working_order_count=_account_working_order_count(entries),
-        account_expected_exposure={},
-    )
-
     resolved_authority_account_id = authority_account_id or default_authority_account_id(
         status, account_id
     )
@@ -883,8 +758,6 @@ def build_panel(
         authority_account_id=resolved_authority_account_id,
         authority_kind=authority_kind_for_account(resolved_authority_account_id),
     )
-    readiness_checks = _readiness_checks(actions, now_ms)
-    readiness_ready_count = sum(check.ready for check in readiness_checks)
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
@@ -927,11 +800,14 @@ def build_panel(
         rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
-        actions=actions,
-        primary_action=select_primary_action(actions, health),
-        readiness_checks=readiness_checks,
-        readiness_ready_count=readiness_ready_count,
-        readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
+        # Commands are the SQLite adapter's (``adapt_sqlite_panel``), which
+        # every served panel passes through: Clear's archive and the Clerk's
+        # recovery catalog, with their readiness checks and primary command.
+        actions=[],
+        primary_action=None,
+        readiness_checks=[],
+        readiness_ready_count=0,
+        readiness_blocked_count=0,
         status=bot_status,
         end=end,
         exposure=exposure,

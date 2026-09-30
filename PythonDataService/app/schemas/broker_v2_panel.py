@@ -91,8 +91,9 @@ class PanelProfile(BaseModel):
     """Closed descriptor extending BrokerCapabilities for the panel (§4).
 
     Angular renders strictly from this: an inapplicable station renders as
-    ``not_applicable``; an unsupported action never renders at all. Snapshot-
-    contract-tested per broker.
+    ``not_applicable``. A bot's commands are not listed here: its panel
+    presents exactly the actions it may run (``BotPanelView.actions``).
+    Snapshot-contract-tested per broker.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -107,9 +108,6 @@ class PanelProfile(BaseModel):
     live_bars_supported: bool
     # Which stations apply to this broker/mode (§7).
     stations: list[StationApplicability]
-    # The action ids this broker supports (§11). An action not listed here is
-    # never rendered.
-    supported_action_ids: list[ActionId]
 
 
 # ── §5 Catalog view (bots list roster row) ───────────────────────────────────

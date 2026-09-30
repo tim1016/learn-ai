@@ -66,14 +66,20 @@ import {
  * The world is a small state machine keyed on the commands the page has
  * sent: a Deploy makes the bot run (holding 1 SPY), a Stop leaves it stopped
  * but still holding, the flatten sequence's sale makes it flat and Finished,
- * and a Clear takes it off Home. Each read answers the current state, so the
- * page's own polls carry every change onto the screen.
+ * and a Clear takes it off Home and into History's cleared bots. Each read
+ * answers the current state, so the page's own polls carry every change onto
+ * the screen.
  */
 
 type Schemas = components['schemas'];
 type SymbolCatalogEntry = Schemas['SymbolCatalogEntry'];
 type SymbolCoverageSpan = Schemas['SymbolCoverageSpan'];
 type RecoveryActionCheckRequest = Schemas['RecoveryActionCheckRequest'];
+type BotDeployPrefill = Schemas['BotDeployPrefill'];
+type FleetBotHistoryPage = Schemas['FleetBotHistoryPage'];
+type FleetBotHistoryRow = Schemas['FleetBotHistoryRow'];
+type HistoryStatus = FleetBotHistoryRow['status'];
+type HistoryWorld = FleetBotHistoryRow['world'];
 
 /** Every request body a command carries: the payload plus the fleet envelope. */
 type Enveloped<T> = T & { readonly command_context: CommandContext };
@@ -87,6 +93,8 @@ export const LIVE_ACCOUNT = '9LIVE0001';
 
 export const PAPER_WORKSPACE = `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`;
 export const LIVE_WORKSPACE = `/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}`;
+/** History, opened from the Paper workspace: lane-scoped, every account's bots (#2574). */
+export const PAPER_HISTORY = `/brokers/alpaca/clerks/${PAPER_CLERK}/history`;
 
 /** The name the backend authors at the Deploy (#2551); the page never makes one up. */
 export const WALKED_BOT = 'spy-dv-20260928-1031';
@@ -94,6 +102,10 @@ export const WALKED_BOT = 'spy-dv-20260928-1031';
 export const EARLIER_BOT = 'qqq-dv-20260925-1402';
 /** The Live bot the typed-consent Deploy names. */
 export const LIVE_BOT = 'spy-dv-20260928-1107';
+/** A Dry Run on the Paper account, cleared days ago: only History still lists it. */
+export const DRY_RUN_BOT = 'spy-dv-20260926-1115';
+/** A Live bot cleared days ago: History lists every account's bots, not one account's. */
+export const LIVE_CLEARED_BOT = 'spy-dv-20260924-0945';
 
 const BINDING_GENERATION = 3;
 const ROUTING_EPOCH = 4;
@@ -134,6 +146,25 @@ export const CLEAR_REFUSAL = {
   message: 'This account cannot prove the bot is flat.',
   why: 'A bot is cleared only on proof that it holds nothing. Choose Reconcile now once Alpaca can be read, then clear it.',
 } as const;
+/** `catalog_projection_service.WORLD_LABELS`, by the world History names. */
+export const WORLD_LABELS = {
+  live: 'LIVE · real money',
+  paper: 'PAPER · practice money',
+  shadow: 'SHADOW · simulated fills on your live account',
+  dry_run: 'DRY RUN · simulated cash',
+} as const satisfies Record<HistoryWorld, string>;
+/** `bot_history._STATUS_LABELS`. */
+const HISTORY_STATUS_LABELS = {
+  running: 'Running',
+  holding: 'Stopped · still holding',
+  finished: 'Finished',
+  cleared: 'Cleared',
+} as const satisfies Record<HistoryStatus, string>;
+/** `outcome_copy.outcome_headline` for an owner's Stop: the one outcome
+ * vocabulary's `STOPPED_OUTCOME` label, or its words for a run whose stop the
+ * owner's flatten followed. */
+const STOPPED_HEADLINE = 'Stopped by you';
+const FLATTENED_HEADLINE = 'Stopped and flattened';
 
 /** The amounts this walk types, and the Live phrase the backend binds consent to. */
 export const PAPER_BUDGET = '1000.00';
@@ -187,7 +218,6 @@ function brokerAccount(accountId: string, mode: 'paper' | 'live', equity: number
     account_status: 'ACTIVE',
     account_blocked: false,
     trading_blocked: false,
-    pattern_day_trader: false,
     currency: 'USD',
     cash: equity,
     equity,
@@ -493,6 +523,7 @@ const LAKE_COVERAGE = {
 /** Where the walked bot is in its life. */
 export type BotPhase = 'not_deployed' | 'running' | 'holding' | 'finished' | 'cleared';
 
+const EARLIER_ENDED_AT_MS = NOW_MS - 3 * 86_400_000;
 const EARLIER_FINISHED = fakeCatalogBot({
   strategy_instance_id: EARLIER_BOT,
   account_id: PAPER_ACCOUNT,
@@ -505,11 +536,11 @@ const EARLIER_FINISHED = fakeCatalogBot({
   fills_today: 0,
   realized_pnl_today: 0,
   open_pnl: null,
-  last_activity_at_ms: NOW_MS - 3 * 86_400_000,
+  last_activity_at_ms: EARLIER_ENDED_AT_MS,
   group: 'finished',
   final_result_usd: '-3.10',
   trade_count: 4,
-  ended_at_ms: NOW_MS - 3 * 86_400_000,
+  ended_at_ms: EARLIER_ENDED_AT_MS,
 });
 
 function walkedCatalogRow(phase: BotPhase): BotCatalogView | null {
@@ -518,7 +549,7 @@ function walkedCatalogRow(phase: BotPhase): BotCatalogView | null {
     account_id: PAPER_ACCOUNT,
     symbol: 'SPY',
     last_activity_at_ms: NOW_MS,
-    world_label: 'PAPER · practice money',
+    world_label: WORLD_LABELS.paper,
   };
   switch (phase) {
     case 'running':
@@ -545,6 +576,154 @@ function walkedCatalogRow(phase: BotPhase): BotCatalogView | null {
   }
 }
 
+// ── History: every account's bots, cleared ones included (#2574) ──────────
+
+/** What History says about one bot that this walk varies; the rest is the
+ * Clerk's answer for a bot run once and stopped by its owner. */
+interface HistoryFacts {
+  readonly clerk_id: string;
+  readonly account_id: string;
+  readonly strategy_instance_id: string;
+  readonly symbol: string;
+  readonly world: HistoryWorld;
+  readonly status: HistoryStatus;
+  readonly started_at_ms: number;
+  /** `null` while it runs. */
+  readonly stopped_at_ms: number | null;
+  readonly budget_usd: string;
+  readonly result_usd: string;
+  readonly transaction_count: number;
+  /** The owner's flatten sold what the stopped run held. */
+  readonly flattened?: boolean;
+}
+
+/** `bot_history.compose_bots`' row for a bot with one run. */
+function historyRow({ flattened = false, ...facts }: HistoryFacts): FleetBotHistoryRow {
+  const outcome = facts.stopped_at_ms === null ? null : {
+    kind: 'STOPPED' as const,
+    reason_code: 'STOPPED_FLAT',
+    headline: flattened ? FLATTENED_HEADLINE : STOPPED_HEADLINE,
+    recorded_at_ms: facts.stopped_at_ms,
+  };
+  const orders = { sent: facts.transaction_count, filled: facts.transaction_count, cancelled: 0, rejected: 0 };
+  return {
+    ...facts,
+    broker: 'alpaca',
+    strategy_key: 'deployment_validation',
+    strategy_label: 'Deployment Validation',
+    world_label: WORLD_LABELS[facts.world],
+    status_label: HISTORY_STATUS_LABELS[facts.status],
+    outcome,
+    orders,
+    fees_usd: '0.00',
+    money_unavailable_reason: null,
+    money_scope_note: null,
+    page_unavailable_reason: null,
+    runs: [{
+      run_id: `run-${facts.strategy_instance_id}`,
+      running: facts.stopped_at_ms === null,
+      started_at_ms: facts.started_at_ms,
+      stopped_at_ms: facts.stopped_at_ms,
+      outcome,
+      orders,
+      transaction_count: facts.transaction_count,
+    }],
+  };
+}
+
+/** History's other bots: the earlier one Home still shows, a Dry Run cleared
+ * on this account, and a bot cleared on the Live account. */
+const OTHER_HISTORY_ROWS: readonly FleetBotHistoryRow[] = [
+  historyRow({
+    clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: EARLIER_BOT,
+    symbol: EARLIER_FINISHED.symbol, world: 'paper', status: 'finished',
+    started_at_ms: EARLIER_ENDED_AT_MS - 21_600_000, stopped_at_ms: EARLIER_ENDED_AT_MS,
+    budget_usd: PAPER_BUDGET, result_usd: EARLIER_FINISHED.final_result_usd ?? '0.00',
+    transaction_count: EARLIER_FINISHED.trade_count ?? 0,
+  }),
+  historyRow({
+    clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: DRY_RUN_BOT, symbol: 'SPY',
+    world: 'dry_run', status: 'cleared', started_at_ms: NOW_MS - 2 * 86_400_000 - 21_600_000,
+    stopped_at_ms: NOW_MS - 2 * 86_400_000, budget_usd: PAPER_BUDGET, result_usd: '2.15', transaction_count: 2,
+  }),
+  historyRow({
+    clerk_id: LIVE_CLERK, account_id: LIVE_ACCOUNT, strategy_instance_id: LIVE_CLEARED_BOT, symbol: 'SPY',
+    world: 'live', status: 'cleared', started_at_ms: NOW_MS - 5 * 86_400_000 - 21_600_000,
+    stopped_at_ms: NOW_MS - 5 * 86_400_000, budget_usd: LIVE_BUDGET, result_usd: '1.25', transaction_count: 2,
+  }),
+];
+
+/** The walked bot's History row: none before its Deploy, then its status is
+ * its phase. It is flat once the owner's flatten sold what it held. */
+function walkedHistoryRow(phase: BotPhase): FleetBotHistoryRow | null {
+  if (phase === 'not_deployed') return null;
+  const flat = phase === 'finished' || phase === 'cleared';
+  return historyRow({
+    clerk_id: PAPER_CLERK, account_id: PAPER_ACCOUNT, strategy_instance_id: WALKED_BOT, symbol: 'SPY',
+    world: 'paper', status: phase, started_at_ms: NOW_MS, stopped_at_ms: phase === 'running' ? null : NOW_MS,
+    budget_usd: PAPER_BUDGET, result_usd: flat ? '0.99' : '0.00', transaction_count: flat ? 2 : 1, flattened: flat,
+  });
+}
+
+/** Every query name the coordinator's History route declares. */
+const HISTORY_QUERY = new Set(['clerk_id', 'status', 'world', 'symbol', 'strategy_instance_id', 'page', 'page_size']);
+
+/**
+ * History's one read, answered as the coordinator answers it
+ * (`aggregate_broker_clerks_bot_history` + `merge_bot_history`): the lanes
+ * `clerk_id` names (every lane without it; one naming no lane is the
+ * `unknown_account` gap), each asked only for the bot `strategy_instance_id`
+ * names; newest first; `status`, `world` and `symbol` applied; then paged.
+ * `symbols` is every symbol a read row trades, before those three filters. A
+ * query name or enum value the route would refuse (422) is a walk bug; a
+ * symbol's or bot id's shape is not checked here.
+ */
+function historyPage(bots: readonly FleetBotHistoryRow[], query: URLSearchParams): FleetBotHistoryPage | null {
+  const status = query.get('status');
+  const world = query.get('world');
+  const page = Number(query.get('page') ?? 1);
+  const pageSize = Number(query.get('page_size') ?? 25);
+  if (
+    [...query.keys()].some((name) => !HISTORY_QUERY.has(name))
+    || (status !== null && !Object.hasOwn(HISTORY_STATUS_LABELS, status))
+    || (world !== null && !Object.hasOwn(WORLD_LABELS, world))
+    || !Number.isInteger(page) || page < 1
+    || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100
+  ) return null;
+  const narrowed = (row: FleetBotHistoryRow, names: readonly ('clerk_id' | 'strategy_instance_id' | 'status' | 'world' | 'symbol')[]) =>
+    names.every((name) => query.get(name) === null || row[name] === query.get(name));
+  const read = bots
+    .filter((row) => narrowed(row, ['clerk_id', 'strategy_instance_id']))
+    .sort((a, b) => (b.started_at_ms ?? 0) - (a.started_at_ms ?? 0)
+      || a.clerk_id.localeCompare(b.clerk_id) || a.strategy_instance_id.localeCompare(b.strategy_instance_id));
+  const matching = read.filter((row) => narrowed(row, ['status', 'world', 'symbol']));
+  const clerkId = query.get('clerk_id');
+  return {
+    observed_at_ms: NOW_MS,
+    rows: matching.slice((page - 1) * pageSize, page * pageSize),
+    gaps: clerkId === null || [PAPER_CLERK, LIVE_CLERK].includes(clerkId) ? [] : [{
+      broker: 'alpaca', clerk_id: clerkId, account_id: null, strategy_instance_id: null,
+      reason: 'No account by this id is known here, so its bots cannot be listed.', reason_code: 'unknown_account',
+    }],
+    total: matching.length,
+    page,
+    page_size: pageSize,
+    symbols: [...new Set(read.map((row) => row.symbol))].sort(),
+  };
+}
+
+/** `deploy_prefill` for an ended bot: its sealed settings, never its money or consent. */
+function deployPrefill(sid: string): BotDeployPrefill {
+  return {
+    source_strategy_instance_id: sid,
+    strategy_key: 'deployment_validation',
+    symbol: 'SPY',
+    sizing: { preset: 'safe_canary', quantity: 1 },
+    parameters: {},
+    exit_terms: DEPLOY_VIEW.default_exit_terms,
+  };
+}
+
 const STOP_ACTION = fakeSqliteStopAction({ concurrency_token: 'stop-running' });
 const RECONCILE_ACTION = fakePanelAction('reconcile_now', {
   label: 'Reconcile now', explanation: 'Check this bot\'s position with Alpaca.', concurrency_token: 'reconcile-1',
@@ -562,8 +741,88 @@ const PANEL_PROFILE = {
   fee_fidelity: 'per_fill',
   live_bars_supported: true,
   stations: [],
-  supported_action_ids: ['deploy', 'archive'],
 } satisfies PanelProfile;
+
+/** A bot on duty, or one its owner stopped from Home. */
+function botHealth(sid: string, running: boolean): BotPanelView['health'] {
+  return {
+    strategy_instance_id: sid,
+    phase: running ? 'ON_DUTY' : 'OFF_DUTY',
+    phase_label: running ? 'On duty' : 'Off duty',
+    desired_state: running ? 'RUNNING' : 'STOPPED',
+    desired_state_label: running ? 'Running' : 'Stopped',
+    running,
+    duty_outcome: running ? null : {
+      kind: 'STOPPED',
+      label: 'Stopped',
+      explanation: 'Stopped by the owner from Home.',
+      reason_code: 'OWNER_STOP',
+      recorded_at_ms: NOW_MS,
+      run_id: `run-${sid}`,
+    },
+    last_decision_at_ms: NOW_MS,
+    decision_stale: false,
+    last_bar_at_ms: NOW_MS,
+  };
+}
+
+function missionVerdict(running: boolean): BotPanelView['mission_verdict'] {
+  return running
+    ? { state: 'working', label: 'Working', explanation: 'The runtime is on duty.', next_action: 'Monitor decisions.', evaluated_at_ms: NOW_MS }
+    : { state: 'off_duty', label: 'Off duty', explanation: 'The bot is stopped.', next_action: null, evaluated_at_ms: NOW_MS };
+}
+
+/** The cleared Dry Run's page, opened from History: stopped, flat, its cash
+ * simulated, its records read-only (#2614). */
+const DRY_RUN_PANEL = fakeBotPanelView({
+  strategy_instance_id: DRY_RUN_BOT,
+  account_id: PAPER_ACCOUNT,
+  symbol: 'SPY',
+  mode: 'dry_run',
+  status: 'cleared',
+  updated_at_ms: NOW_MS,
+  health: botHealth(DRY_RUN_BOT, false),
+  mission_verdict: missionVerdict(false),
+  fills_today: 0,
+  end: NO_END_STOPPED,
+  experimental_notice: DV_EXPERIMENTAL_NOTICE,
+});
+/** `budget_deploy._fenced_budget_view` for it: stopped, flat, nothing still claimed. */
+const DRY_RUN_BUDGET = {
+  state: 'ready',
+  strategy_instance_id: DRY_RUN_BOT,
+  world: 'synthetic',
+  headline: 'Stopped · finished',
+  detail: 'It released $1002.15 when it stopped. Nothing it held is still claimed.',
+  committed_usd: PAPER_BUDGET,
+  observed_at_ms: NOW_MS,
+  segment: null,
+  statement: [
+    { label: 'Budget', amount_usd: PAPER_BUDGET },
+    { label: 'Balance', amount_usd: '0.00', total: true },
+  ],
+} satisfies DeploymentBudgetView;
+
+/** A bot page's REST bootstrap: its panel at `surfaceVersion`, and an empty chart. */
+function liveSnapshot(panel: BotPanelView, surfaceVersion: number): BotPanelLiveSnapshot {
+  return {
+    stream_epoch: 'owner-walk',
+    surface_version: surfaceVersion,
+    panel,
+    live_chart: {
+      as_of_ms: NOW_MS,
+      bars: [],
+      feed: fakeChartFeed(),
+      fill_markers: [],
+      overlay_notices: [],
+      resolution: '5s',
+      strategy_instance_id: panel.strategy_instance_id,
+      symbol: panel.symbol,
+      trading_date_open_ms: NOW_MS - 3_600_000,
+      trading_date_close_ms: NOW_MS + 19_800_000,
+    },
+  };
+}
 
 /** The flatten sequence's progress through the Clerk: reconcile mints the
  * evidence a prepared sale needs, and a checked plan is what may be sent. */
@@ -619,8 +878,6 @@ export class OwnerWalkWorld {
   private botEnd: BotEndView = WALK_DEFAULT_END;
   /** Bumped on every state change, so the bot page adopts the new snapshot. */
   private surfaceVersion = 1;
-  /** The sids the last clear took off Home. */
-  private readonly cleared = new Set<string>();
   /** Commands held back until the walk releases them, by `action_id`. */
   private readonly holds = new Map<string, Promise<void>>();
 
@@ -701,6 +958,12 @@ export class OwnerWalkWorld {
     // The shell: the fleet, each lane's verdict and attention.
     if (path === '/api/broker-clerks') return json(DIRECTORY);
     if (path === '/api/broker-clerks/aggregate/attention') return json(this.attention());
+    // History: every account's bots, through the coordinator (#2574).
+    if (method === 'GET' && path === '/api/broker-clerks/aggregate/bot-history') {
+      const walked = walkedHistoryRow(this.phase);
+      const history = historyPage([...(walked === null ? [] : [walked]), ...OTHER_HISTORY_ROWS], new URL(request.url()).searchParams);
+      return history === null ? null : json(history);
+    }
     if (path === `${CLERK_SCOPE(PAPER_CLERK)}/live-verdict`) return json(verdict('paper', PAPER_ACCOUNT));
     if (path === `${CLERK_SCOPE(LIVE_CLERK)}/live-verdict`) return json(verdict('live', LIVE_ACCOUNT));
     if (path === '/api/brokers/alpaca/panel-profile') return json(PANEL_PROFILE);
@@ -744,7 +1007,7 @@ export class OwnerWalkWorld {
     // Paper: the walked bot's page and its commands.
     const bot = `${PAPER}/bots/${WALKED_BOT}`;
     if (path === `${bot}/panel`) return json(this.panel());
-    if (path === `${bot}/live-snapshot`) return json(this.snapshot());
+    if (path === `${bot}/live-snapshot`) return json(liveSnapshot(this.panel(), this.surfaceVersion));
     if (path === `${bot}/live-stream`) return { kind: 'stream' };
     if (path === `${bot}/budget`) return json(this.botBudget());
     if (method === 'PUT' && path === `${bot}/end`) {
@@ -761,6 +1024,17 @@ export class OwnerWalkWorld {
     }
     if (method === 'POST' && path === `${PAPER}/bots/clear`) {
       return json(this.clear(request.postDataJSON() as Enveloped<BotClearRequest>));
+    }
+
+    // Paper: the cleared Dry Run's page, opened from History (#2614).
+    const dryRun = `${PAPER}/bots/${DRY_RUN_BOT}`;
+    if (path === `${dryRun}/panel`) return json(DRY_RUN_PANEL);
+    if (path === `${dryRun}/live-snapshot`) return json(liveSnapshot(DRY_RUN_PANEL, DRY_RUN_PANEL.revision));
+    if (path === `${dryRun}/live-stream`) return { kind: 'stream' };
+    if (path === `${dryRun}/budget`) return json(DRY_RUN_BUDGET);
+    // Deploy again from either ended bot: Deploy reads its sealed settings.
+    for (const sid of [WALKED_BOT, DRY_RUN_BOT]) {
+      if (method === 'GET' && path === `${PAPER}/bots/${sid}/deploy-prefill`) return json(deployPrefill(sid));
     }
     return null;
   }
@@ -799,8 +1073,7 @@ export class OwnerWalkWorld {
 
   private paperCatalog(): BotCatalogView[] {
     const walked = walkedCatalogRow(this.phase);
-    return [...(walked === null ? [] : [walked]), EARLIER_FINISHED]
-      .filter((row) => !this.cleared.has(row.strategy_instance_id));
+    return [...(walked === null ? [] : [walked]), EARLIER_FINISHED];
   }
 
   private panel(): BotPanelView {
@@ -821,31 +1094,12 @@ export class OwnerWalkWorld {
       symbol: 'SPY',
       updated_at_ms: NOW_MS,
       revision: this.surfaceVersion,
-      health: {
-        strategy_instance_id: WALKED_BOT,
-        phase: running ? 'ON_DUTY' : 'OFF_DUTY',
-        phase_label: running ? 'On duty' : 'Off duty',
-        desired_state: running ? 'RUNNING' : 'STOPPED',
-        desired_state_label: running ? 'Running' : 'Stopped',
-        running,
-        duty_outcome: running ? null : {
-          kind: 'STOPPED',
-          label: 'Stopped',
-          explanation: 'Stopped by the owner from Home.',
-          reason_code: 'OWNER_STOP',
-          recorded_at_ms: NOW_MS,
-          run_id: `run-${WALKED_BOT}`,
-        },
-        last_decision_at_ms: NOW_MS,
-        decision_stale: false,
-        last_bar_at_ms: NOW_MS,
-      },
+      health: botHealth(WALKED_BOT, running),
       actions,
-      mission_verdict: running
-        ? { state: 'working', label: 'Working', explanation: 'The runtime is on duty.', next_action: 'Monitor decisions.', evaluated_at_ms: NOW_MS }
-        : { state: 'off_duty', label: 'Off duty', explanation: 'The bot is stopped.', next_action: null, evaluated_at_ms: NOW_MS },
+      mission_verdict: missionVerdict(running),
       primary_action: running ? 'stop_bot_decisions' : null,
-      status: running ? 'running' : holding ? 'holding' : 'finished',
+      // The same status its History row gives (#2574); the page is never read before its Deploy.
+      status: this.phase === 'not_deployed' ? 'finished' : this.phase,
       exposure: running || holding ? { SPY: 1 } : {},
       fills_today: running || holding ? 1 : 2,
       // A Stop cancels the planned end sale: the stopped bot has no end.
@@ -864,26 +1118,6 @@ export class OwnerWalkWorld {
     );
     this.surfaceVersion += 1;
     return this.botEnd;
-  }
-
-  private snapshot(): BotPanelLiveSnapshot {
-    return {
-      stream_epoch: 'owner-walk',
-      surface_version: this.surfaceVersion,
-      panel: this.panel(),
-      live_chart: {
-        as_of_ms: NOW_MS,
-        bars: [],
-        feed: fakeChartFeed(),
-        fill_markers: [],
-        overlay_notices: [],
-        resolution: '5s',
-        strategy_instance_id: WALKED_BOT,
-        symbol: 'SPY',
-        trading_date_open_ms: NOW_MS - 3_600_000,
-        trading_date_close_ms: NOW_MS + 19_800_000,
-      },
-    };
   }
 
   private botBudget(): DeploymentBudgetView {
@@ -992,7 +1226,6 @@ export class OwnerWalkWorld {
           error: { action_id: 'archive', outcome: 'conflict', receipt_id: null, recorded_at_ms: NOW_MS, ...CLEAR_REFUSAL },
         };
       }
-      this.cleared.add(sid);
       if (sid === WALKED_BOT) this.advance('cleared');
       return {
         strategy_instance_id: sid,

@@ -13,19 +13,19 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import get_args
 
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
+from app.broker.alpaca.clerk.sqlite import bot_history as custody_history
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION
 from app.engine.live.bot_lifecycle_state import stable_bot_lifecycle_state_path
-from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.services.bot_binding_repository import (
     BotRunOutcomeRecord,
     BotRunRecord,
@@ -33,13 +33,13 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_lifecycle_projection import SqliteAlpacaLifecycleAuthority
 from app.services.broker_v2_panel import bot_history, sqlite_roster_status
-from app.services.broker_v2_panel.bot_history import outcome_headline
 from app.services.broker_v2_panel.catalog_projection_service import custody_bot_status
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_bot_history import _ack, _enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+from tests.broker.alpaca.clerk.sqlite.test_v14_simulated_execution_evidence import _rewind_to_v13
 
 _ACCOUNT = "BUDGET-PAPER"
 
@@ -229,33 +229,6 @@ async def test_the_bot_page_reads_the_same_status_as_its_history_row(lane: Clerk
     assert rows["live"] == pages["live"] == "holding"
 
 
-def test_every_outcome_kind_has_its_own_words_and_an_unknown_one_still_reads() -> None:
-    worded = {kind: outcome_headline(kind, "UNWORDED_REASON", flattened=False) for kind in get_args(BotDutyOutcomeKind)}
-
-    assert "Ended" not in worded.values()
-    assert outcome_headline("A_KIND_FROM_A_NEWER_BUILD", "UNWORDED_REASON", flattened=False) == "Ended"
-
-
-@pytest.mark.parametrize(
-    ("kind", "reason", "flattened", "headline"),
-    [
-        ("STOPPED", "SCHEDULED_END", False, "Ended at its scheduled time"),
-        ("STOPPED", "STOPPED_FLAT", False, "Stopped by you"),
-        ("STOPPED", "STOPPED_FLAT", True, "Stopped and flattened"),
-        ("STOPPED", "SERVICE_SHUTDOWN", False, "Stopped when the service shut down"),
-        ("CRASHED", "FEED_DEATH", False, "Crashed because market data stopped"),
-        ("CRASHED", "ValueError", False, "Crashed"),
-        ("HALTED", "HALTED", False, "Halted"),
-        ("FAILED_LAUNCH", "LAUNCH_FAILED", False, "Failed to launch"),
-        # #2559: the failed-launch compensation records a stop nobody made.
-        ("STOPPED", "ACTIVATION_FAILED_AFTER_REGISTRATION", False, "Failed to launch"),
-        ("EXITED_UNVERIFIED", "INTERRUPTED_BY_RESTART", False, "Ended without a clean exit"),
-    ],
-)
-def test_each_way_a_run_ends_has_its_own_plain_words(kind: str, reason: str, flattened: bool, headline: str) -> None:
-    assert outcome_headline(kind, reason, flattened=flattened) == headline
-
-
 @pytest.mark.asyncio
 async def test_the_route_serves_the_read_and_refuses_without_the_accounts_clerk(
     lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
@@ -302,5 +275,128 @@ async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
     rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
     assert (rehearsal.world, rehearsal.world_label) == ("shadow", "SHADOW · simulated fills on your live account")
     assert rehearsal.status == "finished" and rehearsal.account_id == _ACCOUNT
-    # The account's own bots are read from its own database, as before.
+    # Its page would not open: the Live account's workspace reads only its own
+    # world, and answered a Shadow bot's page "No custody record exists".
+    assert rehearsal.page_unavailable_reason == (
+        "This bot ran in the account's Shadow world, which the account's pages don't open, "
+        "so it has no page of its own. History keeps its record."
+    )
+    # The account's own bots are read from its own database, as before, and
+    # their pages -- and a Dry Run's -- open.
+    assert {"done", "live", "dry-1"} <= {bot.strategy_instance_id for bot in history.bots}
+    assert all(bot.page_unavailable_reason is None for bot in history.bots if bot.strategy_instance_id != "rehearsal")
+
+
+def _shadow_rehearsal(lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The Live account's ``shadow:`` database with one finished rehearsal bot; the lane now serves Live."""
+    shadow = ClerkSqliteRepository.initialize(
+        account_id=f"shadow:{_ACCOUNT}", artifacts_root=lane.db_path.parents[3], clock=_TestClock(NOON),
+    )
+    try:
+        _register(shadow, "rehearsal")
+        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        path = shadow.db_path
+    finally:
+        shadow.close()
+    monkeypatch.setattr(
+        bot_history, "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id=_ACCOUNT, account_mode="live", repository=lane),
+    )
+    return path
+
+
+def _schema_version(path: Path) -> int:
+    conn = sqlite3.connect(path)
+    try:
+        return int(conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0])
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_an_old_shadow_database_no_clerk_migrated_is_read_through_the_clerks_own_migrations(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2615: the retired Shadow world's file stays at the schema its last
+    Clerk left; it used to be a permanent "could not be read" gap. It is read
+    on a private migrated copy, and the file itself is never written."""
+    path = _shadow_rehearsal(lane, monkeypatch)
+    _rewind_to_v13(path)
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
+    assert rehearsal.world == "shadow" and rehearsal.status == "finished" and len(rehearsal.runs) == 1
+    assert [gap for gap in history.gaps if gap.strategy_instance_id is None] == []
+    assert _schema_version(path) == 13
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version", [3, 8, SCHEMA_VERSION + 1], ids=["no_registered_path", "offline_v8_ceremony", "newer_build"],
+)
+async def test_a_world_in_a_record_format_no_migration_reaches_is_named_as_such(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, version: int,
+) -> None:
+    """A file no migration brings forward is named for what it is -- and
+    never fails the account's whole read (a v8 file's refusal used to escape
+    as a ``ValueError``)."""
+    path = _shadow_rehearsal(lane, monkeypatch)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE control_meta SET schema_version = ? WHERE id = 1", (version,))
+    conn.commit()
+    conn.close()
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    assert [gap.reason for gap in history.gaps if gap.strategy_instance_id is None] == [
+        "This account's SHADOW · simulated fills on your live account bots are kept in a record format "
+        "this version cannot read, so they are not listed.",
+    ]
     assert {"done", "live"} <= {bot.strategy_instance_id for bot in history.bots}
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_other_world_is_its_own_gap_beside_the_accounts_bots(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _shadow_rehearsal(lane, monkeypatch)
+    path.write_bytes(b"not a database")
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    assert [gap.reason for gap in history.gaps if gap.strategy_instance_id is None] == [
+        "This account's SHADOW · simulated fills on your live account bots could not be read, so they are not listed.",
+    ]
+    assert {"done", "live", "dry-1"} <= {bot.strategy_instance_id for bot in history.bots}
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_is_projected_again_only_once_its_custody_moves(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2615: every page or filter change used to re-project every Dry Run,
+    so the read's cost grew with the Dry Runs an account ever ran."""
+    projected: list[str] = []
+    project = custody_history.project_custody_history
+
+    def counting(conn: sqlite3.Connection, **kwargs: object) -> custody_history.CustodyHistory:
+        history = project(conn, **kwargs)  # type: ignore[arg-type]
+        projected.append(history.account_id)
+        return history
+
+    monkeypatch.setattr(custody_history, "project_custody_history", counting)
+
+    first = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+    again = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+    dry = ClerkSqliteRepository.open(account_id="sim:dry-1", artifacts_root=bot_history.live_artifacts_root(), clock=_TestClock(NOON + 10))
+    try:
+        submit_start_run(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry-2", clock=dry.clock)
+    finally:
+        dry.close()
+    moved = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    assert projected.count("sim:dry-1") == 2
+    assert first.bots == again.bots
+    assert len(next(bot for bot in moved.bots if bot.strategy_instance_id == "dry-1").runs) == 2

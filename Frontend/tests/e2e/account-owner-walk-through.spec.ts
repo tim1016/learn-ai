@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import type { DeploySubmissionBody } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.service';
@@ -6,6 +7,7 @@ import type { CommandContext } from '../../src/app/fleet/resource-target';
 import {
   BOT_NAME_NOTE,
   CLEAR_REFUSAL,
+  DRY_RUN_BOT,
   DV_EXPERIMENTAL_NOTICE,
   EARLIER_BOT,
   HOLDING_ATTENTION,
@@ -14,6 +16,7 @@ import {
   LIVE_API,
   LIVE_BOT,
   LIVE_BUDGET,
+  LIVE_CLEARED_BOT,
   LIVE_PHRASE,
   LIVE_WORKSPACE,
   NO_END_STOPPED,
@@ -21,6 +24,7 @@ import {
   PAPER_ACCOUNT,
   PAPER_API,
   PAPER_BUDGET,
+  PAPER_HISTORY,
   PAPER_WORKSPACE,
   PLAN_NEXT_STEP,
   RECEIPT_EXPLANATION,
@@ -31,12 +35,16 @@ import {
   STOP_MESSAGE,
   WALKED_BOT,
   WALK_DEFAULT_END,
+  WORLD_LABELS,
 } from './support/owner-walk-world';
 
 /**
  * The owner's walk through one account (PRD #2560 "Daily browser
  * walk-through", slice 7 #2567): Deploy → the bot's new slice on Home's money
  * bar → Stop → the stopped-but-holding row → Flatten → Finished → Clear.
+ * After a Clear the owner finds the bot in History (#2614): the Finished
+ * fold's link → the cleared bots → the bot's own page → Deploy again, for a
+ * Paper bot and for a cleared Dry Run.
  *
  * Everything the page reads and sends is answered at the network edge by
  * `OwnerWalkWorld` — no coordinator, clerk or broker — so this walk can never
@@ -51,8 +59,9 @@ import {
  *   answered empty here, so no fill marker or trade row is walked.
  * - A flatten outside regular hours. The prepared sale is priced
  *   `regular_session`, so the extended-hours limit ticket is not opened.
- * - The Wall view, the cohort flatten drawer and Deploy again: each has its
- *   own unit spec; this walk stays on the List.
+ * - The Wall view and the cohort flatten drawer: each has its own unit spec;
+ *   this walk stays on the List.
+ * - A Deploy again sent: the History walk stops at the pre-filled form.
  * - Home's attention dot on the top-bar pill: the directory's counts are
  *   served static, so the pill's dot is not asserted to move.
  * - A Live bot's life after its Deploy: the Live walk stops at the receipt.
@@ -115,6 +124,35 @@ function finishedFold(page: Page): Locator {
   return page.locator('details').filter({ has: page.getByText('Finished', { exact: true }) });
 }
 
+/** The History tab: every bot across every account (#2574). */
+function historyTab(page: Page): Locator {
+  return page.getByRole('region', { name: 'History' });
+}
+
+/** The bots History lists, in its order, by the one link that opens each. */
+function historyBots(page: Page): Locator {
+  return historyTab(page).getByRole('table').getByRole('link');
+}
+
+/** One bot's line in History. */
+function historyRow(page: Page, sid: string): Locator {
+  return historyTab(page).getByRole('row').filter({ has: page.getByRole('link', { name: sid, exact: true }) });
+}
+
+/** The bot page's header, where a cleared bot says so and offers Deploy again. */
+function botBanner(page: Page): Locator {
+  return page.locator('app-bot-banner');
+}
+
+/** The page as the app shell serves it passes AXE, landmarks and all. */
+async function expectNoAxeViolations(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page }).analyze();
+  expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+}
+
+/** `bot-banner.component.html`'s note on a cleared bot's page. */
+const CLEARED_NOTE = 'Cleared: this bot will not run again, and its records here are read-only.';
+
 test.describe('The owner walks one account (PRD #2560)', () => {
   // One test is the whole walk: a dozen screens and every command in turn.
   test.setTimeout(60_000);
@@ -125,7 +163,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // ── Home before: all $25,000.00 free, one bot finished days ago. ──────
     await page.goto(PAPER_WORKSPACE);
-    const home = page.getByRole('main', { name: 'Home' });
+    const home = page.getByRole('region', { name: 'Home' });
     const freeToDeploy = headerFigure(page, 'Free to deploy');
     await expect(freeToDeploy).toHaveText('$25,000.00');
     const accountBar = home.getByRole('list', { name: 'Where the money is' });
@@ -324,6 +362,74 @@ test.describe('The owner walks one account (PRD #2560)', () => {
 
     // Nothing the Paper walk did reached the Live account (FR-096).
     expect(world.sent.filter((command) => !command.path.startsWith(PAPER_API))).toEqual([]);
+    expect(world.unexpected()).toEqual([]);
+  });
+
+  test('History: a cleared bot and a cleared Dry Run are found there, open, and deploy again (#2614)', async ({ page }) => {
+    const world = new OwnerWalkWorld();
+    world.phase = 'finished';
+    await world.install(page);
+
+    // ── Home: clear the finished bot from the Finished fold. ──────────────────
+    await page.goto(PAPER_WORKSPACE);
+    const finished = finishedFold(page);
+    await expect(finished).toBeVisible();
+    await expectNoAxeViolations(page);
+    await finished.locator('summary').click();
+    await finished.getByRole('checkbox', { name: `Select ${WALKED_BOT}` }).check();
+    await finished.getByRole('button', { name: 'Clear selected (1)' }).click();
+    await page.getByRole('dialog', { name: 'Clear 1 finished bot from Home?' }).getByRole('button', { name: 'Clear 1' }).click();
+    await expect(finished.getByRole('region', { name: 'Clear outcome' })).toContainText('Cleared 1 of 1 bot.');
+    await expect(finished.getByRole('row').filter({ hasText: WALKED_BOT })).toHaveCount(0);
+
+    // ── The fold's link: History, on every account's cleared bots. ─────────────
+    await finished.getByRole('link', { name: 'see cleared bots in History' }).click();
+    await expect(page).toHaveURL(`${PAPER_HISTORY}?status=cleared`);
+    const history = historyTab(page);
+    await expect(history.getByRole('combobox', { name: 'Status', exact: true })).toHaveValue('cleared');
+    await expect(history.getByRole('combobox', { name: 'Account', exact: true })).toHaveValue('');
+    // The bot just cleared, a Dry Run cleared on this account and a bot
+    // cleared on Live, newest first; the finished bot Home still shows is not.
+    await expect(historyBots(page)).toHaveText([WALKED_BOT, DRY_RUN_BOT, LIVE_CLEARED_BOT]);
+    await expect(history).toContainText('Page 1 of 1 · 3 bots');
+    await expect(historyRow(page, WALKED_BOT)).toContainText('Cleared');
+    // Each row wears the world its run was in, not its lane's mode (#2615).
+    await expect(historyRow(page, DRY_RUN_BOT).locator('app-alpaca-lane-mode-chip')).toHaveText(WORLD_LABELS.dry_run);
+
+    // The page passes AXE as the app shell serves it, landmarks and all.
+    await expectNoAxeViolations(page);
+
+    // ── The cleared bot's page, from its History row: read-only, Deploy again. ─
+    await history.getByRole('link', { name: WALKED_BOT, exact: true }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
+    await expect(botBanner(page)).toContainText(CLEARED_NOTE);
+    await expect(botBanner(page).getByRole('link', { name: 'Every cleared bot is in History' }))
+      .toHaveAttribute('href', `${PAPER_HISTORY}?status=cleared`);
+    await botBanner(page).getByRole('link', { name: 'Deploy again' }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${WALKED_BOT}`);
+    await expect(page.getByRole('region', { name: 'Deploy again' })).toContainText(`Prefilled from ${WALKED_BOT}.`);
+
+    // ── History's own tab lists every bot; its World filter finds the Dry Run. ─
+    await page.getByRole('navigation', { name: 'Account sections' }).getByRole('link', { name: 'History' }).click();
+    await expect(page).toHaveURL(PAPER_HISTORY);
+    await expect(historyBots(page)).toHaveText([WALKED_BOT, DRY_RUN_BOT, EARLIER_BOT, LIVE_CLEARED_BOT]);
+    await history.getByRole('combobox', { name: 'World', exact: true }).selectOption({ label: 'Dry Run' });
+    await expect(page).toHaveURL(`${PAPER_HISTORY}?world=dry_run`);
+    await expect(historyBots(page)).toHaveText([DRY_RUN_BOT]);
+    await expect(historyRow(page, DRY_RUN_BOT)).toContainText('Cleared');
+
+    // ── The cleared Dry Run's page: simulated cash, read-only, Deploy again. ───
+    await history.getByRole('link', { name: DRY_RUN_BOT, exact: true }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${DRY_RUN_BOT}`);
+    await expect(botBanner(page)).toContainText(WORLD_LABELS.dry_run);
+    await expect(botBanner(page)).toContainText(CLEARED_NOTE);
+    await botBanner(page).getByRole('link', { name: 'Deploy again' }).click();
+    await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${DRY_RUN_BOT}`);
+    await expect(page.getByRole('region', { name: 'Deploy again' })).toContainText(`Prefilled from ${DRY_RUN_BOT}.`);
+
+    // Deploy again only pre-fills: the one clear is all this walk sent.
+    expect(world.commandsTo(`${PAPER_API}/bots`)).toEqual([]);
+    expect(world.commandsTo('/bots/clear')).toHaveLength(1);
     expect(world.unexpected()).toEqual([]);
   });
 

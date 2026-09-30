@@ -79,10 +79,8 @@ if TYPE_CHECKING:
     # sort order, is the thing to fix, and it is not this slice's to fix.
     # ``live_arming_ledger`` imports ``live_envelope``, so it is here for
     # exactly the same reason.
-    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
     from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
     from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
-    from app.broker.alpaca.clerk.sqlite.live_envelope_sync import InstanceSeals
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
@@ -341,8 +339,6 @@ async def compose_repository_runtime(
     live_envelope: LiveEnvelopeGate | None = None,
     envelope_read: BrokerReadPort | None = None,
     arming_ledger: LiveArmingLedger | None = None,
-    arming_gate: ArmingGate | None = None,
-    instance_seals: InstanceSeals | None = None,
     simulation_initial_cash: Decimal | None = None,
     initialize_reviewed_policy: Callable[[ClerkSqliteRepository], None] | None = None,
 ) -> _ComposedAuthority:
@@ -357,15 +353,10 @@ async def compose_repository_runtime(
     read as the reference cash source. Simulated positions, fees and risk
     come exclusively from its own custody and retained market-data evidence.
 
-    ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
-    envelope sync re-reads it every tick so an arming performed by the
-    out-of-process CLI reaches the running gate within one cadence.
-
-    ``arming_gate`` and ``instance_seals`` exist only on the live authority
-    (ADR 0059 D11, slice 7): the gate the facade admits ENTERs against, and
-    the runner's sealed bindings the sync reads beside the ledger every tick
-    — injected as a callable, so the clerk layer never learns the runner's
-    root.
+    ``arming_ledger`` is the live account's historical arming evidence (ADR
+    0059 D3), read once by the exit-terms upgrade to price a bot armed before
+    exit terms existed. It grants nothing: no arming gate or per-tick arming
+    refresh is composed any more (#2629).
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -383,11 +374,6 @@ async def compose_repository_runtime(
         verify_activation(repository.control_meta_snapshot())
         if initialize_reviewed_policy is not None:
             initialize_reviewed_policy(repository)
-        if repository.budget_authority_version() >= 2:
-            # Historical arming remains readable for exit-term migration;
-            # it supplies no executable permission after the cutover.
-            arming_gate = None
-            instance_seals = None
         intake = ReentrantAsyncLock()
         guarded_read, guarded_trade = guard_broker_ports(
             read=ports.read,
@@ -415,9 +401,6 @@ async def compose_repository_runtime(
                 ),
                 envelope=live_envelope,
                 custody_read=guarded_read,
-                arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
-                arming_gate=arming_gate,
-                instance_seals=instance_seals,
                 simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
                     if repository.account_id.startswith(("sim:", "shadow:")) else None),
             )
@@ -433,7 +416,6 @@ async def compose_repository_runtime(
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
-            live_arming=arming_gate,
             entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
         )
         publish = facade.publish_sweep_reconciliation
@@ -480,8 +462,6 @@ async def compose_repository_runtime(
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
         if not repository.account_id.startswith(("sim:", "shadow:")):
             fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read)
-        if envelope_sync is not None:
-            await asyncio.to_thread(envelope_sync.refresh_arming)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
         try:
             await asyncio.wait_for(

@@ -70,6 +70,16 @@ is archived while the code it names still runs.
 - **Free budget** — a deployment’s economic balance after its attributed fees,
   position cost and pending entry claims. Only its positive free amount remains
   reserved while the deployment runs.
+- **Two bots on one symbol** — allowed. Each bot owns its orders, fills,
+  position, FIFO result and budget, and its EXIT sells only its own shares. They
+  share the account's cash and its one net broker position, so reconciliation
+  checks the total, not which bot a missing share belonged to. Alpaca's
+  wash-trade protection refuses an order that could trade against an open
+  opposite-side order on the same symbol, which is always true of the bots'
+  market orders. So a refused EXIT is re-sent on the first pass after the other
+  order ends, and Deploy warns when another bot in the account already trades
+  the symbol (#2469, #2622).
+  _Avoid_: coexistence guard (retired with ADR 0009 §13)
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
   The amount is what the Stop released, recorded with the Stop; money that comes
@@ -787,9 +797,11 @@ as read-only evidence.
 
 The bullets below record the former IBKR live-sizing design for provenance; they
 are not current product authority. `LivePortfolio`, its pending-order boundary,
-and every registered IBKR submit path are gone. The broker-neutral sizing math
-that remains is available to research/backtest consumers only and cannot produce
-an IBKR order.
+and every registered IBKR submit path are gone. So are the policy adapter
+(`order_sizer.py`), the sizing-policy union, the audit-copy allow-list and the
+`LiveConfig` dataclass (#2602, #2609), and the registry's `sizing_surface` flag
+that no strategy set. The one piece of sizing math that remains,
+`LeanSetHoldingsSizing`, serves research and backtests only.
 
 - **live sizing policy** — the **canonical** sizing authority for a *live* bot:
   `run_ledger.live_config.sizing`. Because `live_config` is hashed into `run_id`,
@@ -938,29 +950,6 @@ an IBKR order.
   Re-deploying from a legacy run defaults the deploy form to **Safe canary**, not
   to "whatever the legacy run effectively did" — the safe default applies on the
   first sizing-aware deploy.
-- **capital sleeve** *(future — not v1)* — a Python **live buying-power budget**
-  that scopes the portfolio value a single strategy's percent sizing may target.
-  It will sit at the **portfolio-value provider** feeding `order_sizer`'s
-  `SetHoldings` path (whole account today → per-strategy sleeve later →
-  `LeanSetHoldingsSizing`); `FixedShares` / `FixedNotional` never read it. **Do not
-  conflate with `allocation`** — `allocation` was the `.NET`/Postgres
-  `StrategyAllocation.CapitalAllocated` record of the trade-attribution feature
-  (deleted in #1964): an after-the-fact attribution / reporting record, never a
-  live pre-trade sizing input. The two words must stay distinct across stacks.
-- **all-in coexistence guard** — the interim v1 stand-in for the capital-sleeve
-  layer: a start / pre-flight **refusal**, scoped to the **trade symbol** (not the
-  whole account). If resolved sizing is `SetHoldings(1.0)` (Reference parity) **and**
-  *either* (a) the bound trade symbol has non-zero exposure in the broker account,
-  *or* (b) another managed live binding on this account holds `SetHoldings(1.0)` on
-  the same symbol → **block start** ("all-in coexistence requires the capital-sleeve
-  layer, not built yet"); the deploy page surfaces the same state best-effort.
-  `FixedShares` / `FixedNotional` are **never** blocked — an oversized custom
-  notional fails loudly through broker / reconciliation, never via silent
-  budget-clamping.
-  **Permitted-but-unsafe**: two all-in bots on *different* symbols (e.g. SPY all-in
-  + AAPL all-in) deploy successfully on the same cash account and *will* fight for
-  shared buying power. This is an accepted v1 trade-off, not an oversight; the
-  capital-sleeve layer closes it.
 
 ## Page-wide collapse rule (resolved 2026-06-17)
 

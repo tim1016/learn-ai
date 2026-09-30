@@ -18,7 +18,7 @@ class HistoricalArmingLedger(LiveArmingLedger):
 
 
     def append_disarm_fixture(self, strategy_instance_id: str, *, disarmed_at_ms: int) -> None:
-        old = self.latest(strategy_instance_id)
+        old = self.records_for(strategy_instance_id)[-1]
         assert isinstance(old, LiveArmingRecord)
         self.append(LiveDisarmRecord.create(live_account_id=self.live_account_id,
             strategy_instance_id=strategy_instance_id, revokes_record_sha256=old.record_sha256,

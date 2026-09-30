@@ -428,7 +428,6 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
             portfolio_value: 10_000,
             long_market_value: 0,
             short_market_value: 0,
-            pattern_day_trader: false,
             trading_blocked: false,
             account_blocked: false,
             created_at_ms: null,

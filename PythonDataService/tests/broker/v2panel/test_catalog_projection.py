@@ -130,6 +130,7 @@ def _projection(
         runs=(),
         commands=(),
         operations=(),
+        working_order_refs=(),
         positions=(),
         holds=holds,
         uncertainties=(),
@@ -207,7 +208,7 @@ def test_an_unclean_exit_is_labelled_distinctly_from_a_deliberate_stop() -> None
     stopped = _status(sid=SID, running=False, phase="OFF_DUTY", duty_kind="STOPPED")
 
     assert status_label_for(crashed) == "Crashed"
-    assert status_label_for(unverified) == "Exited unverified"
+    assert status_label_for(unverified) == "Ended without a clean exit"
     # A clean stop is still plain "Off duty" -- this must not become alarming.
     assert status_label_for(stopped) == "Off duty"
     # A retired bot keeps its terminal label whatever ended the last run.

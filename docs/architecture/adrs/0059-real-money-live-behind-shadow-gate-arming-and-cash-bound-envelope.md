@@ -19,6 +19,8 @@ Their descriptions remain historical; current Live consent is part of Deploy.
 
 **Amended 2026-09-27 (owner decision #2422, issue #2442):** Decision 4's cash bound now says what it does instead of over-claiming. A regular-session ENTER is a market `DAY` order, so the check prices it at its decision-bar close — an estimate, not a guarantee; a fill above that close can spend more cash than the bound admitted, and the original sentence "an Intraday Margin Deficit is impossible by construction" is withdrawn. The estimate is honest at both edges: extended-hours entries remain day limits genuinely bounded by their limit price, and once a fill is recorded, its reservation carries the fill's actual cost — fill price × quantity plus reported fees — until the next broker observation that can see the fill supersedes it, so the reserved figure between a fill and the next read is the cash the broker actually took, not the decision close. The unpriced window that remains is decision-to-fill and the not-yet-recorded remainder of a filled order, both estimated at the decision price. Reasons: the owner chose to keep market-order regular-session entries and correct the claim rather than bound execution cost with a protective price; #2441 already keeps recorded fills reserved while the broker read is in flight, so actual-cost pricing closes the gap that remained inside the reservation itself. Authority: owner decision #2422; implementation and regression in #2442.
 
+**Amended 2026-09-30 (issue #2624):** Decision 7 no longer lists day-trading buying power. Alpaca removed that field and the pattern-day-trader flag from the Trading API account object on 2026-07-06, so the adapter no longer ingests either and the account card no longer shows them.
+
 **Partially superseded 2026-09-11:** [ADR 0060](0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) replaces only the environment-source rule for the six live-envelope values in Decisions 3, 4 and 5.3 and the corresponding rejected alternative. Their authority is now the effective profile revision. Required values, validation, sealed arming, mode agreement, account isolation and the Live/Shadow developer-reset refusals remain unchanged. The provenance above records the original decision.
 
 **Scope extended 2026-09-12:** [ADR 0062](0062-broker-clerk-fleet-control-plane.md) lifts this ADR's "Not done by this ADR: more than one live account per installation" boundary by making each lane its own clerk — its own process, volume, credentials and custody. Every `real_live` clerk retains the full three-way mode agreement, per-instance arming, sealed envelope and cash-bound ENTER semantics independently; nothing in this ADR is weakened or shared across lanes.
@@ -118,7 +120,7 @@ Provider activity evidence is retained as immutable custody transitions and allo
 
 ### 7. Margin fields are ingested to prove the bound, not to use it
 
-The adapter ingests `multiplier`, `regt_buying_power`, `daytrading_buying_power`, `maintenance_margin`, `initial_margin`, `sma` and `last_equity` onto `BrokerAccountSnapshot` (nullable; absence is unknown). The account card renders them so an operator can see that exposure sits under cash. The envelope reads `equity` and `last_equity` for account day P&L; it reads none of the margin or buying-power fields. *(Amended 2026-09-24 by owner decision #2423.)*
+The adapter ingests `multiplier`, `regt_buying_power`, `maintenance_margin`, `initial_margin`, `sma` and `last_equity` onto `BrokerAccountSnapshot` (nullable; absence is unknown). The account card renders them so an operator can see that exposure sits under cash. The envelope reads `equity` and `last_equity` for account day P&L; it reads none of the margin or buying-power fields. *(Amended 2026-09-24 by owner decision #2423, and 2026-09-30 by #2624.)*
 
 ### 8. The live verdict is server-derived, reactive and loud — ADR 0011 extended to Alpaca
 
@@ -143,7 +145,7 @@ Each `account_mode != "paper"` refusal becomes an explicit admitted-set per cont
 - **Shadow = existing Dry Run plus read-only live observation.** Cheaper, but proves none of the live plumbing this ADR exists to prove; the first exercise of the live decision path would be with real orders.
 - **`ALPACA_MODE=live` alone as arming.** The exact "config accident" D7 rejected.
 - **Account-level arming.** Would let an instance that never shadowed trade on the strength of a sibling's receipt.
-- **A per-order notional cap.** Owner rejected on 2026-09-07. The cash bound already bounds every order by settled cash.
+- **A per-order notional cap.** Owner rejected on 2026-09-07. The cash bound already bounds every order by broker-observed cash. (Corrected 2026-09-30, #2625: the text said *settled* cash, but the bound reads Alpaca's `cash`, which reflects a fill within milliseconds, long before settlement.)
 - **A symbol allowlist, or one symbol at a time.** Owner rejected: every symbol a sealed program is bound to is in scope.
 - **Regular-hours-only on live.** Owner rejected; Decision 5 makes extended hours real rather than merely permitted.
 - **Envelope defaults in code.** Owner rejected: every value comes from the environment file, is required when live, and is sealed at arming.

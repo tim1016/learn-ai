@@ -67,7 +67,6 @@ def _snapshot(
         portfolio_value=1000.0,
         long_market_value=0.0,
         short_market_value=0.0,
-        pattern_day_trader=False,
         trading_blocked=False,
         account_blocked=False,
         created_at_ms=None,

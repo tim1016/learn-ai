@@ -15,7 +15,7 @@ import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.c
 import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
-import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
+import { fakeChartFeed, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -78,7 +78,6 @@ const PROFILE: PanelProfile = {
   fee_fidelity: 'none',
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['deploy', 'archive'],
 };
 
 const PANEL: BotPanelView = {
@@ -250,17 +249,6 @@ const OPEN_CUSTODY_TIMELINE_ACTION = {
   ],
 } satisfies PanelAction;
 
-const STOP_ACTION = {
-  action_id: 'stop_bot_decisions',
-  revision: 1,
-  concurrency_token: 'stop-token',
-  enabled: true,
-  label: 'Stop',
-  explanation: 'Stop the bot.',
-  blockers: [],
-  confirmation: null,
-} satisfies PanelAction;
-
 const HISTORICAL_RECOVERY_PLAN: HistoricalExecutionRecoveryPlan = {
   account_id: 'DUM284968',
   strategy_instance_id: 'sid-001',
@@ -361,6 +349,8 @@ const EXECUTE_SAFE_FLATTEN_ACTION = {
 
 const ENABLED_EXECUTE = { ...EXECUTE_SAFE_FLATTEN_ACTION, enabled: true, concurrency_token: 'execute-token-18' };
 
+/** An unconfirmed command as the SQLite panel presents it: the one button the
+ * command tests click, since a real stop (`fakeSqliteStopAction`) confirms first. */
 const RECONCILE_ACTION = {
   action_id: 'reconcile_now', revision: 17, concurrency_token: 'reconcile-token-17', enabled: true,
   label: 'Reconcile now', explanation: 'Reconcile this bot now.', blockers: [], confirmation: null,
@@ -601,14 +591,14 @@ const mockService = {
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({
-    action_id: 'stop_bot_decisions',
+    action_id: 'reconcile_now',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
     applied: true,
-    revision: 1,
-    concurrency_token: 'start-token',
-    message: 'Bot start requested.',
+    revision: 17,
+    concurrency_token: 'reconcile-token-17',
+    message: 'Reconciliation requested.',
   }),
   executeExtendedSafeFlatten: vi.fn().mockResolvedValue({
     action_id: 'execute_safe_flatten',
@@ -670,20 +660,20 @@ function virtualRunPoll(): { elapse(): Promise<void> } {
 
 function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
   return {
-    action_id: 'stop_bot_decisions',
+    action_id: 'reconcile_now',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
     applied: true,
-    revision: 1,
-    concurrency_token: 'stop-token',
-    message: 'Bot stop requested.',
+    revision: 17,
+    concurrency_token: 'reconcile-token-17',
+    message: 'Reconciliation requested.',
     ...overrides,
   };
 }
 
-/** Renders the shell with a single "Stop" action in its header, so the fence
- * tests only need to click one button. */
+/** Renders the shell with a single unconfirmed command (Reconcile now) in its
+ * header, so the fence tests only need to click one button. */
 async function renderShell(
   overrides: {
     directory?: FleetDirectoryDouble;
@@ -698,13 +688,13 @@ async function renderShell(
   // the constructor's second effect), which re-fetches the snapshot. A local
   // override — not a mutation of the shared `mockService.getLiveSnapshot` —
   // keeps every fetch, including that restart-triggered one, returning the
-  // Stop-action panel without leaking a persistent mock into later tests.
+  // one-command panel without leaking a persistent mock into later tests.
   const service = {
     ...mockService,
     getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
       ...PANEL,
-      actions: [STOP_ACTION],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
       ...(overrides.end ? { end: overrides.end } : {}),
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
@@ -783,23 +773,12 @@ describe('BotPanelShellComponent', () => {
       observed_at_ms: 1_753_800_060_000,
     } as const;
 
-    function resumableSnapshot(): BotPanelLiveSnapshot {
+    function oneCommandSnapshot(): BotPanelLiveSnapshot {
       return liveSnapshot({
         ...PANEL,
         health: { ...PANEL.health, running: false },
-        actions: [
-          {
-            action_id: 'stop_bot_decisions',
-            label: 'Stop',
-            explanation: 'Stop evaluating bars.',
-            enabled: true,
-            blockers: [],
-            confirmation: null,
-            revision: 1,
-            concurrency_token: 'start-token',
-          },
-        ],
-        primary_action: 'stop_bot_decisions',
+        actions: [RECONCILE_ACTION],
+        primary_action: 'reconcile_now',
       });
     }
 
@@ -815,7 +794,7 @@ describe('BotPanelShellComponent', () => {
     }
 
     it('shows the server notice above the frozen panel and keeps its controls', async () => {
-      mockService.getLiveSnapshot.mockResolvedValueOnce(resumableSnapshot());
+      mockService.getLiveSnapshot.mockResolvedValueOnce(oneCommandSnapshot());
       const fixture = await renderShell();
 
       emitOnLiveStream('stale', JSON.stringify(STALL));
@@ -830,9 +809,9 @@ describe('BotPanelShellComponent', () => {
       )).toBeTruthy();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
       expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
 
-      emitOnLiveStream('snapshot', JSON.stringify(resumableSnapshot()));
+      emitOnLiveStream('snapshot', JSON.stringify(oneCommandSnapshot()));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -842,11 +821,11 @@ describe('BotPanelShellComponent', () => {
 
     it('keeps the action receipt when the post-action refresh finds the producer stalled', async () => {
       mockService.getLiveSnapshot
-        .mockResolvedValueOnce(resumableSnapshot())
+        .mockResolvedValueOnce(oneCommandSnapshot())
         .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
       const fixture = await renderShell();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       for (let step = 0; step < 4; step += 1) {
         await fixture.whenStable();
         fixture.detectChanges();
@@ -854,9 +833,9 @@ describe('BotPanelShellComponent', () => {
 
       expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
       expect(screen.getByRole('alert', { name: 'The live panel stopped updating.' })).toBeTruthy();
-      expect(screen.getByText('Bot start requested.')).toBeTruthy();
+      expect(screen.getByText('Reconciliation requested.')).toBeTruthy();
       expect(screen.getByText('receipt-001')).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
     });
   });
 
@@ -1186,8 +1165,8 @@ describe('BotPanelShellComponent', () => {
 
   describe('action outcome ownership (#2471)', () => {
     /** Re-bind the always-rendered page instance to another identity, the way
-     * the attention bell and browser history do, and let a pending Stop land. */
-    async function rebindAndResolveStop(
+     * the attention bell and browser history do, and let a pending command land. */
+    async function rebindAndResolve(
       fixture: ComponentFixture<BotPanelShellComponent>,
       pending: { promise: Promise<PanelActionResult>; resolve(value: PanelActionResult): void },
       input: { sid?: string; accountId?: string; clerkId?: string },
@@ -1205,67 +1184,67 @@ describe('BotPanelShellComponent', () => {
       const { fixture } = await renderShell({
         runBotAction: vi.fn().mockResolvedValue(fakeActionResult()),
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
       fixture.detectChanges();
-      expect(screen.getByText('Bot stop requested.')).toBeTruthy();
+      expect(screen.getByText('Reconciliation requested.')).toBeTruthy();
       expect(screen.getByText('receipt-001')).toBeTruthy();
 
       fixture.componentRef.setInput('sid', 'sid-002');
       await fixture.whenStable();
       fixture.detectChanges();
 
-      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('Reconciliation requested.')).toBeNull();
       expect(screen.queryByText('receipt-001')).toBeNull();
     });
 
-    it('keeps a late Stop off the new bot, sends exactly one command to the old bot, and names it', async () => {
+    it('keeps a late command off the new bot, sends exactly one command to the old bot, and names it', async () => {
       const pending = deferred<PanelActionResult>();
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
-      await rebindAndResolveStop(fixture, pending, { sid: 'sid-002' });
+      await rebindAndResolve(fixture, pending, { sid: 'sid-002' });
 
-      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('Reconciliation requested.')).toBeNull();
       expect(screen.queryByText('receipt-001')).toBeNull();
       expect(runBotAction).toHaveBeenCalledTimes(1);
       expect(runBotAction.mock.calls[0]?.[1]).toBe('sid-001');
       const toast = messageService.add.mock.calls.at(-1)?.[0] as { detail: string };
       expect(toast.detail).toContain('Ema Crossover');
-      expect(toast.detail).toContain('Bot stop requested.');
+      expect(toast.detail).toContain('Reconciliation requested.');
     });
 
-    it('keeps a late Stop off the panel when the account changes', async () => {
+    it('keeps a late command off the panel when the account changes', async () => {
       const pending = deferred<PanelActionResult>();
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
-      await rebindAndResolveStop(fixture, pending, { accountId: 'DUM284969' });
+      await rebindAndResolve(fixture, pending, { accountId: 'DUM284969' });
 
-      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('Reconciliation requested.')).toBeNull();
       expect(runBotAction).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps a late Stop off the panel when the lane changes', async () => {
+    it('keeps a late command off the panel when the lane changes', async () => {
       const pending = deferred<PanelActionResult>();
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
-      await rebindAndResolveStop(fixture, pending, { clerkId: 'clrk_other' });
+      await rebindAndResolve(fixture, pending, { clerkId: 'clrk_other' });
 
-      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('Reconciliation requested.')).toBeNull();
       expect(runBotAction).toHaveBeenCalledTimes(1);
     });
   });
@@ -1749,19 +1728,8 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
-      actions: [
-        {
-          action_id: 'stop_bot_decisions',
-          label: 'Stop',
-          explanation: 'Stop evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'start-token',
-        },
-      ],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1777,7 +1745,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
 
     expect(mockService.runBotAction).toHaveBeenCalledWith(
@@ -1785,7 +1753,7 @@ describe('BotPanelShellComponent', () => {
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
       }),
       'sid-001',
-      expect.objectContaining({ action_id: 'stop_bot_decisions' }),
+      expect.objectContaining({ action_id: 'reconcile_now' }),
       null,
     );
   });
@@ -1953,19 +1921,8 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
-      actions: [
-        {
-          action_id: 'stop_bot_decisions',
-          label: 'Stop',
-          explanation: 'Stop evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'start-token',
-        },
-      ],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1975,14 +1932,14 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByText('Bot start requested.')).toBeTruthy();
+    expect(screen.getByText('Reconciliation requested.')).toBeTruthy();
     expect(screen.getByText('receipt-001')).toBeTruthy();
     expect(messageService.add).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'success', detail: 'Bot start requested.' }),
+      expect.objectContaining({ severity: 'success', detail: 'Reconciliation requested.' }),
     );
   });
 
@@ -1990,26 +1947,15 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
-      actions: [
-        {
-          action_id: 'stop_bot_decisions',
-          label: 'Stop',
-          explanation: 'Stop evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'start-token',
-        },
-      ],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'stop_bot_decisions',
+            action_id: 'reconcile_now',
             outcome: 'unknown',
             receipt_id: 'receipt-unknown',
             recorded_at_ms: 1_753_800_000_000,
@@ -2027,7 +1973,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2055,30 +2001,19 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
-      actions: [
-        {
-          action_id: 'stop_bot_decisions',
-          label: 'Stop',
-          explanation: 'Stop evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'start-token',
-        },
-      ],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
         error: {
           detail: {
-            action_id: 'stop_bot_decisions',
+            action_id: 'reconcile_now',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
-            message: 'Stop is no longer available for this bot.',
+            message: 'Reconcile now is no longer available for this bot.',
             why: null,
             reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
           },
@@ -2093,11 +2028,11 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByText('Stop is no longer available for this bot.')).toBeTruthy();
+    expect(screen.getByText('Reconcile now is no longer available for this bot.')).toBeTruthy();
     expect(screen.getByText('Terminal Evidence Unreadable')).toBeTruthy();
   });
 
@@ -2108,26 +2043,15 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
-      actions: [
-        {
-          action_id: 'stop_bot_decisions',
-          label: 'Stop',
-          explanation: 'Stop evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'start-token',
-        },
-      ],
-      primary_action: 'stop_bot_decisions',
+      actions: [RECONCILE_ACTION],
+      primary_action: 'reconcile_now',
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {
           detail: {
-            action_id: 'stop_bot_decisions',
+            action_id: 'reconcile_now',
             outcome: 'failure',
             receipt_id: null,
             recorded_at_ms: 1_753_800_000_000,
@@ -2146,7 +2070,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2180,7 +2104,7 @@ describe('BotPanelShellComponent', () => {
     );
     const { fixture } = await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
 
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -2208,7 +2132,7 @@ describe('BotPanelShellComponent', () => {
     );
     const { fixture } = await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
     await fixture.whenStable();
 
     expect(messageService.add).toHaveBeenCalledWith(
@@ -2240,7 +2164,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(runBotAction).not.toHaveBeenCalled();
     expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
@@ -2259,7 +2183,7 @@ describe('BotPanelShellComponent', () => {
     const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
     await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(runBotAction).not.toHaveBeenCalled();
     expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
@@ -2273,7 +2197,7 @@ describe('BotPanelShellComponent', () => {
     const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
     await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(runBotAction).toHaveBeenCalledWith(
       expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
@@ -2320,11 +2244,11 @@ describe('BotPanelShellComponent', () => {
       await vi.waitFor(() => expect(service.getLiveSnapshot.mock.calls.length).toBeGreaterThan(reads));
     });
 
-    it('holds Change still while a Stop is on its way, so a change of end never races it', async () => {
+    it('holds Change still while a command is on its way, so a change of end never races it', async () => {
       const pending = deferred<PanelActionResult>();
       const { fixture } = await renderShell({ end: END, runBotAction: vi.fn().mockReturnValueOnce(pending.promise) });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -2333,14 +2257,14 @@ describe('BotPanelShellComponent', () => {
       await vi.waitFor(() => expect(changeEnd().disabled).toBe(false));
     });
 
-    it('sends no Stop while a change of the end is on its way', async () => {
+    it('sends no command while a change of the end is on its way', async () => {
       const pending = deferred<BotEndView>();
       const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
       const { fixture } = await renderShell({ end: END, runBotAction, editBotEnd: vi.fn().mockReturnValueOnce(pending.promise) });
 
       await saveNoEnd();
       await fixture.whenStable();
-      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
       await fixture.whenStable();
 
       expect(runBotAction).not.toHaveBeenCalled();
@@ -2404,12 +2328,12 @@ describe('BotPanelShellComponent', () => {
 
     it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
       await renderPage({
-        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [STOP_ACTION], primary_action: 'stop_bot_decisions',
+        ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [fakeSqliteStopAction()], primary_action: 'stop_bot_decisions',
         open_pnl: -3.254, open_pnl_usd: '-3.25', open_pnl_direction: 'loss',
       });
       await screen.findByText('Holding its position');
 
-      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
       expect(statement()).toEqual([
         'Budget set aside at deploy $1,000.00',
         'Realized gains and losses $0.00',
@@ -2452,13 +2376,13 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByText('DRY RUN · simulated cash')).toBeTruthy();
     });
 
-    it('moves the keyboard to the outcome after Stop (story 48)', async () => {
-      await renderPage({ ...PANEL, mode: 'trade', actions: [STOP_ACTION], primary_action: 'stop_bot_decisions' });
+    it('moves the keyboard to the outcome after a command (story 48)', async () => {
+      await renderPage({ ...PANEL, mode: 'trade', actions: [RECONCILE_ACTION], primary_action: 'reconcile_now' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
-      expect(document.activeElement?.textContent).toContain('Bot start requested.');
+      expect(document.activeElement?.textContent).toContain('Reconciliation requested.');
     });
 
     it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (H30)', async () => {
@@ -2583,7 +2507,7 @@ describe('BotPanelShellComponent', () => {
     });
 
     it.each([
-      ['running', { ...PANEL, mode: 'trade' as const, actions: [STOP_ACTION], primary_action: 'stop_bot_decisions' as const }],
+      ['running', { ...PANEL, mode: 'trade' as const, actions: [fakeSqliteStopAction()], primary_action: 'stop_bot_decisions' as const }],
       ['stopped and holding', strandedPanel()],
     ])('has no detectable accessibility violations (%s)', async (_name, panel) => {
       await renderPage(panel);

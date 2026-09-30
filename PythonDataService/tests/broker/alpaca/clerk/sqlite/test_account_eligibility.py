@@ -21,7 +21,7 @@ def _account(**overrides: Any) -> BrokerAccountSnapshot:
     base: dict[str, Any] = dict(
         broker="alpaca", account_id="PA1", account_mode="paper", account_status="ACTIVE", currency="USD",
         cash=100.0, equity=150.0, buying_power=300.0, portfolio_value=150.0, long_market_value=50.0,
-        short_market_value=0.0, pattern_day_trader=False, trading_blocked=False, account_blocked=False,
+        short_market_value=0.0, trading_blocked=False, account_blocked=False,
         created_at_ms=1_600_000_000_000, observed_at_ms=1_700_000_000_000,
     )
     base.update(overrides)

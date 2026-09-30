@@ -2,9 +2,10 @@
 
 Every test runs ``select_active_clerk_runtime`` against a live broker double:
 the wiring under test is composition — which authority a live boot selects
-once an activation exists, which ports it binds, which gates it installs, and
-whether an armed instance's ENTER reaches the real trade port through all
-three admissions. No wall clock: the repository is pinned to ``NOW_MS``.
+once an activation exists, which ports it binds, and that an account not yet
+switched to budgets refuses every ENTER whatever its historical arming says
+(#2553; the arming gate itself is retired, #2629). No wall clock: the
+repository is pinned to ``NOW_MS``.
 """
 
 from __future__ import annotations
@@ -52,23 +53,17 @@ from tests.broker.alpaca.clerk.live_authority_fixtures import (
     LIVE_SID,
     _RecordingLiveBroker,
     compose_live,
-    instance_seals_over,
     live_activation,
     pinned_repository,
 )
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
-    SHADOW_ACCT,
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, _binding
 from tests.broker.alpaca.clerk.test_shadow_broker import _retain
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import BAR_CLOSE, DECISION_MINUTE, NOW_MS
-
-# The rehearsal's instance: sealed on ``shadow:<LIVE_ACCT>``, armed in the same
-# account-rooted ledger, and foreign to the graduated authority (design R15).
-SHADOW_SID = "ema-shadow-1"
 
 
 @pytest.fixture(autouse=True)
@@ -85,10 +80,10 @@ def live_state_root(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 async def live_runtime(
-    tmp_path: Path, live_state_root: Path
+    tmp_path: Path,
 ) -> AsyncIterator[tuple[ActiveClerkRuntime, _RecordingLiveBroker]]:
     broker = _RecordingLiveBroker(now_ms=NOW_MS)
-    runtime = await compose_live(tmp_path, broker, now_ms=NOW_MS, live_state_root=live_state_root)
+    runtime = await compose_live(tmp_path, broker, now_ms=NOW_MS)
     assert runtime.authority_kind == "sqlite", runtime.startup_failure
     try:
         yield runtime, broker
@@ -167,7 +162,7 @@ async def test_a_live_account_with_no_activation_still_boots_the_shadow_authorit
         await runtime.close()
 
 
-async def test_an_activated_live_account_boots_the_real_live_authority_with_both_gates(
+async def test_an_activated_live_account_boots_the_real_live_authority_with_its_envelope(
     live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
 ) -> None:
     """R1, R4: the same sqlite Clerk over a real account, in the real_live world, with the real trade port."""
@@ -178,13 +173,12 @@ async def test_an_activated_live_account_boots_the_real_live_authority_with_both
     assert runtime.clerk.account_mode == "live"
     assert runtime.clerk.live_envelope is runtime.envelope_sync.envelope
     assert runtime.clerk.live_envelope.custody_is_simulated is False
-    assert runtime.clerk.live_arming is not None
     assert isinstance(runtime.evidence_sink, SqliteTradeUpdateEvidenceSink)
     set_active_clerk_runtime(runtime)
     assert primary_custody_world() == "real_live"
 
 
-async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_path: Path) -> None:
+async def test_budget_cutover_boot_survives_an_unreadable_historical_arming_ledger(tmp_path: Path) -> None:
     from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
     from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
     from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
@@ -203,10 +197,9 @@ async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_
     activation = live_activation(authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token, artifacts_root=tmp_path)
     runtime = await select_active_clerk_runtime(read=broker, trade=broker, artifacts_root=tmp_path,
         activation_store=_ActivationStore(activation), repository_opener=pinned_repository(NOW_MS),
-        live_envelope_values=TEST_ENVELOPE_VALUES, instance_seals=lambda _: pytest.fail("retired grants must not be read"))
+        live_envelope_values=TEST_ENVELOPE_VALUES)
     try:
         assert runtime.authority_kind == "sqlite", runtime.startup_failure
-        assert runtime.clerk.live_arming is None
         # Fee freshness belongs to this process's producer, as at a real boot.
         assert runtime.fee_sync is not None and not await runtime.fee_sync.tick()
         assert await runtime.envelope_sync.tick() == "observed"
@@ -216,15 +209,12 @@ async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_
         await runtime.close()
 
 
-async def test_an_open_control_plane_installs_no_live_authority(
-    tmp_path: Path, live_state_root: Path
-) -> None:
+async def test_an_open_control_plane_installs_no_live_authority(tmp_path: Path) -> None:
     """R14: DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true and a live account never meet."""
     runtime = await compose_live(
         tmp_path,
         _LiveBroker(now_ms=NOW_MS),
         now_ms=NOW_MS,
-        live_state_root=live_state_root,
         control_unauthenticated=True,
     )
     assert runtime.authority_kind == "unavailable"
@@ -233,14 +223,11 @@ async def test_an_open_control_plane_installs_no_live_authority(
     assert "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL" in runtime.startup_failure.recovery
 
 
-async def test_a_live_authority_without_envelope_values_is_unavailable(
-    tmp_path: Path, live_state_root: Path
-) -> None:
+async def test_a_live_authority_without_envelope_values_is_unavailable(tmp_path: Path) -> None:
     runtime = await compose_live(
         tmp_path,
         _LiveBroker(now_ms=NOW_MS),
         now_ms=NOW_MS,
-        live_state_root=live_state_root,
         live_envelope_values=None,
     )
     assert runtime.authority_kind == "unavailable"
@@ -265,7 +252,6 @@ async def test_an_activation_naming_another_account_is_a_mode_disagreement(tmp_p
         execution_lease_retry_interval_s=0.1,
         stream_health_gate=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        instance_seals=None,
         control_unauthenticated=False,
     )
     assert runtime.authority_kind == "unavailable"
@@ -293,7 +279,6 @@ async def test_a_paper_mode_account_reaching_the_live_selector_is_a_mode_disagre
         execution_lease_retry_interval_s=0.1,
         stream_health_gate=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        instance_seals=None,
         control_unauthenticated=False,
     )
     assert runtime.authority_kind == "unavailable"
@@ -306,7 +291,6 @@ async def _select_live(
     *,
     account: Any,
     activation: Any,
-    live_state_root: Path | None = None,
 ) -> ActiveClerkRuntime:
     """``select_live_clerk_runtime`` with every uninteresting seam pinned."""
     broker = _LiveBroker(now_ms=NOW_MS)
@@ -323,7 +307,6 @@ async def _select_live(
         execution_lease_retry_interval_s=0.1,
         stream_health_gate=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        instance_seals=None if live_state_root is None else instance_seals_over(live_state_root),
         control_unauthenticated=False,
     )
 
@@ -420,39 +403,7 @@ def test_a_composition_that_raised_is_named_by_which_thing_failed(
     assert failure.db_identity_token == "live-db"
 
 
-async def test_no_seals_reader_arms_nothing_rather_than_defaulting(
-    tmp_path: Path, live_state_root: Path
-) -> None:
-    """Fail closed: with no seals reader the gate learns no seal, so no instance is armed.
-
-    The reader is the composition root's (``main.py``'s
-    ``_alpaca_instance_seals``), which has no test seam of its own; what is
-    pinnable -- and what actually decides -- is what the live authority does
-    when one was never wired.
-    """
-    broker = _RecordingLiveBroker(now_ms=NOW_MS)
-    runtime = await compose_live(
-        tmp_path, broker, now_ms=NOW_MS, live_state_root=live_state_root, with_seals=False
-    )
-    try:
-        assert runtime.clerk is not None and runtime.envelope_sync is not None
-        seal = record_sealed_binding(
-            live_state_root, strategy_instance_id=LIVE_SID, sealed_account_id=LIVE_ACCT
-        )
-        _arm(tmp_path, seal.bot_configuration_hash)
-        await runtime.envelope_sync.tick()
-
-        snapshot = runtime.clerk.live_arming.latest_snapshot() if runtime.clerk.live_arming else None
-        assert snapshot is not None
-        assert snapshot.seals == {}
-        assert snapshot.armed_instance_ids(NOW_MS) == frozenset()
-    finally:
-        await runtime.close()
-
-
-async def test_an_unreadable_activation_record_refuses_the_live_boot(
-    tmp_path: Path, live_state_root: Path
-) -> None:
+async def test_an_unreadable_activation_record_refuses_the_live_boot(tmp_path: Path) -> None:
     """Finding 1: the live fork's refusal for a tampered cutover record, through the real selector."""
     broker = _RecordingLiveBroker(now_ms=NOW_MS)
     runtime = await select_active_clerk_runtime(
@@ -462,7 +413,6 @@ async def test_an_unreadable_activation_record_refuses_the_live_boot(
         activation_store=_ActivationStore(None, invalid=True),
         repository_opener=pinned_repository(NOW_MS),
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        instance_seals=instance_seals_over(live_state_root),
     )
     assert runtime.authority_kind == "unavailable"
     assert runtime.startup_failure is not None
@@ -504,43 +454,3 @@ async def test_a_live_account_not_switched_to_budgets_refuses_every_enter_armed_
     assert "Switch this account to budgets in Settings" in receipt.explanation
     assert broker.submissions == []
     assert runtime.sqlite_repository.budget_authority_version() == 1
-
-
-async def test_the_gates_snapshot_seals_only_the_live_sealed_instance(
-    live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
-    registered_live_bot: tuple[RetainedSourceBar, str],
-    tmp_path: Path,
-    live_state_root: Path,
-) -> None:
-    """The rehearsal's `shadow:`-sealed rows share this ledger; only the live-sealed id is armed.
-
-    Harmless at the gate -- a foreign instance never reaches ``accept_enter``
-    -- but the same admissible set feeds the live verdict's count, so the two
-    truths are pinned to one rule here and in
-    ``test_the_real_live_count_ignores_the_rehearsals_shadow_sealed_instance``.
-    """
-    runtime, _broker = live_runtime
-    _bar, seal_hash = registered_live_bot
-    _arm(tmp_path, seal_hash)
-    shadow_seal = record_sealed_binding(
-        live_state_root, strategy_instance_id=SHADOW_SID, sealed_account_id=SHADOW_ACCT
-    )
-    LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT).append(
-        LiveArmingRecord.create(
-            live_account_id=LIVE_ACCT,
-            strategy_instance_id=SHADOW_SID,
-            seal_hash=shadow_seal.bot_configuration_hash,
-            configured_signal_hash=shadow_seal.configured_signal_hash,
-            shadow_receipt_sha256=None,
-            envelope=TEST_ENVELOPE_VALUES,
-            armed_at_ms=NOW_MS - 60_000,
-            max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
-        )
-    )
-    assert runtime.envelope_sync is not None and runtime.clerk is not None
-    await runtime.envelope_sync.tick()
-
-    snapshot = runtime.clerk.live_arming.latest_snapshot() if runtime.clerk.live_arming else None
-    assert snapshot is not None
-    assert snapshot.armed_instance_ids(NOW_MS) == frozenset({LIVE_SID})
-    assert SHADOW_SID not in snapshot.seals

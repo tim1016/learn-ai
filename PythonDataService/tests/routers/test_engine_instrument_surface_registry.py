@@ -3,8 +3,6 @@
 PRD #593 §"The instrument-surface registry flag" introduced the policy surface.
 Every live-runtime Action Plan and signal-intent binding is enumerated here so a
 registry change cannot silently alter execution behavior.
-
-Prior art: ``test_run_cli.test_lookup_sizing_surface_resolves_module_name_to_registry_key``.
 """
 
 from __future__ import annotations

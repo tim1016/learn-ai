@@ -52,30 +52,31 @@ const ACCOUNT_LIST_URL = '/brokers/alpaca';
 })
 class WorkspaceHostComponent {}
 
-// Each real tab roots itself in a labelled `<main>`; the stubs do the same so
-// the accessibility assertion below grades the workspace's own chrome against
-// the landmark structure the tabs actually bring.
-@Component({ selector: 'app-home-stub', template: '<main aria-label="Home">Home tab</main>' })
+// Each real tab roots itself in a labelled `<section>` inside the shell's one
+// `<main>` (#2614); the stubs do the same, so the accessibility assertion below
+// grades the workspace's own chrome against the landmark structure the tabs
+// actually bring.
+@Component({ selector: 'app-home-stub', template: '<section aria-label="Home">Home tab</section>' })
 class HomeStubComponent {}
 
-@Component({ selector: 'app-activity-stub', template: '<main aria-label="Activity">Activity tab</main>' })
+@Component({ selector: 'app-activity-stub', template: '<section aria-label="Activity">Activity tab</section>' })
 class ActivityStubComponent {}
 
-@Component({ selector: 'app-history-stub', template: '<main aria-label="History">History tab</main>' })
+@Component({ selector: 'app-history-stub', template: '<section aria-label="History">History tab</section>' })
 class HistoryStubComponent {}
 
 @Component({
   selector: 'app-settings-stub',
-  template: '<main aria-label="Settings">Settings tab</main>',
+  template: '<section aria-label="Settings">Settings tab</section>',
 })
 class SettingsStubComponent {}
 
-@Component({ selector: 'app-bot-stub', template: '<main aria-label="Bot">Bot page</main>' })
+@Component({ selector: 'app-bot-stub', template: '<section aria-label="Bot">Bot page</section>' })
 class BotStubComponent {}
 
 @Component({
   selector: 'app-deploy-stub',
-  template: '<main aria-label="Deploy a bot">Deploy a bot tab</main>',
+  template: '<section aria-label="Deploy a bot">Deploy a bot tab</section>',
 })
 class DeployStubComponent {}
 
@@ -136,7 +137,6 @@ function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAcco
     portfolio_value: 15_000,
     long_market_value: 5_000,
     short_market_value: 0,
-    pattern_day_trader: false,
     trading_blocked: false,
     account_blocked: false,
     created_at_ms: 1_600_000_000_000,

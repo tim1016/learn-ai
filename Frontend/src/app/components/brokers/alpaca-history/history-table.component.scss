@@ -49,9 +49,13 @@
   border-top-style: dashed;
 }
 
+.history-table__sid,
+.history-table__sid-text {
+  font-family: var(--font-mono);
+}
+
 .history-table__sid {
   color: var(--accent-text);
-  font-family: var(--font-mono);
 }
 
 .history-table__meta,

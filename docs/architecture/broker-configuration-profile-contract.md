@@ -291,12 +291,11 @@ Changing a profile or execution revision requires prior obligations to be clear,
 even for the same broker account. A refused Apply consumes its request and
 recovers last-effective, including refusals caused by retired environment lines.
 
-An effective live-envelope change appends `live_arming_invalidated` configuration
-events. `previous_ref` is the exact arming record hash, `next_ref` its account ID,
-and the profile/revision identifies the effective selection that invalidated it.
-The event and effective acknowledgement commit together. Reverting values never
-revives these records; a new CLI arming can grant permission again. Existing
-arming/custody/activation records and envelope hashes retain their original shape.
+Arming grants nothing any more (#2629), so an effective live-envelope change
+appends no `live_arming_invalidated` event. Events recorded before, whose
+`previous_ref` was the arming record hash and `next_ref` its account ID, stay in
+the configuration event log as history. Existing arming/custody/activation
+records and envelope hashes retain their original shape.
 
 ### Offline Paper configuration cleanup
 

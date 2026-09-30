@@ -32,7 +32,6 @@ from app.broker.alpaca.clerk.exit_terms import (
     upgrade_exit_terms,
 )
 from app.broker.alpaca.clerk.live_arming import latest_arming
-from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
@@ -344,7 +343,6 @@ class SqliteAlpacaClerkFacade:
         account_mode: Literal["paper", "live"],
         program_leg_policy: ProgramLegPolicy | None = None,
         live_envelope: LiveEnvelopeGate | None = None,
-        live_arming: ArmingGate | None = None,
         quote_source: QuoteSource | None = None,
         entry_reading: EntryReading | None = None,
     ) -> None:
@@ -358,12 +356,14 @@ class SqliteAlpacaClerkFacade:
                 raise AccountAuthorityIdentityError("a shadow authority reads a live account")
         else:
             require_real_account_id(repo.account_id)
-            # ADR 0059 D11 (slice 7): a real-money facade is never a permissive
-            # default. Both gates are composed by the live selector; a live
-            # facade with either missing is a composition bug, refused here.
-            if account_mode == "live" and (live_envelope is None or (repo.budget_authority_version() < 2 and live_arming is None)):
+            # ADR 0059 D4: a real-money facade is never a permissive default.
+            # The live selector composes its envelope; a live facade without
+            # one is a composition bug, refused here. No arming gate is
+            # composed any more (#2629): only a budgeted deployment admits an
+            # ENTER, and an account on authority version 1 refuses every one.
+            if account_mode == "live" and live_envelope is None:
                 raise AccountAuthorityIdentityError(
-                    "a live sqlite authority requires a risk envelope and an arming gate"
+                    "a live sqlite authority requires a risk envelope"
                 )
         self._repo = repo
         self._intake = intake or ReentrantAsyncLock()
@@ -391,10 +391,6 @@ class SqliteAlpacaClerkFacade:
         # ``None`` where no sync reads the account, and such an ENTER is
         # dropped as before.
         self._entry_reading = entry_reading
-        # ADR 0059 D11: per-instance arming on the live authority only;
-        # ``None`` on paper and under shadow. It admits no ENTER (#2553: only a
-        # budgeted account does); the live verdict reads its mode hold.
-        self._live_arming = live_arming
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
         # states the quote directly.
@@ -443,11 +439,6 @@ class SqliteAlpacaClerkFacade:
         return self._live_envelope
 
     @property
-    def live_arming(self) -> ArmingGate | None:
-        """The per-instance arming gate the live verdict reads, if this authority has one."""
-        return self._live_arming
-
-    @property
     def account_mode(self) -> Literal["paper", "live"]:
         """The environment every custody answer names (ADR 0054), learned at activation."""
         return self._account_mode
@@ -491,14 +482,14 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
-        """The account's entry policy, refreshed from the current arming envelope.
+        """The account's entry policy, refreshed from the current envelope.
 
         Exit allowance, band and spread cap come exclusively from the bot's
         immutable custody seal through ``exit_policy_for_instance``.
         """
         policy = self._program_leg_policy
         if self._live_envelope is not None and self._live_envelope.values is not None:
-            values = self._live_envelope.in_force
+            values = self._live_envelope.values
             return replace(policy, allowance_refusal=None, allowances=ExtendedHoursAllowances(
                 entry_bps=Decimal(str(values.xh_entry_bps)), exit_bps=None,
             ))
@@ -507,7 +498,12 @@ class SqliteAlpacaClerkFacade:
         )
 
     def upgrade_legacy_exit_terms(self, arming_ledger: LiveArmingLedger | None = None) -> None:
-        """Seal each legacy bot from its own arming history, else the effective revision."""
+        """Seal each legacy bot from its own arming history, else the effective revision.
+
+        Historical arming is read here only to price a bot armed before exit
+        terms existed, from its own newest arming, once; it grants nothing
+        (#2629).
+        """
         if self._repo.exit_terms_upgrade_completed():
             return
         records = ()

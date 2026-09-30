@@ -103,7 +103,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
-    from app.broker.alpaca.clerk.sqlite.budget_projection import BotResultsMemo
+    from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult, RevisionMemo
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,7 @@ class ClerkSqliteRepository(
         self._fee_evidence_checked_at_ms: int | None = None
         # Home's Finished results at the last custody revision read; created
         # on first use (``bot_results``), process-local like the line above.
-        self._bot_results_memo: BotResultsMemo | None = None
+        self._bot_results_memo: RevisionMemo[dict[str, BotResult]] | None = None
         # Pinned contracts doc §2: "one application-owned write coordinator
         # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;

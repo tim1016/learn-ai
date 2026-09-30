@@ -95,16 +95,15 @@ class AlpacaSettings(BaseSettings):
     # separate trading credentials and broker clock.
     market_status_upstream_url: HttpUrl | None = None
 
-    # The live envelope and ceremony values (ADR 0059 D4). Required when
+    # The live envelope's loss bounds (ADR 0059 D4). Required when
     # ``mode == "live"``; deliberately no defaults in code — a number nobody
     # chose must never bound real money, and neither may an infinite or
-    # NaN one (`inf` satisfies `gt=0`). Sealed into the arming record by
-    # slice 6; read here so the service refuses to boot live without them.
+    # NaN one (`inf` satisfies `gt=0`). The arming ceremony's two session
+    # counts are retired (#2629): no setting holds them, and a historical
+    # profile revision that stores them resolves without them.
     live_loss_fraction: float | None = Field(default=None, gt=0, lt=1, allow_inf_nan=False)
     live_loss_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    live_shadow_sessions: int | None = Field(default=None, ge=1)
-    live_arming_max_sessions: int | None = Field(default=None, ge=1)
-    # The extended-hours allowances. Unlike the four values above, these two
+    # The extended-hours allowances. Unlike the two values above, these two
     # apply in ANY mode: they price every extended-hours and after-close limit
     # (``program_leg._settings_allowances``). On a live binding they are the
     # envelope's pair; on a paper binding they hold the applied paper

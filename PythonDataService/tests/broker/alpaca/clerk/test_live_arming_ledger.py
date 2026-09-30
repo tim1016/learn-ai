@@ -1,9 +1,8 @@
-"""The append-only, account-rooted arming ledger (ADR 0059 D3, design R3)."""
+"""The read-only, account-rooted historical arming ledger (ADR 0059 D3, design R3; #2629)."""
 
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
@@ -11,12 +10,9 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_arming import (
-    LIVE_ARMING_INSTANCE_UNSEALED,
     LiveArmingInvalid,
     LiveArmingRecord,
-    LiveArmingRefused,
     LiveDisarmRecord,
-    instance_ids,
     latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LIVE_ARMING_FILENAME
@@ -70,8 +66,8 @@ def test_the_ledger_is_account_rooted_outside_every_custody_namespace(tmp_path: 
     # Not under accounts/alpaca/ and not inside a custody namespace directory:
     # no cutover or latent-database check can mistake this tree for an authority.
     assert "alpaca" not in ledger.path.parts
-    assert ledger.records() == () and instance_ids(ledger.records()) == ()
-    assert ledger.latest(SID) is None and latest_arming(ledger.records()) is None
+    assert ledger.records() == () and ledger.records_for(SID) == ()
+    assert latest_arming(ledger.records()) is None
 
 
 def test_a_reserved_namespace_account_never_gets_a_ledger(tmp_path: Path) -> None:
@@ -89,9 +85,7 @@ def test_append_and_read_keep_file_order_and_survive_a_reopen(tmp_path: Path) ->
     reopened = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     assert reopened.records() == (first, second)
     assert reopened.records_for(SID) == (first,)
-    assert reopened.latest(SID) == first
     assert latest_arming(reopened.records()) == second
-    assert instance_ids(reopened.records()) == (SID, "ema-shadow-2")
     assert len(reopened.path.read_text(encoding="utf-8").splitlines()) == 2
 
 
@@ -117,7 +111,7 @@ def test_appending_version_one_preserves_its_original_payload_and_digest(tmp_pat
 
 
 def test_the_sealed_envelope_is_the_latest_arming_records_own(tmp_path: Path) -> None:
-    """The seal is ``latest_arming(records())``'s envelope -- the one read the sync takes."""
+    """The newest arming record's own envelope is what ``latest_arming`` answers."""
     ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     ledger.append(_armed())
     latest = latest_arming(ledger.records())
@@ -143,7 +137,7 @@ def test_a_disarm_never_unseals_the_account_level_envelope(tmp_path: Path) -> No
         )
     )
 
-    assert isinstance(ledger.latest(SID), LiveDisarmRecord)
+    assert isinstance(ledger.records_for(SID)[-1], LiveDisarmRecord)
     assert latest_arming(ledger.records()) == record
     assert record.envelope == ENVELOPE
 
@@ -158,7 +152,7 @@ def test_a_foreign_accounts_row_is_ignored_rather_than_answered_for(tmp_path: Pa
     )
 
     assert ledger.records() == (_armed(),)
-    assert instance_ids(ledger.records()) == (SID,)
+    assert tuple(row.strategy_instance_id for row in ledger.records()) == (SID,)
 
 
 
@@ -205,59 +199,6 @@ def test_a_row_with_no_recognised_kind_is_refused(tmp_path: Path) -> None:
 
 
 
-def test_discover_finds_the_one_account_whose_ledger_names_the_instance(tmp_path: Path) -> None:
-    """The arming tree answers without the shadow activation proof."""
-    LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT).append(
-        _armed(account=OTHER_ACCOUNT, instance="somebody-else")
-    )
-    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
-
-    found = LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
-
-    assert found is not None and found.live_account_id == ACCOUNT
-    assert LiveArmingLedger.discover(tmp_path, strategy_instance_id="never-armed") is None
-    assert LiveArmingLedger.discover(tmp_path / "empty", strategy_instance_id=SID) is None
-
-
-def test_discover_skips_an_unreadable_ledger_loudly_rather_than_silently(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A damaged sibling must neither hide a readable ledger nor vanish quietly."""
-    damaged = LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT)
-    damaged.append(_armed(account=OTHER_ACCOUNT))
-    damaged.path.write_text(
-        damaged.path.read_text(encoding="utf-8").replace(
-            f'"armed_at_ms":{FRIDAY_MS}', f'"armed_at_ms":{FRIDAY_MS + 1}'
-        ),
-        encoding="utf-8",
-    )
-    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
-
-    with caplog.at_level(logging.ERROR):
-        found = LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
-
-    assert found is not None and found.live_account_id == ACCOUNT
-    (invalid,) = [
-        record for record in caplog.records if getattr(record, "action", None) == "live_arming_ledger_invalid"
-    ]
-    assert invalid.account_id == OTHER_ACCOUNT  # type: ignore[attr-defined]
-    assert invalid.exc_info is not None, "the traceback names which row will not verify"
-
-
-def test_discover_refuses_when_two_accounts_armed_the_same_instance(tmp_path: Path) -> None:
-    """Nothing in the tree can choose between them, so it does not choose."""
-    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
-    LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT).append(_armed(account=OTHER_ACCOUNT))
-
-    with pytest.raises(LiveArmingRefused) as caught:
-        LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
-
-    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
-    assert ACCOUNT in str(caught.value) and OTHER_ACCOUNT in str(caught.value)
-
-
-
-
 def test_production_ledger_has_no_mutating_arming_interface(tmp_path: Path) -> None:
     from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger as ReadOnlyLedger
 
@@ -266,5 +207,5 @@ def test_production_ledger_has_no_mutating_arming_interface(tmp_path: Path) -> N
     fixture = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     fixture.append(_armed())
     before = fixture.path.read_bytes()
-    assert ledger.latest(SID) == _armed()
+    assert ledger.records_for(SID) == (_armed(),)
     assert fixture.path.read_bytes() == before

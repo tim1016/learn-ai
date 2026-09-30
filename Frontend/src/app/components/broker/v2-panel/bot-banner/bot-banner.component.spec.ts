@@ -114,7 +114,8 @@ describe('BotBannerComponent', () => {
   it('marks a Dry Run bot as simulated cash, never with the lane world (H23)', async () => {
     await renderBanner({ mode: 'dry_run' });
 
-    expect(screen.getByText('DRY RUN · simulated cash')).toBeTruthy();
+    // The same chip a Dry Run's History row wears (#2615).
+    expect(document.querySelector('.lane-mode-chip--dry_run')?.textContent?.trim()).toBe('DRY RUN · simulated cash');
     expect(screen.queryByText(LANE_MODE_WORDING.paper)).toBeNull();
     expect(screen.queryByText(LANE_MODE_WORDING.live)).toBeNull();
   });

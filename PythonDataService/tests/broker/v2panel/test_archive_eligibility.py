@@ -14,51 +14,49 @@ refuses even though it reports no exposure.
 
 from __future__ import annotations
 
-from app.broker.v2panel.action_policy import (
-    ACTION_REGISTRY,
-    ActionGuardContext,
-    evaluate_archive,
-)
+from typing import Any
+
+import pytest
+
+from app.broker.v2panel.action_policy import archive_action, evaluate_archive
+from app.schemas.broker_v2_panel import PanelAction
 
 
-def _ctx(
+def _action(
     *,
     running: bool = False,
     phase: str = "OFF_DUTY",
     has_exposure: bool = False,
     working_order_count: int = 0,
     freeze_active: bool = False,
-) -> ActionGuardContext:
-    return ActionGuardContext(
+) -> PanelAction:
+    return archive_action(
         running=running,
         phase=phase,
-        hold_active=False,
         freeze_active=freeze_active,
-        reconciliation_verdict="clean",
-        outstanding_intents=0,
-        has_exposure=has_exposure,
-
-        account_id="PA3KWXU1C4C3",
-        strategy_instance_id="Aug11",
         exposure={"SPY": 1.0} if has_exposure else {},
         working_order_count=working_order_count,
+        account_id="PA3KWXU1C4C3",
+        strategy_instance_id="Aug11",
+        revision=1,
     )
 
 
-def _archive(ctx: ActionGuardContext) -> tuple[bool, list]:
-    return ACTION_REGISTRY["archive"].guard(ctx)
+def _archive(**facts: Any) -> tuple[bool, list]:
+    action = _action(**facts)
+    return action.enabled, action.blockers
 
 
 def test_a_stopped_flat_bot_is_archive_eligible() -> None:
     """The case #1911 asked for."""
-    enabled, blockers = _archive(_ctx())
+    enabled, blockers = _archive()
 
     assert enabled is True
     assert blockers == []
 
 
 def test_archive_refuses_a_running_bot() -> None:
-    enabled, blockers = _archive(_ctx(running=True, phase="ON_DUTY"))
+    enabled, blockers = _archive(running=True, phase="ON_DUTY")
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["BOT_STILL_RUNNING"]
@@ -72,7 +70,7 @@ def test_archive_refuses_a_dead_process_whose_run_never_settled() -> None:
     Archiving there would stamp `retired_at_ms` on a registration whose run
     never ended -- and the fold that writes it states there is no active run.
     """
-    enabled, blockers = _archive(_ctx(running=False, phase="ON_DUTY"))
+    enabled, blockers = _archive(running=False, phase="ON_DUTY")
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["BOT_DUTY_NOT_SETTLED"]
@@ -99,14 +97,14 @@ def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:
 
 
 def test_archive_refuses_while_the_bot_still_holds_exposure() -> None:
-    enabled, blockers = _archive(_ctx(has_exposure=True))
+    enabled, blockers = _archive(has_exposure=True)
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["ARCHIVE_WOULD_STRAND_CUSTODY"]
 
 
 def test_archive_refuses_while_an_order_is_still_working() -> None:
-    enabled, blockers = _archive(_ctx(working_order_count=1))
+    enabled, blockers = _archive(working_order_count=1)
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["ARCHIVE_WOULD_STRAND_CUSTODY"]
@@ -120,7 +118,7 @@ def test_archive_refuses_when_the_clerk_cannot_prove_flatness() -> None:
     flatness. Archive's *enabling* proof is that reading, so it must refuse
     rather than treat an unproven fact as an enabling one.
     """
-    enabled, blockers = _archive(_ctx(freeze_active=True))
+    enabled, blockers = _archive(freeze_active=True)
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["ARCHIVE_CUSTODY_UNPROVABLE"]
@@ -129,14 +127,14 @@ def test_archive_refuses_when_the_clerk_cannot_prove_flatness() -> None:
 
 def test_a_frozen_account_refuses_archive_before_reporting_exposure() -> None:
     """Ordering: unprovable custody outranks the exposure it cannot prove."""
-    enabled, blockers = _archive(_ctx(freeze_active=True, has_exposure=True))
+    enabled, blockers = _archive(freeze_active=True, has_exposure=True)
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["ARCHIVE_CUSTODY_UNPROVABLE"]
 
 
 def test_an_already_retired_registration_cannot_be_archived_again() -> None:
-    enabled, blockers = _archive(_ctx(phase="RETIRED"))
+    enabled, blockers = _archive(phase="RETIRED")
 
     assert enabled is False
     assert [b.condition.id for b in blockers] == ["BOT_ALREADY_RETIRED"]
@@ -144,13 +142,7 @@ def test_an_already_retired_registration_cannot_be_archived_again() -> None:
 
 def test_archive_carries_a_typed_confirmation_naming_the_custody_it_rests_on() -> None:
     """An irreversible command states the proof the operator is acting on."""
-    from app.broker.v2panel.action_policy import build_actions_from_registry
-
-    actions = {
-        action.action_id: action
-        for action in build_actions_from_registry(_ctx(), revision=1, broker="alpaca")
-    }
-    archive = actions["archive"]
+    archive = _action()
 
     assert archive.enabled is True
     assert archive.confirmation is not None
@@ -163,52 +155,69 @@ def test_archive_carries_a_typed_confirmation_naming_the_custody_it_rests_on() -
 
 def test_a_disabled_archive_offers_no_confirmation() -> None:
     """Confirmation copy describes a command the operator can actually run."""
-    from app.broker.v2panel.action_policy import build_actions_from_registry
+    archive = _action(has_exposure=True)
 
-    actions = {
-        action.action_id: action
-        for action in build_actions_from_registry(
-            _ctx(has_exposure=True), revision=1, broker="alpaca"
-        )
-    }
-
-    assert actions["archive"].enabled is False
-    assert actions["archive"].confirmation is None
+    assert archive.enabled is False
+    assert archive.confirmation is None
 
 
-def test_archive_is_the_only_lifecycle_exit_the_panel_presents() -> None:
-    """#2578: Clear is the one way off Home, so Retire is gone from the registry
-    and a stopped bot is presented Archive and no Retire."""
-    from app.broker.v2panel.action_policy import build_actions_from_registry
+def test_the_archive_token_keys_only_on_the_facts_its_rule_reads() -> None:
+    """Archive owns its compare-and-set domain: the account, the bot's name and
+    the panel revision cannot make a presented Clear stale (#2635 kept the
+    payload the registry hashed, so the served token is unchanged)."""
+    baseline = _action()
+    elsewhere = archive_action(
+        running=False,
+        phase="OFF_DUTY",
+        freeze_active=False,
+        exposure={},
+        working_order_count=0,
+        account_id="318420190",
+        strategy_instance_id="another-bot",
+        revision=99,
+    )
 
-    presented = [
-        action.action_id
-        for action in build_actions_from_registry(_ctx(), revision=1, broker="alpaca")
-    ]
+    # The token every lane served for a stopped, flat, unfrozen bot on
+    # 2026-09-30 (paper, live and Dry Run panels alike).
+    assert baseline.concurrency_token == "9a8f9b9530fb687e13bc07cfd1c5b9aa"
+    assert elsewhere.concurrency_token == baseline.concurrency_token
+    for changed in (
+        _action(has_exposure=True),
+        _action(working_order_count=1),
+        _action(freeze_active=True),
+        _action(phase="RETIRED"),
+    ):
+        assert changed.concurrency_token != baseline.concurrency_token
 
-    assert "retire" not in ACTION_REGISTRY
-    assert "archive" in presented
-    assert "retire" not in presented
 
-
-def test_the_shared_rule_is_what_the_guard_renders() -> None:
-    """The guard must not restate the rule -- commit-time answers the same one."""
-    for kwargs in (
+@pytest.mark.parametrize(
+    "facts",
+    [
         {},
         {"running": True, "phase": "ON_DUTY"},
         {"has_exposure": True},
         {"working_order_count": 2},
         {"freeze_active": True},
         {"phase": "RETIRED"},
-    ):
-        ctx = _ctx(**kwargs)
-        verdict = evaluate_archive(
-            running=ctx.running,
-            phase=ctx.phase,
-            has_exposure=ctx.has_exposure,
-            working_order_count=ctx.working_order_count,
-            outstanding_effect_count=0,
-            custody_provable=not ctx.freeze_active,
-        )
-        enabled, _ = _archive(ctx)
-        assert enabled is verdict.eligible
+    ],
+)
+def test_the_shared_rule_is_what_the_action_renders(facts: dict[str, Any]) -> None:
+    """The action must not restate the rule -- commit-time answers the same one."""
+    resolved = {
+        "running": False,
+        "phase": "OFF_DUTY",
+        "has_exposure": False,
+        "working_order_count": 0,
+        "freeze_active": False,
+        **facts,
+    }
+    verdict = evaluate_archive(
+        running=resolved["running"],
+        phase=resolved["phase"],
+        has_exposure=resolved["has_exposure"],
+        working_order_count=resolved["working_order_count"],
+        outstanding_effect_count=0,
+        custody_provable=not resolved["freeze_active"],
+    )
+
+    assert _action(**resolved).enabled is verdict.eligible

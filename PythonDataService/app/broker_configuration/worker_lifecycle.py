@@ -19,9 +19,6 @@ from app.broker.alpaca.clerk.account_authority import (
     live_account_id_for_shadow_account,
 )
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime, unavailable_runtime
-from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker_configuration.arming_policy import install_configuration_arming_fence
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.runtime import get_broker_configuration_service, resolve_clerk_dir
 from app.broker_configuration.worker_binding import (
@@ -219,28 +216,10 @@ async def acknowledge_runtime_binding(
     # account and must never receive a synthetic custody namespace.
     if account_id is not None and is_shadow_account_id(account_id):
         account_id = live_account_id_for_shadow_account(account_id)
-    try:
-        accepted = acknowledge_worker_binding(
-            bound=bound, account_id=account_id, service_factory=service_factory
-        )
-        if accepted:
-            install_configuration_arming_fence(
-                bound=bound,
-                gate=(runtime.clerk.live_arming if isinstance(runtime.clerk, SqliteAlpacaClerkFacade) else None),
-            )
-            return runtime
-    except LiveArmingInvalid:
-        await runtime.close()
-        refuse_active_alpaca_binding(UnboundBroker(
-            reason="broker_unconfigured",
-            message="The applied broker configuration's arming evidence could not be read.",
-            next_step="Restore the configuration arming evidence, then restart.",
-        ))
-        return unavailable_runtime(
-            "LIVE_ARMING_LEDGER_INVALID",
-            account_id=account_id,
-            recovery="The configuration arming evidence could not be read; restore it and restart.",
-        )
+    if acknowledge_worker_binding(
+        bound=bound, account_id=account_id, service_factory=service_factory
+    ):
+        return runtime
     await runtime.close()
     refuse_active_alpaca_binding(UnboundBroker(
         reason="broker_unconfigured",

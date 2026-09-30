@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     select_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -32,11 +31,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.contract.models import BrokerActivity
 from app.services.alpaca_live_envelope import clear_loss_hold
 from app.services.broker_v2_panel.budget_deploy import _broker_figures
-from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_authority_fixtures import compose_live
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
-    LIVE_ACCT,
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
@@ -47,35 +44,10 @@ from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import (
 )
 
 
-def _arm(
-    artifacts_root: Path,
-    *,
-    envelope: object = TEST_ENVELOPE_VALUES,
-    armed_at_ms: int = NOW_MS,
-) -> LiveArmingRecord:
-    """Append one arming record straight to the ledger.
-
-    The ceremony that mints these has its own tests; what is under test here is
-    what the *runtime* does with a record that exists.
-    """
-    record = LiveArmingRecord.create(
-        live_account_id=LIVE_ACCT,
-        strategy_instance_id="spy-bot",
-        seal_hash="a" * 64,
-        configured_signal_hash="b" * 64,
-        shadow_receipt_sha256="c" * 64,
-        envelope=envelope,  # type: ignore[arg-type]
-        armed_at_ms=armed_at_ms,
-        max_sessions=20,
-    )
-    LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).append(record)
-    return record
-
-
 @pytest.fixture()
 async def loss_runtime(tmp_path: Path) -> AsyncIterator[tuple[ActiveClerkRuntime, _LiveBroker]]:
     broker = _LiveBroker(now_ms=NOW_MS)
-    runtime = await compose_live(tmp_path, broker, now_ms=NOW_MS, live_state_root=tmp_path / "runner")
+    runtime = await compose_live(tmp_path, broker, now_ms=NOW_MS)
     assert runtime.authority_kind == "sqlite", runtime.startup_failure
     complete_fee_evidence(runtime.sqlite_repository)
     try:
@@ -134,62 +106,28 @@ async def test_the_clear_refuses_while_the_breach_stands_then_clears_once_it_has
     assert _hold(runtime.sqlite_repository) is None
 
 
-async def test_the_clear_judges_the_sealed_limit_not_a_loosened_configured_one(
+async def test_a_loosened_configured_limit_cannot_clear_the_original_loss_hold(
     loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
-    tmp_path: Path,
 ) -> None:
-    """The regression: raising the limit in the environment must not release a hold.
+    """#2543: the hold retains the threshold it was raised on.
 
-    ADR 0059 D3 seals every envelope value at arming, so changing one is a
-    re-arm and never a silent drift. The clear used to re-observe against the
-    *configured* values, which meant an operator could edit
-    ``ALPACA_LIVE_LOSS_USD``, restart, and clear a hold the armed envelope
-    still says stands -- with ENTER separately refusing
-    ``LIVE_ENVELOPE_DISAGREEMENT``, so the account was left holdless *and*
-    unable to trade, and the next re-arm restored no hold.
+    An operator who loosens the configured loss limit and restarts cannot
+    clear a hold the original limit still says stands. No arming seal takes
+    part any more (#2629): the retained threshold is the whole protection.
     """
     runtime, broker = loss_runtime
     assert runtime.envelope_sync is not None
-    _arm(tmp_path)
     broker.unrealized = -5_000.0  # limit = min(0.05 × 100,000, 5,000) = 5,000
     assert await runtime.envelope_sync.tick() == "hold_raised"
-    assert runtime.envelope_sync.envelope.sealed == TEST_ENVELOPE_VALUES
-
-    # The operator loosened both halves of the loss limit and restarted the
-    # process; nobody re-armed, so the ledger still seals the old envelope.
     runtime.envelope_sync.envelope.values = replace(
         TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09
     )
 
     refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
 
-    assert refused.outcome == "refused"
-    assert refused.reason_code == "LIVE_ENVELOPE_LOSS_HOLD_STANDS"
-    # 5,000 is the sealed limit; 9,000 would be the loosened configured one,
-    # and -5,000 breaches the first and not the second.
-    assert refused.loss_limit_usd == pytest.approx(5_000.0)
-    assert "sealed at arming" in refused.detail
-    assert _hold(runtime.sqlite_repository) is not None
-
-
-async def test_a_looser_legacy_rearm_cannot_clear_the_original_loss_hold(
-    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
-    tmp_path: Path,
-) -> None:
-    """#2543: historical arming cannot erase the retained loss threshold."""
-    runtime, broker = loss_runtime
-    assert runtime.envelope_sync is not None
-    _arm(tmp_path)
-    broker.unrealized = -5_000.0
-    assert await runtime.envelope_sync.tick() == "hold_raised"
-    loosened = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
-    runtime.envelope_sync.envelope.values = loosened
-
-    _arm(tmp_path, envelope=loosened, armed_at_ms=NOW_MS + 1)
-    cleared = await clear_loss_hold(runtime, now_ms=NOW_MS)
-
-    assert cleared.outcome == "refused", cleared.detail
-    assert cleared.loss_limit_usd == pytest.approx(9_000.0)
+    assert refused.outcome == "refused", refused.detail
+    assert refused.loss_limit_usd == pytest.approx(9_000.0)
+    assert "recorded when this hold began" in refused.detail
     assert _hold(runtime.sqlite_repository) is not None
 
 
@@ -211,34 +149,25 @@ async def test_the_clear_refuses_an_unknown_fact(
     assert _hold(runtime.sqlite_repository) is not None
 
 
-async def test_the_clear_names_an_unreadable_arming_ledger_rather_than_the_broker_feed(
+async def test_the_clear_names_a_missing_loss_limit_rather_than_the_broker_feed(
     loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
-    tmp_path: Path,
 ) -> None:
-    """The fourth unjudgeable cause reaches this screen, so it must be named here.
+    """An account with no loss limit to judge against is named as such.
 
-    An account whose seal cannot be read has no sealed loss limit to judge
-    against, so the clear refuses — but the standing sentence enumerated three
-    broker-side causes, and would have sent the operator to debug the feed
-    while the actual fault was a corrupt ``live_arming.jsonl``.
+    The standing sentence enumerates broker-side causes, and would send the
+    operator to debug the feed while the actual fault is that no limit is set.
     """
     runtime, broker = loss_runtime
     assert runtime.envelope_sync is not None
-    _arm(tmp_path)
     broker.unrealized = -5_000.0
     assert await runtime.envelope_sync.tick() == "hold_raised"
-
-    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
-    ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace('"kind":"armed"', '"kind":"armed ', 1),
-        encoding="utf-8",
-    )
+    runtime.envelope_sync.envelope.values = None
 
     refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
 
     assert refused.outcome == "refused"
     assert refused.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
-    assert "arming inputs could not be read" in refused.detail
+    assert "No daily loss limit is set" in refused.detail
     assert refused.day_pnl_usd is None and refused.loss_limit_usd is None
     assert _hold(runtime.sqlite_repository) is not None
 
@@ -308,7 +237,6 @@ async def test_the_refusal_names_the_same_cent_deploys_today_pnl_shows(tmp_path:
         tmp_path,
         _DepositedBroker(),
         now_ms=NOW_MS,
-        live_state_root=tmp_path / "runner",
         live_envelope_values=_HALF_CENT_ENVELOPE,
     )
     try:

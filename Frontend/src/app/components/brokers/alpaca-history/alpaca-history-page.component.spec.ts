@@ -56,6 +56,7 @@ function bot(overrides: Partial<FleetBotHistoryRow> = {}): FleetBotHistoryRow {
     money_unavailable_reason: null,
     money_scope_note: null,
     runs: [],
+    page_unavailable_reason: null,
     ...overrides,
   };
 }
@@ -132,6 +133,42 @@ describe('AlpacaHistoryPageComponent', () => {
     expect(within(line).getByText('$12.34')).toBeTruthy();
     expect(within(line).getByText('$0.07')).toBeTruthy();
     expect(line.textContent).toContain('3 sent · 2 filled · 1 cancelled');
+  });
+
+  it("wears the world each bot's run was in, never its lane's mode today (#2615)", async () => {
+    // Both rows sit on the Live lane: a Dry Run and an old Shadow rehearsal
+    // never wear its red "real money" chip.
+    await renderHistory(page({
+      rows: [
+        bot({ strategy_instance_id: 'dry-1', clerk_id: LIVE_CLERK, world: 'dry_run', world_label: 'DRY RUN · simulated cash' }),
+        bot({
+          strategy_instance_id: 'rehearsal', clerk_id: LIVE_CLERK, world: 'shadow',
+          world_label: 'SHADOW · simulated fills on your live account',
+        }),
+        bot({ strategy_instance_id: 'real', clerk_id: LIVE_CLERK, world: 'live', world_label: 'LIVE · real money' }),
+      ],
+    }));
+
+    const chip = (sid: string) =>
+      (screen.getByRole('link', { name: sid }).closest('tr') as HTMLElement).querySelector('.lane-mode-chip') as HTMLElement;
+    expect([chip('dry-1'), chip('rehearsal'), chip('real')].map((element) => element.textContent?.trim())).toEqual([
+      'DRY RUN · simulated cash', 'SHADOW · simulated fills on your live account', 'LIVE · real money',
+    ]);
+    expect(chip('dry-1').classList).toContain('lane-mode-chip--dry_run');
+    expect(chip('rehearsal').classList).toContain('lane-mode-chip--shadow');
+    expect(chip('real').classList).toContain('lane-mode-chip--live');
+  });
+
+  it("names a bot whose page cannot open, with why, and offers no dead link (#2614)", async () => {
+    const why = "This bot ran in the account's Shadow world, which the account's pages don't open, "
+      + 'so it has no page of its own. History keeps its record.';
+    await renderHistory(page({
+      rows: [bot({ strategy_instance_id: 'sh-dv-spy-0916', clerk_id: LIVE_CLERK, world: 'shadow', page_unavailable_reason: why })],
+    }));
+
+    expect(screen.queryByRole('link', { name: 'sh-dv-spy-0916' })).toBeNull();
+    const line = screen.getByText('sh-dv-spy-0916').closest('tr') as HTMLElement;
+    expect(within(line).getByText(why)).toBeTruthy();
   });
 
   it('names each account in the filter with its mode worded', async () => {

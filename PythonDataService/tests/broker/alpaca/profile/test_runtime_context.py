@@ -8,12 +8,13 @@ operator's ledger is sealed over that exact encoding.
 
 from __future__ import annotations
 
+import dataclasses
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import RETIRED_ENVELOPE_FIELDS, LiveEnvelopeValues
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
 from app.broker.alpaca.profile.errors import (
@@ -22,7 +23,6 @@ from app.broker.alpaca.profile.errors import (
     RevisionIncomplete,
 )
 from app.broker.alpaca.profile.runtime_context import (
-    _INTEGER_ENVELOPE_FIELDS,
     LIVE_ENVELOPE_FIELDS,
     PAPER_ALLOWANCE_SETTINGS_FIELDS,
     is_exactly_int,
@@ -40,8 +40,6 @@ from tests.broker.alpaca.profile.conftest import (
 _LIVE_SETTINGS_KWARGS = {
     "live_loss_fraction": 0.02,
     "live_loss_usd": 500.0,
-    "live_shadow_sessions": 5,
-    "live_arming_max_sessions": 20,
     "live_xh_entry_bps": 10.0,
     "live_xh_exit_bps": 12.5,
 }
@@ -238,10 +236,10 @@ def test_the_integer_predicate_agrees_with_the_sealed_record_validator(
     """Parity test for the duplicate named in ``runtime_context.is_exactly_int``.
 
     Canonical implementation: ``app/broker/alpaca/clerk/live_arming.py::_is_int``.
-    The resolver restates it rather than importing it, because ``live_arming``
-    drags ``app.lean_sidecar.trading_calendar`` and the market-calendar
-    dependency onto the credential-resolution path. This pins the two together
-    so the restatement cannot drift (CLAUDE.md guiding philosophy #5).
+    The resolver restates it rather than importing it, so the historical
+    arming-record module stays off the credential-resolution path. This pins
+    the two together so the restatement cannot drift (CLAUDE.md guiding
+    philosophy #5).
     """
     from app.broker.alpaca.clerk.live_arming import _is_int
 
@@ -289,7 +287,7 @@ def test_a_stale_live_value_in_the_environment_cannot_reach_a_paper_revision(
     )
 
     assert context.settings.live_loss_usd is None
-    assert context.settings.live_shadow_sessions is None
+    assert not hasattr(context.settings, "live_shadow_sessions")
     assert context.live_envelope is None
 
 
@@ -316,7 +314,7 @@ def test_a_paper_revisions_own_allowances_bind_the_two_settings_and_nothing_else
     assert context.settings.live_xh_entry_bps == 12.5
     assert type(context.settings.live_xh_exit_bps) is float
     assert context.settings.live_xh_exit_bps == 7.0
-    for absent in ("live_loss_fraction", "live_loss_usd", "live_shadow_sessions", "live_arming_max_sessions"):
+    for absent in ("live_loss_fraction", "live_loss_usd"):
         assert getattr(context.settings, absent) is None, absent
     assert ExtendedHoursAllowances.from_settings(context.settings) == ExtendedHoursAllowances(
         entry_bps=Decimal("12.5"), exit_bps=Decimal("7.0")
@@ -432,14 +430,31 @@ def test_a_revision_cannot_supply_deployment_endpoints_or_a_clerk_directory(
         )
 
 
-def test_the_integer_envelope_fields_are_derived_from_the_dataclass() -> None:
-    # A hand-listed int/float split would drift silently the next time a field
-    # is added or retyped, and drift here changes the sha every historical
-    # arming record is sealed over.
-    assert frozenset(
-        {"shadow_sessions", "arming_max_sessions"}
-    ) == _INTEGER_ENVELOPE_FIELDS
-    assert set(LIVE_ENVELOPE_FIELDS) >= _INTEGER_ENVELOPE_FIELDS
+def test_the_whole_number_fields_are_the_dataclasses_integer_fields() -> None:
+    # The retired counts are the only fields type-checked as ``int``; a drift
+    # from the dataclass would change the sha every historical arming record
+    # is sealed over.
+    integer_fields = {
+        field.name for field in dataclasses.fields(LiveEnvelopeValues) if "int" in str(field.type)
+    }
+    assert integer_fields == set(RETIRED_ENVELOPE_FIELDS)
+    assert set(LIVE_ENVELOPE_FIELDS) >= integer_fields
+
+
+@pytest.mark.parametrize("field", RETIRED_ENVELOPE_FIELDS)
+def test_a_historical_session_count_below_one_is_refused(
+    field: str,
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    # No setting holds the retired counts, so the envelope's own domain table
+    # is what refuses one out of range.
+    with pytest.raises(RevisionIncomplete, match=f"its {field} is not at least 1"):
+        resolve_runtime_context(
+            endpoint_mode="live",
+            credential_slot="default",
+            live_envelope={**COMPLETE_ENVELOPE, field: 0},
+            environment=only_default_slot_injected,
+        )
 
 
 def test_an_endpoint_mode_that_is_neither_paper_nor_live_is_refused(
@@ -493,5 +508,4 @@ def test_current_four_field_profile_ignores_stale_session_environment(only_defau
     monkeypatch.setenv("ALPACA_LIVE_ARMING_MAX_SESSIONS", "99")
     context = resolve_runtime_context(endpoint_mode="live", credential_slot="default", live_envelope=monetary, environment=only_default_slot_injected)
     assert context.live_envelope.to_mapping() == monetary
-    assert context.settings.live_shadow_sessions is None
-    assert context.settings.live_arming_max_sessions is None
+    assert not {"live_shadow_sessions", "live_arming_max_sessions"} & set(type(context.settings).model_fields)

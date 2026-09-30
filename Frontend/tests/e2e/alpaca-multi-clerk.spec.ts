@@ -81,7 +81,6 @@ const paperAccount = {
   portfolio_value: 10_000,
   long_market_value: 0,
   short_market_value: 0,
-  pattern_day_trader: false,
   trading_blocked: false,
   account_blocked: false,
   created_at_ms: null,
@@ -214,15 +213,15 @@ async function expectDeployOpen(page: Page): Promise<void> {
 }
 
 /** The account's Home, showing that account's own bots; the tabs are Home,
- * Activity and Settings, with no separate Bots tab (PRD #2560). */
+ * Activity, History (#2574) and Settings, with no separate Bots tab (PRD #2560). */
 async function expectHomeRoster(page: Page): Promise<void> {
-  const home = page.getByRole('main', { name: 'Home' });
+  const home = page.getByRole('region', { name: 'Home' });
   await expect(home.getByRole('heading', { name: 'Bots', exact: true })).toBeVisible();
   await expect(home).toContainText('spy-ema-20260929-0931');
   await expect(home).toContainText('spy-ema-20260925-1402');
   await expect(
     page.getByRole('navigation', { name: 'Account sections' }).getByRole('link'),
-  ).toHaveText(['Home', 'Activity', 'Settings']);
+  ).toHaveText(['Home', 'Activity', 'History', 'Settings']);
 }
 
 test.describe('Alpaca multi-clerk frontend cutover', () => {
@@ -261,7 +260,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await deskLink.click();
 
     await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}$`));
-    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Home' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Deploy a bot', exact: true })).toHaveAttribute(
       'href',
       `${PAPER_WORKSPACE}/deploy`,
@@ -345,7 +344,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await page.getByRole('navigation', { name: 'Account sections' })
       .getByRole('link', { name: 'Home', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${PAPER_WORKSPACE}$`));
-    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Home' })).toBeVisible();
   });
 
   test('opens the live gallery stream with the exact clerk and account identity', async ({ page }) => {
@@ -361,7 +360,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await page.goto(`${PAPER_WORKSPACE}/gallery`);
 
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}?view=wall`);
-    await expect(page.getByRole('main', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Home' })).toBeVisible();
     await expect(page.getByRole('radio', { name: 'Wall' })).toBeChecked();
     await expect.poll(() => ({
       snapshot: allRequests.some(

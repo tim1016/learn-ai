@@ -105,7 +105,7 @@ def fold_exit_terms(conn: sqlite3.Connection, sid: str, terms: ExitTerms) -> Non
 
 
 def upgrade_exit_terms(repo: ClerkSqliteRepository, policy_for: Callable[[str], ProgramLegPolicy]) -> None:
-    """One explicit legacy upgrade, after the account's arming seal was refreshed."""
+    """One explicit legacy upgrade, priced per bot by ``policy_for``."""
     from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 
     if repo.exit_terms_upgrade_completed():

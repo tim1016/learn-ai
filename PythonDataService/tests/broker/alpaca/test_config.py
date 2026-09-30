@@ -27,15 +27,15 @@ from app.broker.alpaca.config import (
 _LIVE_REQUIRED = {
     "live_loss_fraction": 0.02,
     "live_loss_usd": 500.0,
-    "live_shadow_sessions": 5,
-    "live_arming_max_sessions": 20,
     "live_xh_entry_bps": 10.0,
     "live_xh_exit_bps": 10.0,
 }
-# The same six values as an envelope, so a domain row can be tampered with one
-# field at a time on both sides of the parity test below.
+# The same values as a historical six-value envelope, so a domain row can be
+# tampered with one field at a time on both sides of the parity test below.
 _IN_DOMAIN_ENVELOPE = LiveEnvelopeValues(
-    **{name.removeprefix("live_"): value for name, value in _LIVE_REQUIRED.items()}
+    **{name.removeprefix("live_"): value for name, value in _LIVE_REQUIRED.items()},
+    shadow_sessions=5,
+    arming_max_sessions=20,
 )
 
 
@@ -129,7 +129,7 @@ def test_paper_mode_ignores_live_values_entirely() -> None:
 @pytest.mark.parametrize(
     ("field", "bad"),
     [("live_loss_fraction", 0.0), ("live_loss_fraction", 1.0), ("live_loss_usd", 0.0),
-     ("live_shadow_sessions", 0), ("live_arming_max_sessions", 0), ("live_xh_entry_bps", -1.0)],
+     ("live_xh_entry_bps", -1.0)],
 )
 def test_live_values_have_domain_bounds(field: str, bad: float | int) -> None:
     values = dict(_LIVE_REQUIRED)
@@ -211,8 +211,6 @@ _JUST_OUTSIDE: tuple[tuple[str, float], ...] = (
     ("loss_usd", 0.0),
     ("loss_usd", float("inf")),
     ("loss_usd", float("nan")),
-    ("shadow_sessions", 0),
-    ("arming_max_sessions", 0),
     ("xh_entry_bps", -1.0),
     ("xh_entry_bps", 10_000.0),
     ("xh_exit_bps", -1.0),
@@ -249,7 +247,15 @@ def test_the_envelope_domains_admit_every_value_the_settings_load() -> None:
     assert envelope_domain_violation(LiveEnvelopeValues.from_settings(settings)) is None
 
 
-def test_live_current_configuration_requires_no_retired_session_counts() -> None:
-    current = {key: value for key, value in _LIVE_REQUIRED.items() if key not in {"live_shadow_sessions", "live_arming_max_sessions"}}
-    configured = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **current)
+def test_live_configuration_holds_no_retired_session_count() -> None:
+    """#2629: the arming ceremony's two counts are not settings any more."""
+    configured = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
     assert configured.is_live
+    assert not {"live_shadow_sessions", "live_arming_max_sessions"} & set(AlpacaSettings.model_fields)
+
+
+@pytest.mark.parametrize("field", ["shadow_sessions", "arming_max_sessions"])
+def test_a_sealed_records_retired_session_counts_keep_their_domain(field: str) -> None:
+    """Only a historical sealed record carries them now, and it still verifies them."""
+    violation = envelope_domain_violation(replace(_IN_DOMAIN_ENVELOPE, **{field: 0}))
+    assert violation is not None and violation.startswith(field)

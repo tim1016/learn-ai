@@ -262,6 +262,11 @@ class ClerkProjection:
     runs: tuple[ProjectedRun, ...]
     commands: tuple[ProjectedCommand, ...]
     operations: tuple[ProjectedOperation, ...]
+    # Every still-working order of this bot, as a STOP proof and Clear's
+    # commit-time check count them (``order_evidence.is_working_order``): all
+    # its orders, not only those under the bounded ``operations`` window.
+    # Empty for an account snapshot.
+    working_order_refs: tuple[str, ...]
     positions: tuple[ProjectedPosition, ...]
     holds: tuple[ProjectedHold, ...]
     uncertainties: tuple[ProjectedUncertainty, ...]

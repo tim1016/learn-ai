@@ -22,11 +22,9 @@ import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_CASH_EXCEEDED,
-    LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
     OBSERVATION_MAX_AGE_MS,
     LiveEnvelopeGate,
-    LiveEnvelopeValues,
 )
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
@@ -206,36 +204,6 @@ def test_unobservable_facts_refuse_closed(
             reference_price=reference_price,
         )
     assert _refusal(exc_info) == LIVE_ENVELOPE_UNOBSERVED
-
-
-def test_a_sealed_envelope_that_disagrees_with_the_environment_refuses(
-    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
-) -> None:
-    sid, run_id = active_instance
-    other = LiveEnvelopeValues(**{**TEST_ENVELOPE_VALUES.to_mapping(), "loss_usd": 4_999.0})
-    with pytest.raises(AdmissionBlockedError) as exc_info:
-        _accept(
-            envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=_gate(sealed=other)
-        )
-    assert _refusal(exc_info) == LIVE_ENVELOPE_DISAGREEMENT
-
-
-def test_a_disagreement_is_named_even_when_nothing_has_been_observed(
-    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
-) -> None:
-    """The ordering is load-bearing: a disagreed envelope is not 'unobserved'.
-
-    Both facts hold at once here, and only one of them tells the operator what
-    to do — re-arm, rather than wait for the sync to catch up.
-    """
-    sid, run_id = active_instance
-    other = LiveEnvelopeValues(**{**TEST_ENVELOPE_VALUES.to_mapping(), "loss_usd": 4_999.0})
-    never_observed = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=other, custody_is_simulated=True)
-    with pytest.raises(AdmissionBlockedError) as exc_info:
-        _accept(
-            envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=never_observed
-        )
-    assert _refusal(exc_info) == LIVE_ENVELOPE_DISAGREEMENT
 
 
 def test_no_envelope_means_no_envelope_check(

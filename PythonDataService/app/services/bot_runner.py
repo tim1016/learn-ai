@@ -148,7 +148,11 @@ from app.services.bot_run_evidence import (
     BotRunEvidenceService,
 )
 from app.services.bot_run_terminal import (
+    FAILED_LAUNCH_STOP,
+    OPERATOR_STOP,
     BotRunTerminalRecorder,
+    StopCause,
+    StopKind,
     StopProver,
     prove_end_stop_outcome,
     prove_terminal_stop_outcome,
@@ -192,7 +196,6 @@ from app.services.bot_start_admission import (
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
 from app.services.go_live_hold import GoLiveHoldState
-from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_replay_proof import RunReplayProofService, RunReplayUnavailableError
@@ -487,7 +490,6 @@ class BotTaskRegistry:
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
-        arming_fact: ArmingFactResolver = live_arming_admission_fact,
         validation_fact: ValidationFactResolver | None = None,
         lane_start_gates: tuple[LaneStartGate, ...] = (),
     ) -> None:
@@ -565,7 +567,6 @@ class BotTaskRegistry:
             activate=self._activate_start_binding,
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
-            arming_fact=arming_fact,
         )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
@@ -896,7 +897,7 @@ class BotTaskRegistry:
                         updated_by=_UPDATED_BY,
                         reason=ACTIVATION_FAILED_STOP_REASON_CODE,
                         clerk_stop_already_committed=True,
-                        outcome_reason_code=ACTIVATION_FAILED_STOP_REASON_CODE,
+                        cause=FAILED_LAUNCH_STOP,
                     )
                 except Exception:
                     logger.error(
@@ -1152,7 +1153,7 @@ class BotTaskRegistry:
         updated_by: str,
         reason: str | None,
         clerk_stop_already_committed: bool,
-        outcome_reason_code: str = "OPERATOR_STOP",
+        cause: StopCause = OPERATOR_STOP,
     ) -> BotStatusView:
         """Serialized STOP implementation with terminal Clerk custody proof.
 
@@ -1187,18 +1188,16 @@ class BotTaskRegistry:
         if await self._stop_process_locked(
             managed, reason=reason, clerk_stop_already_committed=clerk_stop_already_committed
         ):
-            # ``outcome_reason_code`` names who ended the run (#2559): the
-            # failed-launch compensation passes the activation-failure code, an
-            # operator's stop keeps OPERATOR_STOP. It is an internal flag, never
-            # derived from operator-typed prose. In trade mode the Clerk's custody
-            # proof replaces it: that proof (flat, carryover kept, flatten
-            # required) drives the panel's next step, and one reason slot cannot
-            # carry both, so a trade-mode failed launch still reads as a stop
-            # (#2667).
+            # ``cause`` names who ended the run (#2559, #2667): an operator's
+            # Stop, or the failed-launch compensation. Its kind is recorded
+            # whatever the mode; in trade mode the reason is the Clerk's custody
+            # proof, which drives the panel's next step.
             outcome, canary_rollback = await self._prove_stop(
-                managed.binding, prove_terminal_stop_outcome, untraded_outcome=outcome_reason_code
+                managed.binding, prove_terminal_stop_outcome, untraded_outcome=cause.untraded_reason
             )
-            await self._record_stop(managed.binding, reason_code=outcome, canary_rollback=canary_rollback)
+            await self._record_stop(
+                managed.binding, kind=cause.kind, reason_code=outcome, canary_rollback=canary_rollback,
+            )
         return self.status(broker, strategy_instance_id)
 
     async def _stop_process_locked(
@@ -1295,12 +1294,14 @@ class BotTaskRegistry:
         self,
         binding: BrokerBotBinding,
         *,
+        kind: StopKind,
         reason_code: str,
         canary_rollback: CanaryRollbackDecision | None,
     ) -> None:
         """Replace the provisional stop with its proven outcome; then the run's receipt is owed and its authority released."""
         self._terminal.replace_provisional_stop(
             binding,
+            kind=kind,
             reason_code=reason_code,
             canary_rollback=canary_rollback,
         )
@@ -1760,7 +1761,9 @@ class BotTaskRegistry:
             )
             return
         if current.run_id == binding.run_id:
-            await self._record_stop(binding, reason_code=SCHEDULED_END_REASON_CODE, canary_rollback=canary_rollback)
+            await self._record_stop(
+                binding, kind="STOPPED", reason_code=SCHEDULED_END_REASON_CODE, canary_rollback=canary_rollback,
+            )
             return
         logger.info(
             "A later run of the bot began before its stop at its end was proven; the proof is recorded as the "

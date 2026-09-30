@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.active_runtime import (
     reconnecting_refusal,
     unavailable_runtime,
 )
-from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
 from app.broker.alpaca.market_liveness import (
     get_market_liveness_consumer,
     reset_market_liveness_consumer_for_testing,
@@ -263,25 +262,6 @@ async def test_a_reconnect_that_breaks_records_the_apply_it_held_as_refused(
     assert not selection.apply_requested
     assert selection.last_apply_outcome == "refused"
     assert selection.last_apply_refusal_reason == final.startup_failure.recovery
-
-
-async def test_unreadable_arming_evidence_during_acknowledgement_closes_custody(
-    service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    profile = paper_profile(service)
-    bound = _bound(profile.profile.profile_id, 0)
-    runtime = ActiveClerkRuntime(authority_kind="sqlite", clerk=object(), account_id="PA-TEST")
-    runtime.close = AsyncMock()
-
-    def unreadable(**_kwargs: object) -> None:
-        raise LiveArmingInvalid("malformed arming ledger")
-
-    monkeypatch.setattr(service, "acknowledge_effective", unreadable)
-    result = await acknowledge_runtime_binding(bound=bound, runtime=runtime, service_factory=lambda: service)
-
-    runtime.close.assert_awaited_once()
-    assert result.clerk is None
-    assert result.startup_failure.reason_code == "LIVE_ARMING_LEDGER_INVALID"
 
 
 async def test_failed_startup_closes_custody_before_releasing_installation_lock(

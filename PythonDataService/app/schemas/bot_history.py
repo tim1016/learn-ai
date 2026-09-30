@@ -113,6 +113,10 @@ class BotHistoryBot(BaseModel):
     money_scope_note: str | None
     #: Newest first.
     runs: tuple[BotHistoryRun, ...]
+    #: Why the bot's own page cannot open from its account's workspace;
+    #: ``None`` when it can. A bot of the account's other world is kept in a
+    #: database that workspace does not read, so only History shows it.
+    page_unavailable_reason: str | None
 
 
 class BotHistoryGap(BaseModel):

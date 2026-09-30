@@ -34,8 +34,6 @@ class _AccountClient:
 _LIVE_ENVELOPE = {
     "live_loss_fraction": 0.02,
     "live_loss_usd": 500.0,
-    "live_shadow_sessions": 5,
-    "live_arming_max_sessions": 20,
     "live_xh_entry_bps": 10.0,
     "live_xh_exit_bps": 10.0,
 }
@@ -71,13 +69,10 @@ def test_from_alpaca_account_maps_every_field(
     # (ADR 0059 D7). Values are the sanitized fixture's own.
     assert snapshot.multiplier == 4.0
     assert snapshot.regt_buying_power == 200000.0
-    assert snapshot.daytrading_buying_power is None  # absent from the fixture
     assert snapshot.maintenance_margin == 0.0
     assert snapshot.initial_margin == 0.0
     assert snapshot.sma == 100000.0
     assert snapshot.last_equity == 100000.0
-    # pattern_day_trader is absent from the real fixture; adapter returns None.
-    assert snapshot.pattern_day_trader is None
     assert snapshot.trading_blocked is False
     assert snapshot.account_blocked is False
     assert snapshot.created_at_ms == rfc3339_to_ms("2026-07-22T00:40:26.776619Z")
@@ -100,28 +95,6 @@ def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) ->
         from_alpaca_account(payload, account_mode="paper", observed_at_ms=_OBSERVED).created_at_ms
         is None
     )
-
-
-def test_missing_pattern_day_trader_preserves_unknown(
-    load_alpaca_fixture: AlpacaFixtureLoader,
-) -> None:
-    # The real fixture already lacks pattern_day_trader; adapter must return None.
-    payload = dict(load_alpaca_fixture("account", "account.json"))
-    payload.pop("pattern_day_trader", None)
-
-    snapshot = from_alpaca_account(payload, account_mode="paper", observed_at_ms=_OBSERVED)
-
-    assert snapshot.pattern_day_trader is None
-
-
-def test_malformed_pattern_day_trader_is_rejected(
-    load_alpaca_fixture: AlpacaFixtureLoader,
-) -> None:
-    payload = dict(load_alpaca_fixture("account", "account.json"))
-    payload["pattern_day_trader"] = "false"
-
-    with pytest.raises(TypeError, match="boolean or null"):
-        from_alpaca_account(payload, account_mode="paper", observed_at_ms=_OBSERVED)
 
 
 @pytest.mark.parametrize(

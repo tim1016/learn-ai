@@ -122,7 +122,14 @@ async def test_the_whole_cutover_and_its_rollback(
 ) -> None:
     configured = AlpacaSettings(_env_file=None)
     current_sha = LiveEnvelopeValues.from_settings(configured).sha
-    legacy_sha = LiveEnvelopeValues(**{field: getattr(configured, f"live_{field}") for field in ("loss_fraction", "loss_usd", "shadow_sessions", "arming_max_sessions", "xh_entry_bps", "xh_exit_bps")}).sha
+    # The imported revision keeps the legacy six-value identity; the two
+    # retired counts come from the legacy environment itself, since no setting
+    # holds them any more (#2629).
+    legacy_sha = LiveEnvelopeValues(
+        **{field: getattr(configured, f"live_{field}") for field in ("loss_fraction", "loss_usd", "xh_entry_bps", "xh_exit_bps")},
+        shadow_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_SHADOW_SESSIONS"]),
+        arming_max_sessions=int(LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_ARMING_MAX_SESSIONS"]),
+    ).sha
 
     # 1. Before the import: no profiles, so the environment is still the only
     #    description of this worker and it boots from it unchanged.
@@ -235,7 +242,9 @@ async def test_the_whole_cutover_and_its_rollback(
     assert rolled_back.context.settings.live_loss_usd == float(
         LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_LOSS_USD"]
     )
-    assert rolled_back.context.settings.live_arming_max_sessions == int(
+    # The retired count is no setting any more (#2629); the stored revision's
+    # own value reaches the envelope, never the drifted environment's.
+    assert rolled_back.context.live_envelope.arming_max_sessions == int(
         LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_ARMING_MAX_SESSIONS"]
     )
     complained = [

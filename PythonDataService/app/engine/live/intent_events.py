@@ -64,10 +64,10 @@ class IntentEventType(StrEnum):
     INTENT_NOT_ACCEPTED = "INTENT_NOT_ACCEPTED"
     SUBMIT_UNCERTAIN_HALTED = "SUBMIT_UNCERTAIN_HALTED"
     ADOPTED_BROKER_ORDER = "ADOPTED_BROKER_ORDER"
-    # ADR 0009 § 11 — audit-only sizing decision record. Joins each broker
-    # fill back to the live_config.sizing rule that produced its order, so
-    # the Sizing card's per-trade audit list can render the rule, intended
-    # qty, reference price, and sizing_provenance at resolve time.
+    # ADR 0009 § 11 — audit-only sizing decision record. It joined each
+    # broker fill back to the live_config.sizing rule that produced its
+    # order. Nothing emits it any more; the value stays so persisted WALs
+    # that carry it still fold.
     SIZING_RESOLVED = "SIZING_RESOLVED"
     # PR 3 / operator-notice — drop audit record. Emitted by the bar loop at
     # each submission gate that discards intents silently today.

@@ -3,8 +3,10 @@
 
 **Current authorization (2026-09-27, PRD #2540 / #2547):** after explicit Budget
 authority cutover, Live deployment requires its own reviewed budget and consent.
-Standalone arming is retired. This note's older arming descriptions document the
-pre-cutover historical reader; they are not a current operator workflow.
+Standalone arming is retired, and since #2629 the per-instance arming gate, its
+refresh, the envelope seal and the Start-time arming fact are deleted too: the
+live authority composes the risk envelope alone. This note's older arming
+descriptions are history, not a current operator workflow.
 
 **Status:** canonical for ADR 0059 slice 7 (2026-09-09). Lineage: live.
 
@@ -121,12 +123,14 @@ startable. The live verdict's arming count reads the same rule: a
 - `app/broker/alpaca/clerk/authority_reconnect.py::run_authority_reconnect` —
   the capped-backoff retry of the boot's own steps a reconnecting boot runs
   while the lane serves.
-- `app/broker/alpaca/clerk/live_arming_gate.py` — `ArmingSnapshot` and
-  `ArmingGate`, the per-instance cache one ledger read fills.
 - `app/broker/alpaca/clerk/sqlite/live_envelope_sync.py` — every 15 s, one
-  ledger read seals the envelope and publishes the snapshot; the runner's
-  sealed bindings arrive through an injected callable (`instance_seals`).
-- `app/services/live_arming_admission.py` — the arming fact Start and Resume read.
+  account reading judges the envelope, and a mid-session mode disagreement
+  withdraws it (`account_mode_disagreed`, which the live verdict reads).
+- The arming ledger is handed to the composition only as history: the one-time
+  exit-terms upgrade prices a bot armed before exit terms existed from its own
+  arming. Until #2629, `live_arming_gate.py`, `sqlite/arming_refresh.py` and
+  `services/live_arming_admission.py` held a per-instance arming snapshot and
+  a Start-time arming fact; they are deleted.
 
 ## The ENTER admission chain
 
@@ -247,7 +251,6 @@ authority; the second is already refused by `injection_permitted`).
   instance) lands — a named follow-up slice, deferred by the owner on
   2026-09-09. Rehearsal is optional, so this blocks nothing.
 - Graduation has no reversal (R1).
-- The arming gate is a 15 s cache of local evidence (R5).
 - The halt writes no desired state (R10) — owner question E1.
 - A refused live boot labels its compat surfaces "paper" (`custody_world_or_paper`).
 - A human trading the live account withdraws day P&L to unknown for the day

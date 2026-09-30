@@ -85,7 +85,6 @@ class _LiveBroker:
             long_market_value=0.0,
             short_market_value=0.0,
             last_equity=self.cash if self.last_equity_known else None,
-            pattern_day_trader=False,
             trading_blocked=False,
             account_blocked=False,
             created_at_ms=self.now_ms - 1_000,

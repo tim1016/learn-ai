@@ -7,16 +7,18 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.account_authority import live_account_id_for_shadow_account
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
-from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.alpaca.config import AlpacaSettings
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     DeploymentReadiness,
     LossHoldState,
     ModeAgreement,
 )
+
+LIVE_MODE_DISAGREEMENT = BrokerAccountModeDisagreement.reason_code
 
 
 def observe_loss_hold(runtime: ActiveClerkRuntime | None) -> LossHoldState:
@@ -78,9 +80,9 @@ def alpaca_live_verdict(
         account_id = failure.account_id
     refusal = None if failure is None else failure.reason_code
     authority = "not_installed" if runtime is None else runtime.authority_kind
-    gate = None if runtime is None or runtime.clerk is None else runtime.clerk.live_arming
-    if ((gate is not None and gate.invalid_reason_code == LIVE_MODE_DISAGREEMENT)
-            or (runtime is not None and runtime.envelope_sync is not None and runtime.envelope_sync.account_mode_disagreed)):
+    # The envelope sync is the one observer of a mid-session mode
+    # disagreement; the arming gate that also held it is retired (#2629).
+    if runtime is not None and runtime.envelope_sync is not None and runtime.envelope_sync.account_mode_disagreed:
         refusal = LIVE_MODE_DISAGREEMENT
     agreement: ModeAgreement = (
         "disagreed" if refusal == LIVE_MODE_DISAGREEMENT else

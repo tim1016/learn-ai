@@ -19,9 +19,9 @@ needed, and none could be trusted across a suspend or a wall-clock step:
   commits ``RUN_STOPPED`` (reason :data:`RUNNER_GONE_REASON`) for every
   ACTIVE run whose owner is done or has been garbage-collected. A live owner
   is never retired, whatever any clock says.
-* An ACTIVE run with **no** owner -- one admitted by a path with no runner,
-  such as the published ``/runs/start`` custody route -- is retired fail
-  closed after one pass's grace: the first pass that sees it unowned notes
+* An ACTIVE run with **no** owner -- one admitted by a path with no runner
+  (the raw ``/runs/start`` custody route was one until #2675 deleted it) --
+  is retired fail closed after one pass's grace: the first pass that sees it unowned notes
   it, and the next pass still seeing it unowned retires it (reason
   :data:`NO_RUNNER_REASON`). Runs admitted before a Clerk restart never get
   here: ``recover()`` already retired every one of them.
