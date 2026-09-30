@@ -15,6 +15,9 @@
       <div><dt>Strategy</dt><dd>{{ strategyLabel() }}</dd></div>
       <div><dt>Window</dt><dd>{{ windowLabel() }}</dd></div>
     </dl>
+    @if (selectedStrategy()?.experimental_notice; as notice) {
+      <app-experimental-notice [notice]="notice" />
+    }
   </section>
 } @else {
   <aside class="config-rail" aria-label="Strategy configuration">
@@ -53,9 +56,12 @@
           <option
             [value]="strategy.name"
             [selected]="strategy.name === selectedStrategyName()"
-          >{{ strategy.display_name }}</option>
+          >{{ strategy.display_name }}{{ strategy.experimental_notice ? ' — ' + strategy.experimental_notice : '' }}</option>
         }
       </select>
+      @if (selectedStrategy()?.experimental_notice; as notice) {
+        <app-experimental-notice [notice]="notice" />
+      }
     </section>
 
     <details class="advanced">

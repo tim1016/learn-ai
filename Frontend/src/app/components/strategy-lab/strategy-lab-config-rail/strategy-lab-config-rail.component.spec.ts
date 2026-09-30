@@ -323,4 +323,25 @@ describe("StrategyLabConfigRailComponent", () => {
     fixture.detectChanges();
     expect(advanced.textContent).toContain("LEAN launcher");
   });
+
+  it("says Deployment Validation is experimental where it is listed, chosen and summarised (#2607)", async () => {
+    const notice = "Experimental validation only — not a trading strategy";
+    const dv: StrategyInfo = { ...STRATEGY, name: "deployment_validation", display_name: "Deployment Validation", experimental_notice: notice };
+    const fixture = await createRail();
+    fixture.componentRef.setInput("strategies", [STRATEGY, dv]);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const options = [...root.querySelectorAll("#strategy-picker option")].map((option) => option.textContent?.trim());
+    expect(options).toEqual(["EMA crossover", `Deployment Validation — ${notice}`]);
+    expect(root.querySelector("[role='note']")).toBeNull();
+
+    fixture.componentRef.setInput("selectedStrategyName", dv.name);
+    fixture.detectChanges();
+    expect(root.querySelector("[role='note']")?.textContent).toContain(notice);
+
+    fixture.componentRef.setInput("collapsed", true);
+    fixture.detectChanges();
+    expect(root.querySelector(".config-strip [role='note']")?.textContent).toContain(notice);
+  });
 });
