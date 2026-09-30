@@ -1,4 +1,5 @@
 @use '../../../styles/filled-controls' as *;
+@use '../../../styles/popover-panel' as *;
 
 // Confirm fills its column: the review at the top, the Deploy button at the
 // bottom, level with the end of the tallest step beside it.
@@ -100,28 +101,7 @@
 
 // The check list, over the page rather than in the column.
 .confirm-step__checks {
-  width: min(40rem, calc(100vw - 2rem));
-  max-height: min(44rem, calc(100vh - 4rem));
-  padding: var(--space-4);
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  box-shadow: 0 1.25rem 3rem rgb(0 0 0 / 0.55);
-  overflow: auto;
-
-  &::backdrop { background: rgb(0 0 0 / 0.45); }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-
-    h3 { font-size: var(--fs-md); }
-    button { @include soft-button; }
-  }
+  @include popover-panel;
 
   > p { margin-top: var(--space-3); color: var(--text-secondary); font-size: var(--fs-sm); }
 }

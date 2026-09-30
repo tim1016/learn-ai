@@ -1,0 +1,28 @@
+<div class="bot-end-editor">
+  <div class="bot-end-editor__when">
+    <label>
+      <span>End date</span>
+      <input #date type="date" [formField]="endForm.date" [attr.aria-invalid]="endForm.time().invalid()" />
+    </label>
+    <label>
+      <span>End time <small>· your time</small></span>
+      <input type="time" [formField]="endForm.time" [attr.aria-invalid]="endForm.time().invalid()" />
+    </label>
+  </div>
+  @if (endForm.time().invalid()) {
+    <p class="bot-end-editor__error" role="alert">{{ endForm.time().errors()[0]?.message }}</p>
+  }
+
+  <label class="bot-end-editor__check">
+    <input #noEnd type="checkbox" [formField]="endForm.noEnd" />
+    <span>No end — run until I stop it</span>
+  </label>
+
+  @if (keepOffered()) {
+    <fieldset class="bot-end-editor__action">
+      <legend>At its end</legend>
+      <label><input type="radio" value="SELL" [formField]="endForm.action" /> Sell its shares</label>
+      <label><input type="radio" value="KEEP" [formField]="endForm.action" /> Keep its shares</label>
+    </fieldset>
+  }
+</div>

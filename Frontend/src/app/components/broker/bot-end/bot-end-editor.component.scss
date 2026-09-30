@@ -1,0 +1,72 @@
+@use '../../../styles/eyebrow-heading' as *;
+@use '../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.bot-end-editor {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.bot-end-editor__when {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: var(--space-2);
+
+  label {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+
+    > span { @include field-label; }
+    small { color: var(--text-subtle); font-size: inherit; font-weight: inherit; }
+  }
+
+  input { @include filled-field; }
+}
+
+.bot-end-editor__error {
+  margin: 0;
+  color: var(--bear);
+  font-size: var(--fs-xs);
+}
+
+.bot-end-editor__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+
+  input { margin: 0; accent-color: var(--accent); }
+}
+
+.bot-end-editor__action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  legend {
+    @include eyebrow-heading;
+    margin-bottom: var(--space-2);
+    padding: 0;
+  }
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+  }
+
+  input { margin: 0; accent-color: var(--accent); }
+
+  label:has(input:disabled) { color: var(--text-muted); cursor: not-allowed; }
+}
