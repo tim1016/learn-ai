@@ -26,4 +26,4 @@ def start_window_next_step(window: StartWindowFact, *, now_ms: int) -> str:
     """The owner's next step for ``window`` as judged at ``now_ms``, which sets the year rule of its words."""
     if window.next_open_ms is None:
         return "Start is allowed in the current session."
-    return f"Next Start or Resume window opens {et_when_words(window.next_open_ms, now_ms=now_ms)}."
+    return f"Next Start window opens {et_when_words(window.next_open_ms, now_ms=now_ms)}."
