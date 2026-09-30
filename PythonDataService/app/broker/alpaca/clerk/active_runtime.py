@@ -374,6 +374,34 @@ async def compose_repository_runtime(
             trade=ports.trade,
             intake=intake,
         )
+        # ADR 0059 D4: the envelope's own fixed cadence, for the same reason
+        # the stream-health hold sync below has one -- the reconcile loop's
+        # backoff reaches 300 s on failure, and a losing day must not wait
+        # that long to be judged. Unstarted here, like that sync:
+        # `start_background_taps()` is the one start seam.
+        # Shadow takes only reference cash from the real account. The shared
+        # simulated projection values its own custody with retained marks.
+        # Built before the facade, which asks it for a reading when an ENTER
+        # waits on executions newer than the last one (#2623).
+        envelope_sync = (
+            None
+            if live_envelope is None
+            else LiveEnvelopeSync(
+                repo=repository,
+                read=(
+                    guarded_read
+                    if envelope_read is None
+                    else guard_broker_read_port(envelope_read, intake=intake)
+                ),
+                envelope=live_envelope,
+                custody_read=guarded_read,
+                arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
+                arming_gate=arming_gate,
+                instance_seals=instance_seals,
+                simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
+                    if repository.account_id.startswith(("sim:", "shadow:")) else None),
+            )
+        )
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -386,6 +414,7 @@ async def compose_repository_runtime(
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
             live_arming=arming_gate,
+            entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -429,31 +458,6 @@ async def compose_repository_runtime(
         # persist a false account-wide hold on every boot. main.py starts
         # it via `start_background_taps()` once the provider exists.
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
-        # ADR 0059 D4: the envelope's own fixed cadence, for the same reason
-        # the hold sync has one -- the reconcile loop's backoff reaches 300 s
-        # on failure, and a losing day must not wait that long to be judged.
-        # Unstarted here too: `start_background_taps()` is the one start seam.
-        # Shadow takes only reference cash from the real account. The shared
-        # simulated projection values its own custody with retained marks.
-        envelope_sync = (
-            None
-            if live_envelope is None
-            else LiveEnvelopeSync(
-                repo=repository,
-                read=(
-                    guarded_read
-                    if envelope_read is None
-                    else guard_broker_read_port(envelope_read, intake=intake)
-                ),
-                envelope=live_envelope,
-                custody_read=guarded_read,
-                arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
-                arming_gate=arming_gate,
-                instance_seals=instance_seals,
-                simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
-                    if repository.account_id.startswith(("sim:", "shadow:")) else None),
-            )
-        )
         if not repository.account_id.startswith(("sim:", "shadow:")):
             fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read)
         if envelope_sync is not None:

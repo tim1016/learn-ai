@@ -21,7 +21,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl, risk_evidence_ready, risk_fill_sequence
+from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl, reading_covers_executions, risk_evidence_ready
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
@@ -36,6 +36,16 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS
 _NEXT_READING = f"The account is read again every {ENVELOPE_SYNC_INTERVAL_S:g} seconds."
 
 
+class AccountReadingBehindExecutions(AdmissionBlockedError):
+    """New exposure is refused because executions postdate the last account reading.
+
+    The refusal a newer reading can lift, so an ENTER refused this way waits
+    for one instead of being dropped (#2623, owner decision 2026-09-29). It is
+    judged before the equity, day P&L, fee, loss-limit and cash rules, so it
+    says nothing about them: the ENTER is judged whole again on the new reading.
+    """
+
+
 @dataclass(frozen=True)
 class RiskReadiness:
     observation: AccountObservation | None = None
@@ -44,6 +54,8 @@ class RiskReadiness:
     breach_cause: LossHoldCause | None = None
     # No limit is set at all: the fix is setting one, not waiting for evidence.
     limit_missing: bool = False
+    # The one refusal a newer account reading can lift (#2623).
+    reading_behind_executions: bool = False
 
     @property
     def allowed(self) -> bool:
@@ -89,8 +101,8 @@ def current_risk_readiness(
         ):
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
                 detail=f"The simulated account's session baseline or current market prices are out of date, so new entries wait. {_NEXT_READING}")
-        if observation.risk_fill_sequence != risk_fill_sequence(repo):
-            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
+        if not reading_covers_executions(repo, observation):
+            return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, reading_behind_executions=True,
                 detail=f"Executions changed after the last account reading, so new entries wait. {_NEXT_READING}")
         if observation.equity_usd is None:
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
@@ -119,11 +131,19 @@ def require_current_risk_admission(
         if decision.allowed:
             assert decision.observation is not None
             return decision.observation
-        envelope.withdraw()
+        # A reading behind executions stays published (#2623): every other
+        # ENTER, and a budget deploy, must meet the same refusal -- the one
+        # that waits -- not an "unobserved" one that drops it. Leaving it
+        # cannot admit anything, because every commitment re-runs this whole
+        # judgement, the execution watermark included, and that reading fails
+        # it until a newer one replaces it.
+        if not decision.reading_behind_executions:
+            envelope.withdraw()
         if decision.breach_cause is not None:
             cause = decision.breach_cause
             raise_account_hold(repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
                 evidence_refs=[f"day-pnl:{cause.day_start_ms}"], cause_facts=cause.to_mapping())
-        raise AdmissionBlockedError(CapabilityDecision(
+        refusal = AccountReadingBehindExecutions if decision.reading_behind_executions else AdmissionBlockedError
+        raise refusal(CapabilityDecision(
             allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=decision.reason_code, why=decision.detail,
         ))
