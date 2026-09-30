@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
@@ -29,6 +29,11 @@ type ReconciliationListener = Callable[[AccountReconciliationResult], object]
 # repair. A hook failure is isolated -- the lease stays revived and the next
 # boot scan remains the backstop.
 type LeaseRevivedHook = Callable[[], Awaitable[None]]
+# Awaited with the runs a pass retired because their in-process runner is
+# gone (#2369), so the runner settles those bots' own duty records now
+# instead of waiting for a restart (#2589). A hook failure is isolated --
+# the retirements stand and the next pass remains the backstop.
+type DutySettleHook = Callable[[Sequence[tuple[str, str]]], Awaitable[None]]
 # Renew the execution lease three times per TTL. This is a safety-margin
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
@@ -54,6 +59,7 @@ class ReconciliationSweep:
         intake: ReentrantAsyncLock | None = None,
         on_result: ReconciliationListener | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
+        on_duty_settle: DutySettleHook | None = None,
         pricing: RecoveryPricing,
         run_ownership: RunOwnership | None = None,
     ) -> None:
@@ -63,6 +69,7 @@ class ReconciliationSweep:
         self._run_ownership = run_ownership
         self._on_result = on_result
         self._on_lease_revived = on_lease_revived
+        self._on_duty_settle = on_duty_settle
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         # What the stuck-EXIT watchdog prices an extended-hours re-drive limit
@@ -90,6 +97,16 @@ class ReconciliationSweep:
         :meth:`start`, mirroring how the sweep itself is started late.
         """
         self._on_lease_revived = hook
+
+    def set_on_duty_settle(self, hook: DutySettleHook | None) -> None:
+        """Late-bind the post-pass duty-settle hook (#2589).
+
+        Same late-binding reason as :meth:`set_on_lease_revived`: the sweep
+        is constructed in the broker layer before the bot task registry
+        exists. The hook receives exactly the runs this sweep's passes retire
+        because their in-process runner is gone (#2369).
+        """
+        self._on_duty_settle = hook
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -384,6 +401,23 @@ class ReconciliationSweep:
             )
             if self._on_result is not None:
                 self._on_result(result)
+            if result.runner_gone_runs and self._on_duty_settle is not None:
+                try:
+                    await self._on_duty_settle(result.runner_gone_runs)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Isolated on purpose, like the lease-revival hook: the
+                    # retirements are already committed, and the next pass
+                    # re-hands any run whose settle failed.
+                    logger.error(
+                        "post-pass duty settle hook errored; the next pass remains the backstop",
+                        extra={
+                            "action": "reconcile_sweep_duty_settle_error",
+                            "account_id": self._repo.account_id,
+                        },
+                        exc_info=True,
+                    )
             return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
@@ -396,4 +430,9 @@ class ReconciliationSweep:
             return False
 
 
-__all__ = ["LeaseRevivedHook", "ReconciliationListener", "ReconciliationSweep"]
+__all__ = [
+    "DutySettleHook",
+    "LeaseRevivedHook",
+    "ReconciliationListener",
+    "ReconciliationSweep",
+]

@@ -106,6 +106,13 @@ LEASE_REVIVAL_PROVENANCE = RecoverySweepProvenance(
     desired_state_reason="interrupted_by_authority_outage",
 )
 
+SWEEP_SETTLE_PROVENANCE = RecoverySweepProvenance(
+    updated_by="bot_runner_duty_settle",
+    interrupted_reason_code="INTERRUPTED_BY_RUNNER_GONE",
+    interrupted_reason="reconciliation_sweep_settled_dead_run",
+    desired_state_reason="settled_by_reconciliation_sweep",
+)
+
 
 class BotBootRecovery:
     """Repair interrupted durable state and run the Clerk recovery sequence."""
@@ -336,20 +343,52 @@ class BotBootRecovery:
             installed_account_id=installed_account_id,
         )
 
+    async def settle_proven_dead_run(
+        self,
+        candidate: BotRecoveryCandidate,
+        provenance: RecoverySweepProvenance,
+        *,
+        projector: AlpacaLifecycleProjector | None = None,
+    ) -> bool:
+        """Settle one run the reconciliation sweep proved dead (#2589).
+
+        The boot scan is the same repair; this entry is the periodic sweep's,
+        so a dead bot's duty record settles within one pass instead of
+        waiting for a restart. The bar is exactly the owner's: no live
+        process owns the run (``_is_running`` false — a registry key removed
+        counts), and the run is closed in its own Clerk (``sqlite_active``
+        false — the sweep's #2369 retirement closed it, or the sealed
+        account's reopen did). A run that fails either test is never settled.
+
+        ``projector`` overrides the registry-routed one for a binding sealed
+        on a foreign ``shadow:`` account: the repair then writes through the
+        sealed account's own authority, never the installed one (ADR 0050).
+        Returns True when the run received interrupted evidence.
+        """
+        if self._is_running(candidate.strategy_instance_id):
+            return False
+        if candidate.sqlite_active:
+            return False
+        return await self._repair_candidate(candidate, provenance, projector=projector)
+
     async def _repair_candidate(
         self,
         candidate: BotRecoveryCandidate,
         provenance: RecoverySweepProvenance,
+        *,
+        projector: AlpacaLifecycleProjector | None = None,
     ) -> bool:
         """Repair one candidate; True when it received interrupted evidence.
 
         Every branch consults the projector before it writes anything; the
         unavailable-authority handler in the caller relies on that ordering
-        to leave durable evidence untouched.
+        to leave durable evidence untouched. ``projector`` overrides the
+        registry routing for a sealed foreign account's own authority
+        (:meth:`settle_proven_dead_run`).
         """
         strategy_instance_id = candidate.strategy_instance_id
         run_id = candidate.run_id
-        projector = self._lifecycle_projector_for(strategy_instance_id)
+        projector = projector or self._lifecycle_projector_for(strategy_instance_id)
         if self._is_running(strategy_instance_id):
             projection = projector.refresh(
                 strategy_instance_id=strategy_instance_id,

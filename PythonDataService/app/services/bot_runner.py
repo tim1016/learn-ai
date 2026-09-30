@@ -47,12 +47,20 @@ from app.broker.alpaca.clerk.active_authority import (
     SyntheticActivationStore,
     get_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
+from app.broker.alpaca.clerk.active_runtime import (
+    DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+    SQLITE_FACADE_AUTHORITIES,
+    open_repository,
+    open_repository_after_lease_expiry,
+)
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
+from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseHeld
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
 from app.broker.v2panel.action_policy import evaluate_archive
 from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -102,6 +110,7 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_boot_recovery import (
     LEASE_REVIVAL_PROVENANCE,
+    SWEEP_SETTLE_PROVENANCE,
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
@@ -126,6 +135,7 @@ from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleAuthorityUnavailableError,
     AlpacaLifecycleProjector,
     ProjectionStatus,
+    SqliteAlpacaLifecycleAuthority,
 )
 from app.services.bot_registry_projection import (
     project_bot_status,
@@ -345,7 +355,10 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
     ),
     "BOT_DUTY_NOT_SETTLED": (
         "This bot's last run has not finished settling.",
-        "Wait for recovery to record how that run ended, then clear the bot.",
+        "Its process is gone but its run is still open. The account's sweep "
+        "settles a provably dead run on its next pass; one that stays open "
+        "here cannot yet be proven dead, so check the bot's evidence before "
+        "clearing it.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "This account cannot prove the bot is flat.",
@@ -981,6 +994,24 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
+            if self._is_sealed_foreign(binding):
+                # A rehearsal binding sealed on a graduated ``shadow:`` account.
+                # Its duty settle goes through that account (#2589); proving it
+                # holds nothing would too, and this lane cannot re-open that
+                # proof -- the graduated live account now holds this lane's own
+                # orders, so the shadow composition's namespace check refuses
+                # by design. Say that instead of failing on an unknown
+                # strategy instance in the installed Clerk.
+                raise BotRunnerError(
+                    "This bot rehearsed on a shadow account that has since graduated.",
+                    detail=(
+                        "Its records settle through that account's own evidence. "
+                        "Proving it holds nothing needs that evidence too, which "
+                        "this lane can no longer read; review its rehearsal "
+                        "history before removing the registration."
+                    ),
+                    reason_code="ARCHIVE_SEALED_ACCOUNT_CUSTODY",
+                )
             try:
                 async with self._archive_custody(binding, reconciled) as (custody, _policy, _terms):
                     # A count the Clerk could not take carries no number and is
@@ -1960,6 +1991,196 @@ class BotTaskRegistry:
             unresolved_intents_probe=self._unresolved_intents_probe,
             provenance=LEASE_REVIVAL_PROVENANCE,
         )
+
+    # ── the periodic duty settle (#2589) ──────────────────────────────
+
+    async def settle_proven_dead_runs(
+        self, runner_gone_runs: Sequence[tuple[str, str]]
+    ) -> None:
+        """Settle what the account's reconciliation sweep proved dead (#2589).
+
+        The sweep's hook hands over exactly the runs its pass retired because
+        their in-process runner is gone (#2369); each gets the boot scan's
+        own repair now, so a dead bot's duty record settles within one pass
+        and Clear works with no restart. One bot's failure is only its own
+        (#2582 posture); the next pass re-hands whatever failed.
+
+        Bindings sealed on a foreign account are skipped here on purpose:
+        their runs were never in this account's sweep, and their settle goes
+        through the sealed account's own authority below.
+        """
+        for strategy_instance_id, run_id in runner_gone_runs:
+            try:
+                binding = self._read_binding(strategy_instance_id)
+            except Exception:
+                logger.exception(
+                    "A sweep-settled bot's binding could not be read; it waits for the next pass",
+                    extra={
+                        "action": "duty_settle_binding_unreadable",
+                        "strategy_instance_id": strategy_instance_id,
+                    },
+                )
+                continue
+            if binding is not None and (
+                binding.mode == "dry_run" or self._is_sealed_foreign(binding)
+            ):
+                continue
+            candidate = BotRecoveryCandidate(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                sqlite_active=False,
+            )
+            try:
+                settled = await self._boot_recovery.settle_proven_dead_run(
+                    candidate, SWEEP_SETTLE_PROVENANCE
+                )
+            except Exception:
+                logger.error(
+                    "A sweep-settled bot's duty settle failed; the next pass remains the backstop",
+                    extra={
+                        "action": "duty_settle_failed",
+                        "strategy_instance_id": strategy_instance_id,
+                        "run_id": run_id,
+                    },
+                    exc_info=True,
+                )
+                continue
+            if settled:
+                logger.warning(
+                    "The reconciliation sweep settled a dead bot's run",
+                    extra={
+                        "action": "duty_settled",
+                        "strategy_instance_id": strategy_instance_id,
+                        "run_id": run_id,
+                    },
+                )
+        await self._settle_sealed_dead_runs()
+
+    def _is_sealed_foreign(self, binding: BrokerBotBinding) -> bool:
+        """Whether the binding is sealed on an account the installed authority does not custody."""
+        sealed = binding.sealed_account_id
+        if sealed is None or sealed.startswith(SIM_ACCOUNT_PREFIX):
+            return False
+        clerk = get_alpaca_clerk()
+        return clerk is not None and sealed != clerk.account_id
+
+    async def _settle_sealed_dead_runs(self) -> None:
+        """Settle dead runs sealed on a foreign ``shadow:`` account, through that account (#2589).
+
+        After a live account graduates, its rehearsal bindings stay sealed on
+        ``shadow:<live_account_id>``. Neither a restart nor the account sweep
+        above can reach them -- their runs live in the sealed account's own
+        SQLite -- so until now such a bot could never be cleared. Each one is
+        settled through the authority of the account it is sealed on, never
+        by the installed authority writing duty state for an instance it has
+        never seen (ADR 0050). A sealed account that cannot be opened is
+        reported and left alone; there is no fallback.
+        """
+        for binding in self._bindings.list_for_broker("alpaca"):
+            sealed = binding.sealed_account_id
+            if sealed is None or not sealed.startswith("shadow:"):
+                continue
+            if not self._is_sealed_foreign(binding) or self._is_running(
+                binding.strategy_instance_id
+            ):
+                continue
+            record = self._lifecycle_repo(binding.strategy_instance_id).read()
+            desired = self._desired_repo(binding.strategy_instance_id).read_state()
+            if (
+                record is not None
+                and record.phase is BotLifecyclePhase.OFF_DUTY
+                and record.duty_outcome is not None
+                and desired not in {DesiredState.RUNNING, DesiredState.PAUSED}
+            ):
+                continue
+            try:
+                await self._settle_through_sealed_account(binding)
+            except Exception:
+                logger.error(
+                    "A dead bot sealed on a shadow account could not be settled through it",
+                    extra={
+                        "action": "duty_settle_sealed_account_failed",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "sealed_account_id": sealed,
+                    },
+                    exc_info=True,
+                )
+
+    async def _settle_through_sealed_account(self, binding: BrokerBotBinding) -> None:
+        """One sealed bot's settle, through its sealed account's own authority."""
+        account_id = binding.sealed_account_id
+        assert account_id is not None
+        strategy_instance_id = binding.strategy_instance_id
+        repository = await open_repository_after_lease_expiry(
+            open_repository,
+            account_id=account_id,
+            artifacts_root=self._artifacts_root,
+            # A single attempt: a lease still held means another live process
+            # owns the sealed account, and the next sweep pass retries.
+            wait_timeout_s=0.0,
+            retry_interval_s=DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
+        )
+        try:
+            activation = ShadowActivationStore(self._artifacts_root).latest(account_id)
+            meta = repository.control_meta_snapshot()
+            if activation is None or (
+                activation.authority_generation != meta.authority_generation
+                or activation.db_identity_token != meta.db_identity_token
+            ):
+                raise RuntimeError(
+                    f"sealed account {account_id!r} has no matching activation record"
+                )
+            candidates: list[BotRecoveryCandidate] = []
+            for candidate in repository.lifecycle_recovery_candidates():
+                if candidate.strategy_instance_id != strategy_instance_id:
+                    continue
+                # Close the run in its own Clerk first, the way the account
+                # sweep's #2369 retirement does, so the settle's bar -- the
+                # run closed in its own authority -- is met on evidence.
+                submit_stop_run(
+                    repository,
+                    account_id=account_id,
+                    strategy_instance_id=strategy_instance_id,
+                    lifecycle_run_id=candidate.run_id,
+                    operator_reason="runner_gone",
+                    clock=self._now_ms,
+                )
+                candidates.append(
+                    BotRecoveryCandidate(
+                        strategy_instance_id=strategy_instance_id,
+                        run_id=candidate.run_id,
+                        sqlite_active=False,
+                    )
+                )
+            if not candidates:
+                candidates = [
+                    BotRecoveryCandidate(
+                        strategy_instance_id=strategy_instance_id,
+                        run_id=binding.run_id,
+                        sqlite_active=False,
+                    )
+                ]
+            projector = AlpacaLifecycleProjector(
+                authority=SqliteAlpacaLifecycleAuthority(repository),
+                lifecycle_repo_for=self._lifecycle_repo,
+                require_alpaca_identity=lambda _sid, _claim: None,
+            )
+            for candidate in candidates:
+                settled = await self._boot_recovery.settle_proven_dead_run(
+                    candidate, SWEEP_SETTLE_PROVENANCE, projector=projector
+                )
+                if settled:
+                    logger.warning(
+                        "A dead bot sealed on a shadow account was settled through it",
+                        extra={
+                            "action": "duty_settled_through_sealed_account",
+                            "strategy_instance_id": strategy_instance_id,
+                            "sealed_account_id": account_id,
+                            "run_id": candidate.run_id,
+                        },
+                    )
+        finally:
+            repository.close()
 
     # ── read surface ──────────────────────────────────────────────────
 
