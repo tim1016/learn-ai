@@ -616,18 +616,40 @@ describe('AlpacaHomeComponent', () => {
   });
 
   it('says why a second bot’s Stop waits while another Stop is being checked, instead of dropping it (#2634)', async () => {
-    const { panel } = await renderHome({ getPanel: () => new Promise<BotPanelView>(() => undefined) });
+    let answer: (panel: BotPanelView) => void = () => undefined;
+    const { panel } = await renderHome({
+      getPanel: () => new Promise<BotPanelView>((resolve) => { answer = resolve; }),
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
     await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop dry-spy' }));
 
-    const outcome = await screen.findByText(
-      'Still checking whether spy-ema-20260929-0931 can be stopped. Press Stop on dry-spy again after that.',
-    );
+    const note = 'Still checking whether spy-ema-20260929-0931 can be stopped. Press Stop on dry-spy again after that.';
+    const outcome = await screen.findByText(note);
     expect(outcome.getAttribute('role')).toBe('status');
     await vi.waitFor(() => expect(document.activeElement).toBe(outcome));
     expect(panel.getPanel).toHaveBeenCalledTimes(1);
+
+    // The note is over once the check is.
+    answer(fakeBotPanelView({ actions: fakeSqliteBotActions({ sid: 'spy-ema-20260929-0931' }) }));
+    await screen.findByRole('dialog', { name: 'Stop spy-ema-20260929-0931?' });
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
+  it('forgets a Stop still being checked on the account the owner left (#2634)', async () => {
+    const { view, router, panel } = await renderHome({ getPanel: () => new Promise<BotPanelView>(() => undefined) });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop spy-ema-20260929-0931' }));
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(1));
+
+    await router.navigateByUrl(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA-OTHER`);
+    await view.fixture.whenStable();
+    const stop = await screen.findByRole('button', { name: 'Stop spy-ema-20260929-0931' });
+    await vi.waitFor(() => expect(stop.getAttribute('aria-busy')).toBe('false'));
+    fireEvent.click(stop);
+
+    await vi.waitFor(() => expect(panel.getPanel).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Still checking/)).toBeNull();
   });
 
   it('says a bot the Clerk no longer lets stop cannot be stopped, without asking', async () => {

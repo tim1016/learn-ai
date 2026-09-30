@@ -9,7 +9,7 @@
       [attr.aria-busy]="phase !== null"
       [attr.aria-label]="'Stop ' + bot().strategy_instance_id"
       (click)="stopRequested.emit(bot().strategy_instance_id)"
-    >{{ phase === 'sending' ? 'Stopping…' : phase === 'reading' ? 'Checking…' : 'Stop' }}</button>
+    >{{ stopLabel() }}</button>
   }
   @case ('flatten') {
     <a

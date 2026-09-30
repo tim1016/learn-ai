@@ -241,6 +241,7 @@ export class AlpacaHomeComponent {
       this.key();
       untracked(() => {
         this.stopAsk.set(null);
+        this.stopPhases.set(new Map());
         this.outcome.set(null);
         this.dismissClear();
       });
@@ -331,6 +332,8 @@ export class AlpacaHomeComponent {
       ask = await this.readStop(sid);
     } finally {
       this.setStopPhase(sid, null);
+      // A "still checking" note is over once the check is.
+      if (this.outcome()?.tone === 'info') this.outcome.set(null);
     }
     if (ask === null) return;
     if (ask.action.confirmation === null) await this.sendStop(ask);

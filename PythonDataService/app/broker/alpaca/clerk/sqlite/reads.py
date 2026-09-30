@@ -925,8 +925,8 @@ def strategies_with_active_exit(
     """Which of these strategies has an exit in progress — :func:`active_exit_for_strategy`, in one read.
 
     While a strategy has one, the stuck-EXIT watchdog sends it no re-drive:
-    either no entry is free of an active EXIT (``_candidate_entries``) or the
-    EXIT is Clerk work in flight on the symbol (``clerk_work_in_flight``). So
+    that EXIT owns the whole symbol's reduction (``exit.newest_reducible_entry``)
+    and is Clerk work in flight on it (``clerk_work_in_flight``). So
     its ``EXIT_NOT_FLAT`` notice says an exit is working instead of promising
     a time (#2440 review). Asked only about the strategies such a notice
     names, so the usual answer — none — costs no query.

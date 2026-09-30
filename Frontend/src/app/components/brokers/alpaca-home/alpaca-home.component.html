@@ -14,6 +14,7 @@
       #outcomeNotice
       class="home__outcome"
       [class.home__outcome--danger]="done.tone === 'danger'"
+      [class.home__outcome--info]="done.tone === 'info'"
       tabindex="-1"
       [attr.role]="done.tone === 'danger' ? 'alert' : 'status'"
     >{{ done.message }}</p>

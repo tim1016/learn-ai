@@ -21,6 +21,12 @@ type BotControl = 'stop' | 'flatten' | null;
  * read, or the Stop is being sent. */
 export type StopPhase = 'reading' | 'sending';
 
+const STOP_LABEL: Record<StopPhase | 'idle', string> = {
+  idle: 'Stop',
+  reading: 'Checking…',
+  sending: 'Stopping…',
+};
+
 /**
  * One bot's command on Home, the same on a List row and a Wall tile.
  *
@@ -50,6 +56,8 @@ export class HomeBotActionComponent {
     if (bot.running) return 'stop';
     return bot.group === 'holding' ? 'flatten' : null;
   });
+
+  protected readonly stopLabel = computed(() => STOP_LABEL[this.stopPhase() ?? 'idle']);
 
   protected readonly botLink = computed(
     () => accountWorkspaceBotRoute(this.account(), this.bot().strategy_instance_id).commands,

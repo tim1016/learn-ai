@@ -124,6 +124,8 @@ logger = logging.getLogger(__name__)
 ACTION_ENTER = "ENTER"
 
 __all__ = [
+    "MARKET_CLOSED",
+    "MARKET_LIVENESS_BLOCKED",
     "EnterSubmission",
     "EntrySubmissionRefusal",
     "accept_enter",
@@ -140,6 +142,12 @@ class EnterSubmission:
     effect_operation_id: str | None
     order_ref: str | None
     created: bool  # False for a transport retry / genuine re-request of an existing decision
+
+
+# The two market refusals an ENTER can meet, each filed under its own code at
+# the Clerk's intake and again just before broker contact (#2637).
+MARKET_LIVENESS_BLOCKED = "MARKET_LIVENESS_BLOCKED"
+MARKET_CLOSED = "MARKET_CLOSED"
 
 
 @dataclass(frozen=True)
@@ -395,7 +403,7 @@ async def submit_accepted_enter(
             except Exception:
                 logger.exception("Clerk entry preflight failed before broker contact")
                 refusal = EntrySubmissionRefusal(
-                    summary_code="MARKET_LIVENESS_BLOCKED",
+                    summary_code=MARKET_LIVENESS_BLOCKED,
                     why="The Clerk could not evaluate current market evidence; no order was sent.",
                 )
             if refusal is not None:

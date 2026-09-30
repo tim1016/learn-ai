@@ -80,7 +80,13 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
-from app.broker.alpaca.clerk.sqlite.enter import EntrySubmissionRefusal, accept_enter, submit_accepted_enter
+from app.broker.alpaca.clerk.sqlite.enter import (
+    MARKET_CLOSED,
+    MARKET_LIVENESS_BLOCKED,
+    EntrySubmissionRefusal,
+    accept_enter,
+    submit_accepted_enter,
+)
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, newest_reducible_entry, resolve_accepted_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -193,10 +199,6 @@ _MARKET_ENTRY_AFTER_THE_CLOSE: Final = (
     "The regular session has closed, or closes within seconds. A market order sent now "
     "could reach the broker after the close and wait there until the next open."
 )
-# The two market refusals an ENTER can meet, each filed under its own code at
-# intake and again just before broker contact (#2637).
-_MARKET_LIVENESS_BLOCKED: Final = "MARKET_LIVENESS_BLOCKED"
-_MARKET_CLOSED: Final = "MARKET_CLOSED"
 logger = logging.getLogger(__name__)
 
 
@@ -1298,7 +1300,7 @@ class SqliteAlpacaClerkFacade:
                     )
                     if policy.refusal(liveness) is not None:
                         return rejected(
-                            reason_code=_MARKET_LIVENESS_BLOCKED,
+                            reason_code=MARKET_LIVENESS_BLOCKED,
                             # The fact's own plain words say which evidence
                             # refused -- e.g. that the session has closed (#2596).
                             explanation=liveness.reason,
@@ -1316,7 +1318,7 @@ class SqliteAlpacaClerkFacade:
                 )
                 if session_refusal is not None:
                     return rejected(
-                        reason_code=_MARKET_CLOSED,
+                        reason_code=MARKET_CLOSED,
                         explanation=session_refusal,
                         next_step=_ENTRY_NOT_RETRIED,
                     )
@@ -1944,9 +1946,9 @@ def _enter_submission_guard(
 
     def refusal() -> EntrySubmissionRefusal | None:
         if liveness is not None and (refused := liveness()) is not None:
-            return EntrySubmissionRefusal(summary_code=_MARKET_LIVENESS_BLOCKED, why=refused)
+            return EntrySubmissionRefusal(summary_code=MARKET_LIVENESS_BLOCKED, why=refused)
         closed = _market_enter_session_refusal(leg, clock(), decision_close_ms=decision_close_ms)
-        return None if closed is None else EntrySubmissionRefusal(summary_code=_MARKET_CLOSED, why=closed)
+        return None if closed is None else EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=closed)
 
     return refusal
 

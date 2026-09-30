@@ -367,11 +367,11 @@ async def _recover_stale_exit(
     )
     if result is not None:
         return result
+    # An EXIT owning the symbol is the strategy's own, already answered above
+    # and again under intake (``_accept_admissible_redrive``).
     target = await run(lambda: newest_reducible_entry(repo, sid, cause.symbol))
     if target is None:
         return RecoveryResult("hold", "RECOVERY_ENTRY_UNAVAILABLE", "No releasable entry evidence is available for this exit.")
-    if target.exit_owned:
-        return RecoveryResult("hold", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
     # Read the instant after repository hops, immediately before quote/liveness.
     now_ms = repo.clock()
     touch = (
