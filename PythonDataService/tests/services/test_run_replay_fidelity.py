@@ -8,7 +8,8 @@ from dataclasses import replace
 import pytest
 
 from app.engine.strategy.signal_program import Settlement, trace_root
-from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.decision_session import RunDecisionSession
@@ -17,7 +18,11 @@ from app.services.run_replay_proof import (
     run_fidelity_over_bars,
 )
 from app.services.source_bar_ledger import RetainedSourceBar
-from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
+from tests._helpers.bot_runner.ema_parity import (
+    EMA_LAST_BAR_ENTER_DAY,
+    _ema_parity_bars_through_first_exit,
+    lean_cell_bars,
+)
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
 _RTH_SESSION = RunDecisionSession(kind="rth", window=None)
@@ -170,19 +175,23 @@ async def test_run_fidelity_over_bars_classifies_a_decision_late_enter_as_expect
     )
 
 
-@pytest.mark.asyncio
-async def test_run_fidelity_over_bars_classifies_a_closing_bar_refusal_as_expected() -> None:
-    """#2607: the runner refuses a decision taken on the session's closing bar.
+def _ema_bars_through_a_closing_bar_enter() -> list[MarketDataBar]:
+    """A retained LEAN stream whose first EMA ENTER is decided on 2026-02-03's closing bar.
 
-    Its ``blocked``/``CLOSING_BAR`` receipt must replay as an expected live
-    effect -- the replay re-derives the math, not the runner's refusals --
-    rather than as ``UNRECOGNIZED_BLOCK_REASON`` drift.
+    QQQ's cell, labelled with the binding's symbol: the math is the prices',
+    and the live pass and its replay both read the same label.
     """
-    bars = _ema_parity_bars_through_first_exit()
+    return lean_cell_bars(
+        "QQQ_W3mo_2026-02-02_to_2026-04-30",
+        symbol="SPY",
+        stop_after_ms=session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY) - 1,
+    )
+
+
+async def _replay_with_the_first_enter_refused_as_closing_bar(bars: list[MarketDataBar]):
     records = await _record_live_pass(bars, block_first_enter=True)
     blocked = next(i for i, record in enumerate(records) if record.outcome == "blocked")
     records[blocked] = replace(records[blocked], reason_code=CLOSING_BAR_REASON_CODE)
-
     result = await run_fidelity_over_bars(
         _binding(run_id="run-1"),
         provider="fake-phase",
@@ -192,11 +201,47 @@ async def test_run_fidelity_over_bars_classifies_a_closing_bar_refusal_as_expect
         captured_decisions={},
         session=_RTH_SESSION,
     )
+    return records[blocked], result
 
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_classifies_a_closing_bar_refusal_as_expected() -> None:
+    """#2607: the runner refuses a decision taken on the session's closing bar.
+
+    Its ``blocked``/``CLOSING_BAR`` receipt on a bucket that really closes at
+    the session close replays as an expected live effect.
+    """
+    refused_record, result = await _replay_with_the_first_enter_refused_as_closing_bar(
+        _ema_bars_through_a_closing_bar_enter()
+    )
+
+    assert is_closing_bar(refused_record.bar_close_ms)
     assert result.drift_count == 0
     refused = next(d for d in result.divergences if d.reason_code == CLOSING_BAR_REASON_CODE)
     assert (refused.classification, refused.replay_staged, refused.live_outcome) == (
         "expected_live_effect",
+        "ENTER",
+        "blocked",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_classifies_a_closing_bar_refusal_on_another_bar_as_drift() -> None:
+    """#2607: whether a bucket is the closing bar is a fact of its close.
+
+    The replay checks it rather than trusting the label, so a ``CLOSING_BAR``
+    refusal of a 09:45 ET bucket is content drift, not an expected effect.
+    """
+    refused_record, result = await _replay_with_the_first_enter_refused_as_closing_bar(
+        _ema_parity_bars_through_first_exit()
+    )
+
+    assert not is_closing_bar(refused_record.bar_close_ms)
+    assert (result.drift_count, result.content_drift_count) == (1, 1)
+    (drift,) = [d for d in result.divergences if d.classification == "drift"]
+    assert (drift.reason_code, drift.bar_close_ms, drift.replay_staged, drift.live_outcome) == (
+        "CLOSING_BAR_MISAPPLIED",
+        refused_record.bar_close_ms,
         "ENTER",
         "blocked",
     )
