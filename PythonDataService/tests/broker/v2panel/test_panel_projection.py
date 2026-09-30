@@ -703,6 +703,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
         ),
         commands=(command,),
         operations=(operation,),
+        working_order_refs=(),
         positions=(
             ProjectedPosition(
                 strategy_instance_id=SID,
@@ -1255,6 +1256,7 @@ def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
 def _rail_projection(
     *,
     orders: tuple[ProjectedOrder, ...],
+    working_order_refs: tuple[str, ...] = (),
     operation_state: str = "in_progress",
     terminal_receipt_id: str | None = None,
     latest_reconciliation: ProjectedReconciliation | None = None,
@@ -1306,6 +1308,7 @@ def _rail_projection(
         ),
         commands=(command,),
         operations=(operation,),
+        working_order_refs=working_order_refs,
         positions=(),
         holds=(),
         uncertainties=(),
@@ -2034,23 +2037,8 @@ def _stopped(**update: object) -> BotStatusView:
     return _status(running=False).model_copy(update=update)
 
 
-_WORKING_ENTRY = ProjectedOrder(
-    order_ref="order:entry",
-    client_order_id="client:entry",
-    broker_order_id="broker:entry",
-    role="ENTRY",
-    broker_state="new",
-    submitted_at_ms=_NOW - 400,
-    updated_at_ms=_NOW - 300,
-    symbol="SPY",
-    side="buy",
-    quantity=1.0,
-    filled_quantity=0.0,
-)
-
-
 @pytest.mark.parametrize(
-    ("status", "clerk", "orders", "exposure", "expected"),
+    ("status", "clerk", "working_order_refs", "exposure", "expected"),
     [
         pytest.param(
             _stopped(), _clerk_status(), (), {},
@@ -2070,7 +2058,7 @@ _WORKING_ENTRY = ProjectedOrder(
         pytest.param(
             # The Clerk's working order, not the legacy journal's: the journal
             # is never written now, so its count could not disable Clear (#2635).
-            _stopped(), _clerk_status(), (_WORKING_ENTRY,), {},
+            _stopped(), _clerk_status(), ("order:entry",), {},
             [_served_archive(token="bd25a4709233167f73c67da20e4f76e4", blocker="ARCHIVE_WOULD_STRAND_CUSTODY")],
             id="working-order",
         ),
@@ -2095,7 +2083,7 @@ _WORKING_ENTRY = ProjectedOrder(
 def test_the_served_archive_is_the_one_the_registry_presented(
     status: BotStatusView,
     clerk: ClerkStatus,
-    orders: tuple[ProjectedOrder, ...],
+    working_order_refs: tuple[str, ...],
     exposure: dict[str, float],
     expected: list[dict[str, object]],
 ) -> None:
@@ -2106,7 +2094,7 @@ def test_the_served_archive_is_the_one_the_registry_presented(
     on 2026-09-30."""
     served = adapt_sqlite_panel(
         _panel(status, clerk, [], exposure=exposure),
-        _rail_projection(orders=orders),
+        _rail_projection(orders=(), working_order_refs=working_order_refs),
     )
 
     assert [

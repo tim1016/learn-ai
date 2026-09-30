@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
+from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
     read_current_orders,
@@ -413,6 +414,15 @@ class SqliteClerkProjectionReader:
                 now_ms=now_ms,
             )
             operations = self._operations(strategy_instance_id, operation_limit)
+            working_order_refs = (
+                ()
+                if strategy_instance_id is None
+                else tuple(
+                    order.order_ref
+                    for order in reads.orders_for_strategy(self._conn, strategy_instance_id)
+                    if is_working_order(order)
+                )
+            )
             commands = self._commands(strategy_instance_id, operation_limit)
             holds = self._holds(strategy_instance_id)
             reconciliation = self._latest_reconciliation(strategy_instance_id, now_ms)
@@ -430,6 +440,7 @@ class SqliteClerkProjectionReader:
             runs=context.runs,
             commands=commands,
             operations=operations,
+            working_order_refs=working_order_refs,
             positions=context.positions,
             holds=holds,
             uncertainties=context.uncertainties[:CURRENT_STATE_LIMIT],
