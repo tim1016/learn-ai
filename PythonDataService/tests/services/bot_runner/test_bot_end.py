@@ -172,6 +172,18 @@ async def test_deploy_with_no_end_records_no_end(tmp_path: Path) -> None:
     assert registry.pending_ends([_SID]) == []
 
 
+async def test_a_running_bot_with_no_end_is_offered_the_default_end_to_add(tmp_path: Path) -> None:
+    """#2663: the bot page's Change opens on the default end, as Deploy's form does; a bot with one opens on its own."""
+    registry = await _deployed(tmp_path, _Clock(), end=None)
+
+    assert registry.bot_end("alpaca", _SID).default_end_at_ms == _END.end_at_ms
+
+    view = await registry.edit_bot_end("alpaca", _SID, _sell(_END.end_at_ms - 3_600_000), updated_by="operator")
+
+    assert view.end_at_ms == _END.end_at_ms - 3_600_000
+    assert view.default_end_at_ms is None
+
+
 # ── the owner edits a running bot's end ──────────────────────────────────────
 
 

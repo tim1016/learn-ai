@@ -22,6 +22,7 @@ export const DEFAULT_END: BotEndView = {
     'At Wed Nov 15, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
   notice: null,
   editable: true,
+  default_end_at_ms: null,
 };
 
 /** The test double's copy of `session_anchors.et_when_words` — "Wed Nov 15, 15:59 ET" —
@@ -41,9 +42,14 @@ function whenWords(ms: number): string {
  * `bot_end.resolved_bot_end_view` for an end the backend accepts as sent — a
  * running bot's end, or no end — in its exact words: "Ends Wed Nov 15, 15:59
  * ET · keeps its shares", and what the Clerk (or a Dry Run's simulation)
- * does then. An end moved before an early close is a spec's own fixture.
+ * does then. No end offers the default end (`defaultEndAtMs`, the fixtures'
+ * own by default) for the owner adding one (#2663). An end moved before an
+ * early close is a spec's own fixture.
  */
-export function scheduledEndView(end: BotEndInput, { dryRun = false }: { dryRun?: boolean } = {}): BotEndView {
+export function scheduledEndView(
+  end: BotEndInput,
+  { dryRun = false, defaultEndAtMs = DEFAULT_END.end_at_ms }: { dryRun?: boolean; defaultEndAtMs?: number | null } = {},
+): BotEndView {
   if (end.end_at_ms === null) {
     return {
       end_at_ms: null,
@@ -53,6 +59,7 @@ export function scheduledEndView(end: BotEndInput, { dryRun = false }: { dryRun?
       explanation: 'This bot has no end time. It runs until you stop it.',
       notice: null,
       editable: true,
+      default_end_at_ms: defaultEndAtMs,
     };
   }
   const at = whenWords(end.end_at_ms);
@@ -69,6 +76,7 @@ export function scheduledEndView(end: BotEndInput, { dryRun = false }: { dryRun?
         : `At ${at} the Clerk stops the bot, cancels its working orders and sells its shares at market.`,
     notice: null,
     editable: true,
+    default_end_at_ms: null,
   };
 }
 

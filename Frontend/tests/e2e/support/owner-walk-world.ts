@@ -329,6 +329,7 @@ export const WALK_DEFAULT_END = {
   explanation: 'At Mon Sep 21, 15:59 ET the Clerk stops the bot, cancels its working orders and sells its shares at market.',
   notice: null,
   editable: true,
+  default_end_at_ms: null,
 } satisfies BotEndView;
 
 /** `bot_end.bot_end_view` for a stopped bot: a Stop cancels its end, and nothing is sold at it (#2607). */
@@ -340,6 +341,7 @@ export const NO_END_STOPPED = {
   explanation: 'This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it.',
   notice: null,
   editable: false,
+  default_end_at_ms: null,
 } satisfies BotEndView;
 
 /** Deployment Validation's registry note (`registry.py`, #2607). */
@@ -364,7 +366,10 @@ const EXPLICIT_NULL_END_422 = {
 /** The end check's answer in the backend's words: an omitted end is the default end. */
 function endPreview(request: BotEndPreviewRequest): BotEndView {
   const end = request.end ?? { end_at_ms: WALK_DEFAULT_END.end_at_ms, end_action: 'SELL' };
-  return scheduledEndView(end, { dryRun: request.execution_mode === 'dry_run' });
+  return scheduledEndView(end, {
+    dryRun: request.execution_mode === 'dry_run',
+    defaultEndAtMs: WALK_DEFAULT_END.end_at_ms,
+  });
 }
 
 const PAPER_DEPLOY_VIEW = {
@@ -853,7 +858,10 @@ export class OwnerWalkWorld {
   private editEnd(choice: Enveloped<BotEndInput>): BotEndView | null {
     if (this.phase !== 'running') return null;
     // `bot_end.bot_end_view` for a running bot: the words its check gives the same end.
-    this.botEnd = scheduledEndView({ end_at_ms: choice.end_at_ms, end_action: choice.end_action });
+    this.botEnd = scheduledEndView(
+      { end_at_ms: choice.end_at_ms, end_action: choice.end_action },
+      { defaultEndAtMs: WALK_DEFAULT_END.end_at_ms },
+    );
     this.surfaceVersion += 1;
     return this.botEnd;
   }

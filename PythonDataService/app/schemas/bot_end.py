@@ -108,7 +108,10 @@ class BotEndView(BaseModel):
     · sells"); ``explanation`` says what will happen, or what happened.
     ``notice`` is set only when the chosen time was moved, e.g. to one minute
     before an early close. ``editable`` says whether the panel may offer to
-    change it now.
+    change it now. ``default_end_at_ms`` is the end the fields open on when
+    the owner adds one to a bot with none -- the default end, by Deploy's
+    rule -- set only while the bot has no end, its end may change now, and it
+    trades in regular hours only; otherwise null.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -120,6 +123,7 @@ class BotEndView(BaseModel):
     explanation: str
     notice: str | None = None
     editable: bool
+    default_end_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 __all__ = [

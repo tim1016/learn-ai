@@ -152,9 +152,16 @@ def bot_end_view(
     now_ms: int,
     dry_run: bool,
     running: bool,
+    use_rth: bool,
     notice: str | None = None,
 ) -> BotEndView:
-    """A bot's end in the owner's words, at ``now_ms``."""
+    """A bot's end in the owner's words, at ``now_ms``.
+
+    A bot with no end whose end may change now is offered the default end
+    (:func:`default_bot_end`, Deploy's rule) for the owner adding one --
+    unless it also trades outside regular hours (``use_rth`` ``False``),
+    which :func:`resolve_bot_end` gives no end.
+    """
     pending = None if recorded is None else recorded.pending()
     editable = end_edit_refusal(pending, running=running, now_ms=now_ms) is None
     if recorded is None:
@@ -167,6 +174,7 @@ def bot_end_view(
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
             notice=notice, editable=editable,
+            default_end_at_ms=default_bot_end(now_ms).end_at_ms if editable and use_rth else None,
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
@@ -183,15 +191,18 @@ def bot_end_view(
             status, recorded.end_action, et_when_words(recorded.end_at_ms, now_ms=now_ms),
             dry_run=dry_run, running=running,
         ),
-        notice=notice, editable=editable,
+        notice=notice, editable=editable, default_end_at_ms=None,
     )
 
 
 def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
-    """An end the Deploy form chose, before its bot exists, with the notice when its time was moved."""
+    """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
+
+    Every Deploy is regular hours only.
+    """
     return bot_end_view(
         None if resolved.end is None else RecordedEnd.scheduled(resolved.end),
-        now_ms=now_ms, dry_run=dry_run, running=True, notice=resolved.notice,
+        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice,
     )
 
 
