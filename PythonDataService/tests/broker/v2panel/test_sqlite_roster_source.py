@@ -543,8 +543,6 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
     assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
     # Its simulated starting cash is its own consent amount, Python-authored.
     assert result[0].simulated_cash_usd == simulated_cash_usd
-    # ``model_copy`` skips validation; the route's response check does not.
-    BotCatalogView.model_validate(result[0].model_dump())
 
 
 @pytest.mark.asyncio

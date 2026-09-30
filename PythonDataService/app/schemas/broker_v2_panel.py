@@ -215,6 +215,16 @@ class BotCatalogView(BaseModel):
             raise ValueError("only a Dry Run carries simulated cash")
         return self
 
+    def with_facts(self, **facts: object) -> BotCatalogView:
+        """This row with ``facts`` set, re-checked against its group.
+
+        ``model_copy`` skips ``carries_its_group_facts``, so a row stamped
+        with a fact its group does not carry passed its producer and failed
+        only the route's response check -- a 500 for the account's whole
+        roster. Stamp group facts through here so it fails where it is made.
+        """
+        return type(self).model_validate(self.model_dump() | facts)
+
 
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
 
