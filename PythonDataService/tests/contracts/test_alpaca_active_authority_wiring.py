@@ -513,6 +513,49 @@ def test_a_reconnect_installs_and_boots_through_the_boot_s_own_steps() -> None:
     ), "shutdown ends the reconnect before it closes custody"
 
 
+def test_a_reconnect_that_refuses_the_binding_stops_the_boot_started_account_work() -> None:
+    """#2669: market liveness and the equity snapshot scheduler stop on a refused binding.
+
+    A boot whose Alpaca did not answer starts both -- the binding was not
+    refused -- and a reconnect whose acknowledgement then refuses the binding
+    (``ACCOUNT_PIN_MISMATCH``) left them running: the snapshot scheduler kept
+    writing equity snapshots for an account the configuration did not
+    approve. A boot that met the mismatch directly never started either.
+
+    Structural because the failure is composition-root wiring: the boot's two
+    starts and the reconnect's stop must read the SAME one decision --
+    ``account_background_work_refused`` -- or the two drift apart again. A
+    reconnect that ends serving leaves both running: the stop is reached only
+    under the refused decision.
+    """
+    source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
+
+    # The boot starts the account's background work only under the one decision.
+    assert source.count("if not account_background_work_refused():") == 2, (
+        "both boot starts read the one decision, so a refused binding starts neither"
+    )
+    assert "active_alpaca_binding_refusal() is None:\n                alpaca_market_liveness" not in source
+    # The reconnect's acknowledgement reads the same decision and stops the work.
+    acknowledge = source[
+        source.index("async def _acknowledge_reconnected") : source.index(
+            "def _install_reconnected"
+        )
+    ]
+    assert "if account_background_work_refused():" in acknowledge
+    assert "await _stop_account_background_work()" in acknowledge
+    # The stop clears both workers, and nothing else starts either one.
+    stop = source[
+        source.index("async def _stop_account_background_work") : source.index(
+            "alpaca_reconnect_task = asyncio.create_task"
+        )
+    ]
+    assert "set_market_liveness_consumer(None)" in stop
+    assert "sovereign_equity_snapshot_scheduler.stop()" in stop
+    assert "sovereign_equity_snapshot_scheduler = None" in stop
+    assert source.count("alpaca_market_liveness.start()") == 1
+    assert source.count("sovereign_equity_snapshot_scheduler.start()") == 1
+
+
 def test_dry_run_restoration_never_holds_the_lane_off_the_network() -> None:
     """#2582: the lifespan starts each Dry Run's restoration and serves; it never awaits one.
 

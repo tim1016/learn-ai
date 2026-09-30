@@ -26,7 +26,7 @@ import app.services.program_source_bootstrap
 from app.broker.alpaca.active_binding import (
     BrokerUnbound,
     UnboundBroker,
-    active_alpaca_binding_refusal,
+    account_background_work_refused,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.alpaca.profile import BrokerProfileError
@@ -720,13 +720,17 @@ async def _service_lifespan(
                     endpoint_mode=alpaca_settings.mode,
                     reconnecting=alpaca_clerk_runtime.reconnecting,
                 )
-            if active_alpaca_binding_refusal() is None:
+            # #2669: both starts and a reconnect's stop read the one decision
+            # "the binding is refused, so the account's background work does
+            # not run" -- a refused binding starts neither here and stops
+            # whatever an unanswered-Alpaca boot started there.
+            if not account_background_work_refused():
                 alpaca_market_liveness.start()
                 set_market_liveness_consumer(alpaca_market_liveness)
                 logger.info("IBKR market-status source and Alpaca execution clock started.")
             _install_alpaca_authority(alpaca_clerk_runtime)
 
-            if active_alpaca_binding_refusal() is None:
+            if not account_background_work_refused():
                 from app.services.sovereign_equity_snapshots import (
                     DailySovereignEquitySnapshotScheduler,
                     DailySovereignEquitySnapshotStore,
@@ -1031,8 +1035,49 @@ async def _service_lifespan(
 
         reconnecting_binding = alpaca_binding
 
+        async def _stop_account_background_work() -> None:
+            """Stop and clear the boot's account-scoped background work (#2669).
+
+            Idempotent: the reconnect's acknowledgement can refuse the
+            binding on any attempt, and shutdown stops whatever remains.
+            Stopped loudly — the snapshot scheduler was writing equity
+            snapshots for an account the configuration did not approve, and
+            the market-status source was feeding an execution clock the
+            refused binding no longer stands behind.
+            """
+            nonlocal sovereign_equity_snapshot_scheduler
+            from app.broker.alpaca.market_liveness import (
+                get_market_liveness_consumer,
+                set_market_liveness_consumer,
+            )
+
+            liveness = get_market_liveness_consumer()
+            if liveness is not None:
+                await liveness.stop()
+                set_market_liveness_consumer(None)
+                logger.warning(
+                    "IBKR market-status source stopped: the Alpaca binding is refused.",
+                    extra={"action": "account_background_work_stopped", "work": "market_liveness"},
+                )
+            if sovereign_equity_snapshot_scheduler is not None:
+                await sovereign_equity_snapshot_scheduler.stop()
+                sovereign_equity_snapshot_scheduler = None
+                logger.warning(
+                    "Daily sovereign Alpaca equity snapshot scheduler stopped: the Alpaca "
+                    "binding is refused, so no snapshot is written for an unapproved account.",
+                    extra={"action": "account_background_work_stopped", "work": "equity_snapshots"},
+                )
+
         async def _acknowledge_reconnected(selected: ActiveClerkRuntime) -> ActiveClerkRuntime:
-            return await acknowledge_runtime_binding(bound=reconnecting_binding, runtime=selected)
+            acknowledged = await acknowledge_runtime_binding(bound=reconnecting_binding, runtime=selected)
+            # #2669: the boot started the account's background work only
+            # because the binding was not refused then; an acknowledgement
+            # that refuses it now must stop that work, leaving the lane as a
+            # boot that met the refusal directly. A reconnect that ends
+            # serving keeps both running.
+            if account_background_work_refused():
+                await _stop_account_background_work()
+            return acknowledged
 
         def _install_reconnected(reconnected: ActiveClerkRuntime) -> None:
             if fleet_lane is not None:
