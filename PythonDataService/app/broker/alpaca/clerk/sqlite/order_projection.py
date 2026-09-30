@@ -22,6 +22,19 @@ ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES = frozenset(
     {"filled", "canceled", "expired", "rejected", "replaced"}
 )
 
+UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
+"""Terminal broker states that, with no recorded execution, are proven
+unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
+terminal snapshot can truthfully precede its execution slice on the
+websocket.
+
+Lives in this leaf module rather than in any one domain module because each
+reads it: EXIT falls through to ``EXIT_NOT_FLAT`` on it (R12), ENTER folds
+``ENTER_UNFILLED`` on it (#2006, the same ruling mirrored), and a manual
+order's unfilled remainder ends on it (#2647), whose owner copy
+(``manual_order_completion``) is checked against it at import.
+"""
+
 # An order that can never fill further, over ``orders o`` joined to its
 # ``effect_operations e``: the broker ended it, or its effect is terminal while
 # nothing says the broker ever knew it -- no broker identity (set only by an

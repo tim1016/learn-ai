@@ -30,6 +30,14 @@ class EffectDecisionEvidence(BaseModel):
     # gate's #1671 AC3 exemption), so its receipt says it was decided late.
     # ``None`` means on time.
     decision_lateness_ms: int | None = Field(default=None, gt=0)
+    # #2623: the last instant an ENTER decided on time is still on time -- its
+    # bar's close plus the run's delivery allowance
+    # (``feed_continuity_policy.decision_valid_until_ms``). An ENTER the Clerk
+    # refuses only because executions postdate the last account reading waits
+    # for a newer reading until then, and is dropped after it. ``None`` on an
+    # EXIT, which never waits for a reading, and from callers that set none:
+    # such an ENTER is dropped at once.
+    decision_valid_until_ms: int | None = Field(default=None, ge=0)
 
     @property
     def reason_code(self) -> str:

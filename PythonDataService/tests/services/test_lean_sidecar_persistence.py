@@ -130,7 +130,7 @@ def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: 
             },
         }
     )
-    python_receipt = _persisted_execution_config(request, evaluation_start=date(2026, 1, 5))
+    python_receipt = _persisted_execution_config(request)
     lean_payload = build_persist_payload(
         workspace_path=tmp_path,
         run_id="paired-execution-receipt",
@@ -146,7 +146,7 @@ def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: 
     )
 
     assert json.loads(lean_payload["execution_config_json"]) == python_receipt
-    assert set(python_receipt).isdisjoint({"session_entry_cutoff", "force_flat_at"})
+    assert set(python_receipt) == {"compatibility_profile", "warmup_from_date", "slippage_per_share", "limit_penetration"}
 
 
 def test_pair_skips_non_filled_events() -> None:

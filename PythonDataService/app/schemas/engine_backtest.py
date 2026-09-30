@@ -8,7 +8,6 @@ they live here rather than in either (#1999).
 
 from __future__ import annotations
 
-from datetime import time as time_of_day
 from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -62,24 +61,6 @@ class EngineBacktestRequest(BaseModel):
             "Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a "
             "non-zero value (e.g. 0.02 = 2 ticks for US equities) to model a "
             "more realistic execution cost."
-        ),
-    )
-    session_entry_cutoff: time_of_day | None = Field(
-        None,
-        description=(
-            "After this time-of-day, entry orders (those that would grow "
-            "|position|) are dropped. Exits still fill. Interpreted in the "
-            "timezone of the bar data. Example: '15:55:00' for ET data."
-        ),
-    )
-    force_flat_at: time_of_day | None = Field(
-        None,
-        description=(
-            "At the first minute bar whose wall-clock time reaches this "
-            "value, the engine cancels all queued / deferred orders, clears "
-            "active TP/SL brackets, closes every open position at that "
-            "minute's close, and calls strategy.on_force_flat(). Once per "
-            "calendar day. Example: '15:58:00' for ET data."
         ),
     )
     limit_penetration: float = Field(
@@ -297,12 +278,7 @@ class EngineBacktestRequest(BaseModel):
             raise ValueError("us-equity-raw-ibkr-v1 requires regular-session minute bars")
         if self.fill_mode != "signal_bar_close":
             raise ValueError("us-equity-raw-ibkr-v1 requires fill_mode=signal_bar_close")
-        if (
-            self.slippage_per_share != 0
-            or self.limit_penetration != 0
-            or self.session_entry_cutoff is not None
-            or self.force_flat_at is not None
-        ):
+        if self.slippage_per_share != 0 or self.limit_penetration != 0:
             raise ValueError("us-equity-raw-ibkr-v1 does not permit execution overrides")
         # The profile pins fees the same way it pins fills: a flat commission
         # the run would ignore is a conflict at the boundary, not a default to

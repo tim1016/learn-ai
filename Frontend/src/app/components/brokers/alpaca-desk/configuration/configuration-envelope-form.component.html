@@ -13,8 +13,8 @@
       The entry offset sets how far from the price an extended-hours entry is placed:
       above it for a buy, below it for a short entry. Exit defaults pre-fill future deploys;
       each bot keeps the exit terms chosen when it was deployed. Its exit allowance prices
-      a sell below the bid or a cover above the ask when an exit is retried; a last-bar exit
-      uses the decision bar's close. Every fresh Deploy reviews its own exit terms. Stopped
+      a sell below the bid or a cover above the ask when an exit is retried; an extended-hours
+      exit uses the decision bar's close. Every fresh Deploy reviews its own exit terms. Stopped
       positions retain their existing recovery actions. Set both offsets or leave both empty;
       entry changes take effect when this revision is applied and the worker restarts.
     </p>

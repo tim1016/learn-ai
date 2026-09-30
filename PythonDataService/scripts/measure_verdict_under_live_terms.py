@@ -319,10 +319,10 @@ class LiveTermsFillModel(FillModel):
     charged incrementally so each date's charges sum to its settlement.
 
     Only fills priced by ``fill_market_order`` see either term. The engine's
-    force-flat, end-of-algorithm and bracket exits call ``compute_fee``
-    directly (``engine.py:245``, ``:817``), which charges the flat commission —
-    $0 in the Alpaca-fee variants. Force-flat is off and the strategy places no
-    brackets, so that is at most the one end-of-algorithm exit per run. A
+    end-of-algorithm and bracket exits call ``compute_fee`` directly, which
+    charges the flat commission — $0 in the Alpaca-fee variants. The strategy
+    places no brackets, so that is at most the one end-of-algorithm exit per
+    run. A
     market order from the final consolidated bar has no current minute
     (``engine.py:681``) and fills at the signal bar's close.
     """

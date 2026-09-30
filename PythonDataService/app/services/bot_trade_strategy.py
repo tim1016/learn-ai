@@ -39,6 +39,7 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     trace_root,
 )
+from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -56,6 +57,7 @@ from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
     admit_on_delivery,
     continuity_policy_for,
+    decision_valid_until_ms,
     late_decision,
 )
 from app.services.market_liveness import (
@@ -955,6 +957,8 @@ async def run_trade_bot(
                     reason_code="STOPPED_OBSERVE_ONLY",
                 )
                 continue
+            if _refused_on_the_closing_bar(decision_receipts, binding=binding, evaluation=evaluation, intent=intent):
+                continue
             lateness = _screen_late_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
             )
@@ -1012,6 +1016,7 @@ async def run_trade_bot(
                 evaluation,
                 intent,
                 source_bars=source_bars,
+                continuity=continuity,
                 decision_lateness_ms=lateness.exempt_lateness_ms,
             )
             receipt = await clerk.execute_for_instance(
@@ -1035,6 +1040,10 @@ async def run_trade_bot(
                 # refusing it leaves nothing to unwind. (#1671 AC6 / #1708 review
                 # finding 1 described compensating rollbacks; the staged protocol
                 # in #1730 removed the emission-time mutation they compensated.)
+                # A REJECTED receipt is final: an ENTER refused only because
+                # executions postdate the account's last reading is kept by the
+                # Clerk until a newer reading lands or its evidence's
+                # ``decision_valid_until_ms`` passes (#2623).
                 _discard_evaluation(evaluation)
             else:
                 _settle_evaluation(evaluation, Settlement.COMMIT)
@@ -1192,6 +1201,58 @@ def _screen_late_decision(
     return _LatenessScreen(refused=True)
 
 
+def _refused_on_the_closing_bar(
+    decision_receipts: SqliteDecisionReceipts,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+) -> bool:
+    """Refuse a decision taken on the session's closing bar (#2607).
+
+    Shared by both runners. The bucket that ends at the regular session's
+    close is decided only after that close, so its decision is never sent:
+    DISCARD -- the refused-decision path, so an ENTER is dropped and an EXIT
+    stays due for the program to decide again from the next session -- plus a
+    protected ``blocked`` receipt naming ``CLOSING_BAR``. The backtest settles
+    the same bar the same way (``BacktestEngine``), and both read the one
+    predicate (``app.lean_sidecar.closing_bar``). The Clerk's market-closed
+    gate stays the backstop behind this screen.
+
+    The rule does not read the run's session kind. Every Deploy is
+    regular-hours today; an extended-hours run could trade the regular close's
+    bucket after hours, so extended-hours trading must decide whether the rule
+    follows the bot's hours -- here and in the backtest alike, or the two stop
+    agreeing.
+
+    Returns whether the decision was refused.
+    """
+    if not is_closing_bar(evaluation.decision_bar_close_ms):
+        return False
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=CLOSING_BAR_REASON_CODE,
+    )
+    logger.info(
+        "Bot decision on the session's closing bar not sent",
+        extra={
+            "action": "bot_closing_bar_decision_refused",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "intent": intent.kind.value,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+        },
+    )
+    return True
+
+
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
     return (
         f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
@@ -1205,6 +1266,7 @@ def _decision_bar_evidence(
     intent: SignalIntent,
     *,
     source_bars: SourceBarLedger | None,
+    continuity: ContinuityPolicy | None,
     decision_lateness_ms: int | None = None,
 ) -> tuple[RetainedSourceBar | None, EffectDecisionEvidence]:
     """The exact retained decision bar and the evidence that names it.
@@ -1216,6 +1278,10 @@ def _decision_bar_evidence(
     including the RTH-inside-extended ones that only ever wanted a market
     leg. It was written out once per runner before, and only the Dry Run
     copy resolved the bar.
+
+    An ENTER carries the instant it stops being on time (#2623): the Clerk
+    keeps an ENTER refused only for executions newer than the account's last
+    reading until then, rather than this runner discarding it.
 
     The ledger identity is authored from each observation's feed provenance.
     A wrapper's stream capability name may differ (for example a test or
@@ -1241,6 +1307,11 @@ def _decision_bar_evidence(
         trace_digest=_evaluation_trace_digest(evaluation),
         decision_bar_close_ms=evaluation.decision_bar_close_ms,
         decision_lateness_ms=decision_lateness_ms,
+        decision_valid_until_ms=(
+            decision_valid_until_ms(continuity, evaluation.decision_bar_close_ms)
+            if intent.kind is SignalIntentKind.ENTER
+            else None
+        ),
     )
     return retained, evidence
 
@@ -1331,6 +1402,8 @@ async def run_dry_run_bot(
                     },
                 )
                 continue
+            if _refused_on_the_closing_bar(decision_receipts, binding=binding, evaluation=evaluation, intent=intent):
+                continue
             lateness = _screen_late_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
             )
@@ -1342,6 +1415,7 @@ async def run_dry_run_bot(
                 evaluation,
                 intent,
                 source_bars=source_bars,
+                continuity=continuity,
                 decision_lateness_ms=lateness.exempt_lateness_ms,
             )
             receipt = await clerk.execute_for_instance(
@@ -1357,6 +1431,10 @@ async def run_dry_run_bot(
                 decision_evidence=decision_evidence,
             )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+                # A REJECTED receipt is final: an ENTER refused only because
+                # executions postdate the account's last reading is kept by the
+                # Clerk until a newer reading lands or its evidence's
+                # ``decision_valid_until_ms`` passes (#2623).
                 _discard_evaluation(evaluation)
                 continue
             _settle_evaluation(evaluation, Settlement.COMMIT)

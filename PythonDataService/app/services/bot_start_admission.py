@@ -393,8 +393,10 @@ def extended_hours_admission_fact(
 ) -> ExtendedHoursAdmissionFact:
     """Ask entry permission of the account and exit permission of this bot's seal.
 
-    Every new run needs exit terms, including regular-session runs whose last
-    bar exits after the close. Extended entries additionally need the account's
+    Every new run needs exit terms, including regular-session runs: their
+    exits outside the session (a manual Flatten, the watchdog's re-drive of a
+    refused exit, an exit that reaches the broker after the close) are priced
+    by the exit allowance. Extended entries additionally need the account's
     declared window and entry allowance. A stopped bot retains its immutable
     terms and resolves remaining exposure through Flatten.
     """

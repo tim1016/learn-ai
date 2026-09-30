@@ -145,8 +145,8 @@ class Portfolio:
 
         The engine moves the order to its ``resting_limit_orders`` list
         at drain time and evaluates it against every subsequent minute
-        bar until it fills (per the configured penetration rule) or is
-        cancelled by force-flat.
+        bar until it fills (per the configured penetration rule) or the
+        evaluation boundary clears the book.
         """
         if quantity == 0:
             raise ValueError("cannot submit a zero-quantity limit order")

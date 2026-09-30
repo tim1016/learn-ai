@@ -41,7 +41,8 @@ committed in the repo.
   from the account object (a changelog entry dated 2026-07-06 by its URL). All
   Alpaca accounts are margin accounts.
 - **A2 (#2441) is fixed on master.** A second, stricter gate now also refuses
-  every ENTER after any bot's fill until cash is re-read.
+  every ENTER after any bot's fill until cash is re-read; since #2623 that ENTER
+  waits for the re-read instead of being dropped.
 
 ## 1. How shares and fills are attributed
 
@@ -110,12 +111,16 @@ for example when shares were sold outside the Clerk.
   ("Executions changed after the last account reading") until the next reading.
   [code] `clerk/sqlite/risk_admission.py:92-94`, added by `b920c799` / `78ca2b40`
   (#2543, #2566).
-- **The refused ENTER is dropped.** The runtime returns a rejected receipt
-  [code] `clerk/sqlite/runtime.py:1164-1168`, and the bot discards that decision
-  [code] `services/bot_trade_strategy.py:1029-1038`.
+- **The refused ENTER waits for that reading (#2623).** At `79c79f22` it was
+  dropped: the runtime returned a rejected receipt and the bot discarded the
+  decision. Since the owner's decision of 2026-09-29 the Clerk reads the account
+  at once and judges the ENTER again, while the decision is still on time (its
+  bar's close plus 20 s). Any other refusal still drops it.
+  [code] `clerk/sqlite/runtime.py` (`_execute_effect`),
+  `clerk/sqlite/live_envelope_sync.py` (`read_for_entry`)
 - **Two bots deciding on the same bar:** once the first bot's fill is recorded,
-  the second bot's entry is refused rather than delayed.
-  [test] `test_one_bots_fill_refuses_the_other_bots_entry_until_the_next_account_reading`
+  the second bot's entry waits for the next reading, then enters.
+  [test] `test_one_bots_fill_holds_the_other_bots_entry_until_the_next_account_reading`
 
 ## 2. Wash trades at Alpaca
 
@@ -275,13 +280,18 @@ What that means for a wash-trade refusal:
   - Deploy starts regular-session bots only, so no program ENTER is sent
     outside the regular session. The case that happens is the owner's own
     manual buy limit, which can rest for hours: A's exit waits for it, then
-    goes out on the first pass after the owner cancels it through the Clerk.
-    [test] `test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_the_clerk_cancels_it`
-  - A cancel at Alpaca, or an expiry, is #2647: the order's record ends, but
-    its manual effect stays in progress, so the Clerk keeps counting it as
-    work in flight and the exit still waits (on the regular session's
-    escalation budget from 09:30). [test] strict xfail
-    `test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca`
+    goes out on the first pass after the order ends. That holds however it
+    ends: the owner cancels it through the Clerk or in Alpaca's own website,
+    a DAY limit expires, or Alpaca rejects it after accepting it. Alpaca's
+    ending ends the manual order's effect too (#2647), by its `trade_updates`
+    frame or by the next sweep, so the Clerk no longer counts it as work in
+    flight.
+    - [test] `test_a_bot_exit_refused_behind_the_owners_resting_buy_limit_is_sent_again_once_the_clerk_cancels_it`
+    - [test] `test_a_bot_exit_refused_behind_the_owners_buy_limit_is_sent_again_once_it_is_cancelled_at_alpaca`
+      (both routes)
+    - [test] `test_manual_order_ended_at_broker.py::test_a_manual_limit_alpaca_ends_unfilled_ends_its_effect_and_bots_may_enter_again`
+      (a cancel at Alpaca, an expiry and a rejection each end the manual
+      effect, on both routes)
   - A refusal with no opposite-side order open still waits for the next
     session outside the regular one. Existing test
     `test_exit_send_session.py::test_failed_extended_limit_waits_for_next_eligible_session_without_chasing`
@@ -474,7 +484,7 @@ From `PythonDataService/`:
 
 ```text
 DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-44 passed, 2 xfailed
+46 passed
 ```
 
 - **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
@@ -484,11 +494,10 @@ DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/cler
   `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
   from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
 - **The former xfails.** The file carried strict xfails for #2621 (the error
-  mapping) and the two #2553 cash-claim cases. Each passed once its issue
-  landed, and its mark was removed.
-- **The open xfail.** The two cases of a manual buy limit cancelled at Alpaca
-  (by the sweep and by its `trade_updates` frame) are strict xfails for
-  #2647; remove the mark when that issue lands.
+  mapping), the two #2553 cash-claim cases, and the two #2647 cases of a
+  manual buy limit cancelled at Alpaca (by the sweep and by its
+  `trade_updates` frame). Each passed once its issue landed, and its mark was
+  removed.
 
 ## Sources
 

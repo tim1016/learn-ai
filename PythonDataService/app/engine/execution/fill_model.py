@@ -39,6 +39,7 @@ from app.engine.execution.order import (
     OrderEvent,
     OrderType,
 )
+from app.lean_sidecar.closing_bar import ClosingBarConvention
 from app.utils.timestamps import ny_datetime
 
 # Set of FillModes whose fill_market_order may return None waiting for a
@@ -79,6 +80,20 @@ class FillModel:
     slippage_per_share: Decimal = Decimal(0)
     fee_model: IbkrEquityCommissionModel | None = None
     fill_stale_signal_at_current_open: bool = False
+
+    @property
+    def closing_bar_convention(self) -> ClosingBarConvention:
+        """How a run under this model settles a Signal Program decision on the closing bar.
+
+        The LEAN-compatibility path (``fill_stale_signal_at_current_open``)
+        commits it and fills it at the next session's first minute, because
+        LEAN does. Every other model follows the closing-bar rule (#2607): the
+        decision settles DISCARD, as live refuses it
+        (``app.lean_sidecar.closing_bar``).
+        """
+        if self.fill_stale_signal_at_current_open:
+            return ClosingBarConvention.LEAN_NEXT_OPEN
+        return ClosingBarConvention.SKIP_CLOSING_BAR
 
     def compute_fee(self, *, quantity: int, fill_price: Decimal) -> Decimal:
         """Return the fee for a single fill. Always quantized to cents."""

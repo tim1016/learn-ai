@@ -3058,6 +3058,36 @@
         "title": "BacktestResultResponse",
         "type": "object"
       },
+      "BacktestRunClosingBarSkipResponse": {
+        "description": "One decision the run's closing-bar rule set aside (#2607).",
+        "properties": {
+          "barCloseMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Barclosems",
+            "type": "integer"
+          },
+          "closePrice": {
+            "title": "Closeprice",
+            "type": "number"
+          },
+          "intent": {
+            "enum": [
+              "ENTER",
+              "EXIT"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "barCloseMs",
+          "intent",
+          "closePrice"
+        ],
+        "title": "BacktestRunClosingBarSkipResponse",
+        "type": "object"
+      },
       "BacktestRunDetailResponse": {
         "description": "Everything the run report renders, plus the bounded trade evidence.",
         "properties": {
@@ -3071,6 +3101,13 @@
               }
             ],
             "title": "Brokeragepolicy"
+          },
+          "closingBarSkips": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunClosingBarSkipResponse"
+            },
+            "title": "Closingbarskips",
+            "type": "array"
           },
           "commissionPerOrder": {
             "anyOf": [
@@ -3427,7 +3464,8 @@
           "insightSummaryJson",
           "trades",
           "tradesTruncated",
-          "parityVerdicts"
+          "parityVerdicts",
+          "closingBarSkips"
         ],
         "title": "BacktestRunDetailResponse",
         "type": "object"
@@ -11149,6 +11187,46 @@
         "title": "CloseLegExit",
         "type": "object"
       },
+      "ClosingBarConvention": {
+        "description": "How a run treats a Signal Program decision on the closing bar.\n\nRecorded on every backtest run's evidence provenance, so evidence produced\nunder a different convention is classified rather than silently compared.",
+        "enum": [
+          "skip_closing_bar/v1",
+          "lean_next_open/v1"
+        ],
+        "title": "ClosingBarConvention",
+        "type": "string"
+      },
+      "ClosingBarSkipRecord": {
+        "additionalProperties": false,
+        "description": "One decision a run's closing-bar convention set aside (#2607).\n\nAn ENTER produced no trade. An EXIT stayed due: the program decided it\nagain from the next session, when its own exit condition said so, instead\nof at this bar's close.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "close_price": {
+            "title": "Close Price",
+            "type": "number"
+          },
+          "intent": {
+            "enum": [
+              "ENTER",
+              "EXIT"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "intent",
+          "close_price"
+        ],
+        "title": "ClosingBarSkipRecord",
+        "type": "object"
+      },
       "CohortActionResult": {
         "description": "The batch outcome: every leg answered, in request order (ADR 0051 D5).",
         "properties": {
@@ -15887,19 +15965,6 @@
             "title": "Fill Mode",
             "type": "string"
           },
-          "force_flat_at": {
-            "anyOf": [
-              {
-                "format": "time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "At the first minute bar whose wall-clock time reaches this value, the engine cancels all queued / deferred orders, clears active TP/SL brackets, closes every open position at that minute's close, and calls strategy.on_force_flat(). Once per calendar day. Example: '15:58:00' for ET data.",
-            "title": "Force Flat At"
-          },
           "from_date": {
             "anyOf": [
               {
@@ -15961,19 +16026,6 @@
             "description": "Persist this run as a Strategy Lab study and dispatch its parity companion. False keeps the engine result only \u2014 for callers such as Grid Search that record their own summary rows.",
             "title": "Save Study",
             "type": "boolean"
-          },
-          "session_entry_cutoff": {
-            "anyOf": [
-              {
-                "format": "time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.",
-            "title": "Session Entry Cutoff"
           },
           "slippage_per_share": {
             "default": 0.0,
@@ -26497,6 +26549,17 @@
               }
             ]
           },
+          "ending": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ending"
+          },
           "instruction": {
             "anyOf": [
               {
@@ -26543,7 +26606,8 @@
           "command",
           "effect",
           "order",
-          "cancellation"
+          "cancellation",
+          "ending"
         ],
         "title": "ManualOrderLegResponse",
         "type": "object"
@@ -30613,7 +30677,7 @@
       },
       "PaperXhAllowancesPayload": {
         "additionalProperties": false,
-        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's EXIT on the day's last bar goes out after the close\nas such a limit, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is\nnever carried into a new deployment; resolving it requires Flatten before\na fresh Deploy (#2504).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at Deploy. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
+        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's exits outside the session -- a manual Flatten, the\nwatchdog's re-drive of a refused exit, an exit that reaches the broker\nafter the close -- are such limits, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is\nnever carried into a new deployment; resolving it requires Flatten before\na fresh Deploy (#2504).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at Deploy. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
         "properties": {
           "xh_entry_bps": {
             "exclusiveMaximum": 10000.0,
@@ -35866,6 +35930,24 @@
       "RunEvidenceProvenance": {
         "additionalProperties": false,
         "properties": {
+          "closing_bar_convention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClosingBarConvention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closing_bar_skips": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ClosingBarSkipRecord"
+            },
+            "title": "Closing Bar Skips",
+            "type": "array"
+          },
           "daily_return_convention": {
             "title": "Daily Return Convention",
             "type": "string"

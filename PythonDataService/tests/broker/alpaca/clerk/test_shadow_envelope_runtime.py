@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.active_authority import (
     activate_shadow_clerk_authority,
     select_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
@@ -41,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
+from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -298,6 +300,37 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     refused = await _enter(runtime, registered_running_bot, quantity=1, decision_id="d2")
     assert refused.state.value == "rejected"
     assert refused.explanation.startswith("LIVE_ENVELOPE_UNOBSERVED:"), refused.explanation
+
+
+async def test_an_entry_after_the_accounts_own_fills_waits_for_a_new_reading_and_enters(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+) -> None:
+    """#2623 through the composed authority: its facade asks its own sync for a reading.
+
+    The bot buys and sells before the sync reads again, so its next ENTER is
+    refused only for executions newer than the reading. It is not dropped: the
+    Clerk reads the account at once and the ENTER is admitted on that reading.
+    """
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None and runtime.clerk is not None
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert (await _enter(runtime, registered_running_bot, quantity=1)).state.value == "submitted"
+    assert (await _exit(runtime, registered_running_bot, quantity=1)).state.value == "flat"
+    decision_id = "e" * 64
+
+    again = await runtime.clerk.execute_for_instance(
+        strategy_instance_id=SID, run_id=RUN_ID, decision_id=decision_id, purpose=EffectPurpose.ENTER,
+        action_plan=_binding(use_rth=True).action_plan, quantity=1, use_rth=True,
+        retained_source_bar=registered_running_bot,
+        decision_evidence=EffectDecisionEvidence(
+            evaluation_id=decision_id, bar_ref=registered_running_bot.bar_ref, symbol="SPY",
+            outcome="enter_intent", observed_at_ms=NOW_MS, decision_bar_close_ms=registered_running_bot.end_ms,
+            decision_valid_until_ms=registered_running_bot.end_ms + DELIVERY_ALLOWANCE_MS,
+        ),
+    )
+
+    assert again.state.value == "submitted", again.explanation
 
 
 async def test_paper_installs_the_same_account_risk_observation_gate(
