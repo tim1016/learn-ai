@@ -96,6 +96,16 @@ class BacktestRunParityVerdictResponse(BaseModel):
     created_at: int = _column("created_at_ms", "createdAt")
 
 
+class BacktestRunClosingBarSkipResponse(BaseModel):
+    """One decision the run's closing-bar rule set aside (#2607)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    bar_close_ms: int
+    intent: Literal["ENTER", "EXIT"]
+    close_price: float
+
+
 class BacktestRunDetailResponse(_RunResponse):
     """Everything the run report renders, plus the bounded trade evidence."""
 
@@ -123,6 +133,11 @@ class BacktestRunDetailResponse(_RunResponse):
     trades: list[BacktestRunTradeResponse]
     trades_truncated: bool
     parity_verdicts: list[BacktestRunParityVerdictResponse]
+    # The decisions the run's closing-bar convention set aside, read from the
+    # evidence provenance its producer recorded; empty when it recorded none.
+    closing_bar_skips: list[BacktestRunClosingBarSkipResponse] = _column(
+        "evidence_provenance_json", "closingBarSkips"
+    )
 
     @field_validator("equity_curve", "validation_analytics", mode="before")
     @classmethod
@@ -134,6 +149,12 @@ class BacktestRunDetailResponse(_RunResponse):
     def _parse_documentation(cls, value: Any) -> Any:
         parsed = json.loads(value) if isinstance(value, str) else value
         return parsed or []
+
+    @field_validator("closing_bar_skips", mode="before")
+    @classmethod
+    def _parse_closing_bar_skips(cls, value: Any) -> Any:
+        provenance = json.loads(value) if isinstance(value, str) else value
+        return (provenance or {}).get("closing_bar_skips", [])
 
 
 class BacktestRunNotesRequest(BaseModel):

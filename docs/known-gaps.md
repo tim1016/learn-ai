@@ -656,3 +656,21 @@ re-arms the server-authored timeframe auto-correct, and numeric
   above is what remains open. Evidence:
   [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md),
   [final-bar decisions note, section 5](./references/final-bar-decisions-2467.md).
+
+## Backtest vs reality: when a bot ends (#2607, 2026-09-29)
+
+- **P2: a backtest always holds overnight; the owner's end schedule is not
+  modelled (owner decision 4).** Live and backtest share the closing-bar rule
+  (`PythonDataService/app/lean_sidecar/closing_bar.py`): neither acts on a
+  decision taken on the bar that ends at the session close. A backtest then
+  carries any open position into the next session. A live bot instead ends
+  when its owner says: by default today at one minute before the close,
+  selling at market or keeping its shares as chosen at Deploy (#2607 slices
+  2 and 3). A one-day bot that sells every afternoon therefore has no
+  backtest counterpart, and neither does any bot whose end, or sell/keep
+  choice, differs from "hold until the strategy exits". Compare such a bot's
+  live results with a backtest only over trades the end schedule did not
+  touch. The rule itself covers Signal Program decisions, the only ones a
+  live bot makes. Research-only strategies without a Signal Program (spec
+  strategies, the QuantConnect parity ports) have no refusable decision and
+  keep their reference fill conventions.

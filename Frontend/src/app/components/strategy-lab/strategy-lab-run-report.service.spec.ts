@@ -97,6 +97,18 @@ describe("StrategyLabRunReport", () => {
     expect(report.reportNotices()).not.toContain("Validation analytics were not recorded for this run.");
   });
 
+  it("hands the ledger every closing-bar decision the run set aside", async () => {
+    const run = makeRun({
+      closingBarSkips: [{ barCloseMs: Date.UTC(2026, 0, 5, 21, 0), intent: "ENTER", closePrice: 501.25 }],
+    });
+    const { report } = makeReport(of(run), run.id);
+    await Promise.resolve();
+
+    expect(report.engineResult()?.closing_bar_skips).toEqual([
+      { bar_close_ms: Date.UTC(2026, 0, 5, 21, 0), intent: "ENTER", close_price: 501.25 },
+    ]);
+  });
+
   it("surfaces a malformed persisted verdict as a notice with no verdict", async () => {
     const run = makeRun({ verdictJson: "{}" });
     const { report } = makeReport(of(run), run.id);

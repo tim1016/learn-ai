@@ -82,6 +82,7 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     parityGroupId: null,
     trades: [],
     tradesTruncated: false,
+    closingBarSkips: [],
     metricDocumentation: [],
     notes: null,
     parityVerdicts: [],

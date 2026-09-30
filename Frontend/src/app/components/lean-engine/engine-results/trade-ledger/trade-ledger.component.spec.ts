@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { EngineTrade } from '../engine-results.types';
+import type { EngineClosingBarSkip, EngineTrade } from '../engine-results.types';
 import { TradeLedgerComponent } from './trade-ledger.component';
 
 function trade(tradeNumber: number): EngineTrade {
@@ -38,5 +38,31 @@ describe('TradeLedgerComponent', () => {
 
     expect(screen.getByText('Showing 7 of 7 closed trades · viewer-local time')).toBeTruthy();
     expect(screen.getByText('Signal 1')).toBeTruthy();
+  });
+
+  it('lists the decisions the closing-bar rule set aside, even when no trade closed', async () => {
+    const skips: EngineClosingBarSkip[] = [
+      { bar_close_ms: Date.UTC(2026, 6, 1, 20, 0, 0), intent: 'ENTER', close_price: 612.34 },
+      { bar_close_ms: Date.UTC(2026, 6, 2, 20, 0, 0), intent: 'EXIT', close_price: 613.5 },
+    ];
+    await render(TradeLedgerComponent, {
+      inputs: { trades: [], closingBarSkips: skips },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.getByText('This run did not close any trades.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Decided on the closing bar' })).toBeTruthy();
+    expect(screen.getByText('Entry skipped')).toBeTruthy();
+    expect(screen.getByText('Exit moved to the next session')).toBeTruthy();
+    expect(screen.getByText('612.34')).toBeTruthy();
+  });
+
+  it('shows no closing-bar section when the run set nothing aside', async () => {
+    await render(TradeLedgerComponent, {
+      inputs: { trades: [trade(2)] },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    expect(screen.queryByRole('heading', { name: 'Decided on the closing bar' })).toBeNull();
   });
 });

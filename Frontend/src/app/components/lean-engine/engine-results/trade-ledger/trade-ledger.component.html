@@ -41,4 +41,27 @@
       </button>
     </footer>
   } @else { <p class="empty-state">This run did not close any trades.</p> }
+  @if (closingBarSkips().length > 0) {
+    <section class="closing-bar" aria-labelledby="closing-bar-title">
+      <h3 id="closing-bar-title">Decided on the closing bar</h3>
+      <p>
+        The bar that ends at the session close is decided only after the market closes, so live cannot trade it
+        and this backtest did not: an entry was skipped, and an exit moved to the next session's first decision.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Bar close</th><th>Outcome</th><th>Close</th></tr></thead>
+          <tbody>
+            @for (skip of closingBarSkips(); track skip.bar_close_ms) {
+              <tr>
+                <td><app-timestamp-display [value]="skip.bar_close_ms" mode="local" /></td>
+                <td>{{ closingBarOutcome(skip) }}</td>
+                <td class="mono">{{ formatNumber(skip.close_price) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  }
 </section>

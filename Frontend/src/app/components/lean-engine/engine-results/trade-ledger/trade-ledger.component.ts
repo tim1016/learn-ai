@@ -2,7 +2,13 @@ import { ChangeDetectionStrategy, Component, computed, input, signal } from '@an
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
-import type { EngineTrade } from '../engine-results.types';
+import type { EngineClosingBarSkip, EngineTrade } from '../engine-results.types';
+
+/** Closed copy for what the closing-bar rule (#2607) did to each decision it set aside. */
+const CLOSING_BAR_OUTCOME: Record<EngineClosingBarSkip['intent'], string> = {
+  ENTER: 'Entry skipped',
+  EXIT: 'Exit moved to the next session',
+};
 
 @Component({
   selector: 'app-engine-trade-ledger',
@@ -15,6 +21,7 @@ export class TradeLedgerComponent {
   readonly trades = input.required<EngineTrade[]>();
   readonly totalTradeCount = input<number | null>(null);
   readonly tradesTruncated = input(false);
+  readonly closingBarSkips = input<EngineClosingBarSkip[]>([]);
   readonly expanded = signal(false);
 
   readonly isTruncated = computed(() =>
@@ -39,6 +46,10 @@ export class TradeLedgerComponent {
 
   readonly winners = computed(() => this.tradeOutcomeTally().winners);
   readonly losses = computed(() => this.tradeOutcomeTally().losses);
+
+  closingBarOutcome(skip: EngineClosingBarSkip): string {
+    return CLOSING_BAR_OUTCOME[skip.intent];
+  }
 
   toggleExpanded(): void {
     this.expanded.update((value) => !value);

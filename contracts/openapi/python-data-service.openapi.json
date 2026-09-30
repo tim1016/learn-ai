@@ -3058,6 +3058,34 @@
         "title": "BacktestResultResponse",
         "type": "object"
       },
+      "BacktestRunClosingBarSkipResponse": {
+        "description": "One decision the run's closing-bar rule set aside (#2607).",
+        "properties": {
+          "barCloseMs": {
+            "title": "Barclosems",
+            "type": "integer"
+          },
+          "closePrice": {
+            "title": "Closeprice",
+            "type": "number"
+          },
+          "intent": {
+            "enum": [
+              "ENTER",
+              "EXIT"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "barCloseMs",
+          "intent",
+          "closePrice"
+        ],
+        "title": "BacktestRunClosingBarSkipResponse",
+        "type": "object"
+      },
       "BacktestRunDetailResponse": {
         "description": "Everything the run report renders, plus the bounded trade evidence.",
         "properties": {
@@ -3071,6 +3099,13 @@
               }
             ],
             "title": "Brokeragepolicy"
+          },
+          "closingBarSkips": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunClosingBarSkipResponse"
+            },
+            "title": "Closingbarskips",
+            "type": "array"
           },
           "commissionPerOrder": {
             "anyOf": [
@@ -3427,7 +3462,8 @@
           "insightSummaryJson",
           "trades",
           "tradesTruncated",
-          "parityVerdicts"
+          "parityVerdicts",
+          "closingBarSkips"
         ],
         "title": "BacktestRunDetailResponse",
         "type": "object"
@@ -11147,6 +11183,37 @@
           "entry_leg_id"
         ],
         "title": "CloseLegExit",
+        "type": "object"
+      },
+      "ClosingBarSkipRecord": {
+        "additionalProperties": false,
+        "description": "One decision a run's closing-bar convention set aside (#2607).\n\nAn ENTER produced no trade. An EXIT stayed due and filled on the next\nsession's first decision instead of at this bar's close.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "close_price": {
+            "title": "Close Price",
+            "type": "number"
+          },
+          "intent": {
+            "enum": [
+              "ENTER",
+              "EXIT"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "intent",
+          "close_price"
+        ],
+        "title": "ClosingBarSkipRecord",
         "type": "object"
       },
       "CohortActionResult": {
@@ -35855,6 +35922,25 @@
       "RunEvidenceProvenance": {
         "additionalProperties": false,
         "properties": {
+          "closing_bar_convention": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Bar Convention"
+          },
+          "closing_bar_skips": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ClosingBarSkipRecord"
+            },
+            "title": "Closing Bar Skips",
+            "type": "array"
+          },
           "daily_return_convention": {
             "title": "Daily Return Convention",
             "type": "string"

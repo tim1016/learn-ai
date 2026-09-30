@@ -52,7 +52,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
+from app.research.backtest_runs.evidence_provenance import ClosingBarSkipRecord, RunEvidenceProvenance
 from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_backtest import (
@@ -1051,6 +1051,15 @@ def _aggregate_backtest_response(
             statistics_basis="marked_equity_curve/v1",
             daily_return_convention="initial_capital_first_session/v1",
             data_availability_hash=lake_manifest,
+            closing_bar_convention=result.closing_bar_convention.value,
+            closing_bar_skips=tuple(
+                ClosingBarSkipRecord(
+                    bar_close_ms=skip.bar_close_ms,
+                    intent=skip.intent.value,
+                    close_price=float(skip.close_price),
+                )
+                for skip in result.closing_bar_skips
+            ),
         ),
         success=True,
         strategy_name=request.strategy_name,

@@ -3,9 +3,14 @@ import { rxResource } from "@angular/core/rxjs-interop";
 import { EMPTY, expand, of, switchMap, timer } from "rxjs";
 
 import { BacktestRunsService } from "../../services/backtest-runs.service";
-import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../services/backtest-runs.types";
+import type {
+  BacktestRunClosingBarSkip,
+  BacktestRunDetail,
+  BacktestRunDetailTrade,
+} from "../../services/backtest-runs.types";
 import type { TradingMarker, TradingPoint } from "../../shared/trading-chart";
 import type {
+  EngineClosingBarSkip,
   EngineResultData,
   EngineTrade,
   LeanStatistics,
@@ -130,6 +135,7 @@ export class StrategyLabRunReport {
       lean_statistics: parseLeanStatistics(run.leanStatisticsJson),
       lean_analysis: parseLeanAnalysis(run.leanAnalysisJson),
       trades: run.trades.map(toEngineTrade),
+      closing_bar_skips: run.closingBarSkips.map(toEngineClosingBarSkip),
       log_lines: [],
       // The frozen envelope is served as the engine wrote it; the analytics
       // body inside it is the shape the results components already read.
@@ -299,6 +305,10 @@ export function toEngineTrade(trade: BacktestRunDetailTrade, index: number): Eng
     result: trade.pnL > 0 ? "WIN" : "LOSS",
     signal_reason: trade.signalReason,
   };
+}
+
+function toEngineClosingBarSkip(skip: BacktestRunClosingBarSkip): EngineClosingBarSkip {
+  return { bar_close_ms: skip.barCloseMs, intent: skip.intent, close_price: skip.closePrice };
 }
 
 function parseLeanStatistics(json: string | null): LeanStatistics | null {

@@ -95,6 +95,17 @@ export interface MetricDocumentationContext {
   contract_id: string | null;
 }
 
+/**
+ * One decision the run's closing-bar rule set aside (#2607): an ENTER that
+ * produced no trade, or an EXIT that filled on the next session's first
+ * decision instead. Read from the evidence provenance the producer recorded.
+ */
+export interface BacktestRunClosingBarSkip {
+  barCloseMs: number;
+  intent: "ENTER" | "EXIT";
+  closePrice: number;
+}
+
 export interface BacktestRunParityVerdict {
   id: number;
   status: string;
@@ -148,6 +159,8 @@ export interface BacktestRunDetail {
   /** True when the response carries only the newest bounded trade evidence. */
   tradesTruncated: boolean;
   parityVerdicts: BacktestRunParityVerdict[];
+  /** Empty for a run that recorded none, including every run from before #2607. */
+  closingBarSkips: BacktestRunClosingBarSkip[];
 }
 
 export function toRunHistoryRow(run: BacktestRunSummary): RunHistoryRow {

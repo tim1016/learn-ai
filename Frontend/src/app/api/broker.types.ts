@@ -9363,12 +9363,29 @@ export interface components {
             win_rate?: number;
         };
         /**
+         * BacktestRunClosingBarSkipResponse
+         * @description One decision the run's closing-bar rule set aside (#2607).
+         */
+        BacktestRunClosingBarSkipResponse: {
+            /** Barclosems */
+            barCloseMs: number;
+            /** Closeprice */
+            closePrice: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
+        };
+        /**
          * BacktestRunDetailResponse
          * @description Everything the run report renders, plus the bounded trade evidence.
          */
         BacktestRunDetailResponse: {
             /** Brokeragepolicy */
             brokeragePolicy: string | null;
+            /** Closingbarskips */
+            closingBarSkips: components["schemas"]["BacktestRunClosingBarSkipResponse"][];
             /** Commissionperorder */
             commissionPerOrder: number | null;
             /** Datapolicy */
@@ -12428,6 +12445,24 @@ export interface components {
              * @constant
              */
             kind: "close_leg";
+        };
+        /**
+         * ClosingBarSkipRecord
+         * @description One decision a run's closing-bar convention set aside (#2607).
+         *
+         *     An ENTER produced no trade. An EXIT stayed due and filled on the next
+         *     session's first decision instead of at this bar's close.
+         */
+        ClosingBarSkipRecord: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Close Price */
+            close_price: number;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "ENTER" | "EXIT";
         };
         /**
          * CohortActionResult
@@ -23428,6 +23463,13 @@ export interface components {
         };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
+            /** Closing Bar Convention */
+            closing_bar_convention?: string | null;
+            /**
+             * Closing Bar Skips
+             * @default []
+             */
+            closing_bar_skips?: components["schemas"]["ClosingBarSkipRecord"][];
             /** Daily Return Convention */
             daily_return_convention: string;
             /** Data Availability Hash */
