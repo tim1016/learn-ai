@@ -38,6 +38,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.lean_sidecar.trading_calendar import SessionWindow
+from app.schemas.broker_v2_panel import BotCatalogView, BotGroup
 from app.services.bot_binding_repository import (
     RUN_OUTCOMES_DIRECTORY,
     BotRunOutcomeRecord,
@@ -461,8 +462,20 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "simulated_cash_usd"),
+    [
+        ("dry_run", "2000.00"),
+        # A stopped, flat Dry Run is Finished (#2567) and carries no simulated
+        # cash: stamping it anyway failed the response schema and 500'd the
+        # account's whole roster.
+        ("finished", None),
+    ],
+)
 async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
     monkeypatch: pytest.MonkeyPatch,
+    group: BotGroup,
+    simulated_cash_usd: str | None,
 ) -> None:
     """A Dry Run must not disappear behind the real-paper Clerk selector."""
 
@@ -470,12 +483,30 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
         account_id = "sim:dry-spy"
         repository = SimpleNamespace(deployment_budget=lambda sid: {"committed_cents": 200_000})
 
-    class _CatalogRow:
-        strategy_instance_id = "dry-spy"
-        mode = "trade"
-
-        def model_copy(self, *, update: dict[str, str]) -> SimpleNamespace:
-            return SimpleNamespace(strategy_instance_id=self.strategy_instance_id, **update)
+    running = group == "dry_run"
+    sealed_row = BotCatalogView(
+        strategy_instance_id="dry-spy",
+        strategy_key="deployment_validation",
+        strategy_label="Deployment Validation",
+        broker="alpaca",
+        account_id="sim:dry-spy",
+        symbol="SPY",
+        mode="trade",
+        phase="ON_DUTY" if running else "OFF_DUTY",
+        desired_state="RUNNING" if running else "STOPPED",
+        running=running,
+        status_label="Working" if running else "Off duty",
+        status_explanation="The Dry Run's sealed simulator.",
+        exposure={},
+        fills_today=0,
+        realized_pnl_today=0.0,
+        open_pnl=0.0,
+        day_pnl=0.0,
+        last_activity_at_ms=None,
+        needs_attention=False,
+        group=group,
+        world_label="DRY RUN · simulated cash",
+    )
 
     binding = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
     # A cleared Dry Run (#2567): its sealed simulator is never opened again.
@@ -497,9 +528,9 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
     async def real_catalog(_broker: str, _account_id: str) -> list[object]:
         return []
 
-    async def synthetic_catalog(_broker: str, received_facade: _SyntheticFacade) -> list[_CatalogRow]:
+    async def synthetic_catalog(_broker: str, received_facade: _SyntheticFacade) -> list[BotCatalogView]:
         assert received_facade is facade
-        return [_CatalogRow()]
+        return [sealed_row]
 
     monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
@@ -511,7 +542,9 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
 
     assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
     # Its simulated starting cash is its own consent amount, Python-authored.
-    assert result[0].simulated_cash_usd == "2000.00"
+    assert result[0].simulated_cash_usd == simulated_cash_usd
+    # ``model_copy`` skips validation; the route's response check does not.
+    BotCatalogView.model_validate(result[0].model_dump())
 
 
 @pytest.mark.asyncio

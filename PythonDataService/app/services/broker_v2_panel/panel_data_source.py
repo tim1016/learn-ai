@@ -347,10 +347,15 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
                 detail=str(exc),
             ) from exc
         # A Dry Run's starting cash is its consent amount, private to its
-        # simulated account (PRD #2540); a pre-budget Dry Run has none.
+        # simulated account (PRD #2540); a pre-budget Dry Run has none. Only
+        # the Dry Run group carries it: a stopped, flat Dry Run is Finished
+        # (#2567), and ``model_copy`` skips the schema check that says so.
         simulated_cash = None if budget is None else dollars(budget["committed_cents"])
         synthetic_rows.extend(
-            row.model_copy(update={"mode": "dry_run", "simulated_cash_usd": simulated_cash})
+            row.model_copy(update={
+                "mode": "dry_run",
+                "simulated_cash_usd": simulated_cash if row.group == "dry_run" else None,
+            })
             for row in rows
             if row.strategy_instance_id == binding.strategy_instance_id
         )
