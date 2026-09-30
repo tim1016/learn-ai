@@ -41,10 +41,6 @@ export interface ConfirmInFormAction {
   anchor: string;
 }
 
-export interface RetireReplaceAction {
-  kind: 'retire_replace';
-}
-
 export interface RemoveAction {
   kind: 'remove';
 }
@@ -52,7 +48,6 @@ export interface RemoveAction {
 export type OperatorAction =
   | NavigateAction
   | ConfirmInFormAction
-  | RetireReplaceAction
   | RemoveAction;
 
 export interface OperatorMove {
