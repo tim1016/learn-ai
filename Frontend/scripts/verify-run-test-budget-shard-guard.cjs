@@ -49,6 +49,7 @@ const CASE_DRIVEN_ENV_VARS = [
   'TEST_SHARD_COUNT',
   'NG_BUILD_MAX_WORKERS',
   'FAKE_NPM_EXIT_CODE',
+  'GITHUB_STEP_SUMMARY',
 ];
 
 // Runs the real wrapper as a child process with a stubbed "npm" ahead of the
@@ -157,6 +158,62 @@ function runWrapper({ args = [], env = {} } = {}) {
 {
   const { result } = runWrapper({ env: { FAKE_NPM_EXIT_CODE: '0' } });
   assert.equal(result.status, 0);
+}
+
+// The wrapper reports the run's elapsed time on stderr (#2632 item 3), and
+// appends the same line to the CI step summary when GitHub Actions provides
+// the path — one line per shard so budget drift is readable from a run's
+// summary page without opening each job.
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
+  const summaryFile = path.join(scratch, 'summary.md');
+  try {
+    const { result } = runWrapper({
+      env: {
+        TEST_SHARD_INDEX: '2',
+        TEST_SHARD_COUNT: '6',
+        GITHUB_STEP_SUMMARY: summaryFile,
+      },
+    });
+    assert.equal(result.status, 0);
+    const expected = /^Frontend tests shard 2\/6: \d+(\.\d+)?s of the 120s budget\n$/;
+    assert.match(
+      fs.readFileSync(summaryFile, 'utf8'),
+      expected,
+      'the wrapper must append the shard time to the step summary',
+    );
+    assert.match(result.stderr, expected);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// Without a step-summary path (a local dev run) the wrapper still prints
+// the time to stderr and exits cleanly.
+{
+  const { result } = runWrapper({
+    env: { TEST_SHARD_INDEX: '3', TEST_SHARD_COUNT: '6' },
+  });
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stderr,
+    /Frontend tests shard 3\/6: \d+(\.\d+)?s of the 120s budget/,
+  );
+}
+
+// A step summary that cannot be written (here: the path is a directory)
+// warns on stderr and leaves the child's exit code untouched.
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-budget-summary-'));
+  try {
+    const { result } = runWrapper({
+      env: { GITHUB_STEP_SUMMARY: scratch, FAKE_NPM_EXIT_CODE: '3' },
+    });
+    assert.equal(result.status, 3, 'a failed summary write must not change the exit code');
+    assert.match(result.stderr, /Unable to append the test time to GITHUB_STEP_SUMMARY/);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 console.log('run-test-budget shard guard ok');
