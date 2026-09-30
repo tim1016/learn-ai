@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_broker_ending
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     ManualOrderCapability,
     ManualOrderPreview,
@@ -267,6 +268,9 @@ class ManualOrderLegResponse(BaseModel):
     effect: ManualOrderEffectResponse | None
     order: ManualOrderBrokerOrderResponse | None
     cancellation: ManualOrderCancellationResponse | None
+    # How this leg ended at Alpaca without filling in full, in plain words
+    # ("Cancelled at Alpaca.", "Expired at the close."); absent otherwise.
+    ending: str | None
 
     @classmethod
     def from_resource(
@@ -279,6 +283,7 @@ class ManualOrderLegResponse(BaseModel):
         effect = repo.effect_operation(leg.effect_operation_id) if leg.effect_operation_id is not None else None
         order = repo.order(leg.order_ref) if leg.order_ref is not None else None
         cancellation = repo.manual_order_cancellation(order_ref=leg.order_ref) if leg.order_ref is not None else None
+        ending = manual_order_broker_ending(repo, order_ref=leg.order_ref) if leg.order_ref is not None else None
         return cls(
             leg_id=leg.leg_id,
             sequence_index=leg.sequence_index,
@@ -320,6 +325,7 @@ class ManualOrderLegResponse(BaseModel):
                 if cancellation is not None
                 else None
             ),
+            ending=ending,
         )
 
 

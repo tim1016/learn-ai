@@ -26708,6 +26708,17 @@
               }
             ]
           },
+          "ending": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ending"
+          },
           "instruction": {
             "anyOf": [
               {
@@ -26754,7 +26765,8 @@
           "command",
           "effect",
           "order",
-          "cancellation"
+          "cancellation",
+          "ending"
         ],
         "title": "ManualOrderLegResponse",
         "type": "object"
