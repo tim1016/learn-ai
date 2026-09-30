@@ -38,8 +38,8 @@ import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import UUID
 
+from app.broker.alpaca.adapter import parse_order_link_id
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
@@ -1354,19 +1354,16 @@ def validate_manual_order_cancel_result_facts(facts: ManualOrderCancelResultFact
 def followable_broker_order_id(value: object) -> str | None:
     """The broker order id a manual replacement link may follow, else ``None`` (#2656).
 
-    Alpaca order ids are UUIDs, and the broker-id lookup that follows a link
-    (``GET /v2/orders/{order_id}``) refuses any other spelling before it
-    leaves the process -- a link to one would fail on every pass for ever.
-    A non-string, blank or non-UUID value names nothing the Clerk can follow.
+    The adapter's own link-id reader decides (:func:`parse_order_link_id`):
+    the broker-id read that follows a link refuses anything but a UUID
+    before it leaves the process, so a link to one would fail on every pass.
+    The Clerk asks it of every successor it records -- a ``replaced_by`` and
+    a new order's own id alike.
     """
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
     try:
-        UUID(text)
-    except ValueError:
+        return parse_order_link_id(value)
+    except (TypeError, ValueError):
         return None
-    return text
 
 
 def validate_manual_order_replaced_facts(facts: ManualOrderReplacedFacts) -> None:

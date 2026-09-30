@@ -118,12 +118,13 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        await registry.deploy(
+        deployed = await registry.deploy(
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
             mode="trade",
         )
+        assert deployed.active_run_id is not None
 
         # Model the recovery flow: the SQLite authority already committed the
         # durable STOP before entering the registry. The registry must reap the
@@ -133,6 +134,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
         await registry.stop_after_durable_clerk_stop(
             "alpaca",
             _SID,
+            lifecycle_run_id=deployed.active_run_id,
             updated_by="operator_recovery",
             reason="sqlite_recovery_stop_bot_decisions",
         )

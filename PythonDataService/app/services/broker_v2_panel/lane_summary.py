@@ -71,12 +71,12 @@ from app.schemas.broker_v2_panel import (
     LaneAttentionKind,
     LaneAttentionRead,
 )
-from app.services.bot_end import when_words
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster, read_account_projection
 from app.services.sqlite_clerk_compat import account_eligibility
+from app.utils.et_words import et_when_words
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +260,7 @@ def _end_sale_item(waiting: EndSaleWaiting, *, opens_at_ms: int, now_ms: int) ->
         headline=(
             f"{waiting.strategy_instance_id} reached its end while the market was closed. "
             f"Its sale of {holdings_text({waiting.symbol: waiting.quantity})} goes out at the open, "
-            f"{when_words(opens_at_ms, now_ms=now_ms)}."
+            f"{et_when_words(opens_at_ms, now_ms=now_ms)}."
         ),
         action=_OPEN_BOT,
     )

@@ -20,7 +20,7 @@ from app.services.bot_end import (
     default_bot_end,
     end_edit_refusal,
     resolve_bot_end,
-    when_words,
+    resolved_bot_end_view,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import to_ms_utc
@@ -31,7 +31,6 @@ _THURSDAY = date(2026, 10, 1)
 _SATURDAY = date(2026, 10, 3)
 _MONDAY = date(2026, 10, 5)
 _HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: the close is 13:00
-_NEXT_YEAR = date(2027, 1, 5)
 
 
 def _at(day: date, hour: int, minute: int = 0, second: int = 0) -> int:
@@ -206,7 +205,7 @@ def test_resolve_bot_end_reports_a_bug_as_a_bug_not_as_a_date_the_calendar_does_
 
 
 def test_resolve_bot_end_names_the_year_of_a_day_in_another_year() -> None:
-    """#2607 review: a refusal about next year names its year, as ``when_words`` does."""
+    """#2607 review: a refusal about next year names its year, as ``et_when_words`` does."""
     refused = _refusal(_choose(_at(date(2027, 1, 1), 12)), now_ms=_at(_WEDNESDAY, 10))
 
     assert str(refused) == "The market is closed on Fri Jan 1 2027."
@@ -291,7 +290,8 @@ def test_end_edit_refusal_is_the_one_answer_for_the_edit_and_the_view(
 
     refusal = end_edit_refusal(pending, running=running, now_ms=now)
     view = bot_end_view(
-        None if pending is None else RecordedEnd.scheduled(pending), now_ms=now, dry_run=False, running=running,
+        None if pending is None else RecordedEnd.scheduled(pending),
+        now_ms=now, dry_run=False, running=running, use_rth=True,
     )
 
     assert (None if refusal is None else str(refusal)) == refused
@@ -302,14 +302,10 @@ def test_end_edit_refusal_is_the_one_answer_for_the_edit_and_the_view(
 # ── the owner's words ────────────────────────────────────────────────────────
 
 
-def test_when_words_name_the_weekday_and_date_never_today() -> None:
-    """The owner may not be in ET: "today" in ET can be tomorrow where they are (#2607 review)."""
-    assert when_words(_at(_WEDNESDAY, 15, 59), now_ms=_at(_WEDNESDAY, 10)) == "Wed Sep 30, 15:59 ET"
-    assert when_words(_at(_NEXT_YEAR, 15, 59), now_ms=_at(_WEDNESDAY, 10)) == "Tue Jan 5 2027, 15:59 ET"
-
-
 def test_bot_end_view_of_a_scheduled_sale() -> None:
-    view = bot_end_view(_scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True)
+    view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True, use_rth=True,
+    )
 
     assert view.status == "scheduled"
     assert view.headline == "Ends Wed Sep 30, 15:59 ET · sells"
@@ -323,7 +319,7 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
 
 def test_bot_end_view_of_a_later_day_that_keeps() -> None:
     view = bot_end_view(
-        _scheduled(_at(_MONDAY, 12), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True,
+        _scheduled(_at(_MONDAY, 12), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True, use_rth=True,
     )
 
     assert view.headline == "Ends Mon Oct 5, 12:00 ET · keeps its shares"
@@ -333,7 +329,9 @@ def test_bot_end_view_of_a_later_day_that_keeps() -> None:
 
 
 def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
-    view = bot_end_view(_scheduled(_at(_THURSDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True)
+    view = bot_end_view(
+        _scheduled(_at(_THURSDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True, use_rth=True,
+    )
 
     assert view.headline == "Ends Thu Oct 1, 15:59 ET · sells"
     assert view.explanation == (
@@ -342,14 +340,16 @@ def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
 
 
 def test_bot_end_view_of_a_bot_that_died_before_its_end_says_the_end_still_stands() -> None:
-    view = bot_end_view(_scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False)
+    view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False, use_rth=True,
+    )
 
     assert view.status == "scheduled"
     assert view.explanation.startswith("The bot is not running, but its end still stands. At Wed Sep 30, 15:59 ET")
 
 
 def test_bot_end_view_of_no_end() -> None:
-    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True)
+    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True, use_rth=True)
 
     assert view.status == "no_end"
     assert view.end_at_ms is None
@@ -359,7 +359,7 @@ def test_bot_end_view_of_no_end() -> None:
 
 def test_bot_end_view_of_a_stopped_bot_says_its_stop_cancelled_any_end() -> None:
     """The owner's Stop cancels a pending end: it keeps the shares and nothing is sold at the end time."""
-    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False)
+    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False, use_rth=True)
 
     assert view.status == "no_end"
     assert view.headline == "No end scheduled"
@@ -371,7 +371,9 @@ def test_bot_end_view_of_a_stopped_bot_says_its_stop_cancelled_any_end() -> None
 
 def test_bot_end_view_once_the_end_has_come_says_what_is_pending_not_now() -> None:
     """Days late (the Clerk was down) the words still hold: no "Ending now" (#2607 review)."""
-    view = bot_end_view(_scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_MONDAY, 9), dry_run=False, running=False)
+    view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_MONDAY, 9), dry_run=False, running=False, use_rth=True,
+    )
 
     assert view.status == "ending"
     assert view.headline == "End reached Wed Sep 30, 15:59 ET · sells"
@@ -385,7 +387,7 @@ def test_bot_end_view_once_the_end_has_come_says_what_is_pending_not_now() -> No
 def test_bot_end_view_once_the_end_was_carried_out_names_when() -> None:
     carried_out = RecordedEnd(end_at_ms=_at(_WEDNESDAY, 15, 59), carried_out_at_ms=_at(_WEDNESDAY, 15, 59, 4))
 
-    view = bot_end_view(carried_out, now_ms=_at(_THURSDAY, 9), dry_run=False, running=False)
+    view = bot_end_view(carried_out, now_ms=_at(_THURSDAY, 9), dry_run=False, running=False, use_rth=True)
 
     assert view.status == "ended"
     assert view.headline == "Ended Wed Sep 30, 15:59 ET · sale put in"
@@ -398,7 +400,7 @@ def test_bot_end_view_once_the_end_was_carried_out_names_when() -> None:
 def test_bot_end_view_of_an_ended_dry_run() -> None:
     carried_out = RecordedEnd(end_at_ms=_at(_WEDNESDAY, 15, 59), carried_out_at_ms=_at(_WEDNESDAY, 16, 2))
 
-    view = bot_end_view(carried_out, now_ms=_at(_WEDNESDAY, 17), dry_run=True, running=False)
+    view = bot_end_view(carried_out, now_ms=_at(_WEDNESDAY, 17), dry_run=True, running=False, use_rth=True)
 
     assert view.headline == "Ended Wed Sep 30, 16:02 ET · sold at its last price"
     assert view.explanation == "The bot has stopped, and its simulation sold what it held at the last price it saw."
@@ -406,7 +408,59 @@ def test_bot_end_view_of_an_ended_dry_run() -> None:
 
 def test_bot_end_view_carries_the_clamp_notice() -> None:
     view = bot_end_view(
-        _scheduled(_at(_HALF_DAY, 12, 59)), now_ms=_at(_HALF_DAY, 9), dry_run=False, running=True, notice="moved",
+        _scheduled(_at(_HALF_DAY, 12, 59)), now_ms=_at(_HALF_DAY, 9), dry_run=False, running=True, use_rth=True,
+        notice="moved",
     )
 
     assert view.notice == "moved"
+
+
+# ── the default end offered to a bot with none (#2663) ───────────────────────
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "offered"),
+    [
+        pytest.param(_at(_WEDNESDAY, 10), _at(_WEDNESDAY, 15, 59), id="todays-close-minus-a-minute"),
+        pytest.param(_at(_HALF_DAY, 10), _at(_HALF_DAY, 12, 59), id="half-day"),
+        pytest.param(_at(_WEDNESDAY, 15, 59, 30), _at(_THURSDAY, 15, 59), id="after-todays-last-minute"),
+    ],
+)
+def test_bot_end_view_offers_a_running_bot_with_no_end_the_default_end(now_ms: int, offered: int) -> None:
+    """Change opens on the default end, by Deploy's rule, never on blank fields."""
+    view = bot_end_view(None, now_ms=now_ms, dry_run=False, running=True, use_rth=True)
+
+    assert view.default_end_at_ms == offered == default_bot_end(now_ms).end_at_ms
+    assert view.end_at_ms is None
+    assert view.end_action == "SELL"
+
+
+@pytest.mark.parametrize(
+    ("recorded", "running", "use_rth"),
+    [
+        pytest.param(None, False, True, id="stopped-bot"),
+        pytest.param(RecordedEnd(end_at_ms=_at(_WEDNESDAY, 14)), True, True, id="bot-with-an-end"),
+        pytest.param(
+            RecordedEnd(end_at_ms=_at(_WEDNESDAY, 11), carried_out_at_ms=_at(_WEDNESDAY, 11)), False, True,
+            id="bot-that-ended",
+        ),
+        pytest.param(None, True, False, id="bot-that-trades-outside-regular-hours"),
+    ],
+)
+def test_bot_end_view_offers_no_default_end_where_none_can_be_added(
+    recorded: RecordedEnd | None, running: bool, use_rth: bool,
+) -> None:
+    """Only a bot with no end, whose end may change now and can have one, is offered the default."""
+    view = bot_end_view(recorded, now_ms=_at(_WEDNESDAY, 12), dry_run=False, running=running, use_rth=use_rth)
+
+    assert view.default_end_at_ms is None
+
+
+def test_the_deploy_forms_default_end_offers_no_second_default() -> None:
+    """Deploy's own ``default_end`` is a scheduled end, so it carries no duplicate of itself."""
+    now = _at(_WEDNESDAY, 10)
+
+    view = resolved_bot_end_view(_resolve(None, now_ms=now), now_ms=now, dry_run=False)
+
+    assert view.end_at_ms == _at(_WEDNESDAY, 15, 59)
+    assert view.default_end_at_ms is None

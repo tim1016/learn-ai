@@ -7,6 +7,7 @@ cannot drift into separate guard implementations.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from typing import Protocol
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
-from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource
+from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource, RunResource
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -35,6 +36,9 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
 from app.broker.contract.errors import BrokerError
 
 logger = logging.getLogger(__name__)
+
+# The process stop's reason when the operator gave `stop_bot_decisions` none.
+_RECOVERY_STOP_REASON = "sqlite_recovery_stop_bot_decisions"
 
 
 class RecoveryExecutionError(Exception):
@@ -135,18 +139,13 @@ async def execute_recovery_action(
             lifecycle_run_id=request.execution_ref,
         )
         if existing is not None:
-            # The durable STOP already committed on a prior attempt. A retry
-            # must still re-drive local quiescence: an earlier attempt could
-            # have failed after committing the STOP but before the in-process
-            # task stopped, leaving it free to keep consuming bars.
-            # `_quiesce_bot_process` is idempotent for an already-stopped task.
-            await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
-            return RecoveryExecutionResult(
-                action_id=request.action_id,
-                applied=False,
-                receipt_id=existing.command_id,
-                recorded_at_ms=existing.updated_at_ms,
-                command=existing,
+            # The durable STOP already committed on a prior attempt, so the
+            # capability presented for it is spent. A retry still redoes the
+            # whole Stop, replaying that STOP: an earlier attempt could have
+            # failed after committing the STOP but before the in-process task
+            # stopped, leaving it free to keep consuming bars.
+            return await _stop_bot_decisions(
+                facade, request, strategy_instance_id=strategy_instance_id, lifecycle_run_id=request.execution_ref
             )
 
     context = await current_context()
@@ -189,26 +188,8 @@ async def execute_recovery_action(
             raise RecoveryExecutionError(
                 "The stop target does not match the run authorized by the presented action."
             )
-        # The owner's Stop sells nothing at the end time (#2607): its end is
-        # cancelled before the STOP commits, so nothing that runs between the
-        # STOP and the process stop reads the end as still to be carried out.
-        # Should the STOP then fail, the bot runs on with no end: the end is
-        # the owner's, and they asked to Stop -- they are told the Stop
-        # failed, and the bot runs until they Stop it again. Nothing restores
-        # the end: a restored SELL end would sell what the owner meant to keep.
-        await cancel_bot_end(strategy_instance_id, updated_by="operator_recovery")
-        submission = await facade.stop_strategy_run(
-            strategy_instance_id=strategy_instance_id,
-            run_id=capability.execution_ref,
-            reason=request.reason,
-        )
-        await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
-        return RecoveryExecutionResult(
-            action_id=request.action_id,
-            applied=submission.created,
-            receipt_id=submission.command.command_id,
-            recorded_at_ms=submission.command.updated_at_ms,
-            command=submission.command,
+        return await _stop_bot_decisions(
+            facade, request, strategy_instance_id=strategy_instance_id, lifecycle_run_id=capability.execution_ref
         )
     if request.action_id == "reconcile_now":
         reconciliation = await facade.reconcile_account(
@@ -304,12 +285,97 @@ async def execute_recovery_action(
     )
 
 
-async def cancel_bot_end(strategy_instance_id: str, *, updated_by: str) -> None:
-    """An operator's Stop cancels the bot's scheduled end, before its STOP commits (#2607).
+async def _stop_bot_decisions(
+    facade: ActiveSqliteRecoveryFacade,
+    request: RecoveryExecutionRequest,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+) -> RecoveryExecutionResult:
+    """The panel's Stop: an operator's Stop of the run."""
+    submission = await operator_stop_run(
+        facade,
+        strategy_instance_id=strategy_instance_id,
+        lifecycle_run_id=lifecycle_run_id,
+        operator_reason=request.reason,
+        updated_by="operator_recovery",
+        reason=request.reason or _RECOVERY_STOP_REASON,
+    )
+    return RecoveryExecutionResult(
+        action_id=request.action_id,
+        applied=submission.created,
+        receipt_id=submission.command.command_id,
+        recorded_at_ms=submission.command.updated_at_ms,
+        command=submission.command,
+    )
+
+
+async def operator_stop_run(
+    facade: ActiveSqliteRecoveryFacade,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+    operator_reason: str | None,
+    updated_by: str,
+    reason: str,
+) -> CommandSubmission:
+    """An operator's Stop of run ``lifecycle_run_id``: cancel the bot's end, commit the STOP, stop the process.
+
+    The one sequence the panel's Stop (``stop_bot_decisions``) and the raw
+    ``runs/stop`` route (#2664) run. Its STOP, recording ``operator_reason``,
+    commits through the account authority's facade (``stop_strategy_run``):
+    under its intake, and keyed with the account the authority stores, as
+    every other STOP of the run is -- the sweep's, a restart's, the Clerk's at
+    the end. Never with a route's spelling of the account, which a route admits
+    in lowercase and, under Shadow, as the plain live account: such a key
+    misses the run's STOP. ``reason`` is the one the process stop records. The
+    owner's Stop sells nothing at the end time (#2607): the end is cancelled
+    before the STOP commits, so nothing that runs between the STOP and the
+    process stop -- the runner's end watch, a Clerk pass -- reads it as still
+    to be carried out, and the process stop records the rest of the Stop, its
+    STOPPED intent. Should the STOP fail, the bot runs on with no end: the end
+    is the owner's, and they asked to Stop -- they are told the Stop failed,
+    and the bot runs until they Stop it again. Nothing restores the end: a
+    restored SELL end would sell what the owner meant to keep.
+
+    Only a Stop of the bot's current run -- its ACTIVE run, else its latest --
+    is an operator's Stop of the bot: whether that run is live, died in a
+    crash the sweep or a restart then stopped, or was stopped by the Clerk at
+    its end, the end is cancelled and the process stopped. A run is stopped
+    once, under its first STOP's reason, so a retry -- after a lost response,
+    or after the process stop failed -- finds the STOP already committed, and
+    the Stop is redone whole; each step is idempotent. A Stop naming an
+    earlier run (a retry landing after a redeploy) or a run the bot never had
+    touches neither end nor process: its STOP alone is replayed or refused. A
+    sale the Clerk already accepted for the end is that sale's EXIT's, and no
+    Stop calls it off (#2666).
+    """
+    current = await asyncio.to_thread(_current_run, facade.repository, strategy_instance_id)
+    stops_the_bot = current is not None and current.lifecycle_run_id == lifecycle_run_id
+    if stops_the_bot:
+        await _cancel_bot_end(strategy_instance_id, lifecycle_run_id, updated_by=updated_by)
+    submission = await facade.stop_strategy_run(
+        strategy_instance_id=strategy_instance_id, run_id=lifecycle_run_id, reason=operator_reason,
+    )
+    if stops_the_bot:
+        await _quiesce_bot_process(strategy_instance_id, lifecycle_run_id, updated_by=updated_by, reason=reason)
+    return submission
+
+
+def _current_run(repo: ClerkSqliteRepository, strategy_instance_id: str) -> RunResource | None:
+    """The bot's current run: its ACTIVE run, else its latest.
+
+    ``latest_run`` alone is not enough: runs started in the same millisecond
+    tie-break on ``run_id``, which need not name the ACTIVE one.
+    """
+    return repo.active_run(strategy_instance_id) or repo.latest_run(strategy_instance_id)
+
+
+async def _cancel_bot_end(strategy_instance_id: str, lifecycle_run_id: str, *, updated_by: str) -> None:
+    """The Stop's first step: cancel the bot's scheduled end, before its STOP commits (#2607).
 
     Through the registry that keeps the end (``BotTaskRegistry.cancel_end``),
-    whether or not it runs the bot's process: the panel's Stop and the raw
-    ``runs/stop`` route (#2664) both call it. A process with no registry
+    whether or not it runs the bot's process. A process with no registry
     installs no end schedule either (``scheduled_end.install_bot_end_schedule``),
     so no end is carried out here; the Stop goes on, and that is said -- the
     Clerk's routes and the runner are installed together, so a Stop that
@@ -325,23 +391,25 @@ async def cancel_bot_end(strategy_instance_id: str, *, updated_by: str) -> None:
             extra={"action": "bot_end_cancel_no_runner", "strategy_instance_id": strategy_instance_id},
         )
         return
-    await registry.cancel_end(strategy_instance_id, updated_by=updated_by)
+    await registry.cancel_end(strategy_instance_id, lifecycle_run_id=lifecycle_run_id, updated_by=updated_by)
 
 
-async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None) -> None:
-    """Stop the in-process bot task after its durable SQLite STOP commits.
+async def _quiesce_bot_process(
+    strategy_instance_id: str, lifecycle_run_id: str, *, updated_by: str, reason: str
+) -> None:
+    """The Stop's last step: stop the in-process bot task after its durable SQLite STOP commits.
 
-    `stop_bot_decisions` durably records the Clerk-side STOP first (above),
-    but that alone leaves a running `BotTaskRegistry` task free to keep
-    consuming bars and calling `execute_for_instance` — the process only
-    reacts to `DesiredState`, which this command never touched. Route
-    through the registry's own serialized stop boundary so the durable
-    intent and process termination land together, matching the Button
-    Rule's cancel + reap contract (`BotTaskRegistry.stop`).
+    The Clerk-side STOP alone leaves a running `BotTaskRegistry` task free to
+    keep consuming bars and calling `execute_for_instance` — the process only
+    reacts to `DesiredState`, which the STOP never touched. Route through the
+    registry's own serialized stop boundary so the durable intent and process
+    termination land together, matching the Button Rule's cancel + reap
+    contract (`BotTaskRegistry.stop`).
 
-    A bot with no live task in this process (already stopped, running in a
-    different process, or never started here) is not an error: the durable
-    SQLite STOP above is already the authority evidence in that case.
+    A bot with no live task of this run in this process (already stopped,
+    running in a different process, never started here, or running a later
+    run) is not an error: the durable SQLite STOP is already the authority
+    evidence in that case.
     """
     from app.services.bot_runner import get_bot_task_registry
     from app.services.bot_runner_errors import UnknownBotError
@@ -353,8 +421,9 @@ async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None)
         await registry.stop_after_durable_clerk_stop(
             "alpaca",
             strategy_instance_id,
-            updated_by="operator_recovery",
-            reason=reason or "sqlite_recovery_stop_bot_decisions",
+            lifecycle_run_id=lifecycle_run_id,
+            updated_by=updated_by,
+            reason=reason,
         )
     except UnknownBotError:
         return

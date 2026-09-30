@@ -241,6 +241,12 @@ class BrokerOrder(_ContractModel):
     events: list[BrokerOrderEvent] = Field(default_factory=list)
     observed_at_ms: int
     fill_latency_seconds: float | None = None
+    # The broker's own names for the values on this row that would not parse
+    # (#2648), sorted; each reads its absent form above. Non-empty means the
+    # row cannot be stated truthfully: the Clerk contains it on its own -- a
+    # foreign order recorded unfoldable, an answer about its own order
+    # withheld -- and never folds it as evidence.
+    unreadable_fields: tuple[str, ...] = ()
 
 
 class BrokerOrderGroup(_ContractModel):

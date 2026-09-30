@@ -4928,8 +4928,21 @@
       },
       "BotEndView": {
         "additionalProperties": false,
-        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now.",
+        "description": "A bot's end in the owner's words, authored by the backend.\n\n``headline`` is the one line the panel shows (\"Ends Wed Sep 30, 15:59 ET\n\u00b7 sells\"); ``explanation`` says what will happen, or what happened.\n``notice`` is set only when the chosen time was moved, e.g. to one minute\nbefore an early close. ``editable`` says whether the panel may offer to\nchange it now. ``default_end_at_ms`` is the default end (Deploy's rule)\nthe fields open on when the owner adds an end to a bot with none. It is\nnull whenever an end is already set -- so always on Deploy's\n``default_end``, which is that default end itself -- whenever the end\ncannot change now, and whenever the bot trades outside regular hours.",
         "properties": {
+          "default_end_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default End At Ms"
+          },
           "editable": {
             "title": "Editable",
             "type": "boolean"
@@ -4991,7 +5004,8 @@
           "status",
           "headline",
           "explanation",
-          "editable"
+          "editable",
+          "default_end_at_ms"
         ],
         "title": "BotEndView",
         "type": "object"
@@ -7027,6 +7041,14 @@
           "time_in_force": {
             "title": "Time In Force",
             "type": "string"
+          },
+          "unreadable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unreadable Fields",
+            "type": "array"
           },
           "updated_at_ms": {
             "anyOf": [

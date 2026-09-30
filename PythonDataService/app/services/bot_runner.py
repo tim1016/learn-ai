@@ -1071,17 +1071,29 @@ class BotTaskRegistry:
         broker: str,
         strategy_instance_id: str,
         *,
+        lifecycle_run_id: str,
         updated_by: str,
         reason: str | None = None,
     ) -> BotStatusView:
-        """Cancel and reap after the SQLite authority already committed STOP.
+        """Cancel and reap after the SQLite authority already committed run ``lifecycle_run_id``'s STOP.
 
-        Recovery actions commit the lifecycle transition before entering the
-        process registry. Reusing :meth:`stop` would author the same natural
-        command key again with registry-owned prose, turning a successful
-        durable stop into a payload conflict before task cancellation.
+        Recovery actions and the raw ``runs/stop`` route (#2664) commit the
+        lifecycle transition before entering the process registry. Reusing
+        :meth:`stop` would author the same natural command key again with
+        registry-owned prose, turning a successful durable stop into a
+        payload conflict before task cancellation.
+
+        The Stop is its run's alone: a process running another run of the bot
+        is left running, its end and intent untouched, and the Stop raises
+        ``UnknownBotError`` as for a bot with no process here
+        (:meth:`_runs_another_run_locked`).
         """
         async with self._operation_lock(strategy_instance_id):
+            if self._runs_another_run_locked(strategy_instance_id, lifecycle_run_id):
+                raise UnknownBotError(
+                    f"Run '{lifecycle_run_id}' of bot '{strategy_instance_id}' is not running.",
+                    detail="The bot runs a later run; a Stop of an earlier one leaves it running.",
+                )
             return await self._stop_locked(
                 broker,
                 strategy_instance_id,
@@ -1511,19 +1523,23 @@ class BotTaskRegistry:
             )
         return record
 
-    async def cancel_end(self, strategy_instance_id: str, *, updated_by: str) -> None:
-        """The owner's Stop cancels the bot's scheduled end: nothing is sold at the end time.
+    async def cancel_end(self, strategy_instance_id: str, *, lifecycle_run_id: str, updated_by: str) -> None:
+        """The owner's Stop of run ``lifecycle_run_id`` cancels the bot's scheduled end: nothing is sold at the end time.
 
         The panel's Stop and the raw ``runs/stop`` route (#2664) call this
-        before they commit the run's STOP, as :meth:`stop` records its intent
-        first: between that STOP and the process stop, neither the end watch
+        before they commit the run's STOP, through one sequence
+        (``recovery_execution.operator_stop_run``), as :meth:`stop` records its
+        intent first: between that STOP and the process stop, neither the end watch
         nor a Clerk pass may read the end as still to be carried out. The rest
-        of the panel Stop's record -- its STOPPED intent -- lands with the
+        of either Stop's record -- its STOPPED intent -- lands with the
         process stop (:meth:`stop_after_durable_clerk_stop`). Durable in the bot's desired
         state, so no restart revives it, and whether or not this runner has
-        the bot's process.
+        the bot's process. A process running another run of the bot keeps its
+        end (:meth:`_runs_another_run_locked`).
         """
         async with self._operation_lock(strategy_instance_id):
+            if self._runs_another_run_locked(strategy_instance_id, lifecycle_run_id):
+                return
             try:
                 self._cancel_end_locked(strategy_instance_id, updated_by=updated_by)
             except DesiredStateCorruptError as exc:
@@ -1531,13 +1547,40 @@ class BotTaskRegistry:
                 # carried out while the file cannot be read.
                 _say_stop_cannot_cancel_end(strategy_instance_id, exc)
 
+    def _runs_another_run_locked(self, strategy_instance_id: str, lifecycle_run_id: str) -> bool:
+        """Whether this runner's live process of the bot runs a run other than ``lifecycle_run_id``.
+
+        An operator's Stop acts for its run alone, as the Clerk's stop at the
+        end does (:meth:`stop_bot_at_its_end`). The Clerk answers whether the
+        run is the bot's current one before the Stop reaches this runner, and
+        a Deploy may start a later run in between -- a retry of the Stop
+        landing while the bot is redeployed -- whose process, end and intent
+        that Stop must not touch. Read under the bot's operation lock, which a
+        Deploy holds until its process runs. With no live process here nothing
+        names another run, and the Stop is the bot's.
+        """
+        managed = self._bots.get(strategy_instance_id)
+        if managed is None or managed.task.done() or managed.binding.run_id == lifecycle_run_id:
+            return False
+        logger.info(
+            "An operator's Stop of an earlier run left the bot's later run as it was",
+            extra={
+                "action": "operator_stop_of_an_earlier_run",
+                "strategy_instance_id": strategy_instance_id,
+                "run_id": lifecycle_run_id,
+                "running_run_id": managed.binding.run_id,
+            },
+        )
+        return True
+
     def _record_operator_stop_locked(
         self, strategy_instance_id: str, *, updated_by: str, reason: str
     ) -> DesiredState | None:
         """An operator's Stop, as the bot's desired state records it: the one write every operator Stop makes.
 
-        The panel's, the lane-wide one, with or without the bot's process in
-        this runner (#2607). First the bot's end is cancelled, whatever its
+        The panel's, the raw ``runs/stop`` route's (#2664), the lane-wide one,
+        with or without the bot's process in this runner (#2607). First the
+        bot's end is cancelled, whatever its
         intent already says: Stop does not sell, so no sale is left scheduled
         behind it -- a crash's STOPPED keeps its end for the Clerk, and the
         owner's Stop ends it. Then the intent is STOPPED, the end left as the
@@ -1825,6 +1868,7 @@ class BotTaskRegistry:
             now_ms=now_ms,
             dry_run=binding.mode == "dry_run",
             running=self._is_running(binding.strategy_instance_id),
+            use_rth=binding.use_rth,
             notice=notice,
         )
 

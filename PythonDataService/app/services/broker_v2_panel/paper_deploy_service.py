@@ -44,8 +44,9 @@ from app.services.broker_v2_panel.channel_health import (
     evaluate_channels_at_account_scope,
 )
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope, compose_strategy_catalog
-from app.services.deploy_window import deploy_window, session_label, start_window_next_step
+from app.services.deploy_window import deploy_window, start_window_next_step
 from app.services.session_authority import scheduled_extended_session_bounds
+from app.utils.et_words import et_when_words
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
@@ -823,7 +824,7 @@ def build_alpaca_paper_deploy_view(
             headline="Start window is open." if window.state != "CLOSED" else "Regular-session bots may start from pre-market open through the regular close.",
             explanation="Regular-session bots start between pre-market open and regular close.",
             evidence_summary="Dry Run is exempt from the Start window.",
-            recovery=None if window.state != "CLOSED" else start_window_next_step(window),
+            recovery=None if window.state != "CLOSED" else start_window_next_step(window, now_ms=evaluated_at_ms),
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="deploy.exit_terms", label="Exit terms", ready=default_exit_terms is not None,
@@ -951,11 +952,14 @@ def exit_steps_summary(terms: ExitTermsInput | None, now_ms: int) -> str:
     if current is None or following is None:
         raise RuntimeError("The canonical calendar returned no deploy session")
 
+    def at(instant_ms: int) -> str:
+        return et_when_words(instant_ms, now_ms=now_ms)
+
     return (
-        f"Regular close ({session_label(current.rth_close_ms)}): limit at decision close minus {terms.exit_allowance_bps:g} bps. "
-        f"After-hours ends {session_label(current.close_ms)}. "
-        f"Next pre-market ({session_label(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
+        f"Regular close ({at(current.rth_close_ms)}): limit at decision close minus {terms.exit_allowance_bps:g} bps. "
+        f"After-hours ends {at(current.close_ms)}. "
+        f"Next pre-market ({at(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
         f"hold if the spread exceeds {terms.spread_cap_bps:g} bps. "
-        f"Next regular open ({session_label(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
+        f"Next regular open ({at(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
         "then sell the remaining quantity at market. A confirmed halt holds exits."
     )

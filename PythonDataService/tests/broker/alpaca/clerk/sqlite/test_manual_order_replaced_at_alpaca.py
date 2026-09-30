@@ -23,6 +23,7 @@ import uuid
 
 import pytest
 
+from app.broker.alpaca.adapter import from_alpaca_order
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_trade_port
 from app.broker.alpaca.clerk.sqlite.external_orders import unfoldable_broker_order_is_unreviewed
@@ -30,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     submit_manual_order_cancellation,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_replacement import UNNAMED_REPLACEMENT_REASON
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, submit_manual_order
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -37,8 +39,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capabi
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.alpaca.trade_updates import _opt_ms_to_rfc3339
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
@@ -73,6 +77,13 @@ class _Website(_AlpacaWebsite):
         super().__init__(repo=repo)
         self.replacements: dict[str, BrokerOrder] = {}
         self.broker_id_lookups: list[str] = []
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        """Alpaca books the order under a UUID broker id, as every link names one."""
+        booked = await super().submit(leg, client_order_id=client_order_id)
+        booked = booked.model_copy(update={"order_id": str(uuid.UUID(int=0xA0 + len(self.submit_calls)))})
+        self.orders[client_order_id] = booked
+        return booked
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         # alpaca-py refuses a non-UUID id client-side, before any request.
@@ -661,16 +672,16 @@ async def test_a_failed_read_of_the_replacement_is_contained_to_its_own_leg(cloc
 # ── A replacement the Clerk cannot follow is contained ────────────────────────
 
 
-@pytest.mark.parametrize("replaced_by", [None, "", "not-a-uuid"])
-async def test_a_replacement_the_clerk_cannot_follow_is_contained_and_never_freezes_the_sweep(
+@pytest.mark.parametrize("replaced_by", [None, ""])
+async def test_a_replacement_named_by_nothing_is_contained_and_never_freezes_the_sweep(
     clocked_repo, replaced_by: str | None, caplog: pytest.LogCaptureFixture,  # noqa: F811
 ) -> None:
-    """Alpaca reports ``replaced`` naming no replacement id the Clerk can follow.
+    """Alpaca reports ``replaced`` readably but names no replacement in ``replaced_by``.
 
     Nothing raises and the sweep reaches its verdict, pass after pass. The
     leg stays honestly outstanding on the original -- no link to follow --
-    and the order is named on #2363's entry fence, durable and owner-visible,
-    once: a sweep re-seeing it appends nothing.
+    and the order is named on #2363's entry fence with that cause, durable
+    and owner-visible, once: a sweep re-seeing it appends nothing.
     """
     repo, clock = clocked_repo
     website = _Website(repo=repo)
@@ -694,11 +705,136 @@ async def test_a_replacement_the_clerk_cannot_follow_is_contained_and_never_free
     assert repo.effect_operation(effect_id).state == "in_progress"
     assert _replaced_transitions(repo, order_ref) == []
     assert unfoldable_broker_order_is_unreviewed(repo, broker_order_id=replaced.order_id)
+    fence = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE, strategy_instance_id=None,
+    )
+    assert fence is not None and UNNAMED_REPLACEMENT_REASON in fence["facts_json"]
     assert any(
         getattr(record, "action", None) == "manual_order_replacement_unfollowable" for record in caplog.records
     )
     assert len(repo.custody_transitions()) - journal_after_first_pass <= 1, "only the sweep's own receipt"
     assert _owner_reads(repo).replacement_note is None
+
+
+# ── A row the adapter could not fully read never moves the chain (#2648) ──────
+
+
+def _from_alpaca(order: BrokerOrder, **wire: object) -> BrokerOrder:
+    """``order`` as Alpaca's wire carries it, ``wire`` overriding raw fields, mapped by the real adapter."""
+    payload: dict[str, object] = {
+        "id": order.order_id, "client_order_id": order.client_order_id, "symbol": order.symbol,
+        "asset_class": order.asset_class, "side": order.side, "order_type": order.order_type,
+        "time_in_force": order.time_in_force,
+        "qty": None if order.quantity is None else str(order.quantity),
+        "filled_qty": str(order.filled_quantity),
+        "limit_price": None if order.limit_price is None else str(order.limit_price),
+        "stop_price": None,
+        "filled_avg_price": None if order.filled_avg_price is None else str(order.filled_avg_price),
+        "status": order.status, "extended_hours": False,
+        "submitted_at": _opt_ms_to_rfc3339(order.submitted_at_ms),
+        "created_at": _opt_ms_to_rfc3339(order.created_at_ms),
+        "updated_at": _opt_ms_to_rfc3339(order.updated_at_ms),
+        "filled_at": _opt_ms_to_rfc3339(order.filled_at_ms),
+        "canceled_at": _opt_ms_to_rfc3339(order.canceled_at_ms),
+        "expired_at": _opt_ms_to_rfc3339(order.expired_at_ms),
+        "replaced_by": order.replaced_by, "replaces": order.replaces,
+    }
+    return from_alpaca_order({**payload, **wire}, observed_at_ms=order.observed_at_ms)
+
+
+def _withheld_why(repo: ClerkSqliteRepository, order_ref: str) -> str:
+    [latest] = [t for t in _order_evidence(repo, order_ref) if t["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"][-1:]
+    return latest["facts_json"]
+
+
+@pytest.mark.parametrize("wire", [{"filled_qty": "five"}, {"filled_qty": True}, {"updated_at": "later"}])
+async def test_an_unreadable_replacement_row_neither_moves_the_chain_nor_credits_a_fill(
+    clocked_repo, wire: dict[str, object],  # noqa: F811
+) -> None:
+    """The replacement's fill frame reaches the Clerk with a value the adapter could not read.
+
+    Its fills would be the proof it took over -- but an unreadable fill count
+    reads as none, and a row with *any* unreadable value proves nothing, even
+    when its fill count reads. #2679's gate withholds it by the field it
+    names: the original stays the head, nothing is credited, the leg does not
+    end.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    original = website.orders[order_ref]
+    degraded = _from_alpaca(
+        _filled(_replacement_of(original, repo, replacement_id=_B), repo, filled_quantity=5), **wire
+    )
+    assert degraded.unreadable_fields == tuple(wire)
+
+    disposition = await _frame(repo, degraded, event_type="fill", execution_id="exec-b", quantity=5)
+
+    assert disposition == "withheld_order"
+    assert repo.order(order_ref).broker_order_id == original.order_id
+    assert _replaced_transitions(repo, order_ref) == []
+    assert repo.effective_fill_totals_for_order(order_ref)[0] == pytest.approx(0.0, abs=1e-9, rel=0)
+    assert _manual_endings(repo, order_ref) == []
+    assert repo.effect_operation(effect_id).state == "unknown"
+    assert next(iter(wire)) in _withheld_why(repo, order_ref)
+    assert not _unexplained_hold_active(repo)
+
+
+@pytest.mark.parametrize("replaced_by", ["not-a-uuid", 7])
+async def test_an_unreadable_replaced_by_is_withheld_by_the_one_gate_and_never_followed(
+    clocked_repo, replaced_by: object,  # noqa: F811
+) -> None:
+    """A link id that is not a UUID string is an unreadable value, not a replacement to contain.
+
+    The adapter names ``replaced_by`` unreadable; every route withholds the
+    answer through #2679's gate, which names that field, so there is one
+    containment for it -- no chain link, no broker-id read, no entry fence of
+    the replacement path -- and the sweep never freezes.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    now = repo.clock()
+    degraded = _from_alpaca(
+        website.orders[order_ref].model_copy(update={"status": "replaced", "updated_at_ms": now, "observed_at_ms": now}),
+        replaced_by=replaced_by,
+    )
+    assert degraded.unreadable_fields == ("replaced_by",) and degraded.replaced_by is None
+    website.orders[order_ref] = degraded
+
+    assert await _frame(repo, degraded, event_type="replaced") == "withheld_order"
+    result = await _reconciliation_pass(repo, website)
+
+    assert result.verdict == "clean"
+    assert website.broker_id_lookups == []
+    assert _replaced_transitions(repo, order_ref) == []
+    assert repo.effect_operation(effect_id).state == "unknown"
+    assert "replaced_by" in _withheld_why(repo, order_ref)
+    assert not unfoldable_broker_order_is_unreviewed(repo, broker_order_id=degraded.order_id)
+
+
+async def test_a_replaced_report_with_an_unreadable_fill_count_never_links(clocked_repo) -> None:  # noqa: F811
+    """The original names a readable ``replaced_by``, but its fill count would not parse.
+
+    A partial fill on the original must not be lost behind a link: the whole
+    answer is withheld and the chain waits for a readable one.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref = manual.leg.order_ref
+    replaced, _replacement = _replace_at_alpaca(repo, website, order_ref)
+    degraded = _from_alpaca(replaced, filled_qty="two")
+
+    assert await _frame(repo, degraded, event_type="replaced") == "withheld_order"
+
+    assert repo.order(order_ref).broker_order_id == replaced.order_id
+    assert _replaced_transitions(repo, order_ref) == []
+
+    await _frame(repo, replaced, event_type="replaced", event_key="replaced:readable")
+    assert repo.order(order_ref).broker_order_id == _B
 
 
 async def test_a_working_manual_order_shows_no_replacement_note(clocked_repo) -> None:  # noqa: F811

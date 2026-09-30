@@ -56,11 +56,16 @@ MANUAL_ORDER_REPLACED_TRANSITION = "MANUAL_ORDER_REPLACED"
 #: the frontend renders it verbatim.
 REPLACED_AT_ALPACA_COPY = "Replaced at Alpaca; now following the new order."
 
-#: Why a replaced manual order is contained (#2363's entry fence): Alpaca
-#: ended it ``replaced`` without naming a replacement the Clerk can follow.
-UNFOLLOWABLE_REPLACEMENT_REASON = (
-    "Alpaca reported this manual order replaced without naming a replacement "
-    "order the Clerk can follow."
+#: Why a readable ``replaced`` answer is contained on #2363's entry fence.
+#: An *unreadable* ``replaced_by`` never gets here: the adapter marks it in
+#: ``unreadable_fields`` and #2679's gate withholds the whole answer.
+UNNAMED_REPLACEMENT_REASON = (
+    "Alpaca reported this manual order replaced without naming, in replaced_by, "
+    "the order that replaced it."
+)
+CYCLIC_REPLACEMENT_REASON = (
+    "Alpaca reported this manual order replaced by an order already in its "
+    "replacement chain."
 )
 
 ChainStanding = Literal["head", "former", "unproven"]
@@ -113,22 +118,24 @@ def resolve_captured_order(
     standing is answered (idempotent, under the repository write lock like
     the terminal fold), so the standing is always the post-observation
     truth: a head reporting ``replaced`` answers ``former``, a new order
-    with fills answers ``head``. A head reporting ``replaced`` with no
-    followable ``replaced_by`` is contained on its own (#2363's entry fence)
-    and never raises out of the caller's loop.
+    with fills answers ``head``. A readable ``replaced`` naming no
+    replacement, or one already in the chain, is contained on its own
+    (#2363's entry fence) and never raises out of the caller's loop.
+
+    A row the adapter could not fully read (``unreadable_fields``) proves
+    nothing -- its absent values read as zero fills or no link -- so it never
+    moves the chain, whatever its readable fields say. Its standing is still
+    answered: every route then withholds it through #2679's one gate
+    (``withhold_unnamed_order``), which names the unreadable fields.
     """
     with repo._write_lock:
         captured = _resolve(repo, order)
         if captured is None:
             return None
         effect = live_manual_effect(repo, captured.row)
-        if effect is None:
+        if effect is None or order.unreadable_fields:
             return captured
-        advanced = _record_proven_link(repo, captured=captured, effect=effect, order=order)
-        if advanced is not None:
-            return advanced
-        _contain_unfollowable_replacement(repo, captured=captured, order=order)
-        return captured
+        return _apply_proof(repo, captured=captured, effect=effect, order=order)
 
 
 def _resolve(repo: ClerkSqliteRepository, order: BrokerOrder) -> CapturedOrder | None:
@@ -159,27 +166,31 @@ def _resolve(repo: ClerkSqliteRepository, order: BrokerOrder) -> CapturedOrder |
     return None
 
 
-def _record_proven_link(
+def _apply_proof(
     repo: ClerkSqliteRepository,
     *,
     captured: CapturedOrder,
     effect: EffectOperationResource,
     order: BrokerOrder,
-) -> CapturedOrder | None:
-    """Apply the one chain advance this observation proves; ``None`` if it cannot be followed.
+) -> CapturedOrder:
+    """Apply the one chain advance this readable observation proves; answer the new standing.
 
-    Returns the post-advance standing (``captured`` itself when nothing is
-    proven). ``None`` only for a head reporting ``replaced`` whose
-    ``replaced_by`` is missing, not a followable id, or already in the chain
-    (a cycle): the leg stays on that head, honestly outstanding.
+    ``captured`` itself when nothing is proven. A head reporting
+    ``replaced`` whose ``replaced_by`` names no followable order, or one
+    already in the chain (a cycle), stays the head -- honestly outstanding --
+    and is contained on the entry fence with the cause.
     """
     head = captured.row.broker_order_id
     if head is None:
         return captured
     if captured.standing == "head" and order.status.strip().lower() == "replaced":
         successor = followable_broker_order_id(order.replaced_by)
-        if successor is None or repo.manual_chain_order_ref(successor) is not None:
-            return None
+        if successor is None:
+            _contain_unfollowable_replacement(repo, captured=captured, order=order, reason=UNNAMED_REPLACEMENT_REASON)
+            return captured
+        if repo.manual_chain_order_ref(successor) is not None:
+            _contain_unfollowable_replacement(repo, captured=captured, order=order, reason=CYCLIC_REPLACEMENT_REASON)
+            return captured
         _append_link(repo, effect=effect, row=captured.row, successor=successor)
         return CapturedOrder(row=_reread(repo, captured.row), standing="former")
     if (
@@ -238,15 +249,17 @@ def _append_link(
 
 
 def _contain_unfollowable_replacement(
-    repo: ClerkSqliteRepository, *, captured: CapturedOrder, order: BrokerOrder
+    repo: ClerkSqliteRepository, *, captured: CapturedOrder, order: BrokerOrder, reason: str
 ) -> None:
-    """Name a replaced manual order the Clerk cannot follow, on its own entry fence.
+    """Name a readable ``replaced`` answer the Clerk cannot follow, on its own entry fence.
 
     The leg stays on its head -- outstanding, with a Clerk cancel refused as
-    terminal -- because nothing names the order that took its place. That is
-    the #2656 stuck state, so it is never left silent: the order joins
-    #2363's ``UNFOLDABLE_BROKER_ORDER`` episode, durable and owner-visible
-    until acknowledged, idempotent while its broker state is unchanged.
+    terminal -- because nothing followable names the order that took its
+    place. That is the #2656 stuck state, so it is never left silent: the
+    order joins #2363's ``UNFOLDABLE_BROKER_ORDER`` episode under ``reason``,
+    durable and owner-visible until acknowledged, idempotent while its broker
+    state is unchanged. An unreadable link is not this path's: #2679's gate
+    withholds that answer and names the field.
     """
     logger.warning(
         "A replaced manual order names no replacement the Clerk can follow",
@@ -255,11 +268,10 @@ def _contain_unfollowable_replacement(
             "order_ref": captured.order_ref,
             "broker_order_id": order.order_id,
             "replaced_by": order.replaced_by,
+            "reason": reason,
         },
     )
-    record_unfoldable_broker_order(
-        repo, order=order, reason=UNFOLLOWABLE_REPLACEMENT_REASON, proof_reference=captured.order_ref
-    )
+    record_unfoldable_broker_order(repo, order=order, reason=reason, proof_reference=captured.order_ref)
 
 
 def manual_chain_head_beyond(
@@ -296,9 +308,10 @@ def manual_order_replacement_note(
 
 
 __all__ = [
+    "CYCLIC_REPLACEMENT_REASON",
     "MANUAL_ORDER_REPLACED_TRANSITION",
     "REPLACED_AT_ALPACA_COPY",
-    "UNFOLLOWABLE_REPLACEMENT_REASON",
+    "UNNAMED_REPLACEMENT_REASON",
     "CapturedOrder",
     "ChainStanding",
     "live_manual_effect",

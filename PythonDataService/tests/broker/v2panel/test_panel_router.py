@@ -200,18 +200,18 @@ class _FakeRegistry:
     def bot_end(self, broker: str, sid: str) -> BotEndView:
         """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
         self.status(broker, sid)
-        return bot_end_view(None, now_ms=_T0, dry_run=False, running=self._running)
+        return bot_end_view(None, now_ms=_T0, dry_run=False, running=self._running, use_rth=True)
 
     def bindings_for_broker(self, broker: str) -> list:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
-    async def cancel_end(self, sid: str, *, updated_by: str) -> None:
+    async def cancel_end(self, sid: str, *, lifecycle_run_id: str, updated_by: str) -> None:
         """The panel's Stop cancels the bot's end before its STOP commits (#2607); this fleet has no end."""
         self.status("alpaca", sid)
 
     async def stop_after_durable_clerk_stop(
-        self, broker: str, sid: str, *, updated_by: str, reason: str
+        self, broker: str, sid: str, *, lifecycle_run_id: str, updated_by: str, reason: str
     ) -> None:
         """The in-process quiescence step `stop_bot_decisions` drives after its
         durable SQLite STOP commits (recovery_execution._quiesce_bot_process).

@@ -532,8 +532,10 @@ class UnfoldableBrokerOrder:
 
     ``observed_at_ms`` is the first observation, never advanced by a replay.
     ``broker_state`` is the order's broker status and cumulative fill
-    (``"<status> filled=<qty>"``); ``last_activity_at_ms`` is when that state
-    was last seen to change. The day-P&L fact reads the activity stamp, so an
+    (``"<status> filled=<qty>"``, or ``"<status> filled=unreadable
+    updated_at_ms=<ms>"`` when the broker's fill count would not parse,
+    #2648); ``last_activity_at_ms`` is when that state was last seen to
+    change. The day-P&L fact reads the activity stamp, so an
     order first seen yesterday that fills today still marks today unknown,
     exactly as an external order's changed observation does.
     """

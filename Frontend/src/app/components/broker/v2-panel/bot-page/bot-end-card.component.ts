@@ -25,7 +25,8 @@ let nextEndCardId = 0;
  * Change and Save still (`locked`) while another command on this bot is on
  * its way, so a change of end never races a Stop. The fields are read from
  * the end once, as they open, so a poll never rewrites what the owner is
- * typing.
+ * typing: the bot's own end, or — for a bot with none — the default end the
+ * backend offers (`default_end_at_ms`), as Deploy's fields start (#2663).
  */
 @Component({
   selector: 'app-bot-end-card',
@@ -51,9 +52,11 @@ export class BotEndCardComponent {
 
   private readonly editor = viewChild.required(BotEndPopoverComponent);
 
-  /** Change reads the fields from the end on screen, before they open. */
+  /** Change reads the fields from the end on screen, before they open: its
+   * own end, or the default end offered to a bot with none. */
   protected prepare(): void {
-    this.fields.set(botEndFields(this.end()));
+    const end = this.end();
+    this.fields.set(botEndFields({ end_at_ms: end.end_at_ms ?? end.default_end_at_ms, end_action: end.end_action }));
     this.refusal.set(null);
   }
 

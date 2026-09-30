@@ -11,18 +11,22 @@ from typing import Any, cast
 import pytest
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import (
     UNIDENTIFIED_BROKER_ORDER_ID,
     acknowledge_unfoldable_broker_order,
+    observe_or_record_unfoldable,
     record_unfoldable_broker_order,
     unfoldable_broker_orders_active_since,
 )
+from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
     ExternalOrderNotFoundError,
@@ -41,7 +45,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.models import (
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerOrderLeg,
+    BrokerPosition,
+)
 from app.broker.contract.ports import BrokerReadPort
 from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 from tests.broker.alpaca.conftest import load_alpaca_fixture_file
@@ -93,6 +102,53 @@ class _ClosedOrderRead:
 class _Capture:
     def record(self, **_kwargs: Any) -> bool:
         return True
+
+
+class _SweepRead:
+    """The sweep's snapshot: no open orders, the broker's positions as given."""
+
+    def __init__(self, *, positions: list[BrokerPosition]) -> None:
+        self._positions = positions
+
+    async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
+        return []
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        return self._positions
+
+
+class _LookupTrade:
+    """A trade port that never mutates and whose exact lookup answers with one order."""
+
+    def __init__(self, order: BrokerOrder) -> None:
+        self._order = order
+
+    async def submit(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("evidence recovery must not submit")
+
+    async def cancel(self, _order_id: str) -> None:
+        raise AssertionError("evidence recovery must not cancel")
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        return self._order if client_order_id == self._order.client_order_id else None
+
+
+def _spy_position(quantity: float) -> BrokerPosition:
+    return BrokerPosition(
+        broker="alpaca",
+        symbol="SPY",
+        asset_id=None,
+        asset_class="us_equity",
+        quantity=quantity,
+        side="long",
+        average_entry_price=101.0,
+        market_value=101.0 * quantity,
+        cost_basis=101.0 * quantity,
+        current_price=101.0,
+        unrealized_pl=0.0,
+        unrealized_plpc=0.0,
+        observed_at_ms=1,
+    )
 
 
 def _owned_order(order_ref: str, *, status: str = "partially_filled") -> BrokerOrder:
@@ -1064,6 +1120,166 @@ async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
         repo.close()
 
 
+async def test_a_live_order_with_unreadable_values_is_contained_and_the_stream_keeps_folding(
+    tmp_path: Path,
+) -> None:
+    """A boolean fill count once failed the order mapping on the live stream (#2648).
+
+    That was a parse error -- the frame's evidence was dropped and the stream
+    marked unhealthy -- while the same row on the orders read refused the
+    whole answer. The row now maps with its fill count named unreadable, and
+    the order is contained to itself under its id; the next frame for our
+    own order folds.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    unreadable = {
+        **base,
+        "id": "unreadable-live-1",
+        "client_order_id": "alpaca-console:unreadable-1",
+        "status": "new",
+        "filled_qty": True,
+    }
+    owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame("new", unreadable)
+            yield _trade_update_frame("fill", owned, execution_id="exec-live-2", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 0
+        assert consumer.counters.unfoldable_orders >= 1
+        assert _unfoldable_evidence_refs(repo) == ["unreadable-live-1"]
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+    finally:
+        repo.close()
+
+
+_UNREADABLE_OWN_ORDER_VALUES = [
+    pytest.param({"filled_qty": True}, id="boolean-fill-count"),
+    pytest.param({"submitted_at": "yesterday"}, id="unparseable-timestamp"),
+    pytest.param({"extended_hours": "false"}, id="non-boolean-extended-hours"),
+]
+
+
+@pytest.mark.parametrize("unreadable", _UNREADABLE_OWN_ORDER_VALUES)
+async def test_a_frame_for_our_own_order_with_unreadable_values_is_withheld_and_the_next_folds(
+    tmp_path: Path,
+    unreadable: dict[str, object],
+) -> None:
+    """A value this app cannot parse once failed the frame's order mapping (#2648).
+
+    Read with that value named unreadable, the answer about our own order is
+    withheld like a lost one (#2643): nothing of it is recorded, the effect
+    folds ``unknown``, and the next readable frame folds its own execution
+    slice. The withheld slice is not lost: the sweep's exact lookup by
+    ``client_order_id`` recovers it from the broker's readable cumulative
+    total.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    unreadable_owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "2",
+        "filled_avg_price": "101.0",
+        "status": "partially_filled",
+        **unreadable,
+    }
+    readable_owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame(
+                "partial_fill", unreadable_owned, execution_id="exec-unreadable", price="101.0", qty="2"
+            )
+            # Alpaca's slice for the rest of the order: the 3 shares after the 2.
+            yield _trade_update_frame("fill", readable_owned, execution_id="exec-readable", price="101.0", qty="3")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=1,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 0
+        assert consumer.counters.withheld_orders == 1
+        assert len(repo.fills_for_order(order_ref)) == 1
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 3.0
+        order = repo.order(order_ref)
+        assert order is not None and order.broker_order_id == "broker-order-1"
+        effect = repo.effect_operation(order.effect_operation_id)
+        assert effect is not None and effect.state == "in_progress"
+
+        # A later readable lookup recovers the withheld 2 from the broker's
+        # cumulative total, through the sweep's canonical REST fold.
+        readable = adapter.from_alpaca_order(readable_owned)
+        await reconcile_account(
+            repo,
+            read=_SweepRead(positions=[_spy_position(5.0)]),
+            trade=_LookupTrade(readable),
+            pricing=UNPRICEABLE_RECOVERY,
+        )
+
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+    finally:
+        repo.close()
+
+
 _UNNAMED_OWN_ORDER_TEXT = [
     pytest.param({"order_id": ""}, id="id-less"),
     pytest.param({"status": ""}, id="statusless"),
@@ -1376,6 +1592,115 @@ def test_new_activity_on_a_reviewed_order_fences_entries_again(tmp_path: Path) -
             repo, broker_order_id="mleg-1", operator="op-2"
         )
         assert review.ack_operator == "op-2" and repo.active_uncertainties() == []
+    finally:
+        repo.close()
+
+
+def _foreign_order_with_unreadable_fill_count(
+    *, status: str, updated_at: str, observed_at_ms: int
+) -> BrokerOrder:
+    """A foreign Alpaca row, mapped by the real adapter, whose ``filled_qty`` is a boolean."""
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    order = adapter.from_alpaca_order(
+        {
+            **base,
+            "id": "foreign-unreadable-1",
+            "client_order_id": "alpaca-console:foreign-unreadable-1",
+            "status": status,
+            "updated_at": updated_at,
+            "filled_qty": True,
+        },
+        observed_at_ms=observed_at_ms,
+    )
+    assert order.unreadable_fields == ("filled_qty",)
+    return order
+
+
+def test_a_reviewed_order_with_an_unreadable_fill_count_fences_entries_again_when_it_fills(
+    tmp_path: Path,
+) -> None:
+    """#2648 review: a row read with an unreadable fill count once carried no status at all.
+
+    Its activity token was ``" filled=0.0"`` whatever the broker did, so once
+    an operator reviewed the resting order, the order filling was never new
+    evidence and its entry fence was gone for good. The broker's own status
+    is kept now, and the unreadable count is never stated as a zero: a fill
+    is activity again, and so is a fill that leaves the status unchanged.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+
+    def observe(status: str, updated_at: str, observed_at_ms: int) -> None:
+        order = _foreign_order_with_unreadable_fill_count(
+            status=status, updated_at=updated_at, observed_at_ms=observed_at_ms
+        )
+        assert observe_or_record_unfoldable(repo, order=order) == "unfoldable"
+
+    def entry_fenced() -> bool:
+        entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
+        return entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
+
+    try:
+        observe("new", "2026-07-24T14:42:49Z", 1_000)
+        assert entry_fenced()
+        acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="foreign-unreadable-1", operator="op-1"
+        )
+        assert repo.active_uncertainties() == []
+        before = len(repo.custody_transitions())
+
+        # A sweep re-seeing the reviewed resting order is not activity.
+        observe("new", "2026-07-24T14:42:49Z", 2_000)
+        assert len(repo.custody_transitions()) == before and repo.active_uncertainties() == []
+
+        # A partial fill, its count still unreadable, is new evidence.
+        observe("partially_filled", "2026-07-24T14:43:00Z", 3_000)
+        assert entry_fenced() and _unfoldable_evidence_refs(repo) == ["foreign-unreadable-1"]
+        acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="foreign-unreadable-1", operator="op-1"
+        )
+        assert repo.active_uncertainties() == []
+
+        # So is a later fill that leaves the status unchanged ...
+        observe("partially_filled", "2026-07-24T14:44:00Z", 4_000)
+        assert entry_fenced()
+        acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="foreign-unreadable-1", operator="op-1"
+        )
+
+        # ... and the order filling: fenced again, never whitelisted for good.
+        observe("filled", "2026-07-24T14:45:00Z", 5_000)
+        assert entry_fenced() and _unfoldable_evidence_refs(repo) == ["foreign-unreadable-1"]
+    finally:
+        repo.close()
+
+
+def test_an_order_with_an_unreadable_fill_count_is_recorded_under_its_real_cause(
+    tmp_path: Path,
+) -> None:
+    """#2648 review: the durable record once blamed a status Alpaca did send.
+
+    A foreign ``status: "new"`` order with ``filled_qty: true`` read as
+    ``"external order status must be non-empty"`` with ``broker_state:
+    " filled=0.0"``, so an operator inspecting it at Alpaca found a perfectly
+    good status. The record now names the unreadable field and states the
+    broker's status, never the unreadable count as a zero.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        order = _foreign_order_with_unreadable_fill_count(
+            status="new", updated_at="2026-07-24T14:42:49Z", observed_at_ms=1_000
+        )
+
+        assert observe_or_record_unfoldable(repo, order=order) == "unfoldable"
+
+        episode = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+        )
+        assert episode is not None
+        [recorded] = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts["orders"]
+        assert recorded["reason"] == "broker sent values this app could not read: filled_qty"
+        assert recorded["broker_state"].startswith("new filled=unreadable ")
+        assert "status" not in recorded["reason"] and "0.0" not in recorded["broker_state"]
     finally:
         repo.close()
 

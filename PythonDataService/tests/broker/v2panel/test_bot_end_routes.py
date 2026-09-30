@@ -191,6 +191,7 @@ async def test_the_deploy_view_offers_the_default_end(deploy_app) -> None:
     assert default_end["end_at_ms"] == _at(15, 59)
     assert default_end["end_action"] == "SELL"
     assert default_end["headline"] == "Ends Fri Sep 25, 15:59 ET · sells"
+    assert default_end["default_end_at_ms"] is None  # it is the default end, not a bot with none
 
 
 async def test_the_start_admission_preview_refuses_the_end_a_deploy_would_refuse(
@@ -262,7 +263,7 @@ async def test_the_end_preview_refuses_in_plain_words_with_its_code(deploy_app) 
 
 _VIEW = BotEndView(
     end_at_ms=_at(15, 59), end_action="SELL", status="scheduled",
-    headline="Ends Fri Sep 25, 15:59 ET · sells", explanation="…", editable=True,
+    headline="Ends Fri Sep 25, 15:59 ET · sells", explanation="…", editable=True, default_end_at_ms=None,
 )
 
 

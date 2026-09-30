@@ -44,6 +44,25 @@ class DuplicateDailySovereignEquitySnapshotError(ValueError):
     """A daily row was already recorded for the same account and session."""
 
 
+class UnapprovedAccountEquitySnapshotError(ValueError):
+    """The broker answered for an account other than the one the binding pinned (#2669).
+
+    A boot whose Alpaca did not answer starts the scheduler before the pin is
+    checked; until a reconnect refuses the binding and stops it, the account
+    the credentials reach may not be the approved one. Its equity is never
+    recorded: the ledger is append-only, so a row written for it could never
+    be taken back.
+    """
+
+    def __init__(self, *, account_id: str, expected_account_id: str) -> None:
+        super().__init__(
+            f"broker answered for account {account_id!r}, not the approved account "
+            f"{expected_account_id!r}; no daily sovereign equity snapshot is recorded"
+        )
+        self.account_id = account_id
+        self.expected_account_id = expected_account_id
+
+
 @dataclass(frozen=True)
 class DailySovereignEquitySnapshot:
     """One immutable broker-equity observation at a scheduled session close."""
@@ -106,13 +125,26 @@ class DailySovereignEquitySnapshotWriter:
         *,
         store: DailySovereignEquitySnapshotStore,
         account_snapshot_provider: AccountSnapshotProvider,
+        expected_account_id: str | None = None,
     ) -> None:
         self._store = store
         self._account_snapshot_provider = account_snapshot_provider
+        self._expected_account_id = expected_account_id
 
     async def capture(self, *, session_close_ms: int) -> DailySovereignEquitySnapshot:
-        """Read the broker's account equity and append one immutable daily row."""
+        """Read the broker's account equity and append one immutable daily row.
+
+        ``expected_account_id`` is the binding's pinned account; a read that
+        answers for any other account raises
+        :class:`UnapprovedAccountEquitySnapshotError` and writes nothing --
+        the same comparison the authority selection's pin check makes. With
+        no pin, every account the credentials reach is recorded.
+        """
         account = await self._account_snapshot_provider()
+        if self._expected_account_id is not None and account.account_id != self._expected_account_id:
+            raise UnapprovedAccountEquitySnapshotError(
+                account_id=account.account_id, expected_account_id=self._expected_account_id
+            )
         snapshot = DailySovereignEquitySnapshot(
             account_id=account.account_id,
             session_close_ms=session_close_ms,
@@ -199,6 +231,20 @@ class DailySovereignEquitySnapshotScheduler:
                     extra={
                         "action": "daily_sovereign_equity_snapshot_already_recorded",
                         "session_close_ms": session_close_ms,
+                    },
+                )
+                return
+            except UnapprovedAccountEquitySnapshotError as exc:
+                # A retry reads the same credentials, so it reaches the same
+                # account: this close is refused, not retried.
+                logger.error(
+                    "daily sovereign equity snapshot refused: the broker answered for an "
+                    "account the binding did not approve",
+                    extra={
+                        "action": "daily_sovereign_equity_snapshot_unapproved_account",
+                        "session_close_ms": session_close_ms,
+                        "account_id": exc.account_id,
+                        "expected_account_id": exc.expected_account_id,
                     },
                 )
                 return
@@ -290,6 +336,7 @@ __all__ = [
     "DailySovereignEquitySnapshotStore",
     "DailySovereignEquitySnapshotWriter",
     "DuplicateDailySovereignEquitySnapshotError",
+    "UnapprovedAccountEquitySnapshotError",
     "next_nyse_session_close_ms",
     "sovereign_equity_snapshot_database_path",
 ]

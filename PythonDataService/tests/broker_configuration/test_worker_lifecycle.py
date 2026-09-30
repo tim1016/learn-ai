@@ -11,21 +11,34 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.broker.alpaca.active_binding import reset_active_alpaca_binding_for_testing
+from app.broker.alpaca.active_binding import (
+    reset_active_alpaca_binding_for_testing,
+    set_active_alpaca_binding,
+)
 from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
     reconnecting_refusal,
     unavailable_runtime,
 )
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
+from app.broker.alpaca.market_liveness import (
+    get_market_liveness_consumer,
+    reset_market_liveness_consumer_for_testing,
+)
 from app.broker.alpaca.profile import resolve_runtime_context
 from app.broker.contract.errors import BrokerUnreachable
+from app.broker_configuration import worker_lifecycle
 from app.broker_configuration.binding_decision import BindingCandidate, BindingIntent
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.worker_binding import BoundWorker
 from app.broker_configuration.worker_lifecycle import (
+    AccountBackgroundWork,
+    acknowledge_reconnected_binding,
     acknowledge_runtime_binding,
+    close_failed_startup,
     installation_worker,
+    start_account_background_work,
+    stop_account_background_work,
 )
 from tests.broker.alpaca.profile.conftest import make_environment
 from tests.broker_configuration.conftest import paper_profile
@@ -36,6 +49,14 @@ def isolated_binding() -> Iterator[None]:
     reset_active_alpaca_binding_for_testing()
     yield
     reset_active_alpaca_binding_for_testing()
+
+
+@pytest.fixture(autouse=True)
+def no_running_account_work(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(worker_lifecycle, "_running_account_work", None)
+    reset_market_liveness_consumer_for_testing()
+    yield
+    reset_market_liveness_consumer_for_testing()
 
 
 @pytest.fixture(autouse=True)
@@ -297,3 +318,174 @@ async def test_failed_startup_closes_custody_before_releasing_installation_lock(
     assert get_active_clerk_runtime() is None
     with installation_worker(clerk_dir=tmp_path) as refusal:
         assert refusal is None
+
+
+class _Worker:
+    """A background worker that records its starts and stops in one shared log."""
+
+    def __init__(self, name: str, log: list[str], *, stop_error: Exception | None = None) -> None:
+        self._name = name
+        self._log = log
+        self._stop_error = stop_error
+
+    def start(self) -> None:
+        self._log.append(f"{self._name} started")
+
+    async def stop(self) -> None:
+        self._log.append(f"{self._name} stopped")
+        if self._stop_error is not None:
+            raise self._stop_error
+
+
+def _account_work(log: list[str], *, snapshot_stop_error: Exception | None = None) -> AccountBackgroundWork:
+    return AccountBackgroundWork(
+        market_liveness=_Worker("market_liveness", log),  # type: ignore[arg-type]
+        equity_snapshots=_Worker("equity_snapshots", log, stop_error=snapshot_stop_error),  # type: ignore[arg-type]
+    )
+
+
+_BOTH_STARTED = ["market_liveness started", "equity_snapshots started"]
+_ALPACA_UNANSWERED = BrokerUnreachable("Could not reach Alpaca while fetching the account.", broker="alpaca")
+
+
+def _staged(service: BrokerConfigurationService) -> BoundWorker:
+    profile = paper_profile(service)
+    staged = service.stage_selection(
+        profile_id=profile.profile.profile_id, revision=1, expected_selection_generation=0
+    )
+    return _bound(profile.profile.profile_id, staged.selection_generation)
+
+
+def _pin_mismatch() -> ActiveClerkRuntime:
+    return unavailable_runtime(
+        "ACCOUNT_PIN_MISMATCH",
+        account_id="PA-UNAPPROVED",
+        recovery=(
+            "The broker account does not match the applied configuration's approved "
+            "account. Restore its credentials or verify and apply a new revision."
+        ),
+    )
+
+
+async def _boot_with_alpaca_unanswered(
+    service: BrokerConfigurationService, bound: BoundWorker, log: list[str]
+) -> AccountBackgroundWork:
+    """The boot's own steps when Alpaca did not answer: the pin went unchecked, so the work starts."""
+    set_active_alpaca_binding(bound.context)
+    await acknowledge_runtime_binding(
+        bound=bound,
+        runtime=reconnecting_refusal(_ALPACA_UNANSWERED, account_id=None),
+        service_factory=lambda: service,
+    )
+    work = _account_work(log)
+    start_account_background_work(work)
+    assert log == _BOTH_STARTED
+    assert get_market_liveness_consumer() is work.market_liveness
+    return work
+
+
+async def _reconnect_to(
+    selected: ActiveClerkRuntime, *, service: BrokerConfigurationService, bound: BoundWorker
+) -> ActiveClerkRuntime:
+    """The real reconnect, from the unanswered boot to ``selected``, through the reconnect's acknowledgement."""
+    from app.broker.alpaca.clerk.authority_reconnect import AuthoritySteps, run_authority_reconnect
+
+    async def select() -> ActiveClerkRuntime:
+        return selected
+
+    async def acknowledge(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
+        return await acknowledge_reconnected_binding(bound=bound, runtime=runtime, service_factory=lambda: service)
+
+    async def nothing(_: object) -> None:
+        return None
+
+    return await run_authority_reconnect(
+        reconnecting_refusal(_ALPACA_UNANSWERED, account_id=None),
+        steps=AuthoritySteps(
+            select=select, acknowledge=acknowledge, install=lambda _: None, retire=nothing, boot=nothing,
+        ),
+        sleep=nothing,
+    )
+
+
+async def test_a_boot_that_meets_the_pin_mismatch_starts_neither_account_worker(
+    service: BrokerConfigurationService,
+) -> None:
+    """#2669: the boot's own acknowledgement refuses the binding, so the account's work never starts."""
+    bound = _staged(service)
+    set_active_alpaca_binding(bound.context)
+    log: list[str] = []
+
+    await acknowledge_runtime_binding(bound=bound, runtime=_pin_mismatch(), service_factory=lambda: service)
+    start_account_background_work(_account_work(log))
+
+    assert log == []
+    assert get_market_liveness_consumer() is None
+
+
+async def test_a_reconnect_that_meets_the_pin_mismatch_stops_both_account_workers(
+    service: BrokerConfigurationService,
+) -> None:
+    """#2669: the lane ends as a boot that met the mismatch directly.
+
+    A boot whose Alpaca did not answer started market liveness and the equity
+    snapshot scheduler; the reconnect then read an account the configuration
+    did not approve. Its acknowledgement refuses the binding and stops both --
+    the snapshot scheduler first, the worker that could write for that account.
+    """
+    bound = _staged(service)
+    log: list[str] = []
+    await _boot_with_alpaca_unanswered(service, bound, log)
+
+    final = await _reconnect_to(_pin_mismatch(), service=service, bound=bound)
+
+    assert final.startup_failure is not None
+    assert final.startup_failure.reason_code == "ACCOUNT_PIN_MISMATCH"
+    assert log == [*_BOTH_STARTED, "equity_snapshots stopped", "market_liveness stopped"]
+    assert get_market_liveness_consumer() is None
+    assert await stop_account_background_work() is False, "shutdown finds nothing left to stop"
+
+
+async def test_a_reconnect_that_ends_serving_the_approved_account_leaves_both_running(
+    service: BrokerConfigurationService,
+) -> None:
+    bound = _staged(service)
+    log: list[str] = []
+    work = await _boot_with_alpaca_unanswered(service, bound, log)
+    serving = ActiveClerkRuntime(authority_kind="sqlite", clerk=object(), account_id="PA-TEST")
+
+    final = await _reconnect_to(serving, service=service, bound=bound)
+
+    assert final is serving
+    assert service.selection().effective_account_id == "PA-TEST"
+    assert log == _BOTH_STARTED
+    assert get_market_liveness_consumer() is work.market_liveness
+
+
+async def test_a_failed_snapshot_stop_still_stops_the_market_status_source(
+    service: BrokerConfigurationService,
+) -> None:
+    bound = _staged(service)
+    set_active_alpaca_binding(bound.context)
+    log: list[str] = []
+    start_account_background_work(_account_work(log, snapshot_stop_error=RuntimeError("stop failed")))
+
+    with pytest.raises(RuntimeError, match="stop failed"):
+        await stop_account_background_work()
+
+    assert log == [*_BOTH_STARTED, "equity_snapshots stopped", "market_liveness stopped"]
+    assert get_market_liveness_consumer() is None
+
+
+async def test_a_failed_startup_stops_the_account_work_it_started(
+    service: BrokerConfigurationService,
+) -> None:
+    bound = _staged(service)
+    set_active_alpaca_binding(bound.context)
+    log: list[str] = []
+    start_account_background_work(_account_work(log))
+
+    await close_failed_startup()
+
+    assert log == [*_BOTH_STARTED, "equity_snapshots stopped", "market_liveness stopped"]
+    assert get_market_liveness_consumer() is None

@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 import responses
 
+from app.broker.alpaca.adapter import from_alpaca_order
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
@@ -32,6 +33,7 @@ from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
     _MIN_HELD_CONNECTION_MS,
     TradeUpdatesConsumer,
+    _broker_order_fingerprint_fields,
     _from_gap_recovery_event,
     _inject_frame_faults,
     _order_to_event_payload,
@@ -181,6 +183,62 @@ def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
     assert math.isclose(event.quantity, 10.0, abs_tol=1e-9, rel_tol=0.0)
     assert event.price is not None
     assert math.isclose(event.price, 135.80, abs_tol=1e-9, rel_tol=0.0)
+
+
+def test_a_gap_reconciled_replacement_keeps_its_replacement_links() -> None:
+    """A ``replaced`` order recovered through the REST window still names its replacement (#2656).
+
+    Re-shaped without its links, the original would read as replaced by
+    nothing -- a replacement the Clerk cannot follow -- and the order that
+    took its place would lose the ``replaces`` that ties it to its leg.
+    """
+    replaced = _accepted_order(_OWNED_COID).model_copy(
+        update={
+            "order_id": "00000000-0000-0000-0000-00000000000a",
+            "status": "replaced",
+            "replaced_by": "00000000-0000-0000-0000-00000000000b",
+            "updated_at_ms": _FIXED_MS,
+        }
+    )
+
+    payload = _order_to_event_payload(replaced)
+
+    assert payload is not None and payload["event"] == "replaced"
+    mapped = from_alpaca_order(payload["order"], observed_at_ms=_FIXED_MS)
+    assert mapped.replaced_by == "00000000-0000-0000-0000-00000000000b"
+    assert mapped.replaces is None and mapped.unreadable_fields == ()
+
+
+def test_gap_reconcile_never_reshapes_an_order_with_unreadable_values() -> None:
+    """A filled order whose fill count would not parse is not re-fed as a zero fill (#2648 review).
+
+    The adapter keeps the broker's own status on such a row, so the status
+    alone no longer keeps it out of the REST recovery re-map, which would
+    turn its absent fill count into a readable ``qty: 0.0``.
+    """
+    order = _filled_broker_order("unreadable-fill", _OWNED_COID).model_copy(
+        update={"filled_quantity": 0.0, "unreadable_fields": ("filled_qty",)}
+    )
+
+    assert _order_to_event_payload(order) is None
+
+
+def test_an_unreadable_row_is_not_an_exact_redelivery_of_its_readable_twin() -> None:
+    """A degraded row and a readable one whose value really is zero are different evidence (#2648 review).
+
+    Readable orders keep exactly the fingerprint shape they always had, so
+    no variant digest a running consumer computes changes.
+    """
+    readable = _accepted_order(_OWNED_COID)
+    degraded = readable.model_copy(update={"unreadable_fields": ("filled_qty",)})
+
+    assert sorted(_broker_order_fingerprint_fields(readable)) == [
+        "canceled_at_ms", "client_order_id", "created_at_ms", "expired_at_ms",
+        "filled_at_ms", "filled_avg_price", "filled_quantity", "limit_price",
+        "order_id", "order_type", "quantity", "side", "status", "stop_price",
+        "submitted_at_ms", "symbol", "time_in_force", "updated_at_ms",
+    ]
+    assert _broker_order_fingerprint_fields(degraded) != _broker_order_fingerprint_fields(readable)
 
 
 class _FakeBroker:
@@ -737,14 +795,14 @@ async def test_already_durable_duplicate_restores_degraded_evidence_health(
 
 async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path: Path) -> None:
     # A frame whose event/timestamp map cleanly but whose embedded ``order`` is
-    # malformed (a value it cannot map) must be a parse error — captured,
-    # counted, ``_seen`` unpoisoned — and must NOT abort the drain of the frames
-    # that follow it. (Regression: the order was once mapped outside the parse
-    # guard and after ``_seen`` was set, so a bad order silently lost the event
-    # and truncated the stream.) Missing text alone maps blank and is contained
-    # per order instead (#2643), so the malformation is a boolean fill count.
+    # not an object must be a parse error — captured, counted, ``_seen``
+    # unpoisoned — and must NOT abort the drain of the frames that follow it.
+    # (Regression: the order was once mapped outside the parse guard and after
+    # ``_seen`` was set, so a bad order silently lost the event and truncated
+    # the stream.) Missing text maps blank and is contained per order (#2643);
+    # an unreadable value maps degraded and is contained the same way (#2648).
     bad = _load_frames()[0]
-    bad["data"]["order"] = {"id": "malformed-1", "filled_qty": True}
+    bad["data"]["order"] = "not-an-order"
     good = _load_frames()[0]  # a valid owned frame delivered AFTER the bad one
     consumer, clerk, _ = await _consumer(tmp_path, [bad, good])
     await _warm(clerk)
@@ -765,8 +823,9 @@ async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
     tmp_path: Path,
 ) -> None:
     malformed = _load_frames()[0]
-    # A value the order cannot map; missing text alone is contained per order (#2643).
-    malformed["data"]["order"] = {"id": "malformed-1", "filled_qty": True}
+    # Not an object at all; missing text and unreadable values are contained
+    # per order instead (#2643, #2648).
+    malformed["data"]["order"] = "not-an-order"
     async with _running_consumer(tmp_path) as (source, consumer):
         await source.send(malformed)
         await _wait_for_execution_health(healthy=False)
@@ -782,16 +841,17 @@ async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
     [
         pytest.param(lambda data: data.update(price=True), id="boolean-execution-price"),
         pytest.param(lambda data: data.update(qty=False), id="boolean-execution-qty"),
-        pytest.param(lambda data: data["order"].update(filled_qty=True), id="boolean-order-filled-qty"),
     ],
 )
 async def test_a_boolean_numeric_is_a_parse_error_not_a_reconnect(
     tmp_path: Path,
     corrupt: Callable[[dict[str, Any]], None],
 ) -> None:
-    # ``float(True)`` is refused with a ``TypeError``; a frame carrying one is a
-    # frame that would not map — counted, health degraded, socket kept — not a
-    # crash that tears the connection down and reconnects (#2606).
+    # ``float(True)`` is refused with a ``TypeError``; a frame carrying one in
+    # its execution slice is a frame that would not map — counted, health
+    # degraded, socket kept — not a crash that tears the connection down and
+    # reconnects (#2606). A boolean in the embedded ORDER is no longer this
+    # path: the row maps degraded and is contained per order (#2648).
     fill = _load_frames()[2]
     corrupt(fill["data"])
     async with _running_consumer(tmp_path) as (source, consumer):

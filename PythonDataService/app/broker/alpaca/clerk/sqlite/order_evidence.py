@@ -1071,7 +1071,8 @@ def fold_order_submission_response(
     durable position attribution. That port capability — never the
     aggregate's own spelling — is what routes the fold to the simulated
     exact path (#2178). A response missing its broker order id, status,
-    symbol or side folds as a lost one (:func:`withhold_unnamed_order`).
+    symbol or side, or naming values it could not read, folds as a lost
+    one (:func:`withhold_unnamed_order`).
     """
     if withhold_unnamed_order(
         repo,
@@ -1139,20 +1140,24 @@ def withhold_unnamed_order(
     order: BrokerOrder,
     order_ref: str,
 ) -> bool:
-    """Withhold a broker answer about our own order missing its id, status, symbol or side (#2643).
+    """Withhold a broker answer about our own order that cannot be stated truthfully (#2643, #2648).
 
-    Nothing of it can be folded: the acknowledgement keeps the first broker
-    order id it sees, so a blank one would be this order's broker identity
-    for ever; a blank status is no lifecycle state; and both fill folds take
-    the answer's symbol and side, so a blank symbol would credit a fill in
-    no instrument and a blank side is refused by the fills table, raising
-    out of the sweep or the stream. It is treated exactly like a lost
-    response -- nothing recorded, the effect folded ``unknown`` -- so the
-    sweep's exact lookup by ``client_order_id`` recovers the order once the
-    broker names it. The order type and time in force are not withheld: no
-    fold of our own order reads them. Every entrance of evidence about our
-    own order asks this first; a foreign order is contained by the
-    external-order fold. Returns whether the answer was withheld.
+    That is an answer missing its id, status, symbol or side, or one naming
+    ``unreadable_fields`` -- values the adapter could not parse and read as
+    absent. Nothing of it can be folded: the acknowledgement keeps the first
+    broker order id it sees, so a blank one would be this order's broker
+    identity for ever; a blank status is no lifecycle state; both fill folds
+    take the answer's symbol and side, so a blank symbol would credit a fill
+    in no instrument and a blank side is refused by the fills table, raising
+    out of the sweep or the stream; and an unreadable fill count, quantity,
+    price or time would be folded as the zero or ``None`` it reads as. It is
+    treated exactly like a lost response -- nothing recorded, the effect
+    folded ``unknown`` -- so the sweep's exact lookup by ``client_order_id``
+    recovers the order once the broker answers readably. The order type and
+    time in force are not withheld: no fold of our own order reads them.
+    Every entrance of evidence about our own order asks this first; a
+    foreign order is contained by the external-order fold. Returns whether
+    the answer was withheld.
     """
     missing = [
         name
@@ -1164,9 +1169,15 @@ def withhold_unnamed_order(
         )
         if not value.strip()
     ]
-    if not missing:
+    unreadable = list(order.unreadable_fields)
+    if not missing and not unreadable:
         return False
-    why = f"broker reported this order with no {' or '.join(missing)}; withholding its evidence"
+    problems: list[str] = []
+    if missing:
+        problems.append(f"no {' or '.join(missing)}")
+    if unreadable:
+        problems.append(f"values this app could not read ({', '.join(unreadable)})")
+    why = f"broker reported this order with {' and '.join(problems)}; withholding its evidence"
     logger.warning(
         "A broker answer about the Clerk's own order was incomplete and was withheld",
         extra={
@@ -1174,6 +1185,7 @@ def withhold_unnamed_order(
             "order_ref": order_ref,
             "effect_operation_id": effect_operation_id,
             "missing": missing,
+            "unreadable_fields": unreadable,
         },
     )
     fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
