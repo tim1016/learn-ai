@@ -92,8 +92,9 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
         min_trades=1,
     )
     # ``prepare_launch`` is blocking lake-admission work; production routers
-    # run it through ``to_thread.run_sync`` (grid_search.py), and the lake
-    # admission probe refuses an event-loop caller outright.
+    # run it through anyio's to_thread.run_sync (grid_search.py), and the lake
+    # admission probe refuses an event-loop caller outright. asyncio.to_thread
+    # satisfies the same off-loop requirement here.
     created = await service.create(
         await asyncio.to_thread(service.prepare_launch, spec, job_id=None, roots=[lake])
     )

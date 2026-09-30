@@ -31,6 +31,11 @@ from app.data_lake import catalog_client
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar import config as sidecar_config
 
+# The unpatched pool initializer, captured at import time (before any fixture
+# replaces the module attribute) so the conditional fakes below can forward to
+# it without recursing into themselves (#2619).
+_REAL_INIT_POOL = catalog_client.init_pool
+
 
 class FakeCatalog:
     """Stand-in for the Postgres catalog, faithful to its claim semantics.
@@ -135,7 +140,15 @@ class FakeCatalog:
                    for row in self.rows.values())
 
     async def init_pool(self) -> None:
-        return None
+        # Same contract as seeded_lake_catalog's init_pool: the catalog rows
+        # are faked, but the asyncpg pool must stay real when a database is
+        # configured, because app.research.persistence.db shares
+        # catalog_client's pool for its own writes (#2619). _REAL_INIT_POOL is
+        # captured at import time, before any fixture patches the module
+        # attribute - importing it lazily here would re-fetch the patched
+        # fake and recurse.
+        if settings.POSTGRES_URL:
+            await _REAL_INIT_POOL()
 
     async def scope_verified_legacy_metadata(
         self, artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
@@ -627,7 +640,6 @@ def seeded_lake_catalog(monkeypatch):
     """A committed catalog for explicit file seeds, not an admission bypass."""
     receipts = {}
     token = _fixture_publications.set(receipts)
-    real_init_pool = catalog_client.init_pool
 
     async def init_pool():
         # Receipts are faked below, but the pool must stay real when a
@@ -636,7 +648,7 @@ def seeded_lake_catalog(monkeypatch):
         # out entirely makes every research-DB write in a seeded test
         # fail with "pool not initialized" (#2619).
         if settings.POSTGRES_URL:
-            await real_init_pool()
+            await _REAL_INIT_POOL()
 
     async def has_receipt(root_id, mode, relative, digest, size):
         return receipts.get((root_id, mode, relative)) == (digest, size)
