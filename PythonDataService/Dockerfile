@@ -10,7 +10,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Pinned exactly: an unpinned upgrade moves the installed pip on every
 # cache-skipping rebuild, which moves the sweep environment digest and
 # refuses Finish on every interrupted study (#2604). The versions match the
-# image already in service, so pinning itself moves nothing.
+# image already in service. The range pins in requirements-light.txt still
+# re-resolve on a rebuild that skips the cache, so finish interrupted studies
+# before rebuilding.
 RUN pip install --upgrade "pip==26.2.1" "setuptools==80.10.2"
 
 # Layer 1: Heavy/stable libs (scipy, numpy, pandas, statsmodels)

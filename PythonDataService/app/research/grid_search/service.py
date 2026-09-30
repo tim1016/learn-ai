@@ -110,6 +110,12 @@ def current_code_identity() -> CodeIdentity:
     try:
         return resolve_code_identity()
     except EnvironmentIdentityError as exc:
+        # A refusal is a 400 nothing else logs; the cause names what to repair.
+        logger.warning(
+            "launch refused: this service cannot identify its installed environment",
+            extra={"action": "environment_identity_unreadable"},
+            exc_info=True,
+        )
         raise GridSearchRefusal(
             "This service cannot identify its installed Python libraries right now, so it cannot record "
             "the environment a new search runs in. Repair the environment, then launch again.",

@@ -149,16 +149,19 @@ def test_preflight_refuses_an_unreadable_zip_by_path_without_prescribing_a_backf
 
 
 def test_a_launch_whose_environment_cannot_be_identified_is_a_coded_refusal(
-    lake: Path, monkeypatch: pytest.MonkeyPatch
+    lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """An unreadable environment must refuse launch in plain words, not 500 (#2604)."""
+    """An unreadable environment must refuse launch in plain words, not 500 (#2604).
+
+    The refusal is a 400 nothing else logs, so the cause must reach the log here.
+    """
 
     def unreadable() -> CodeIdentity:
         raise EnvironmentIdentityError("the installed distribution 'x' has no name in its metadata")
 
     monkeypatch.setattr(service, "resolve_code_identity", unreadable)
 
-    with pytest.raises(service.GridSearchRefusal) as refused:
+    with caplog.at_level("WARNING", logger=service.__name__), pytest.raises(service.GridSearchRefusal) as refused:
         service.prepare_launch(_spec(), job_id="job-1", roots=[lake])
 
     assert refused.value.code == "ENVIRONMENT_UNIDENTIFIABLE"
@@ -166,6 +169,9 @@ def test_a_launch_whose_environment_cannot_be_identified_is_a_coded_refusal(
         "This service cannot identify its installed Python libraries right now, so it cannot record "
         "the environment a new search runs in. Repair the environment, then launch again."
     )
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "environment_identity_unreadable"]
+    assert record.exc_info is not None
+    assert "has no name in its metadata" in str(record.exc_info[1])
 
 
 async def test_launch_is_durable_and_execute_ranks_the_field(conn, lake: Path) -> None:
