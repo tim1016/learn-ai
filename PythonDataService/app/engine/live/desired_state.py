@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import contextlib
 import os
-from enum import StrEnum
+from collections.abc import Callable
+from enum import Enum, StrEnum
 from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -31,9 +33,11 @@ from app.engine.live.identity import (
     validate_strategy_instance_id,
 )
 from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
+from app.schemas.bot_end import BotEnd, BotEndAction
 
 # Re-exported so existing callers can keep importing it from here.
 __all__ = [
+    "END_UNCHANGED",
     "DesiredState",
     "DesiredStateCorruptError",
     "DesiredStateRecord",
@@ -108,6 +112,14 @@ class DesiredState(StrEnum):
     STOPPED = "STOPPED"
 
 
+class _EndUnchanged(Enum):
+    UNCHANGED = "unchanged"
+
+
+#: ``DesiredStateRepo.set``'s default: the write keeps the record's end as it is.
+END_UNCHANGED = _EndUnchanged.UNCHANGED
+
+
 class DesiredStateRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -115,23 +127,42 @@ class DesiredStateRecord(BaseModel):
     updated_at_ms: int
     updated_by: str
     reason: str | None = None
-    # End-day is stronger than an ordinary pause: the running engine must
-    # eventually queue an audited CLOCK_OUT after a control-plane outage.
-    # This explicit marker is intentionally not inferred from ``reason``;
-    # reasons are operator prose, not durable execution semantics.
-    end_day_requested: bool = False
+    # The owner's one-time end for this deployment (#2607): the instant the
+    # Clerk stops the bot, and whether it sells or keeps its shares then. The
+    # owner's schedule, not a sealed term -- it is editable while the bot runs
+    # and enters no binding, hash or seal. Absent (every record written before
+    # #2607) is "no end". ``end_carried_out_at_ms`` is when the Clerk carried
+    # it out; a carried-out end stays readable but is no longer pending.
+    end_at_ms: int | None = None
+    end_action: BotEndAction = "SELL"
+    end_carried_out_at_ms: int | None = None
     version: int = 1
 
     @model_validator(mode="before")
     @classmethod
-    def discard_retired_evaluator_witness(cls, value: object) -> object:
-        """Read legacy files without retaining the retired receipt witness."""
+    def discard_retired_fields(cls, value: object) -> object:
+        """Read legacy files without retaining retired fields.
+
+        The receipt witness is retired, and so is ``end_day_requested`` -- a
+        marker nothing ever read, replaced by the scheduled end (#2607).
+        """
 
         if isinstance(value, dict):
             value = dict(value)
             value.pop("last_disposition_id", None)
             value.pop("last_disposition_action", None)
+            value.pop("end_day_requested", None)
         return value
+
+    def pending_end(self) -> BotEnd | None:
+        """The end the Clerk still has to carry out, if any."""
+        if self.end_at_ms is None or self.end_carried_out_at_ms is not None:
+            return None
+        return BotEnd(end_at_ms=self.end_at_ms, end_action=self.end_action)
+
+    def recorded_end(self) -> BotEnd | None:
+        """The end this record names, pending or carried out."""
+        return None if self.end_at_ms is None else BotEnd(end_at_ms=self.end_at_ms, end_action=self.end_action)
 
 
 class DesiredStateRepo:
@@ -207,7 +238,7 @@ class DesiredStateRepo:
         updated_by: str,
         now_ms: int,
         reason: str | None = None,
-        end_day_requested: bool = False,
+        end: BotEnd | None | Literal[_EndUnchanged.UNCHANGED] = END_UNCHANGED,
     ) -> DesiredStateRecord:
         """Read-modify-write the desired state under a single lock,
         bumping ``version`` from the prior record (or starting at 1).
@@ -215,25 +246,81 @@ class DesiredStateRepo:
         ``now_ms`` is supplied by the caller — timestamp rigor: the
         int64 ms UTC value is produced at the boundary, not inside this
         repo, so the write stays deterministic and testable.
+
+        ``end`` replaces the scheduled end (``None``: no end) when given; by
+        default the record keeps the end it has, so a crash, a restart or a
+        runner write never loses the owner's schedule (#2607).
         """
-        root_real = os.path.realpath(os.fspath(self._trusted_root))
-        candidate = os.path.realpath(os.fspath(self._path))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
-        path = Path(candidate)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(path, trusted_root=self._trusted_root):
-            existing = self.read()
-            next_version = (existing.version + 1) if existing is not None else 1
-            record = DesiredStateRecord(
+
+        def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord:
+            ends = _end_fields(existing) if end is END_UNCHANGED else _new_end_fields(end)
+            return DesiredStateRecord(
                 desired_state=state,
                 updated_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
-                end_day_requested=end_day_requested,
-                version=next_version,
+                version=version,
+                **ends,
             )
+
+        record = self._read_modify_write(build)
+        assert record is not None
+        return record
+
+    def set_end(self, end: BotEnd | None, *, updated_by: str, now_ms: int) -> DesiredStateRecord:
+        """Replace the scheduled end, keeping the desired state and its reason (#2607)."""
+
+        def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord:
+            return DesiredStateRecord(
+                desired_state=DesiredState.RUNNING if existing is None else existing.desired_state,
+                updated_at_ms=now_ms,
+                updated_by=updated_by,
+                reason=None if existing is None else existing.reason,
+                version=version,
+                **_new_end_fields(end),
+            )
+
+        record = self._read_modify_write(build)
+        assert record is not None
+        return record
+
+    def mark_end_carried_out(
+        self, end: BotEnd, *, updated_by: str, now_ms: int
+    ) -> DesiredStateRecord | None:
+        """Record ``end`` carried out; a no-op unless it is still the pending end.
+
+        Nothing is written when the end was already recorded, or when the
+        owner changed it after the Clerk read it: the Clerk records only the
+        end it carried out. Stopping the bot is the runner's own write.
+        """
+
+        def build(existing: DesiredStateRecord | None, version: int) -> DesiredStateRecord | None:
+            if existing is None or existing.pending_end() != end:
+                return None
+            return existing.model_copy(
+                update={
+                    "updated_at_ms": now_ms,
+                    "updated_by": updated_by,
+                    "end_carried_out_at_ms": now_ms,
+                    "version": version,
+                }
+            )
+
+        return self._read_modify_write(build)
+
+    def _read_modify_write(
+        self,
+        build: Callable[[DesiredStateRecord | None, int], DesiredStateRecord | None],
+    ) -> DesiredStateRecord | None:
+        """One read-modify-write under the file lock; ``build`` returning ``None`` writes nothing."""
+        path = self._confined_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
+            existing = self.read()
+            next_version = (existing.version + 1) if existing is not None else 1
+            record = build(existing, next_version)
+            if record is None:
+                return existing
             self._write_locked(path, record)
             return record
 
@@ -263,3 +350,21 @@ class DesiredStateRepo:
                 tmp_path.unlink()
             raise
         fsync_parent_dir(safe_path)
+
+
+def _end_fields(record: DesiredStateRecord | None) -> dict[str, Any]:
+    """The end a record carries, to write forward unchanged."""
+    if record is None:
+        return {}
+    return {
+        "end_at_ms": record.end_at_ms,
+        "end_action": record.end_action,
+        "end_carried_out_at_ms": record.end_carried_out_at_ms,
+    }
+
+
+def _new_end_fields(end: BotEnd | None) -> dict[str, Any]:
+    """A newly chosen end, not yet carried out; ``None`` is no end."""
+    if end is None:
+        return {}
+    return {"end_at_ms": end.end_at_ms, "end_action": end.end_action}
