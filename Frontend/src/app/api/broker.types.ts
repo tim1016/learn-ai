@@ -12447,11 +12447,21 @@ export interface components {
             kind: "close_leg";
         };
         /**
+         * ClosingBarConvention
+         * @description How a run treats a Signal Program decision on the closing bar.
+         *
+         *     Recorded on every backtest run's evidence provenance, so evidence produced
+         *     under a different convention is classified rather than silently compared.
+         * @enum {string}
+         */
+        ClosingBarConvention: "skip_closing_bar/v1" | "lean_next_open/v1";
+        /**
          * ClosingBarSkipRecord
          * @description One decision a run's closing-bar convention set aside (#2607).
          *
-         *     An ENTER produced no trade. An EXIT stayed due and filled on the next
-         *     session's first decision instead of at this bar's close.
+         *     An ENTER produced no trade. An EXIT stayed due: the program decided it
+         *     again from the next session, when its own exit condition said so, instead
+         *     of at this bar's close.
          */
         ClosingBarSkipRecord: {
             /** Bar Close Ms */
@@ -21335,8 +21345,9 @@ export interface components {
          *     decision bar's close for a leg placed as the program decides, and the live
          *     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
          *     or the send-time re-price of an exit sent after its session. A
-         *     regular-hours run's EXIT on the day's last bar goes out after the close
-         *     as such a limit, so Start of a regular-hours run refuses
+         *     regular-hours run's exits outside the session -- a manual Flatten, the
+         *     watchdog's re-drive of a refused exit, an exit that reaches the broker
+         *     after the close -- are such limits, so Start of a regular-hours run refuses
          *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
          *     never carried into a new deployment; resolving it requires Flatten before
          *     a fresh Deploy (#2504).
@@ -23453,8 +23464,7 @@ export interface components {
         };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
-            /** Closing Bar Convention */
-            closing_bar_convention?: string | null;
+            closing_bar_convention?: components["schemas"]["ClosingBarConvention"] | null;
             /**
              * Closing Bar Skips
              * @default []

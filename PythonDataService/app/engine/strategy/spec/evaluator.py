@@ -32,7 +32,7 @@ captures indicator snapshots into ``_pending_entry``; the entry fill in
 ``on_order_event`` pairs that snapshot with fill price/time to start an
 ``_OpenTrade``; the exit fill closes the trade, appends a
 ``LoggedTrade``, and resets the strategy's lifecycle flags so external
-flatten paths (force-flat at session close, manual liquidate, bracket
+flatten paths (the end-of-algorithm close, manual liquidate, bracket
 TP/SL) leave the strategy in sync with the actual portfolio.
 """
 
@@ -436,7 +436,7 @@ class SpecAlgorithm(Strategy):
         # SHORT/FLAT fill → exit.
         #
         # Reset the strategy's lifecycle flags BEFORE the early return so
-        # external flatten paths (force-flat at session close, manual
+        # external flatten paths (the end-of-algorithm close, manual
         # liquidate, bracket TP/SL) leave the strategy in sync with the
         # actual portfolio. Otherwise ``_in_position`` stays True after
         # the position is gone and the next bar would evaluate exit/

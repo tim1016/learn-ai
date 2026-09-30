@@ -674,3 +674,10 @@ re-arms the server-authored timeframe auto-correct, and numeric
   live bot makes. Research-only strategies without a Signal Program (spec
   strategies, the QuantConnect parity ports) have no refusable decision and
   keep their reference fill conventions.
+- **P2: a closing-bar EXIT due overnight lives only in the running strategy.**
+  The set-aside EXIT is the strategy's own state until the program decides it
+  again next session. A run that dies before then -- a restart, or
+  `DECISION_BAR_MISSED` after IB Gateway's nightly blackout -- leaves the
+  position held. It is not silent: Start refuses with
+  `START_REQUIRES_FLAT_CUSTODY`, and the dead-run warning and Flatten apply.
+  #2607 slice 2's scheduled end and #2640 are the eventual fix.

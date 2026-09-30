@@ -1204,14 +1204,20 @@ def _refused_on_the_closing_bar(
 ) -> bool:
     """Refuse a decision taken on the session's closing bar (#2607).
 
-    Shared by both runners. The bucket that ends at the close is decided only
-    after the market has closed, so its decision is never sent: DISCARD -- the
-    refused-decision path, so an ENTER is dropped and an EXIT stays due for the
-    next session's first decision -- plus a protected ``blocked`` receipt
-    naming ``CLOSING_BAR``. The backtest settles the same bar the same way
-    (``BacktestEngine``), and both read the one predicate
-    (``app.lean_sidecar.closing_bar``). The Clerk's market-closed gate stays
-    the backstop behind this screen.
+    Shared by both runners. The bucket that ends at the regular session's
+    close is decided only after that close, so its decision is never sent:
+    DISCARD -- the refused-decision path, so an ENTER is dropped and an EXIT
+    stays due for the program to decide again from the next session -- plus a
+    protected ``blocked`` receipt naming ``CLOSING_BAR``. The backtest settles
+    the same bar the same way (``BacktestEngine``), and both read the one
+    predicate (``app.lean_sidecar.closing_bar``). The Clerk's market-closed
+    gate stays the backstop behind this screen.
+
+    The rule does not read the run's session kind. Every Deploy is
+    regular-hours today; an extended-hours run could trade the regular close's
+    bucket after hours, so extended-hours trading must decide whether the rule
+    follows the bot's hours -- here and in the backtest alike, or the two stop
+    agreeing.
 
     Returns whether the decision was refused.
     """

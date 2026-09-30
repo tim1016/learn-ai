@@ -24,7 +24,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.repository import Engine
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 RunSource = Literal["engine", "lean-sidecar"]
 
@@ -101,7 +103,7 @@ class BacktestRunClosingBarSkipResponse(BaseModel):
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-    bar_close_ms: int
+    bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     intent: Literal["ENTER", "EXIT"]
     close_price: float
 
@@ -153,8 +155,14 @@ class BacktestRunDetailResponse(_RunResponse):
     @field_validator("closing_bar_skips", mode="before")
     @classmethod
     def _parse_closing_bar_skips(cls, value: Any) -> Any:
-        provenance = json.loads(value) if isinstance(value, str) else value
-        return (provenance or {}).get("closing_bar_skips", [])
+        if value is None:
+            return []
+        provenance = (
+            RunEvidenceProvenance.model_validate_json(value)
+            if isinstance(value, str)
+            else RunEvidenceProvenance.model_validate(value)
+        )
+        return [skip.model_dump() for skip in provenance.closing_bar_skips]
 
 
 class BacktestRunNotesRequest(BaseModel):
