@@ -294,7 +294,11 @@ export class StrategyBuilderComponent implements OnDestroy {
 
   // ── Analysis ──────────────────────────────────────────────
   analysisResult = signal<StrategyAnalyzeResult | null>(null);
-  riskFreeRate = signal(0.043);
+  /**
+   * Python's rate, from the chain snapshot. Null until one arrives: the in-browser
+   * curves (ADR 0068 exception 1) never invent a rate of their own (#2764).
+   */
+  riskFreeRate = signal<number | null>(null);
   priceRangePct = signal(0.05);
   selectedGreek = signal<GreekType>('delta');
 
@@ -702,9 +706,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const t = this.timeToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || t <= 0 || r === null) return [];
+
     return grid.map(price => ({
       price,
       pnl: strategyPnlAtPrice(params, price, t, r),
@@ -715,9 +719,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const dte = this.daysToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || r === null) return [];
+
     return this.whatIfScenarios()
       .filter(s => s.enabled)
       .map(scenario => {
@@ -740,9 +744,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const t = this.timeToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || t <= 0 || r === null) return [];
+
     const greek = this.selectedGreek() as GreekName;
     return grid.map(price => ({
       price,
@@ -830,7 +834,7 @@ export class StrategyBuilderComponent implements OnDestroy {
     const t = this.timeToExpiry();
     const spot = this.spotPrice();
     const r = this.riskFreeRate();
-    if (params.length === 0 || t <= 0 || spot <= 0) return null;
+    if (params.length === 0 || t <= 0 || spot <= 0 || r === null) return null;
     return {
       delta: strategyGreekAtPrice(params, spot, t, r, 'delta'),
       gamma: strategyGreekAtPrice(params, spot, t, r, 'gamma'),
@@ -995,7 +999,7 @@ export class StrategyBuilderComponent implements OnDestroy {
       this.allContracts.set(result.contracts);
       // Auto-populate riskFreeRate from FRED-sourced rate (Step 8 of IV-RV alignment).
       // User can still override via UI.
-      if (result.riskFreeRate != null && result.riskFreeRate > 0) {
+      if (result.riskFreeRate != null) {
         this.riskFreeRate.set(result.riskFreeRate);
       }
 

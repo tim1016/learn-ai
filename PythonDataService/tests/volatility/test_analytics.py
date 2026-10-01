@@ -195,7 +195,7 @@ class TestPutCallParityForward:
 
     def test_put_call_parity_forward_reasonable(self, spot: float, rate: float, flat_vol_chain: list[dict]) -> None:
         """Implied forwards are close to S * exp(r*T) for flat vol."""
-        forwards = compute_put_call_parity_forward(flat_vol_chain)
+        forwards = compute_put_call_parity_forward(flat_vol_chain, rate=rate)
 
         if len(forwards) > 0:
             for ttm, implied_fwd in forwards.items():

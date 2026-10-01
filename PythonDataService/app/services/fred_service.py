@@ -1,8 +1,8 @@
 """FRED Treasury rate service for dynamic risk-free rate interpolation.
 
-Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `FALLBACK_RATE = 0.043` is used when FRED is unreachable (logged warning).
+Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `FALLBACK_RATE` is used when FRED is unreachable (logged warning).
 Reference: FRED data series — `https://fred.stlouisfed.org/series/{DTB4WK,DTB3,DTB6,DTB1YR}`. Variance-time / DTE interpolation across the published Treasury yield curve is the standard convention; CME options-pricing systems use the same family of tenors.
-Canonical implementation: this file (`get_rate`). The hardcoded `r = 0.043` constants in `iv_builder.py:18`, `contract_finder.py:26`, `models/strategy.py:48`, `models/portfolio.py:97/184` are pending migration to call `fred_service.get_rate()`.
+Canonical implementation: this file (`get_risk_free_rate`). `FALLBACK_RATE` is `app/services/risk_free_rate.py::DEFAULT_RISK_FREE_RATE`, the one default every Python surface not handed a rate also uses (#2764).
 Validated against: PythonDataService/tests/test_fred_service.py (interpolation, fallback, parsing).
 
 Fetches daily Treasury bill/bond rates from FRED and interpolates
@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ TENOR_MAP: dict[str, int] = {
     "DTB1YR": 365,
 }
 
-FALLBACK_RATE = 0.043
+FALLBACK_RATE = DEFAULT_RISK_FREE_RATE
 
 # Cache: {observation_date_str: {dte_days: rate}}
 _rate_cache: dict[str, dict[int, float]] = {}

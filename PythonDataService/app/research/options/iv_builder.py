@@ -18,11 +18,8 @@ import pandas as pd
 from app.research.options.contract_finder import find_bracket_contracts
 from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.volatility.solver import implied_volatility
-
-# Default risk-free rate used only if the FRED-backed lookup hasn't been
-# called yet (every active call site overrides it via ``get_risk_free_rate``).
-DEFAULT_RISK_FREE_RATE = 0.043
 
 logger = logging.getLogger(__name__)
 

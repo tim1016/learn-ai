@@ -513,6 +513,35 @@ describe('StrategyBuilderComponent', () => {
     });
   });
 
+  // ── Risk-free rate (#2764) ─────────────────────────────────────
+  // The in-browser curves price at Python's rate from the chain snapshot and
+  // never at a rate of their own.
+  describe('risk-free rate', () => {
+    function withPricedLeg(): void {
+      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      component.selectedExpiration.set(future);
+      component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 });
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+    }
+
+    it('draws forward curves and live Greeks only once Python has supplied a rate', () => {
+      withPricedLeg();
+
+      expect(component.riskFreeRate()).toBeNull();
+      expect(component.currentPnlCurve()).toEqual([]);
+      expect(component.greekCurve()).toEqual([]);
+      expect(component.liveGreeks()).toBeNull();
+
+      component.riskFreeRate.set(0.043);
+
+      expect(component.currentPnlCurve().length).toBeGreaterThan(0);
+      expect(component.greekCurve().length).toBeGreaterThan(0);
+      expect(component.liveGreeks()).not.toBeNull();
+    });
+  });
+
   // ── UX: zero-TTM banner ─────────────────────────────────────────
   // The forward-looking curves (currentPnlCurve, greekCurve,
   // whatIfCurves) silently return [] when timeToExpiry() <= 0 because

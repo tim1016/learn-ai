@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _TIME_ZONE_DESCRIPTION = (
@@ -127,7 +128,10 @@ class OptionsCompanionConfig(BaseModel):
         ),
     )
     risk_free_rate: float = Field(
-        0.05, ge=0, le=0.25, description="Flat annualized risk-free rate used in IV/Greeks solves"
+        DEFAULT_RISK_FREE_RATE,
+        ge=0,
+        le=0.25,
+        description="Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)",
     )
     dividend_yield: float = Field(0.0, ge=0, le=0.25, description="Flat continuous dividend yield for Greeks")
 

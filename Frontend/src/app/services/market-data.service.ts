@@ -132,7 +132,7 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
     $legs: [StrategyLegInput!]!
     $expirationDate: String!
     $spotPrice: Decimal!
-    $riskFreeRate: Decimal = 0.043
+    $riskFreeRate: Decimal
     $includeCurrentCurve: Boolean = false
     $includeGreekCurves: Boolean = false
     $includeLegDiagnostics: Boolean = false
@@ -179,7 +179,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
     $volatility: Decimal!
     $expirationDate: String!
     $optionType: String!
-    $riskFreeRate: Decimal = 0.05
+    $riskFreeRate: Decimal
     $dividendYield: Decimal = 0
     $evaluationDate: String
     $spotMin: Decimal
@@ -204,6 +204,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
       optionType
       expirationDate
       timeToExpiryYears
+      riskFreeRate
       models {
         model
         points { spot price delta gamma theta vega rho }
@@ -319,7 +320,8 @@ export class MarketDataService {
     legs: StrategyLegInput[],
     expirationDate: string,
     spotPrice: number,
-    riskFreeRate = 0.043,
+    /** Omit to have Python price at its one default rate (#2764). */
+    riskFreeRate: number | null = null,
     options: StrategyAnalyzeOptions = {},
   ): Observable<StrategyAnalyzeResult> {
     return this.http
@@ -366,7 +368,7 @@ export class MarketDataService {
           volatility: params.volatility,
           expirationDate: params.expirationDate,
           optionType: params.optionType,
-          riskFreeRate: params.riskFreeRate ?? 0.05,
+          riskFreeRate: params.riskFreeRate ?? null,
           dividendYield: params.dividendYield ?? 0,
           evaluationDate: params.evaluationDate ?? null,
           spotMin: params.spotMin ?? null,

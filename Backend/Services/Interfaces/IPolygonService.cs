@@ -74,7 +74,7 @@ public interface IPolygonService
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
-        decimal riskFreeRate = 0.043m,
+        decimal? riskFreeRate = null,
         StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default);
 
@@ -94,7 +94,7 @@ public interface IPolygonService
     Task<QuantLibPriceResponse> QuantLibPriceAsync(
         decimal spot,
         decimal strike,
-        decimal riskFreeRate,
+        decimal? riskFreeRate,
         decimal volatility,
         string expirationDate,
         string optionType,
@@ -112,7 +112,7 @@ public interface IPolygonService
         decimal volatility,
         string expirationDate,
         string optionType,
-        decimal riskFreeRate = 0.05m,
+        decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
         string? evaluationDate = null,
         decimal? spotMin = null,

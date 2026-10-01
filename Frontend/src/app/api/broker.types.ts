@@ -15592,8 +15592,8 @@ export interface components {
             include_vwap?: boolean;
             /**
              * Risk Free Rate
-             * @description Flat annualized risk-free rate used in IV/Greeks solves
-             * @default 0.05
+             * @description Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -16106,7 +16106,8 @@ export interface components {
             option_type: string;
             /**
              * Risk Free Rate
-             * @default 0.05
+             * @description Annualized risk-free rate (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -16148,6 +16149,11 @@ export interface components {
             models: components["schemas"]["PricingModelCurve"][];
             /** Option Type */
             option_type: string;
+            /**
+             * Risk Free Rate
+             * @description The rate every curve was priced at, so a client overlay can price at the same one
+             */
+            risk_free_rate: number;
             /** Strike */
             strike: number;
             /** Success */
@@ -16623,8 +16629,8 @@ export interface components {
             option_type: string;
             /**
              * Risk Free Rate
-             * @description Annualized risk-free rate
-             * @default 0.05
+             * @description Annualized risk-free rate (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -18785,7 +18791,7 @@ export interface components {
             price_range_pct?: number;
             /**
              * Risk Free Rate
-             * @description Risk-free rate (default ~4.3%)
+             * @description Annualized risk-free rate (omit for the Python default)
              * @default 0.043
              */
             risk_free_rate?: number;

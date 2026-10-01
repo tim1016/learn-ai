@@ -27,6 +27,7 @@ from enum import StrEnum
 import numpy as np
 import pandas as pd
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.volatility.fitting import (
     ArbitrageReport,
     FitResult,
@@ -191,7 +192,7 @@ class VolSurfaceBuilder:
     def __init__(
         self,
         spot: float,
-        rate: float = 0.05,
+        rate: float = DEFAULT_RISK_FREE_RATE,
         dividend: float = 0.0,
         eval_date: str = "",
         min_contracts_per_slice: int = 5,

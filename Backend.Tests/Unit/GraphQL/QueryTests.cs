@@ -142,7 +142,7 @@ public class QueryTests
         };
 
         _polygonMock.Setup(s => s.AnalyzeOptionsStrategyAsync(
-                "AAPL", legs, "2026-02-20", 230m, 0.043m,
+                "AAPL", legs, "2026-02-20", 230m, null,
                 It.IsAny<StrategyAnalyzeOptions>(), default))
             .ReturnsAsync(new StrategyAnalyzeResponseDto
             {
@@ -192,9 +192,9 @@ public class QueryTests
         StrategyAnalyzeOptions? capturedOptions = null;
         _polygonMock.Setup(s => s.AnalyzeOptionsStrategyAsync(
                 It.IsAny<string>(), It.IsAny<List<StrategyLegInput>>(),
-                It.IsAny<string>(), It.IsAny<decimal>(), It.IsAny<decimal>(),
+                It.IsAny<string>(), It.IsAny<decimal>(), It.IsAny<decimal?>(),
                 It.IsAny<StrategyAnalyzeOptions>(), default))
-            .Callback<string, List<StrategyLegInput>, string, decimal, decimal,
+            .Callback<string, List<StrategyLegInput>, string, decimal, decimal?,
                       StrategyAnalyzeOptions?, CancellationToken>(
                 (_, _, _, _, _, opts, _) => capturedOptions = opts)
             .ReturnsAsync(new StrategyAnalyzeResponseDto
@@ -240,7 +240,7 @@ public class QueryTests
     {
         _polygonMock.Setup(s => s.PricingCompareAsync(
                 100m, 100m, 0.20m, "2026-02-20", "call",
-                0.05m, 0m, null, null, null, 100, default))
+                null, 0m, null, null, null, 100, default))
             .ReturnsAsync(new PricingCompareResponse
             {
                 Success = true,
@@ -248,6 +248,7 @@ public class QueryTests
                 OptionType = "call",
                 ExpirationDate = "2026-02-20",
                 TimeToExpiryYears = 0.0822m, // ~30 days / 365
+                RiskFreeRate = 0.043m,
                 Models =
                 [
                     new PricingModelCurveDto
@@ -281,6 +282,7 @@ public class QueryTests
         Assert.Equal(100m, result.Strike);
         Assert.Equal("call", result.OptionType);
         Assert.Equal(0.0822m, result.TimeToExpiryYears);
+        Assert.Equal(0.043m, result.RiskFreeRate);
         Assert.Equal(2, result.Models.Count);
         Assert.Equal("python_bs", result.Models[0].Model);
         Assert.Equal(2, result.Models[0].Points.Count);

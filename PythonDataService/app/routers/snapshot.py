@@ -21,6 +21,7 @@ from app.models.responses import (
     StockTickerSnapshot,
     UnderlyingSnapshot,
 )
+from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
 
@@ -75,8 +76,10 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")
 
         # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
-        # Best-effort: failures fall back to the FRED 0.043 default and q=0
-        # without breaking the snapshot payload.
+        # The dividend lookup is best-effort and may leave q unset. The rate
+        # needs no spot and never fails (FRED falls back to the one Python
+        # default), so every snapshot carries it and the pricing pages never
+        # invent their own (#2764).
         risk_free_rate: float | None = None
         dividend_yield: float | None = None
         rate_source: str | None = None
@@ -96,6 +99,9 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
                 dividend_source = rd.source_dividend
             except Exception as exc:
                 logger.warning("[Snapshot] rate/dividend lookup failed: %s", exc)
+        if risk_free_rate is None:
+            risk_free_rate = get_risk_free_rate(dte_days=30)
+            rate_source = "FRED"
 
         return OptionsChainSnapshotResponse(
             success=True,

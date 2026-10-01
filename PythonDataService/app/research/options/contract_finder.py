@@ -16,6 +16,7 @@ import pandas as pd
 from scipy.stats import norm
 
 from app.services.polygon_client import PolygonClientService
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ OTM_OFFSET_PCT = 0.05  # Fallback: 5% OTM for skew contracts
 TARGET_DELTA_PUT = -0.25  # Target delta for OTM put (25Δ)
 TARGET_DELTA_CALL = 0.25  # Target delta for OTM call (25Δ)
 DEFAULT_IV = 0.25  # Default IV for delta estimation when not available
-DEFAULT_RFR = 0.043  # Default risk-free rate for delta estimation
 
 
 def _bs_delta(
@@ -56,7 +56,7 @@ def _find_otm_put_by_delta(
     stock_close: float,
     dte_days: int,
     iv_estimate: float = DEFAULT_IV,
-    rfr: float = DEFAULT_RFR,
+    rfr: float = DEFAULT_RISK_FREE_RATE,
 ) -> dict | None:
     """Find OTM put closest to 25Δ. Falls back to 5% OTM offset."""
     puts = [c for c in contracts if c.get("contract_type") == "put"]
@@ -80,7 +80,7 @@ def _find_otm_call_by_delta(
     stock_close: float,
     dte_days: int,
     iv_estimate: float = DEFAULT_IV,
-    rfr: float = DEFAULT_RFR,
+    rfr: float = DEFAULT_RISK_FREE_RATE,
 ) -> dict | None:
     """Find OTM call closest to 25Δ. Falls back to 5% OTM offset."""
     calls = [c for c in contracts if c.get("contract_type") == "call"]

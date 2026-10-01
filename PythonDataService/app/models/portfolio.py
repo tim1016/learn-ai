@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -90,7 +91,7 @@ class ScenarioRequest(BaseModel):
 
     as_of_ms: int = Field(..., description="Evaluation timestamp (int64 ms UTC)")
     spot_price: float = Field(..., gt=0, description="Current underlying spot")
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5)
+    risk_free_rate: float = Field(DEFAULT_RISK_FREE_RATE, ge=0, le=0.5)
     dividend_yield: float = Field(0.0, ge=0, le=0.5)
     positions: list[Position] = Field(..., min_length=1, max_length=64)
     grid: ScenarioGrid = Field(default_factory=ScenarioGrid)

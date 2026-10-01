@@ -30,6 +30,8 @@ import QuantLib as ql
 from scipy.optimize import brentq
 from scipy.stats import norm
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -123,7 +125,7 @@ def implied_volatility(
     spot: float,
     strike: float,
     ttm: float,
-    rate: float = 0.05,
+    rate: float = DEFAULT_RISK_FREE_RATE,
     dividend: float = 0.0,
     is_call: bool = True,
     vol_guess: float = DEFAULT_IV_GUESS,
@@ -403,7 +405,7 @@ def _brent_fallback(
 def solve_iv_chain(
     records: list[dict],
     spot: float,
-    rate: float = 0.05,
+    rate: float = DEFAULT_RISK_FREE_RATE,
     dividend: float = 0.0,
 ) -> list[dict]:
     """

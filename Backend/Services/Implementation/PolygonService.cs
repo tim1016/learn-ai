@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Interfaces;
@@ -19,6 +20,13 @@ public class PolygonService : IPolygonService
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
+
+    // A pricing request omits an absent risk-free rate rather than sending
+    // null, so Python fills its one default (#2764).
+    private static readonly JsonSerializerOptions _omitNullRequestOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
     public PolygonService(
@@ -178,7 +186,7 @@ public class PolygonService : IPolygonService
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
-        decimal riskFreeRate = 0.043m,
+        decimal? riskFreeRate = null,
         StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -216,7 +224,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/strategy/analyze", request, cancellationToken);
+                "/api/strategy/analyze", request, _omitNullRequestOptions, cancellationToken);
 
             response.EnsureSuccessStatusCode();
 
@@ -291,7 +299,7 @@ public class PolygonService : IPolygonService
     public async Task<QuantLibPriceResponse> QuantLibPriceAsync(
         decimal spot,
         decimal strike,
-        decimal riskFreeRate,
+        decimal? riskFreeRate,
         decimal volatility,
         string expirationDate,
         string optionType,
@@ -310,7 +318,7 @@ public class PolygonService : IPolygonService
             {
                 spot = (double)spot,
                 strike = (double)strike,
-                risk_free_rate = (double)riskFreeRate,
+                risk_free_rate = (double?)riskFreeRate,
                 volatility = (double)volatility,
                 expiration_date = expirationDate,
                 option_type = optionType,
@@ -320,7 +328,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/quantlib/price", request, cancellationToken);
+                "/api/quantlib/price", request, _omitNullRequestOptions, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<QuantLibPriceResponse>(
@@ -341,7 +349,7 @@ public class PolygonService : IPolygonService
         decimal volatility,
         string expirationDate,
         string optionType,
-        decimal riskFreeRate = 0.05m,
+        decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
         string? evaluationDate = null,
         decimal? spotMin = null,
@@ -362,7 +370,7 @@ public class PolygonService : IPolygonService
                 volatility = (double)volatility,
                 expiration_date = expirationDate,
                 option_type = optionType,
-                risk_free_rate = (double)riskFreeRate,
+                risk_free_rate = (double?)riskFreeRate,
                 dividend_yield = (double)dividendYield,
                 evaluation_date = evaluationDate,
                 spot_min = spotMin.HasValue ? (double?)spotMin.Value : null,
@@ -371,7 +379,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/quantlib/compare", request, cancellationToken);
+                "/api/quantlib/compare", request, _omitNullRequestOptions, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<PricingCompareResponse>(

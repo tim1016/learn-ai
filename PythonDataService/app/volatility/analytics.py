@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import brentq
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+
 
 @dataclass(frozen=True)
 class DeltaStrikeResult:
@@ -305,6 +307,7 @@ def compute_health_score(surface) -> HealthScore:
 
 def compute_put_call_parity_forward(
     option_records: list[dict],
+    rate: float = DEFAULT_RISK_FREE_RATE,
 ) -> dict[float, float]:
     """
     Implied forward price from put-call parity: C - P = (F - K) * df.
@@ -314,6 +317,7 @@ def compute_put_call_parity_forward(
 
     Args:
         option_records: List of dicts with keys: strike, ttm, option_price, is_call
+        rate: Continuously-compounded risk-free rate the chain was priced at
 
     Returns:
         Dictionary mapping ttm -> implied_forward
@@ -338,7 +342,6 @@ def compute_put_call_parity_forward(
 
             cp_diff = call_price - put_price
 
-            rate = 0.05
             df = math.exp(-rate * ttm)
 
             if abs(df) > 1e-10:

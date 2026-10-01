@@ -24349,8 +24349,8 @@
             "type": "boolean"
           },
           "risk_free_rate": {
-            "default": 0.05,
-            "description": "Flat annualized risk-free rate used in IV/Greeks solves",
+            "default": 0.043,
+            "description": "Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)",
             "maximum": 0.25,
             "minimum": 0.0,
             "title": "Risk Free Rate",
@@ -25440,7 +25440,8 @@
             "type": "string"
           },
           "risk_free_rate": {
-            "default": 0.05,
+            "default": 0.043,
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "title": "Risk Free Rate",
             "type": "number"
           },
@@ -25526,6 +25527,11 @@
             "title": "Option Type",
             "type": "string"
           },
+          "risk_free_rate": {
+            "description": "The rate every curve was priced at, so a client overlay can price at the same one",
+            "title": "Risk Free Rate",
+            "type": "number"
+          },
           "strike": {
             "title": "Strike",
             "type": "number"
@@ -25545,6 +25551,7 @@
           "option_type",
           "expiration_date",
           "time_to_expiry_years",
+          "risk_free_rate",
           "models"
         ],
         "title": "PricingCompareResponse",
@@ -26818,8 +26825,8 @@
             "type": "string"
           },
           "risk_free_rate": {
-            "default": 0.05,
-            "description": "Annualized risk-free rate",
+            "default": 0.043,
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "title": "Risk Free Rate",
             "type": "number"
           },
@@ -32292,7 +32299,7 @@
           },
           "risk_free_rate": {
             "default": 0.043,
-            "description": "Risk-free rate (default ~4.3%)",
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "maximum": 0.5,
             "minimum": 0.0,
             "title": "Risk Free Rate",
