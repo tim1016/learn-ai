@@ -154,8 +154,8 @@ class QuarantineJournal:
             "bar_start_ms": quarantine.bar_start_ms,
             "bar_end_ms": quarantine.bar_end_ms,
             # Deliberately no `evaluation_id` / `decision_id`: a quarantined
-            # bucket never became an evaluation. `run_replay_proof` excludes
-            # this outcome before it reaches the identity requirement.
+            # bucket never became an evaluation, so it has no identity to
+            # align a replay on.
             "first_of_reason": True,
         }
         if quarantine.reason == _TIMEFRAME_MISMATCH_REASON:

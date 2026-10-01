@@ -265,7 +265,7 @@ Defensive bar-grid floor (`_bar_grid_floor_ms` in `options_companion_service.py`
 | Polygon expirations endpoint | `services/polygon_client.py` | `list_options_expirations(..., expired=...)` |
 | Pydantic config | `models/requests.py` | `OptionsCompanionConfig` |
 | ZIP packing | `services/dataset_service.py` | `build_zip_bytes(options_slot_files=...)` |
-| FastAPI route | `routers/dataset.py` | `_build_zip_with_events`, `/api/dataset/generate-zip[/stream]` |
+| FastAPI route | `routers/dataset.py` | `_build_zip_with_events`, via `/api/jobs-internal/dataset-zip` |
 
 ---
 

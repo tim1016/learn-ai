@@ -21,7 +21,7 @@ def _requires_ephemeral_db() -> None:
         pytest.skip("live-DB endpoint tests need an ephemeral POSTGRES_URL")
 
 
-async def test_designate_review_list_and_run_retention_are_one_referenceable_workflow() -> None:
+async def test_designate_review_and_list_are_one_referenceable_workflow() -> None:
     _requires_ephemeral_db()
     symbol = f"G{uuid.uuid4().hex[:6].upper()}"
     payload = engine_payload(symbol=symbol, program_version="ema-signal-v1")
@@ -64,10 +64,6 @@ async def test_designate_review_list_and_run_retention_are_one_referenceable_wor
         listed = await client.get("/api/research/golden-validations", params={"symbol": symbol})
         assert listed.status_code == 200
         assert [row["id"] for row in listed.json()] == [candidate["id"]]
-
-        retained = await client.delete(f"/api/research/backtest-runs/{run_id}")
-        assert retained.status_code == 409
-        assert retained.json()["detail"]["code"] == "GOLDEN_VALIDATION_EVIDENCE"
 
 
 async def test_endpoint_reports_idempotency_conflicts_without_mutating_the_first_designation() -> None:

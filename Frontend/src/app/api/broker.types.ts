@@ -24,26 +24,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/pnl-attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Account Pnl Attribution
-         * @description Return C2's inclusive account FIFO attribution from SQLite folds.
-         */
-        get: operations["get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/transactions": {
         parameters: {
             query?: never;
@@ -127,23 +107,6 @@ export interface paths {
          *     Returns sanitized OHLCV data with summary statistics
          */
         post: operations["fetch_aggregates_api_aggregates_fetch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Paged, identity-bearing decision evidence for Paper/Live experiments */
-        get: operations["decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -259,60 +222,6 @@ export interface paths {
         get: operations["get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Bot Timeline */
-        get: operations["get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Command */
-        get: operations["get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile Now
-         * @description Run the same fail-closed account pass used by the automatic sweep.
-         */
-        post: operations["reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -459,74 +368,6 @@ export interface paths {
          *     held here as well. Read on demand; the page never polls.
          */
         get: operations["aggregate_broker_clerks_bot_history_api_broker_clerks_aggregate_bot_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker-clerks/aggregate/directory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)
-         * @description The same per-lane data as ``GET /broker-clerks``, per-lane isolated.
-         *
-         *     ``directory()`` loops every registered clerk with no per-lane exception
-         *     isolation -- one clerk's descriptor projection throwing fails the whole
-         *     roster. This calls the same projection through ``aggregate_lane_reads``'s
-         *     provenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one
-         *     lane's exception is that lane's explicit ``ok: False`` entry, never an
-         *     omission, a substitution, or a 500 for every other lane. No local
-         *     ``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the
-         *     audit read): ``aggregate_lane_reads`` already isolates every per-lane
-         *     exception, so the only ``FleetControlError`` this route could ever see is
-         *     an uninstalled fleet service, which the coordinator's global handler
-         *     already answers identically to ``_refuse`` -- the same reason
-         *     ``list_broker_clerks`` above carries no local try either.
-         */
-        get: operations["aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker-clerks/audit/routing-receipts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Routing-receipt audit trail, since a lower bound (#2104)
-         * @description Routing receipts at or after ``since_ms``, newest first.
-         *
-         *     Read-only: no idempotency key, no command envelope, no ceremony. The
-         *     durable audit trail (routing receipts, assignment history, session
-         *     history) was otherwise reachable only by opening the coordinator's
-         *     SQLite file by hand.
-         *
-         *     The receipt ledger covers **commands only** (ADR 0063, #2153): routed
-         *     streams open no receipt and a lane's own bot runner never enters the
-         *     coordinator, so an empty or quiet window is not evidence of lane
-         *     inactivity.
-         *
-         *     ``before_ms``/``before_correlation_id`` continue a previous page's keyset
-         *     (#2133) -- pass back a truncated page's ``next_before_ms``/
-         *     ``next_before_correlation_id`` verbatim to walk the full window past
-         *     ``limit`` instead of only ever reaching the newest page.
-         */
-        get: operations["list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1039,41 +880,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/alpaca/configuration/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Events */
-        get: operations["list_events_api_brokers_alpaca_configuration_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/configuration/owner": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Owner */
-        get: operations["read_owner_api_brokers_alpaca_configuration_owner_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Patch Owner */
-        patch: operations["patch_owner_api_brokers_alpaca_configuration_owner_patch"];
-        trace?: never;
-    };
     "/api/brokers/alpaca/configuration/profiles": {
         parameters: {
             query?: never;
@@ -1536,23 +1342,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Independent process and Clerk custody facts for one bot */
-        get: operations["get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
         parameters: {
             query?: never;
@@ -1579,23 +1368,6 @@ export interface paths {
         };
         /** Polygon chart: bounded timeframe window (§8) */
         get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** LIVE chart pane: today's IBKR bars + fill markers (§8) */
-        get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1832,23 +1604,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/activities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Activities */
-        get: operations["list_activities_api_brokers__broker__activities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/activities/period": {
         parameters: {
             query?: never;
@@ -1865,23 +1620,6 @@ export interface paths {
          *     reads the next older stretch.
          */
         get: operations["get_activity_period_api_brokers__broker__activities_period_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/assets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Assets */
-        get: operations["list_assets_api_brokers__broker__assets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1913,160 +1651,6 @@ export interface paths {
         get: operations["get_lane_attention_api_brokers__broker__attention_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List bots whose durable binding carries this broker tag */
-        get: operations["list_bots_api_brokers__broker__bots_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Bots-list roster (single-account alias of the scoped route) (§5) */
-        get: operations["get_catalog_unscoped_api_brokers__broker__bots_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/chart/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Polygon chart (single-account alias) (§8) */
-        get: operations["get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** LIVE chart pane (single-account alias) (§8) */
-        get: operations["get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Operator-gated raw evidence (single-account alias) (§14) */
-        get: operations["get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/panel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Panel projection (single-account alias) (§7) */
-        get: operations["get_panel_unscoped_api_brokers__broker__bots__sid__panel_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One bot's roster row (artifact-derived state + registry liveness) */
-        get: operations["get_bot_status_api_brokers__broker__bots__strategy_instance_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read the current run without inferring process or terminal state */
-        get: operations["get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read one run's durable replay-parity receipt */
-        get: operations["read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get"];
-        put?: never;
-        /** Recompute one completed run's replay-parity receipt from its retained bars */
-        post: operations["generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2406,26 +1990,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Authority Facts
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).
-         */
-        get: operations["fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
         parameters: {
             query?: never;
@@ -2458,46 +2022,6 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/history (bot_panel_read).
          */
         get: operations["fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Chart Live
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/live (bot_panel_read).
-         */
-        get: operations["fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/decision-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Decision Evidence
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).
-         */
-        get: operations["fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2740,106 +2264,6 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).
          */
         post: operations["fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Bot Snapshot
-         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/snapshot (custody_read).
-         */
-        get: operations["fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Bot Timeline
-         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/timeline (custody_read).
-         */
-        get: operations["fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/commands/{command_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Command Read
-         * @description Fleet-routed GET /accounts/{account_id}/custody/commands/{command_id} (custody_read).
-         */
-        get: operations["fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/pnl-attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Pnl Attribution
-         * @description Fleet-routed GET /accounts/{account_id}/custody/pnl-attribution (custody_read).
-         */
-        get: operations["fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Custody Reconcile
-         * @description Fleet-routed POST /accounts/{account_id}/custody/reconcile (custody_command).
-         */
-        post: operations["fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3310,26 +2734,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/activities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Activities Read
-         * @description Fleet-routed GET /activities (account_read).
-         */
-        get: operations["fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/activities/period": {
         parameters: {
             query?: never;
@@ -3528,50 +2932,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Configuration Events
-         * @description Fleet-routed GET /configuration/events (configuration_manage).
-         */
-        get: operations["fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/owner": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Configuration Owner Read
-         * @description Fleet-routed GET /configuration/owner (configuration_manage).
-         */
-        get: operations["fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Fleet Configuration Owner Update
-         * @description Fleet-routed PATCH /configuration/owner (configuration_manage).
-         */
-        patch: operations["fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch"];
         trace?: never;
     };
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles": {
@@ -4070,23 +3430,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Clock Evidence */
-        get: operations["get_clock_evidence_api_brokers__broker__clock_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/fees/attribution": {
         parameters: {
             query?: never;
@@ -4101,26 +3444,6 @@ export interface paths {
          *     Lifetime by default; ``period`` reads one account Activity period's fees.
          */
         get: operations["get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/fees/session-reconciliation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Session Fee Reconciliation
-         * @description Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6).
-         */
-        get: operations["get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4234,26 +3557,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/live-envelope/loss-hold/clear": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clear Live Loss Hold
-         * @description The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands.
-         */
-        post: operations["clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/live-verdict": {
         parameters: {
             query?: never;
@@ -4269,26 +3572,6 @@ export interface paths {
          *     read of current account risk and budget authority are the only inputs.
          */
         get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/order-groups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Order Groups
-         * @description Return recent orders grouped by symbol with Python-owned quantity totals.
-         */
-        get: operations["list_order_groups_api_brokers__broker__order_groups_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4408,47 +3691,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/chart/allowed-timeframes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Allowed Timeframes
-         * @description Return allowed timeframes for the given date range and session.
-         *     Frontend should use this as the source of truth for timeframe availability.
-         */
-        post: operations["allowed_timeframes_api_chart_allowed_timeframes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/chart/available-indicators": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Chart Indicators
-         * @description Return indicators available for chart overlays and panels.
-         */
-        get: operations["list_chart_indicators_api_chart_available_indicators_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/chart/data": {
         parameters: {
             query?: never;
@@ -4539,26 +3781,6 @@ export interface paths {
          *     rejected by validation rather than silently taking a branch.
          */
         get: operations["range_presets_api_chart_range_presets_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/chart/timeframes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Timeframes
-         * @description Return all supported timeframes with metadata.
-         */
-        get: operations["list_timeframes_api_chart_timeframes_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4803,96 +4025,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/dataset/generate-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Csv
-         * @description Fetch minute OHLCV data in chunks, calculate selected indicators,
-         *     and return a streaming CSV file.
-         */
-        post: operations["generate_dataset_csv_api_dataset_generate_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-metadata": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Metadata
-         * @description Fetch minute OHLCV data, calculate indicators, and return metadata JSON.
-         */
-        post: operations["generate_dataset_metadata_api_dataset_generate_metadata_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-metadata-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Metadata Csv
-         * @description Fetch minute OHLCV data, calculate indicators, and return column descriptions CSV.
-         */
-        post: operations["generate_dataset_metadata_csv_api_dataset_generate_metadata_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-zip": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Zip
-         * @description Fetch OHLCV, calculate indicators, and return a ZIP.
-         *
-         *     Always contains ``dataset.csv``, ``metadata.csv``, ``columns.csv``. Adds
-         *     per-slot CSVs under ``calls/`` and ``puts/`` subfolders when
-         *     ``options_companion`` is enabled, and ``quality_report.md`` when
-         *     ``include_quality_report`` is true.
-         *
-         *     Synchronous variant — single response with the binary ZIP. The
-         *     streaming counterpart at ``/generate-zip/stream`` emits SSE events for
-         *     chunk-level UI progress; use that one for unified-flow Fetch.
-         */
-        post: operations["generate_dataset_zip_api_dataset_generate_zip_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/dataset/plan": {
         parameters: {
             query?: never;
@@ -4934,77 +4066,6 @@ export interface paths {
          *     Returns a markdown validation report.
          */
         post: operations["generate_validation_report_api_dataset_validation_report_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/validation-report-download": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Download Validation Report
-         * @description Same as validation-report but returns the markdown as a downloadable file.
-         */
-        post: operations["download_validation_report_api_dataset_validation_report_download_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/cross-asset/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cross Asset Run */
-        post: operations["cross_asset_run_api_edge_cross_asset_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/cross-asset/strategies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cross Asset Strategies */
-        get: operations["cross_asset_strategies_api_edge_cross_asset_strategies_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/edge-score/series": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Edge Score Series */
-        post: operations["edge_score_series_api_edge_edge_score_series_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5062,29 +4123,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/edge/realized-vs-iv/coverage/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Realized Vs Iv Coverage
-         * @description Probe how much stored IV history is available for `symbol`.
-         *
-         *     v1 stub: returns a non-blocking placeholder so the UI can render the
-         *     coverage banner. Wires into the real OptionIvSnapshots query in v2.
-         */
-        get: operations["realized_vs_iv_coverage_api_edge_realized_vs_iv_coverage__symbol__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/edge/realized-vs-iv/series": {
         parameters: {
             query?: never;
@@ -5100,74 +4138,6 @@ export interface paths {
          *     align IV30 series; emit VRP forward + z-score.
          */
         post: operations["realized_vs_iv_series_api_edge_realized_vs_iv_series_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/realized-vs-iv/signals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Realized Vs Iv Signals */
-        post: operations["realized_vs_iv_signals_api_edge_realized_vs_iv_signals_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/regimes/cluster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Regimes Cluster */
-        post: operations["regimes_cluster_api_edge_regimes_cluster_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/regimes/strategy-fit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Regimes Strategy Fit */
-        post: operations["regimes_strategy_fit_api_edge_regimes_strategy_fit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/trade-sim/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trade Sim Run */
-        post: operations["trade_sim_run_api_edge_trade_sim_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5203,32 +4173,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/engine/bars": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Engine Bars
-         * @description Serve consolidated bars from the shared bar store for run charting.
-         *
-         *     Reads the same roots, the same session filter, and the same
-         *     consolidator a backtest run used, so the returned bars equal the
-         *     run's transient ``chart_bars`` for the same DataPolicy + window.
-         *     Display reads never mutate the cache — missing days surface in
-         *     ``coverage``, not as a fetch and not as a 500.
-         */
-        get: operations["get_engine_bars_api_engine_bars_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/engine/chart": {
         parameters: {
             query?: never;
@@ -5243,32 +4187,6 @@ export interface paths {
          * @description Render exact strategy bars and indicators from one policy-store read.
          */
         post: operations["get_engine_chart_api_engine_chart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/engine/data/availability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Data Availability
-         * @description Report how many trading days are already on disk for a symbol.
-         *
-         *     Checks the reference mount first, then the writable cache, and
-         *     returns both the aggregate coverage and a per-root breakdown so the
-         *     Angular UI can show the user whether SPY is hitting the bit-exact
-         *     reference data or an arbitrary ticker has been fetched into the
-         *     Polygon cache.
-         */
-        get: operations["get_data_availability_api_engine_data_availability_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5313,31 +4231,6 @@ export interface paths {
         get: operations["get_strategy_lean_source_api_engine_strategies__name__lean_source_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/engine/strategies/{name}/pine": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Pine Script
-         * @description Generate a Pine v6 script for ``name`` using the given params.
-         *
-         *     The request body is the same ``{params: {...}}`` shape used by
-         *     ``/backtest`` — the same Pydantic schema validates it. Response is
-         *     the Pine source as ``text/plain`` so the browser can offer it as a
-         *     direct download.
-         */
-        post: operations["generate_pine_script_api_engine_strategies__name__pine_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5422,29 +4315,6 @@ export interface paths {
          *     warm-up buffer, indicator calculation).
          */
         post: operations["generate_indicator_table_api_indicators_generate_table_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/iv-recorder/series/{ticker}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Series
-         * @description Read recorded snapshots for a ticker over a time window.
-         *
-         *     Both bounds are inclusive; either may be omitted to leave the
-         *     corresponding bound open.
-         */
-        get: operations["read_series_api_iv_recorder_series__ticker__get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5738,34 +4608,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lean-sidecar/calendar/blocked-dates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Return blocked non-tradeable dates in a range.
-         * @description Return weekends and holidays in ``[from_, to]``.
-         *
-         *     Per P2.5 the UI date picker consumes this to disable + label each
-         *     blocked date — single backend source of truth for the NYSE
-         *     calendar so the picker and the validator cannot drift.
-         *
-         *     Early-close half-days are tradeable sessions and are NOT returned
-         *     here. Weekends and holidays return ``"weekend"`` and ``"holiday"``
-         *     respectively. Trading days are NOT in the payload.
-         */
-        get: operations["get_calendar_blocked_dates_api_lean_sidecar_calendar_blocked_dates_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/lean-sidecar/calendar/next-trading-day-open": {
         parameters: {
             query?: never;
@@ -5790,29 +4632,6 @@ export interface paths {
         get: operations["get_calendar_next_trading_day_open_api_lean_sidecar_calendar_next_trading_day_open_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/compare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Classify divergences between two trade lists (Task 3.2).
-         * @description Accept two trade arrays and return a classified divergence list.
-         *
-         *     Pure compute — no DB access on the Python side. The .NET backend
-         *     fetches trades from Postgres and POSTs them here (Task 3.3).
-         */
-        post: operations["compare_trades_api_lean_sidecar_compare_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5848,222 +4667,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lean-sidecar/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List past runs from the artifacts root (newest first).
-         * @description Return the run-history index for the LEAN Lab sidebar.
-         *
-         *     Scans direct child directories of ``DEFAULT_ARTIFACTS_ROOT``, keeps
-         *     those whose names match ``RUN_ID_PATTERN`` (so stray dirs created
-         *     out-of-band are ignored), reads each ``manifest.json``, sorts by
-         *     ``started_at_ms`` desc (run_id desc as a stable tiebreaker), and
-         *     truncates to ``_RUN_INDEX_CAP``.
-         *
-         *     Reviewer P2: cap is applied *after* the sort, not during the scan.
-         *     The scan-time ordering is by ``run_id`` text, which can diverge
-         *     from ``started_at_ms`` order — pre-Phase-4d run_ids didn't include
-         *     a millisecond suffix, so a legacy run with a lexically-late slug
-         *     could push a genuinely-newer run past the cap. Sorting first and
-         *     truncating after costs O(N log N) on the row count but is bounded
-         *     by ``_SCAN_HARD_CAP`` to keep a pathological artifacts root from
-         *     DoSing the endpoint.
-         *
-         *     Pure read — does not touch the launcher, does not require LEAN to
-         *     be running. Manifests that fail to parse are silently skipped (a
-         *     half-written file from a crash mid-write shouldn't break the
-         *     listing for the rest).
-         */
-        get: operations["get_runs_index_api_lean_sidecar_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/cross-reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cross-engine reconciliation — diff this LEAN-Lab run against an Engine-Lab strategy.
-         * @description Phase 5g cross-engine reconciliation.
-         *
-         *     Compares this LEAN-Lab run's fills against an Engine-Lab strategy
-         *     run on the same staged workspace data (D3 — shared staged data,
-         *     not Engine-Lab's native fixtures).
-         *
-         *     Flow:
-         *
-         *     1. Resolve LEAN-Lab workspace + load ``manifest.json`` (extract
-         *        symbol, trading window, starting cash).
-         *     2. Load LEAN's ``normalized/result.json`` (the Phase 3a parser
-         *        output the orchestrator persisted).
-         *     3. Run the caller-supplied Engine-Lab strategy class against the
-         *        workspace data via
-         *        :func:`cross_runner.run_engine_lab_on_workspace`.
-         *     4. Diff via :func:`cross_reconciler.compare_cross_engine`. Default
-         *        gating taxonomy is strict — every category gating EXCEPT
-         *        ``COMMISSION_DRIFT`` (diagnostic). ``assert_fees=true`` (D3
-         *        Branch-A) promotes ``COMMISSION_DRIFT`` to gating.
-         *     5. Fold the comparator output into
-         *        ``CrossEngineReconciliationReportModel`` (``schema_version=1``
-         *        per D10).
-         *
-         *     Error contract mirrors the Phase 5a self-reconciler where possible:
-         *
-         *     * 404 ``run_not_found`` — invalid run_id, or workspace dir absent.
-         *     * 404 ``normalized_missing`` — workspace exists but no parseable
-         *       ``result.json`` (LEAN crashed before producing artifacts, or the
-         *       file failed validation).
-         *     * 404 ``manifest_missing`` — workspace exists but ``manifest.json``
-         *       is absent (the orchestrator never finished writing it). The
-         *       cross-run needs the manifest for symbol/dates/cash.
-         *     * 400 ``manifest_incomplete`` — manifest present but missing one of
-         *       the required fields (older manifest schema, or a malformed
-         *       hand-edited file). Surfaces the missing field name in ``detail``.
-         *     * 400 ``strategy_not_found`` — caller named an Engine-Lab strategy
-         *       class that does not resolve. ``detail`` carries the known list.
-         *     * 400 ``strategy_incompatible`` — strategy resolved but does not
-         *       accept the ``symbol`` kwarg required by the Phase 5g.2 contract.
-         */
-        post: operations["post_cross_reconcile_api_lean_sidecar_runs__run_id__cross_reconcile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/log": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return LEAN's own log.txt (tail-capped) for a completed run. */
-        get: operations["get_log_api_lean_sidecar_runs__run_id__log_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/manifest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return the reproducibility manifest for a completed run. */
-        get: operations["get_manifest_api_lean_sidecar_runs__run_id__manifest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/normalized": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Return the normalized LEAN result (parsed equity curve + orders + stats).
-         * @description Serve the parsed result.json written by the orchestrator.
-         *
-         *     404 when the file is absent: either the run hasn't completed, or
-         *     LEAN died before producing the artifacts the parser reads. The
-         *     operator can `GET /runs/{id}/log` to diagnose.
-         */
-        get: operations["get_normalized_api_lean_sidecar_runs__run_id__normalized_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/observations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return the trusted sample's per-bar audit CSV. */
-        get: operations["get_observations_api_lean_sidecar_runs__run_id__observations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile a past run's recorded fees against the canonical IBKR commission model (Phase 5a).
-         * @description Phase 5a — self-reconciliation: compares each filled order
-         *     event's recorded ``orderFeeAmount`` against the IBKR equity-tier
-         *     fee. Returns the categorized divergence report; tolerance is the
-         *     project default ($0.01) from ``.claude/rules/numerical-rigor.md``.
-         *
-         *     Accepts only ``run_id``. The reconciler is decoupled from whether
-         *     the run was reconciliation-grade — a default-brokerage run will
-         *     have many ``commission_drift`` rows by construction (LEAN's
-         *     default commission ≠ IBKR's tier). Phase 5b will add the
-         *     reconciliation-grade template that makes this report come back
-         *     clean for properly-pinned runs.
-         *
-         *     Reads the persisted normalized ``result.json`` (written by the
-         *     orchestrator after each run), NOT a fresh re-parse of LEAN's raw
-         *     output artifacts. The persisted file pins the parser_version at the
-         *     time of the run; reading it back means a future parser-version bump
-         *     cannot retroactively alter the reconciliation result for an old
-         *     run. The pinned ``parser_version`` is echoed back on the response
-         *     so a consumer can detect when two reports are not comparable.
-         *
-         *     404 contract: ``normalized_missing`` if ``result.json`` is absent
-         *     (run hadn't completed, or LEAN crashed before producing parseable
-         *     output) OR if the file exists but does not validate against the
-         *     current ``NormalizedResult`` schema.
-         */
-        post: operations["post_reconcile_api_lean_sidecar_runs__run_id__reconcile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/lean-sidecar/trusted-runs": {
         parameters: {
             query?: never;
@@ -6082,70 +4685,6 @@ export interface paths {
          *     gate opens (Phase 3).
          */
         post: operations["post_trusted_run_api_lean_sidecar_trusted_runs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/dashboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Dashboard
-         * @description Get combined market status + upcoming holidays in a single call.
-         *
-         *     Useful for the frontend dashboard calendar widget.
-         */
-        get: operations["get_market_dashboard_api_market_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/holidays": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Holidays
-         * @description Get the next upcoming market holidays and early closes.
-         *
-         *     - **limit**: Number of upcoming events to return (default 5)
-         */
-        get: operations["get_market_holidays_api_market_holidays_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Status
-         * @description Get the current trading status of NYSE, NASDAQ, and overall market.
-         */
-        get: operations["get_market_status_api_market_status_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6391,11 +4930,7 @@ export interface paths {
         get: operations["get_backtest_run_api_research_backtest_runs__run_id__get"];
         put?: never;
         post?: never;
-        /**
-         * Delete Backtest Run
-         * @description Hard-delete a run; a run backing a live Recency Chart run must go through Recency soft-delete.
-         */
-        delete: operations["delete_backtest_run_api_research_backtest_runs__run_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6441,46 +4976,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/documentation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Documentation
-         * @description Return complete mathematical documentation for the UI information panel.
-         */
-        get: operations["get_documentation_api_research_documentation_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/features": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Features
-         * @description List all available research features with metadata.
-         */
-        get: operations["list_features_api_research_features_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/golden-validations": {
         parameters: {
             query?: never;
@@ -6493,40 +4988,6 @@ export interface paths {
         put?: never;
         /** Designate Golden Run */
         post: operations["designate_golden_run_api_research_golden_validations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/golden-validations/{golden_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Golden Run */
-        get: operations["get_golden_run_api_research_golden_validations__golden_run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/golden-validations/{golden_run_id}/applicability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assess Golden Run */
-        post: operations["assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6735,57 +5196,6 @@ export interface paths {
         get: operations["list_recency_launches_api_research_recency_launches_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/recency/launches/{launch_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore Recency Launch */
-        post: operations["restore_recency_launch_api_research_recency_launches__launch_id__restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/recency/launches/{launch_id}/soft-delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Soft Delete Recency Launch */
-        post: operations["soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/recency/runs/{run_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore Recency Run */
-        post: operations["restore_recency_run_api_research_recency_runs__run_id__restore_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7148,32 +5558,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/trading-calendar": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Trading Calendar
-         * @description Return the trading-calendar breakdown for ``[start, end]``.
-         *
-         *     Same date semantics as ``POST /api/research/strategy-runs``:
-         *     ``end`` is inclusive (``StrategyAlgorithm.set_end_date`` runs through
-         *     23:59:59 of that day). The date-picker UI calls this before submitting
-         *     a run so the user can see which days will be skipped (weekends,
-         *     holidays) before discovering the truncation in the result.
-         */
-        get: operations["get_trading_calendar_api_research_trading_calendar_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/walk-forward-studies": {
         parameters: {
             query?: never;
@@ -7423,29 +5807,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/spec-strategy/schema": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Schema
-         * @description Return the JSON Schema for StrategySpec.
-         *
-         *     The Frontend uses this to generate form structure and validate specs
-         *     inline before round-tripping to the backtest endpoint.
-         */
-        get: operations["get_schema_api_spec_strategy_schema_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/strategy-validation/strategies": {
         parameters: {
             query?: never;
@@ -7622,204 +5983,6 @@ export interface paths {
          * @description Fetch related company tickers for a given stock.
          */
         post: operations["get_related_tickers_api_tickers_related_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/batch-summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Batch Summary
-         * @description Build or load surfaces for a date range, return daily summaries.
-         *
-         *     Returns ATM IV, 25D RR/BF, skew slope per day.
-         */
-        post: operations["batch_summary_api_volatility_surface_batch_summary_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build Surface
-         * @description Build an implied volatility surface from an option chain.
-         *
-         *     Accepts a list of option records (strike, ttm, price, is_call) and
-         *     returns a cached surface_id for subsequent queries.
-         */
-        post: operations["build_surface_api_volatility_surface_build_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build-from-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build From Csv
-         * @description Build IV surface from raw CSV text.
-         *
-         *     CSV expected columns: strike, expiration_date, bid, ask, option_type, open_interest, volume
-         */
-        post: operations["build_from_csv_api_volatility_surface_build_from_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build-from-ticker": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build From Ticker
-         * @description Build IV surface by fetching option chain from data source.
-         *
-         *     Loads chains via OptionChainLoader, applies filters, and builds surface.
-         */
-        post: operations["build_from_ticker_api_volatility_surface_build_from_ticker_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/diagnostics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Diagnostics
-         * @description Retrieve full diagnostics for a surface.
-         */
-        get: operations["get_diagnostics_api_volatility_surface__surface_id__diagnostics_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/export/{format}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export Surface
-         * @description Export surface as JSON, CSV, or Parquet.
-         *
-         *     format: json, csv, or parquet
-         */
-        get: operations["export_surface_api_volatility_surface__surface_id__export__format__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/grid": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Grid
-         * @description Retrieve IV grid for a surface as a matrix (x, y, z).
-         *
-         *     axis: log_moneyness, moneyness, or strike
-         *     dte_days: Optional comma-separated list of DTE days to include
-         */
-        get: operations["get_grid_api_volatility_surface__surface_id__grid_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/query": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Query Surface
-         * @description Query IV at specific (strike, ttm) points.
-         *
-         *     Body: [{"strike": 100, "ttm": 0.25}, ...]
-         */
-        post: operations["query_surface_api_volatility_surface__surface_id__query_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/smiles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Smiles
-         * @description Retrieve fitted and market smile curves per expiry.
-         *
-         *     axis: log_moneyness, moneyness, or strike
-         */
-        get: operations["get_smiles_api_volatility_surface__surface_id__smiles_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8327,30 +6490,6 @@ export interface components {
              * @default day
              */
             timespan?: string;
-            /**
-             * To Date
-             * @description End date (YYYY-MM-DD)
-             */
-            to_date: string;
-        };
-        /**
-         * AllowedTimeframesRequest
-         * @description Request for allowed timeframes given a date range.
-         */
-        AllowedTimeframesRequest: {
-            /**
-             * From Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            from_date: string;
-            /**
-             * Session
-             * @description 'rth' or 'extended'
-             * @default rth
-             */
-            session?: string;
-            /** Ticker */
-            ticker: string;
             /**
              * To Date
              * @description End date (YYYY-MM-DD)
@@ -8890,34 +7029,6 @@ export interface components {
             expected_selection_generation: number;
         };
         /**
-         * ArbitrageDetail
-         * @description Arbitrage violation diagnostics.
-         */
-        ArbitrageDetail: {
-            /**
-             * Butterfly Violations
-             * @description Number of butterfly violations
-             * @default 0
-             */
-            butterfly_violations?: number;
-            /**
-             * Calendar Violations
-             * @description Number of calendar spread violations
-             * @default 0
-             */
-            calendar_violations?: number;
-            /**
-             * Severity
-             * @description Violation severity (none, low, moderate, high)
-             */
-            severity: string;
-            /**
-             * Worst Slices
-             * @description Details of worst violations
-             */
-            worst_slices?: Record<string, never>[];
-        };
-        /**
          * ArtifactDetail
          * @description Full receipt for one catalog row: identity, hashes, and byte metadata.
          */
@@ -9071,36 +7182,6 @@ export interface components {
             label: string;
             /** Value */
             value: string;
-        };
-        /** AvailabilityResponse */
-        AvailabilityResponse: {
-            /** Available Days */
-            available_days: number;
-            /** End */
-            end: string;
-            /** Expected Days */
-            expected_days: number;
-            /** Is Complete */
-            is_complete: boolean;
-            /**
-             * Missing Days
-             * @default []
-             */
-            missing_days?: string[];
-            /** Resolution */
-            resolution: string;
-            /** Sources */
-            sources?: {
-                [key: string]: string[];
-            };
-            /** Start */
-            start: string;
-            /** Symbol */
-            symbol: string;
-            /** Unreadable Days */
-            unreadable_days: number[];
-            /** Unreadable Files */
-            unreadable_files: components["schemas"]["UnreadableFileResponse"][];
         };
         /**
          * BackfillDefaults
@@ -9709,78 +7790,6 @@ export interface components {
             /** Test Trade Count */
             test_trade_count: number;
         };
-        /**
-         * BatchSummaryRequest
-         * @description Request to build surfaces for a date range.
-         */
-        BatchSummaryRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * End Date
-             * @description End date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /** @description Data quality filters */
-            filters?: components["schemas"]["DataFiltersModel"];
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Mode
-             * @description Build mode (auto, build, cached)
-             * @default cached
-             */
-            mode?: string;
-            /**
-             * Start Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-        };
-        /**
-         * BatchSummaryResponse
-         * @description Response with daily summaries for a date range.
-         */
-        BatchSummaryResponse: {
-            /**
-             * Daily Summaries
-             * @description Per-day surface summaries
-             */
-            daily_summaries: components["schemas"]["DailySummary"][];
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-        };
-        /** Body_download_validation_report_api_dataset_validation_report_download_post */
-        Body_download_validation_report_api_dataset_validation_report_download_post: {
-            /**
-             * Our Csv
-             * Format: binary
-             * @description pandas-ta generated CSV
-             */
-            our_csv: string;
-            /**
-             * Ticker
-             * @default SPY
-             */
-            ticker?: string;
-            /**
-             * Tv Csv
-             * Format: binary
-             * @description TradingView exported CSV
-             */
-            tv_csv: string;
-        };
         /** Body_generate_validation_report_api_dataset_validation_report_post */
         Body_generate_validation_report_api_dataset_validation_report_post: {
             /**
@@ -9892,14 +7901,6 @@ export interface components {
             idempotency_key: string;
             /** Strategy Instance Ids */
             strategy_instance_ids: string[];
-        };
-        /**
-         * BotControlAuthorityFacts
-         * @description Independent process and Clerk facts for one bot control decision.
-         */
-        BotControlAuthorityFacts: {
-            clerk: components["schemas"]["ClerkCustodySnapshot"];
-            process: components["schemas"]["BotProcessFact"];
         };
         /**
          * BotCrashDiagnostic
@@ -10296,44 +8297,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * BotRunReadBrokerErrorDetail
-         * @description Broker-registry failure detail returned by a bot-run read.
-         */
-        BotRunReadBrokerErrorDetail: {
-            /** Broker */
-            broker: string;
-            /** Message */
-            message: string;
-            /** Why */
-            why: string | null;
-        };
-        /**
-         * BotRunReadNotFoundResponse
-         * @description 404 envelope for an unknown broker or strategy-instance run.
-         */
-        BotRunReadNotFoundResponse: {
-            /** Detail */
-            detail: components["schemas"]["BotRunReadBrokerErrorDetail"] | components["schemas"]["BotRunReadRunnerErrorDetail"];
-        };
-        /**
-         * BotRunReadRunnerErrorDetail
-         * @description Runner failure detail returned by a bot-run read.
-         */
-        BotRunReadRunnerErrorDetail: {
-            admission: components["schemas"]["RunAdmissionDecision"] | null;
-            /** Message */
-            message: string;
-            /** Why */
-            why: string | null;
-        };
-        /**
-         * BotRunReadRunnerErrorResponse
-         * @description 422 envelope emitted by the bot runner for an invalid run read.
-         */
-        BotRunReadRunnerErrorResponse: {
-            detail: components["schemas"]["BotRunReadRunnerErrorDetail"];
-        };
-        /**
          * BotRunTerminalOutcomeView
          * @description Immutable terminal outcome and optional crash evidence for one run.
          */
@@ -10541,62 +8504,6 @@ export interface components {
             next_page_token?: string | null;
         };
         /**
-         * BrokerAsset
-         * @description A tradable (or listed) instrument descriptor.
-         */
-        BrokerAsset: {
-            /** Asset Class */
-            asset_class: string;
-            /** Asset Id */
-            asset_id: string;
-            /** Broker */
-            broker: string;
-            /** Exchange */
-            exchange: string | null;
-            /** Fractionable */
-            fractionable: boolean;
-            /** Marginable */
-            marginable: boolean | null;
-            /** Name */
-            name: string | null;
-            /** Shortable */
-            shortable: boolean | null;
-            /** Status */
-            status: string;
-            /** Symbol */
-            symbol: string;
-            /** Tradable */
-            tradable: boolean;
-        };
-        /**
-         * BrokerClockEvidence
-         * @description Market-wide broker-clock evidence — not scheduled-session authority.
-         *
-         *     The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
-         *     the sole source of scheduled session structure. This narrow live input may
-         *     prove that the broker currently says the market is open or closed, but it
-         *     cannot establish that any particular symbol is tradable or not halted. The
-         *     liveness composition therefore pairs it with symbol-scoped vendor status
-         *     evidence; no session/calendar logic may treat these fields as authority.
-         *     The one liveness use of them: an open answer's ``next_close_ms`` is when
-         *     that answer stops proving the market open (#2596). It bounds the answer,
-         *     never the scheduled session, which stays the calendar's.
-         */
-        BrokerClockEvidence: {
-            /** Broker */
-            broker: string;
-            /** Is Open */
-            is_open: boolean;
-            /** Next Close Ms */
-            next_close_ms: number | null;
-            /** Next Open Ms */
-            next_open_ms: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Vendor Timestamp Ms */
-            vendor_timestamp_ms: number;
-        };
-        /**
          * BrokerHealthCondition
          * @description Backend-authored operator copy for the data-plane broker session.
          *
@@ -10706,29 +8613,6 @@ export interface components {
             price: number | null;
             /** Quantity */
             quantity: number | null;
-        };
-        /**
-         * BrokerOrderGroup
-         * @description Recent orders grouped by symbol with canonical gross quantity totals.
-         *
-         *     Quantities are absolute broker-reported shares across both buy and sell
-         *     orders. They are activity totals, not net position or directional exposure.
-         */
-        BrokerOrderGroup: {
-            /** Gross Filled Quantity */
-            gross_filled_quantity: number;
-            /** Gross Requested Quantity */
-            gross_requested_quantity: number;
-            /** Gross Working Quantity */
-            gross_working_quantity: number;
-            /** Order Count */
-            order_count: number;
-            /** Orders */
-            orders: components["schemas"]["BrokerOrder"][];
-            /** Symbol */
-            symbol: string;
-            /** Working Order Count */
-            working_order_count: number;
         };
         /**
          * BrokerOrderLeg
@@ -10908,60 +8792,6 @@ export interface components {
              * @default false
              */
             total?: boolean;
-        };
-        /**
-         * BuildFromCsvRequest
-         * @description Request to build IV surface from raw CSV data.
-         */
-        BuildFromCsvRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * Csv Content
-             * @description Raw CSV text with option records
-             */
-            csv_content: string;
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Spot
-             * @description Current underlying price
-             */
-            spot: number;
-            /**
-             * Ticker
-             * @description Optional ticker symbol for metadata
-             * @default
-             */
-            ticker?: string;
-        };
-        /**
-         * BuildFromTickerRequest
-         * @description Request to build IV surface from ticker and date.
-         */
-        BuildFromTickerRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * Date
-             * @description Evaluation date (YYYY-MM-DD)
-             */
-            date: string;
-            /** @description Data quality filters */
-            filters?: components["schemas"]["DataFiltersModel"];
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Ticker
-             * @description Underlying ticker symbol
-             */
-            ticker: string;
         };
         /**
          * BuildIvHistoryRequest
@@ -11802,7 +9632,7 @@ export interface components {
             end_ms_utc: number;
             /**
              * Estimated Bars Per Timeframe
-             * @description Calendar-arithmetic bar estimate per timeframe for this window (same estimator as /api/chart/allowed-timeframes)
+             * @description Calendar-arithmetic bar estimate per timeframe for this window (same estimator as POST /api/chart/data)
              */
             estimated_bars_per_timeframe: {
                 [key: string]: number;
@@ -11911,60 +9741,6 @@ export interface components {
             terminal_age_ms?: number | null;
         };
         /**
-         * ClerkCustodySnapshot
-         * @description Clerk-authored account and instance custody answer for control policy.
-         */
-        ClerkCustodySnapshot: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "paper" | "live";
-            /** Broker */
-            broker: string;
-            /** Clerk Generation */
-            clerk_generation: string;
-            /**
-             * Evidence Refs
-             * @default []
-             */
-            evidence_refs?: string[];
-            exposure: components["schemas"]["CustodyExposureFact"];
-            freeze: components["schemas"]["AccountFreezeState"];
-            hold: components["schemas"]["HoldState"];
-            /** Journal Sequence */
-            journal_sequence: number;
-            /** Next Step */
-            next_step?: string | null;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            pending_orders: components["schemas"]["CustodyCountFact"];
-            /** Reason Code */
-            reason_code: string;
-            /**
-             * Reconciled At Ms
-             * Format: int64
-             */
-            reconciled_at_ms: number;
-            /** Reconciliation Fresh */
-            reconciliation_fresh: boolean;
-            /**
-             * Reconciliation State
-             * @enum {string}
-             */
-            reconciliation_state: "clean" | "unexplained_order" | "missing_intent" | "stale";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            terminal_orders: components["schemas"]["CustodyCountFact"];
-            unresolved_effects: components["schemas"]["CustodyCountFact"];
-            working_orders: components["schemas"]["CustodyCountFact"];
-        };
-        /**
          * ClerkCustodyTimeline
          * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
          */
@@ -12015,42 +9791,6 @@ export interface components {
             record_count: number;
             /** Uncertain Count */
             uncertain_count: number;
-        };
-        /**
-         * ClerkDecisionEvidencePage
-         * @description A bounded source page; missing retained sequences are never concealed.
-         */
-        ClerkDecisionEvidencePage: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "paper" | "live";
-            /** After Seq */
-            after_seq: number;
-            /** Authority Generation */
-            authority_generation: number;
-            /**
-             * Authority Kind
-             * @enum {string}
-             */
-            authority_kind: "sqlite" | "synthetic" | "shadow";
-            /** Config Hash */
-            config_hash: string;
-            /** Db Identity Token */
-            db_identity_token: string;
-            /** Decisions */
-            decisions: components["schemas"]["ExperimentDecision"][];
-            /** Highest Seq */
-            highest_seq: number;
-            /** Next After Seq */
-            next_after_seq: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * ClerkOrderInstruction
@@ -12582,32 +10322,6 @@ export interface components {
             /** Updated At Ms */
             updated_at_ms: number;
         };
-        /** ConfigurationEventListResponse */
-        ConfigurationEventListResponse: {
-            /** Events */
-            events: components["schemas"]["ConfigurationEventResponse"][];
-        };
-        /** ConfigurationEventResponse */
-        ConfigurationEventResponse: {
-            /** Action */
-            action: string;
-            /** Actor Owner Id */
-            actor_owner_id: string;
-            /** Event Id */
-            event_id: string;
-            /** Next Ref */
-            next_ref: string | null;
-            /** Previous Ref */
-            previous_ref: string | null;
-            /** Profile Id */
-            profile_id: string | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Result */
-            result: string;
-            /** Revision */
-            revision: number | null;
-        };
         /**
          * ConfiguredSignalProgramSeal
          * @description Inner seal: the exact semantic signal program selected by the user.
@@ -12667,36 +10381,6 @@ export interface components {
             kind: "Const";
             /** Value */
             value: number;
-        };
-        /**
-         * ConventionsModel
-         * @description Market conventions for surface building.
-         */
-        ConventionsModel: {
-            /**
-             * Day Count
-             * @description Day count convention
-             * @default Actual365Fixed
-             */
-            day_count?: string;
-            /**
-             * Dividend Yield
-             * @description Dividend yield (continuous)
-             * @default 0
-             */
-            dividend_yield?: number;
-            /**
-             * Forward Model
-             * @description Forward model (bsm, simple)
-             * @default bsm
-             */
-            forward_model?: string;
-            /**
-             * Rate
-             * @description Risk-free rate (continuous)
-             * @default 0.05
-             */
-            rate?: number;
         };
         /**
          * CostViabilityResponse
@@ -12823,151 +10507,6 @@ export interface components {
             /** Slots */
             slots: components["schemas"]["CredentialSlotResponse"][];
         };
-        /** CrossAssetBars */
-        CrossAssetBars: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /** Symbol */
-            symbol: string;
-        };
-        /** CrossAssetRunBody */
-        CrossAssetRunBody: {
-            /**
-             * Bar Size
-             * @default 1d
-             * @enum {string}
-             */
-            bar_size?: "15m" | "1d";
-            /** Bars By Symbol */
-            bars_by_symbol: components["schemas"]["CrossAssetBars"][];
-            /** End Ms */
-            end_ms: number;
-            /**
-             * Split Mode
-             * @default all
-             * @enum {string}
-             */
-            split_mode?: "rolling" | "calendar" | "walkforward" | "all";
-            /** Start Ms */
-            start_ms: number;
-            /** Strategy Name */
-            strategy_name: string;
-            /** Symbols */
-            symbols: string[];
-        };
-        /**
-         * CrossEngineDivergenceModel
-         * @description One typed disagreement between paired LEAN-Lab and Engine-Lab fills.
-         *
-         *     Maps onto ``research.parity.qc_reconciler.Divergence``. When one side
-         *     is missing (DECISION_MISMATCH), the corresponding snapshot is None.
-         */
-        CrossEngineDivergenceModel: {
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
-            /** Detail */
-            detail: string;
-            engine_fill: components["schemas"]["CrossEngineFillSnapshotModel"] | null;
-            lean_fill: components["schemas"]["CrossEngineFillSnapshotModel"] | null;
-            /**
-             * Trading Date
-             * @description NY-local trading date in ISO YYYY-MM-DD form. The reconciler aligns on NY trading date so the wire form reflects that (extended-hours fills can have a UTC date one day off).
-             */
-            trading_date: string;
-        };
-        /**
-         * CrossEngineFillSnapshotModel
-         * @description One side of a paired (LEAN, Engine Lab) divergence row.
-         *
-         *     Carries enough information for the operator to understand WHICH fill
-         *     was on this side without re-fetching the full normalized result. The
-         *     Decimal-valued fields are wire-serialized as strings so the cents are
-         *     exact (avoids float-binary loss in JSON, matches the Phase 5a
-         *     convention).
-         */
-        CrossEngineFillSnapshotModel: {
-            /** Fee */
-            fee?: string | null;
-            /** Fill Price */
-            fill_price: string;
-            /** Fill Quantity */
-            fill_quantity: number;
-            /** Fill Quantity Raw */
-            fill_quantity_raw?: string | null;
-            /** Fill Time Ms Utc */
-            fill_time_ms_utc: number;
-            /**
-             * Side
-             * @enum {string}
-             */
-            side: "Buy" | "Sell";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * CrossEngineReconciliationReportModel
-         * @description Phase 5g — cross-engine fill-by-fill reconciliation report.
-         *
-         *     ``schema_version`` is the D10 contract: any future shape change bumps
-         *     this so the consumer can fail-fast on an unrecognized version. The
-         *     current shape is v1.
-         */
-        CrossEngineReconciliationReportModel: {
-            /** Assert Fees */
-            assert_fees: boolean;
-            /** Counts By Category */
-            counts_by_category: {
-                [key: string]: number;
-            };
-            /** Divergences */
-            divergences: components["schemas"]["CrossEngineDivergenceModel"][];
-            /** Divergent Count */
-            divergent_count: number;
-            /** Engine Lab Strategy Class */
-            engine_lab_strategy_class: string;
-            /** Engine Total Fills */
-            engine_total_fills: number;
-            /** Gating Divergent Count */
-            gating_divergent_count: number;
-            /** Lean Total Fills */
-            lean_total_fills: number;
-            /** Matched Count */
-            matched_count: number;
-            /** Passed */
-            passed: boolean;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @description Explicit schema version per mission-critical doc D10. Consumers MUST fail-fast on an unrecognized version rather than silently misrender.
-             * @default 1
-             */
-            schema_version?: number;
-        };
-        /**
-         * CrossReconcileRequestModel
-         * @description POST /api/lean-sidecar/runs/{run_id}/cross-reconcile — request shape.
-         *
-         *     The request names which Engine Lab strategy class to diff against.
-         *     No auto-derivation: per D3, ambiguity at this seam silently produces
-         *     wrong divergence reports, so we require an explicit string.
-         */
-        CrossReconcileRequestModel: {
-            /**
-             * Assert Fees
-             * @description When false (default), COMMISSION_DRIFT is diagnostic — it shows up in the report but does not flip ``passed`` to False. When true (only meaningful on reconciliation-grade templates that pin the IBKR fee model on both sides), COMMISSION_DRIFT joins the gating set. Same Branch-A semantics as the qc_reconciler.
-             * @default false
-             */
-            assert_fees?: boolean;
-            /**
-             * Engine Lab Strategy Class
-             * @description Name of the Engine Lab strategy class to run on the same workspace data and diff against this LEAN-Lab run. Required: no auto-derivation convention. See mission-critical doc D3.
-             */
-            engine_lab_strategy_class: string;
-        };
         /**
          * CrossSectionalJobRequest
          * @description Body of POST /api/jobs-internal/cross-sectional.
@@ -13080,19 +10619,6 @@ export interface components {
              */
             theoretical_value: number;
         };
-        /**
-         * CustodyCountFact
-         * @description Count whose zero/non-zero/unknown meaning is explicit.
-         */
-        CustodyCountFact: {
-            /** Count */
-            count?: number | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "zero" | "non_zero" | "unknown";
-        };
         /** CustodyDiagnosis */
         CustodyDiagnosis: {
             /** Account Id */
@@ -13175,21 +10701,6 @@ export interface components {
              */
             state: "resolvable_now" | "blocked_on_prerequisite" | "needs_review";
         };
-        /**
-         * CustodyExposureFact
-         * @description Instance exposure with unknown kept distinct from known flat.
-         */
-        CustodyExposureFact: {
-            /** Positions */
-            positions?: {
-                [key: string]: number;
-            } | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "zero" | "non_zero" | "unknown";
-        };
         /** CustodyPositionDelta */
         CustodyPositionDelta: {
             /** Broker Observed Qty */
@@ -13228,58 +10739,6 @@ export interface components {
              * @enum {string}
              */
             tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-        };
-        /**
-         * DailySummary
-         * @description Summary of a single day's IV surface.
-         */
-        DailySummary: {
-            /**
-             * Atm Iv
-             * @description ATM implied vol
-             */
-            atm_iv?: number | null;
-            /**
-             * Bf 25D
-             * @description Butterfly 25-delta
-             */
-            bf_25d?: number | null;
-            /**
-             * Cached
-             * @description Loaded from cache
-             * @default false
-             */
-            cached?: boolean;
-            /**
-             * Date
-             * @description Date (YYYY-MM-DD)
-             */
-            date: string;
-            /**
-             * Health Score
-             * @description Health score 0-100
-             */
-            health_score: number;
-            /**
-             * N Contracts
-             * @description Contracts used
-             */
-            n_contracts: number;
-            /**
-             * Rr 25D
-             * @description Risk reversal 25-delta
-             */
-            rr_25d?: number | null;
-            /**
-             * Skew Slope
-             * @description Vol skew slope
-             */
-            skew_slope?: number | null;
-            /**
-             * Surface Id
-             * @description Surface identifier
-             */
-            surface_id: string;
         };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
@@ -13340,36 +10799,6 @@ export interface components {
              * @default []
              */
             skipped_non_sessions?: components["schemas"]["NonSessionRecord"][];
-        };
-        /**
-         * DataFiltersModel
-         * @description Data quality filters for option contracts.
-         */
-        DataFiltersModel: {
-            /**
-             * Max Dte
-             * @description Maximum days to expiry
-             * @default 365
-             */
-            max_dte?: number;
-            /**
-             * Max Spread Pct
-             * @description Max bid-ask spread as % of mid
-             * @default 0.2
-             */
-            max_spread_pct?: number;
-            /**
-             * Min Dte
-             * @description Minimum days to expiry
-             * @default 7
-             */
-            min_dte?: number;
-            /**
-             * Min Open Interest
-             * @description Minimum open interest
-             * @default 10
-             */
-            min_open_interest?: number;
         };
         /**
          * DataQualityRequest
@@ -13549,169 +10978,6 @@ export interface components {
              * @default 0
              */
             walk_forward_folds?: number;
-        };
-        /**
-         * DatasetGenerationRequest
-         * @description Request to generate a full indicator dataset with chunked OHLCV fetching
-         */
-        DatasetGenerationRequest: {
-            /**
-             * Adjust For Dividends
-             * @description When true, fetch the dividend reference file and subtract each dividend from bars dated before its ex-date server-side. Produces TV-style dividend-adjusted prices. Requires the Polygon reference companion (automatically bundled when this is on).
-             * @default false
-             */
-            adjust_for_dividends?: boolean;
-            /**
-             * Adjusted
-             * @description Polygon adjusted=true — adjusts for SPLITS ONLY. Does NOT adjust for dividends. Use the separate adjust_for_dividends flag for TV-style dividend adjustment. See docs/tv-polygon-validation-gotchas.md §1.
-             * @default true
-             */
-            adjusted?: boolean;
-            /**
-             * Columns
-             * @description Data columns to write to dataset.csv, drawn from the plan's output_columns. Written in the canonical projection order regardless of list order; unix_ts is always first and is not listed here. Null writes every projected column. A name this recipe cannot produce is rejected.
-             */
-            columns?: string[] | null;
-            /**
-             * End Ms Utc
-             * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.
-             */
-            end_ms_utc?: number | null;
-            /**
-             * Fail On Gaps
-             * @description Reject intra-day gaps. Disable only together with explicit forward_fill=True.
-             * @default true
-             */
-            fail_on_gaps?: boolean;
-            /**
-             * Forward Fill
-             * @description Explicitly synthesize missing minute bars from the previous close (volume=0)
-             * @default false
-             */
-            forward_fill?: boolean;
-            /**
-             * From Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            from_date: string;
-            /**
-             * Include Dividends
-             * @description Bundle dividends.csv (Polygon /stocks/v1/dividends)
-             * @default false
-             */
-            include_dividends?: boolean;
-            /**
-             * Include Financials
-             * @description Bundle financials.csv (Polygon /vX/reference/financials, quarterly filings)
-             * @default false
-             */
-            include_financials?: boolean;
-            /**
-             * Include News
-             * @description Bundle news.csv (Polygon /v2/reference/news)
-             * @default false
-             */
-            include_news?: boolean;
-            /**
-             * Include Previous Close
-             * @description When true, add a 'PC' column to dataset.csv positioned before 'open'. PC is the close of the most recently completed RTH session at or before each bar's timestamp: bars before 16:00 ET reference the prior trading day's close, bars at or after 16:00 ET reference the same day's close (which has just printed). This makes overnight volatility a single subtraction across the 16:00 boundary. Sourced from Polygon daily aggregates honoring the 'adjusted' flag; a ~14 calendar-day buffer before from_date is fetched so morning bars on day 1 have a prior session.
-             * @default true
-             */
-            include_previous_close?: boolean;
-            /**
-             * Include Quality Report
-             * @description When true, run the data-quality pipeline on the fetched bars and bundle quality_report.md into the ZIP alongside the dataset.
-             * @default false
-             */
-            include_quality_report?: boolean;
-            /**
-             * Include Quotes
-             * @description Bundle quotes.csv (Polygon /v3/quotes, NBBO). TICK-LEVEL — millions of rows; use a short date window. Capped server-side at 500k rows.
-             * @default false
-             */
-            include_quotes?: boolean;
-            /**
-             * Include Splits
-             * @description Bundle splits.csv (Polygon /stocks/v1/splits)
-             * @default false
-             */
-            include_splits?: boolean;
-            /**
-             * Include Ticker Overview
-             * @description Bundle ticker_overview.json (Polygon /v3/reference/tickers/{ticker})
-             * @default false
-             */
-            include_ticker_overview?: boolean;
-            /**
-             * Include Trades
-             * @description Bundle trades.csv (Polygon /v3/trades). TICK-LEVEL — millions of rows; use a short date window. Capped server-side at 500k rows.
-             * @default false
-             */
-            include_trades?: boolean;
-            /**
-             * Indicator Entries
-             * @description List of indicator entries, each with 'name' and optional 'params' dict. e.g. [{'name': 'ema', 'params': {'length': 20}}, {'name': 'rsi', 'params': {'length': 14}}]
-             * @default []
-             */
-            indicator_entries?: Record<string, never>[];
-            /**
-             * Limit
-             * @description Polygon aggregate per-request limit (1–50000). Higher values mean fewer chunks.
-             * @default 50000
-             */
-            limit?: number;
-            /**
-             * Multiplier
-             * @description Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)
-             * @default 1
-             */
-            multiplier?: number;
-            /** @description Optional options companion file config. When set with enabled=True, the ZIP gains per-slot CSVs under calls/ and puts/ subfolders (one per ATM-relative slot). */
-            options_companion?: components["schemas"]["OptionsCompanionConfig"] | null;
-            /**
-             * Session
-             * @description 'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours
-             * @default extended
-             */
-            session?: string;
-            /**
-             * Sort
-             * @description Polygon aggregate sort order: 'asc' (oldest first) or 'desc' (newest first). Applies to the upstream Polygon request; the downstream merged result stays ascending.
-             * @default asc
-             */
-            sort?: string;
-            /**
-             * Start Ms Utc
-             * @description Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).
-             */
-            start_ms_utc?: number | null;
-            /**
-             * Ticker
-             * @description Ticker symbol
-             */
-            ticker: string;
-            /**
-             * Time Zone
-             * @description IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone — display only; unix_ts stays the canonical time. Null omits the column.
-             */
-            time_zone?: string | null;
-            /**
-             * Timespan
-             * @description Bar timespan: 'minute', 'hour', or 'day'
-             * @default minute
-             */
-            timespan?: string;
-            /**
-             * To Date
-             * @description End date (YYYY-MM-DD)
-             */
-            to_date: string;
-            /**
-             * Warmup
-             * @description Fetch extra bars before from_date to warm up indicator calculations
-             * @default true
-             */
-            warmup?: boolean;
         };
         /**
          * DatasetPlanRequest
@@ -14517,38 +11783,6 @@ export interface components {
             snapshot_at_exit?: string[];
         };
         /**
-         * DiagnosticsResponse
-         * @description Full diagnostics for a built surface.
-         */
-        DiagnosticsResponse: {
-            /** @description Arbitrage analysis */
-            arbitrage: components["schemas"]["ArbitrageDetail"];
-            /**
-             * Fitted Params
-             * @description Fitted parameters per slice
-             */
-            fitted_params: components["schemas"]["FitParamsResponse"][];
-            /**
-             * Health Score
-             * @description Overall health score 0-100
-             */
-            health_score: number;
-            /** @description Rejection analysis */
-            rejections: components["schemas"]["RejectionBreakdown"];
-            /**
-             * Slices
-             * @description Per-slice diagnostics
-             */
-            slices: components["schemas"]["SliceDiagnosticsResponse"][];
-            /** @description Build summary */
-            summary: components["schemas"]["SurfaceBuildSummary"];
-            /**
-             * Warnings
-             * @description List of warnings
-             */
-            warnings?: string[];
-        };
-        /**
          * DifferenceBps
          * @description Relative difference between two operands, expressed in basis points.
          *
@@ -14648,25 +11882,6 @@ export interface components {
             recorded_at_ms: number | null;
             /** Run Id */
             run_id: string | null;
-        };
-        /** EdgeScoreBody */
-        EdgeScoreBody: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /** Iv30 */
-            iv30: (number | null)[];
-            /** Regime Labels */
-            regime_labels: number[];
-            /** Regime Score Map */
-            regime_score_map?: {
-                [key: string]: number;
-            } | null;
-            /** Symbol */
-            symbol: string;
-            /** Weights */
-            weights?: {
-                [key: string]: number;
-            } | null;
         };
         /**
          * EffectiveSampleSizeResponse
@@ -14819,12 +12034,6 @@ export interface components {
             from_date?: string | null;
             /** Initial Cash */
             initial_cash?: number | null;
-            /**
-             * Limit Penetration
-             * @description Dollar amount the bar must penetrate past a resting limit's price before the fill is recognized. Measured against the adverse extreme — low for buy limits, high for sell limits. Default 0 = TradingView-style touch fill; 0.02 for US equities is a realistic 2-tick queue-position model.
-             * @default 0
-             */
-            limit_penetration?: number;
             /** Params */
             params?: Record<string, never>;
             /**
@@ -14948,38 +12157,6 @@ export interface components {
             /** Winning Trades */
             winning_trades: number;
         };
-        /** EngineBarsCoverageResponse */
-        EngineBarsCoverageResponse: {
-            /** Available Days */
-            available_days: number;
-            /** Expected Days */
-            expected_days: number;
-            /** Is Complete */
-            is_complete: boolean;
-            /**
-             * Missing Days
-             * @default []
-             */
-            missing_days?: string[];
-        };
-        /** EngineBarsResponse */
-        EngineBarsResponse: {
-            /** Bars */
-            bars?: Record<string, never>[];
-            /** Count */
-            count: number;
-            coverage: components["schemas"]["EngineBarsCoverageResponse"];
-            /** Multiplier */
-            multiplier: number;
-            /** Policy Key */
-            policy_key: string;
-            /** Session */
-            session: string;
-            /** Symbol */
-            symbol: string;
-            /** Timespan */
-            timespan: string;
-        };
         /** EngineChartBar */
         EngineChartBar: {
             /** C */
@@ -15081,22 +12258,6 @@ export interface components {
             evaluation_start_ms: number;
             /** Warmup Primed */
             warmup_primed: boolean;
-        };
-        /**
-         * EngineParityDivergenceModel
-         * @description The first field where the BacktestEngine and runner-seam traces disagree.
-         */
-        EngineParityDivergenceModel: {
-            /** Evaluation Id */
-            evaluation_id: string | null;
-            /** Expected */
-            expected: string;
-            /** Field */
-            field: string;
-            /** Index */
-            index: number;
-            /** Observed */
-            observed: string;
         };
         /** EngineTradeResponse */
         EngineTradeResponse: {
@@ -15315,18 +12476,6 @@ export interface components {
             truncated: boolean;
         };
         /**
-         * ExchangeStatus
-         * @description Status of individual exchanges
-         */
-        ExchangeStatus: {
-            /** Nasdaq */
-            nasdaq?: string | null;
-            /** Nyse */
-            nyse?: string | null;
-            /** Otc */
-            otc?: string | null;
-        };
-        /**
          * ExcludedDay
          * @description One calendar date that fell inside a requested window but is
          *     not a NYSE trading session.
@@ -15442,33 +12591,6 @@ export interface components {
             exit_allowance_bps: number;
             /** Spread Cap Bps */
             spread_cap_bps: number;
-        };
-        /**
-         * ExperimentDecision
-         * @description One Clerk receipt; observation time is never substituted for decision time.
-         */
-        ExperimentDecision: {
-            /** Decision Bar Close Ms */
-            decision_bar_close_ms?: number | null;
-            /** Decision Id */
-            decision_id?: string | null;
-            /** Order Ref */
-            order_ref?: string | null;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash" | "decision_bar_quarantined";
-            /** Reason Code */
-            reason_code: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string | null;
-            /** Seq */
-            seq: number;
-            /** Trace Digest */
-            trace_digest?: string | null;
         };
         /**
          * ExposureNoticeView
@@ -15615,28 +12737,6 @@ export interface components {
             session_open_ms_utc: number;
             /** Value Pct */
             value_pct: number;
-        };
-        /**
-         * FeatureInfoResponse
-         * @description Feature metadata for the information panel.
-         */
-        FeatureInfoResponse: {
-            /** Category */
-            category: string;
-            /** Example */
-            example: string;
-            /** Formula Latex */
-            formula_latex: string;
-            /** Implementation Note */
-            implementation_note: string;
-            /** Interpretation */
-            interpretation: string;
-            /** Name */
-            name: string;
-            /** Variables */
-            variables: string;
-            /** Window */
-            window: number;
         };
         /**
          * FeatureResearchJobRequest
@@ -15837,38 +12937,6 @@ export interface components {
             target_signed_appropriate?: boolean;
         };
         /**
-         * FeeDivergenceModel
-         * @description One row in the fee reconciliation report. Decimals serialized as
-         *     strings so the wire is exact (avoids float-binary error in JSON).
-         */
-        FeeDivergenceModel: {
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "commission_drift" | "no_recorded_fee" | "fractional_quantity";
-            /** Delta */
-            delta: string | null;
-            /** Expected Ibkr Fee */
-            expected_ibkr_fee: string;
-            /** Fill Price */
-            fill_price: string;
-            /** Fill Quantity */
-            fill_quantity: number;
-            /** Fill Quantity Raw */
-            fill_quantity_raw?: number | null;
-            /** Ms Utc */
-            ms_utc: number;
-            /** Order Event Id */
-            order_event_id: number;
-            /** Order Id */
-            order_id: number;
-            /** Recorded Fee */
-            recorded_fee: string | null;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * FeedContinuityEventView
          * @description One durable, run-scoped market-data continuity fact.
          */
@@ -15961,22 +13029,6 @@ export interface components {
             realized_pnl: number;
             /** Symbol */
             symbol: string;
-        };
-        /**
-         * FitParamsResponse
-         * @description Fitted parameters for a single expiry slice.
-         */
-        FitParamsResponse: {
-            /** Method */
-            method: string;
-            /** Params */
-            params: {
-                [key: string]: number;
-            };
-            /** Rmse */
-            rmse: number;
-            /** Ttm */
-            ttm: number;
         };
         /** FixedContracts */
         FixedContracts: {
@@ -16391,38 +13443,6 @@ export interface components {
             /** Reviewed By */
             reviewed_by: string;
         };
-        /** GoldenValidationApplicabilityRequest */
-        GoldenValidationApplicabilityRequest: {
-            /** Data Policy */
-            data_policy: Record<string, never> | null;
-            /** Execution */
-            execution: Record<string, never>;
-            /** Parameters */
-            parameters: Record<string, never>;
-            /** Program Version */
-            program_version?: string | null;
-            /** Strategy Name */
-            strategy_name: string;
-            /** Symbol */
-            symbol: string;
-            /** Window */
-            window: Record<string, never>;
-        };
-        /** GoldenValidationApplicabilityResponse */
-        GoldenValidationApplicabilityResponse: {
-            /** Applicable */
-            applicable: boolean;
-            /** Classification */
-            classification: string | null;
-            /** Explanation */
-            explanation: string;
-            /** Golden Validation Id */
-            golden_validation_id: number;
-            /** Mismatched Fields */
-            mismatched_fields: string[];
-            /** State */
-            state: string;
-        };
         /** GoldenValidationResponse */
         GoldenValidationResponse: {
             /** Designated At Ms */
@@ -16619,37 +13639,6 @@ export interface components {
             theta?: number | null;
             /** Vega */
             vega?: number | null;
-        };
-        /**
-         * GridMetaModel
-         * @description Metadata for a matrix grid response.
-         */
-        GridMetaModel: {
-            /**
-             * Expiry Dates
-             * @description Expiry dates (YYYY-MM-DD)
-             */
-            expiry_dates: string[];
-            /**
-             * Forwards
-             * @description Forward prices per expiry
-             */
-            forwards: number[];
-            /**
-             * N Expiries
-             * @description Number of expiries
-             */
-            n_expiries: number;
-            /**
-             * N Strikes
-             * @description Number of strikes
-             */
-            n_strikes: number;
-            /**
-             * Spot
-             * @description Spot price
-             */
-            spot: number;
         };
         /** GridSearchCellPageResponse */
         GridSearchCellPageResponse: {
@@ -19149,36 +16138,6 @@ export interface components {
              */
             logic: "AND" | "OR";
         };
-        /**
-         * LossHoldClearOutcome
-         * @description The guarded loss-hold clear's outcome.
-         *
-         *     ``day_pnl_usd`` and ``loss_limit_usd`` are the loss rule's floats — the
-         *     bytes the rule compared and the seal recorded. They are machine figures
-         *     that no client renders as money: the dollars the owner reads live in
-         *     ``detail``, authored in Python through the money boundary (#2612), so a
-         *     cent never depends on a browser's float formatting.
-         */
-        LossHoldClearOutcome: {
-            /** Day Pnl Usd */
-            day_pnl_usd: number | null;
-            /** Detail */
-            detail: string;
-            /** Loss Limit Usd */
-            loss_limit_usd: number | null;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "cleared" | "no_hold" | "refused";
-            /** Reason Code */
-            reason_code: string | null;
-        };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
             /** Broker Order Id */
@@ -19349,59 +16308,6 @@ export interface components {
             message: string;
         };
         /**
-         * MarketDashboardResponse
-         * @description Combined market status + holidays for the dashboard
-         */
-        MarketDashboardResponse: {
-            /** Error */
-            error?: string | null;
-            holidays?: components["schemas"]["MarketHolidaysResponse"] | null;
-            status?: components["schemas"]["MarketStatusResponse"] | null;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * MarketHolidayEvent
-         * @description A single upcoming market holiday event
-         */
-        MarketHolidayEvent: {
-            /** Close */
-            close?: string | null;
-            /** Date */
-            date?: string | null;
-            /**
-             * Exchanges
-             * @default []
-             */
-            exchanges?: string[];
-            /** Name */
-            name?: string | null;
-            /** Open */
-            open?: string | null;
-            /** Status */
-            status?: string | null;
-        };
-        /**
-         * MarketHolidaysResponse
-         * @description Upcoming market holidays response
-         */
-        MarketHolidaysResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Events
-             * @default []
-             */
-            events?: components["schemas"]["MarketHolidayEvent"][];
-            /** Success */
-            success: boolean;
-        };
-        /**
          * MarketMoversRequest
          * @description Request schema for top market movers
          */
@@ -19431,27 +16337,6 @@ export interface components {
              * @default []
              */
             tickers?: components["schemas"]["StockTickerSnapshot"][];
-        };
-        /**
-         * MarketPointModel
-         * @description A single market quote point.
-         */
-        MarketPointModel: {
-            /**
-             * Iv
-             * @description Implied volatility
-             */
-            iv: number;
-            /**
-             * Status
-             * @description Solver status (solved, invalid, etc.)
-             */
-            status: string;
-            /**
-             * X
-             * @description Moneyness value
-             */
-            x: number;
         };
         /**
          * MarketPulseView
@@ -19499,43 +16384,6 @@ export interface components {
             source: string | null;
         };
         /**
-         * MarketStatusResponse
-         * @description Current market status response
-         */
-        MarketStatusResponse: {
-            /**
-             * After Hours
-             * @default false
-             */
-            after_hours?: boolean;
-            /**
-             * Early Hours
-             * @default false
-             */
-            early_hours?: boolean;
-            /** Error */
-            error?: string | null;
-            /** @default {} */
-            exchanges?: components["schemas"]["ExchangeStatus"];
-            /**
-             * Market
-             * @default unknown
-             */
-            market?: string;
-            /**
-             * Server Time
-             * @default
-             */
-            server_time?: string;
-            /**
-             * Server Time Readable
-             * @default N/A
-             */
-            server_time_readable?: string;
-            /** Success */
-            success: boolean;
-        };
-        /**
          * MarketStatusSnapshot
          * @description Authenticated status-source observation shared with a Paper worker.
          *
@@ -19569,46 +16417,6 @@ export interface components {
          * @enum {string}
          */
         MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
-        /**
-         * MatrixGridResponse
-         * @description Matrix grid of IV surface values.
-         */
-        MatrixGridResponse: {
-            /** @description Grid metadata */
-            meta: components["schemas"]["GridMetaModel"];
-            /**
-             * X
-             * @description Moneyness axis values
-             */
-            x: number[];
-            /**
-             * X Label
-             * @description X-axis label (log_moneyness, moneyness, strike)
-             */
-            x_label: string;
-            /**
-             * Y
-             * @description DTE days axis
-             */
-            y: number[];
-            /**
-             * Y Label
-             * @description Y-axis label
-             * @default dte_days
-             */
-            y_label?: string;
-            /**
-             * Z
-             * @description IV matrix [n_expiries × n_strikes]
-             */
-            z: (number | null)[][];
-            /**
-             * Z Label
-             * @description Z-axis label
-             * @default implied_vol
-             */
-            z_label?: string;
-        };
         /**
          * MethodologyResponse
          * @description Methodology metadata from signal engine configuration.
@@ -20501,46 +17309,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * OptionRecord
-         * @description A single option contract with market data.
-         */
-        OptionRecord: {
-            /**
-             * Ask
-             * @description Ask price
-             */
-            ask?: number | null;
-            /**
-             * Bid
-             * @description Bid price
-             */
-            bid?: number | null;
-            /**
-             * Is Call
-             * @description True for call, False for put
-             */
-            is_call: boolean;
-            /** Open Interest */
-            open_interest?: number | null;
-            /**
-             * Option Price
-             * @description Mid market price
-             */
-            option_price: number;
-            /**
-             * Strike
-             * @description Strike price
-             */
-            strike: number;
-            /**
-             * Ttm
-             * @description Time to maturity in years
-             */
-            ttm: number;
-            /** Volume */
-            volume?: number | null;
-        };
-        /**
          * OptionTemplatePosition
          * @description Phase 2 placeholder. Schema admits the shape so authors can write
          *     forward-compatible specs; the Phase 1 evaluator raises
@@ -20909,22 +17677,6 @@ export interface components {
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
-        /** OwnerPatchRequest */
-        OwnerPatchRequest: {
-            /** Display Label */
-            display_label: string;
-        };
-        /** OwnerResponse */
-        OwnerResponse: {
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Display Label */
-            display_label: string;
-            /** Owner Id */
-            owner_id: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
-        };
         /**
          * PanelAction
          * @description One backend-presented action (§11).
@@ -21292,20 +18044,6 @@ export interface components {
          * @enum {string}
          */
         PortfolioHistoryRange: "1D" | "30D" | "60D";
-        /**
-         * PredictedSessionFees
-         * @description The model's end-of-day charge for the session, per component.
-         */
-        PredictedSessionFees: {
-            /** Cat Usd */
-            cat_usd: number;
-            /** Sec Usd */
-            sec_usd: number;
-            /** Taf Usd */
-            taf_usd: number;
-            /** Total Usd */
-            total_usd: number;
-        };
         /**
          * PredictionComparison
          * @description Compare a per-bar prediction value against a constant threshold.
@@ -22185,11 +18923,6 @@ export interface components {
             /** Total Pnl */
             total_pnl: number;
         };
-        /** RecencyLaunchMutationResponse */
-        RecencyLaunchMutationResponse: {
-            /** Launch Id */
-            launch_id: string;
-        };
         /**
          * RecencyLaunchResponse
          * @description One launch as the launches list serves it (#1938).
@@ -22623,35 +19356,6 @@ export interface components {
              */
             vol_label?: string;
         };
-        /** RegimeClusterBody */
-        RegimeClusterBody: {
-            /** Algorithms */
-            algorithms?: ("hmm" | "kmeans")[];
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Iv Series
-             * @description Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}]. When supplied, IV-derived features (iv30_z, d_iv_z, iv_vol_z) are added to the regime feature matrix and weighted by regime_feature_weight (Step F).
-             */
-            iv_series?: Record<string, never>[] | null;
-            /**
-             * Min Run Length
-             * @default 5
-             */
-            min_run_length?: number;
-            /**
-             * N States
-             * @default 3
-             */
-            n_states?: number;
-            /**
-             * P Min
-             * @default 0.7
-             */
-            p_min?: number;
-            /** Symbol */
-            symbol: string;
-        };
         /**
          * RegimeICPoint
          * @description IC for one horizon within one regime bucket.
@@ -22702,13 +19406,6 @@ export interface components {
              */
             vol_window?: number;
         };
-        /** RegimeStrategyFitBody */
-        RegimeStrategyFitBody: {
-            /** Regime Labels */
-            regime_labels: Record<string, never>[];
-            /** Trades */
-            trades: Record<string, never>[];
-        };
         /**
          * RegularSessionFlattenPricing
          * @description Inside the regular session the flatten is a market DAY order; no quote is needed.
@@ -22719,34 +19416,6 @@ export interface components {
              * @enum {string}
              */
             kind: "regular_session";
-        };
-        /**
-         * RejectionBreakdown
-         * @description Breakdown of contract rejections.
-         */
-        RejectionBreakdown: {
-            /**
-             * Accepted
-             * @description Number accepted
-             */
-            accepted: number;
-            /**
-             * By Reason
-             * @description Rejection counts by reason
-             */
-            by_reason: {
-                [key: string]: number;
-            };
-            /**
-             * Rejected
-             * @description Number rejected
-             */
-            rejected: number;
-            /**
-             * Total Quotes
-             * @description Total quotes received
-             */
-            total_quotes: number;
         };
         /**
          * RelatedTickersRequest
@@ -23339,23 +20008,6 @@ export interface components {
             validation_verdict?: components["schemas"]["FeatureValidationVerdictResponse"] | null;
         };
         /**
-         * RunIndexResponseModel
-         * @description Paged-ish response for the run-history index.
-         *
-         *     ``cap`` is the configured per-request cap; ``truncated`` is True if
-         *     the artifacts root holds more runs than were returned. The frontend
-         *     surfaces both so the operator knows the list is not necessarily
-         *     exhaustive.
-         */
-        RunIndexResponseModel: {
-            /** Cap */
-            cap: number;
-            /** Runs */
-            runs: components["schemas"]["RunSummaryModel"][];
-            /** Truncated */
-            truncated: boolean;
-        };
-        /**
          * RunLedger
          * @description Immutable identity record for a single strategy run.
          *
@@ -23555,124 +20207,6 @@ export interface components {
             ticker: string;
         };
         /**
-         * RunReconciliationReportModel
-         * @description Phase 5a — categorized fee-divergence report for one LEAN Lab run.
-         *
-         *     The report is decoupled from whether the run was reconciliation-grade.
-         *     A default-brokerage trusted-sample run will naturally surface many
-         *     ``commission_drift`` rows because LEAN's default commission differs
-         *     from IBKR's tier — that signal is informative, not a bug.
-         */
-        RunReconciliationReportModel: {
-            /** Algorithm Id */
-            algorithm_id: string;
-            /** Commission Atol */
-            commission_atol: string;
-            /** Divergences */
-            divergences: components["schemas"]["FeeDivergenceModel"][];
-            /** Divergent Count */
-            divergent_count: number;
-            /** Matched Count */
-            matched_count: number;
-            /** Normalized Parser Version */
-            normalized_parser_version: string;
-            /** Run Id */
-            run_id: string;
-            /** Total Expected Ibkr Fees */
-            total_expected_ibkr_fees: string;
-            /** Total Fill Events */
-            total_fill_events: number;
-            /** Total Recorded Fees */
-            total_recorded_fees: string;
-        };
-        /**
-         * RunReplayDivergenceModel
-         * @description One classified fidelity-leg disagreement between replay and live record.
-         */
-        RunReplayDivergenceModel: {
-            /** Bar Close Ms */
-            bar_close_ms: number;
-            /**
-             * Classification
-             * @enum {string}
-             */
-            classification: "expected_live_effect" | "drift";
-            /** Detail */
-            detail: string;
-            /** Evaluation Id */
-            evaluation_id: string;
-            /** Live Outcome */
-            live_outcome: string | null;
-            /** Reason Code */
-            reason_code: string;
-            /** Replay Staged */
-            replay_staged: string | null;
-        };
-        /**
-         * RunReplayReceipt
-         * @description Durable parity receipt for one completed run (Direction 2). All temporal fields are int64 ms UTC.
-         */
-        RunReplayReceipt: {
-            /** Bar Set Digest */
-            bar_set_digest: string;
-            /** Continuity Event Digest */
-            continuity_event_digest?: string | null;
-            /** Digest Verified Count */
-            digest_verified_count: number;
-            /** Divergences */
-            divergences: components["schemas"]["RunReplayDivergenceModel"][];
-            /** Drift Count */
-            drift_count: number;
-            /** Engine Parity Compared Count */
-            engine_parity_compared_count: number;
-            engine_parity_divergence: components["schemas"]["EngineParityDivergenceModel"] | null;
-            /** Engine Parity Trace Root */
-            engine_parity_trace_root: string | null;
-            /** Error */
-            error?: string | null;
-            /** Evidence End Seq */
-            evidence_end_seq?: number | null;
-            /** Expected Live Effect Count */
-            expected_live_effect_count: number;
-            /** Generated At Ms */
-            generated_at_ms: number;
-            /** Ledger End Seq */
-            ledger_end_seq: number | null;
-            /** Live Compared Count */
-            live_compared_count: number;
-            /** Match Count */
-            match_count: number;
-            /** Program Version */
-            program_version: string | null;
-            /** Provider */
-            provider: string;
-            /** Records Truncated */
-            records_truncated: boolean;
-            /** Retained Bar Count */
-            retained_bar_count: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version?: 1;
-            /** Sealed Program Hash */
-            sealed_program_hash: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "parity" | "parity_with_expected_live_effects" | "indeterminate" | "drift" | "replay_failed";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Strategy Key */
-            strategy_key: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * RunSignalEngineRequest
          * @description Request body for POST /research/run-signal.
          */
@@ -23794,44 +20328,6 @@ export interface components {
             /** Ticker */
             ticker: string;
             walk_forward?: components["schemas"]["WalkForwardResultResponse"] | null;
-        };
-        /**
-         * RunSummaryModel
-         * @description One row in the run-history index.
-         *
-         *     Built from each run's ``manifest.json``. Index reads do not touch
-         *     the launcher and do not require LEAN to be running — they're a
-         *     pure read over the artifacts root. Fields are the minimum needed
-         *     to render a sidebar row + offer a "click to re-open" action;
-         *     detail views still go through the existing per-run endpoints
-         *     (``/runs/{id}/manifest``, ``/runs/{id}/normalized``, etc.).
-         */
-        RunSummaryModel: {
-            /**
-             * Algorithm Source Kind
-             * @enum {string}
-             */
-            algorithm_source_kind: "trusted_sample" | "user_provided" | "unknown";
-            /** Exit Clean */
-            exit_clean: boolean | null;
-            /** Exit Code */
-            exit_code: number | null;
-            /** Finished At Ms */
-            finished_at_ms: number | null;
-            /** Is Clean */
-            is_clean: boolean | null;
-            /** Lean Error Categories */
-            lean_error_categories: string[];
-            /** Requested End Ms Utc */
-            requested_end_ms_utc: number | null;
-            /** Requested Start Ms Utc */
-            requested_start_ms_utc: number | null;
-            /** Run Id */
-            run_id: string;
-            /** Started At Ms */
-            started_at_ms: number | null;
-            /** Symbol */
-            symbol: string | null;
         };
         /**
          * RunTrade
@@ -24379,67 +20875,6 @@ export interface components {
             /** Staged Revision */
             staged_revision: number | null;
         };
-        /** SeriesResponse */
-        SeriesResponse: {
-            /** N Snapshots */
-            n_snapshots: number;
-            /** Snapshots */
-            snapshots: components["schemas"]["RecordedSnapshotItem"][];
-            /** Ticker */
-            ticker: string;
-        };
-        /**
-         * SessionFeeReconciliation
-         * @description Predicted fees for one ET trade date against the FEE activities Alpaca posted.
-         */
-        SessionFeeReconciliation: {
-            /** Account Id */
-            account_id: string | null;
-            /** Broker */
-            broker: string;
-            /** Delta Usd */
-            delta_usd: number | null;
-            /** Fill Count */
-            fill_count: number;
-            /**
-             * Fill Window End Ms
-             * Format: int64
-             */
-            fill_window_end_ms: number;
-            /**
-             * Fill Window Start Ms
-             * Format: int64
-             */
-            fill_window_start_ms: number;
-            /** Observed Activity Count */
-            observed_activity_count: number;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            /** Observed Total Usd */
-            observed_total_usd: number | null;
-            predicted: components["schemas"]["PredictedSessionFees"] | null;
-            /** Sell Fill Count */
-            sell_fill_count: number;
-            /**
-             * Session Open Ms
-             * Format: int64
-             */
-            session_open_ms: number;
-            /** Tolerance Usd */
-            tolerance_usd: number | null;
-            /** Unpinned Components */
-            unpinned_components: string[];
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "within_tolerance" | "drift" | "pending" | "unobserved" | "no_fills" | "rate_unpinned" | "unavailable";
-            /** Why */
-            why: string;
-        };
         /** SetHoldings */
         SetHoldings: {
             /** Fraction */
@@ -24851,171 +21286,6 @@ export interface components {
             period: number;
             /** Warmup Bars */
             warmup_bars: number;
-        };
-        /** SignalsRequest */
-        SignalsRequest: {
-            /**
-             * Bar Size
-             * @default 1d
-             * @enum {string}
-             */
-            bar_size?: "15m" | "1d";
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Confidence Floor
-             * @description Hard-gate floor: signals are forced to 0 where confidence < floor.
-             * @default 0.1
-             */
-            confidence_floor?: number;
-            /** Estimators */
-            estimators?: string[];
-            /**
-             * Iv Series
-             * @description Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).
-             */
-            iv_series?: Record<string, never>[] | null;
-            /**
-             * Lookback
-             * @default 252
-             */
-            lookback?: number;
-            /**
-             * Rule
-             * @default vrp_zscore
-             * @constant
-             */
-            rule?: "vrp_zscore";
-            /**
-             * Session
-             * @description Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.
-             * @default ETH
-             * @enum {string}
-             */
-            session?: "ETH" | "RTH";
-            /** Symbol */
-            symbol: string;
-            /**
-             * Tenor Days
-             * @default 30
-             */
-            tenor_days?: number;
-            /**
-             * Threshold
-             * @default 1
-             */
-            threshold?: number;
-            /** Windows */
-            windows?: number[];
-        };
-        /** SignalsResponse */
-        SignalsResponse: {
-            /** Signal Oracle */
-            signal_oracle: number[];
-            /** Signal Realtime */
-            signal_realtime: number[];
-            /** Symbol */
-            symbol: string;
-            /** Ts */
-            ts: number[];
-            /** Vrp Z */
-            vrp_z: (number | null)[];
-        };
-        /**
-         * SliceDiagnosticsResponse
-         * @description Diagnostics for a single expiry slice.
-         */
-        SliceDiagnosticsResponse: {
-            /**
-             * Arbitrage Passed
-             * @default true
-             */
-            arbitrage_passed?: boolean;
-            /**
-             * Butterfly Violations
-             * @default 0
-             */
-            butterfly_violations?: number;
-            /** Fit Method */
-            fit_method: string;
-            /** Fit Rmse */
-            fit_rmse: number;
-            /** N Contracts */
-            n_contracts: number;
-            /** N Failed */
-            n_failed: number;
-            /** N Solved */
-            n_solved: number;
-            /** Ttm */
-            ttm: number;
-        };
-        /**
-         * SmilePointModel
-         * @description A single point on a fitted smile curve.
-         */
-        SmilePointModel: {
-            /**
-             * Iv
-             * @description Implied volatility
-             */
-            iv: number;
-            /**
-             * X
-             * @description Moneyness value (K/S or log-moneyness)
-             */
-            x: number;
-        };
-        /**
-         * SmileSliceResponse
-         * @description A single expiry slice with fitted and market points.
-         */
-        SmileSliceResponse: {
-            /**
-             * Dte Days
-             * @description Days to expiry
-             */
-            dte_days: number;
-            /**
-             * Expiry Date
-             * @description Expiry date (YYYY-MM-DD)
-             */
-            expiry_date: string;
-            /**
-             * Fitted
-             * @description Fitted smile points
-             */
-            fitted: components["schemas"]["SmilePointModel"][];
-            /**
-             * Forward
-             * @description Forward price
-             */
-            forward: number;
-            /**
-             * Market
-             * @description Market quotes
-             */
-            market: components["schemas"]["MarketPointModel"][];
-            /**
-             * Ttm
-             * @description Time to maturity in years
-             */
-            ttm: number;
-        };
-        /**
-         * SmilesResponse
-         * @description Collection of smile slices.
-         */
-        SmilesResponse: {
-            /**
-             * Slices
-             * @description Smile slices
-             */
-            slices: components["schemas"]["SmileSliceResponse"][];
-            /**
-             * X Label
-             * @description X-axis label (log_moneyness, moneyness, strike)
-             */
-            x_label: string;
         };
         /**
          * SnapshotBar
@@ -25751,11 +22021,6 @@ export interface components {
             /** Params Schema */
             params_schema: Record<string, never>;
             /**
-             * Pine Available
-             * @default false
-             */
-            pine_available?: boolean;
-            /**
              * Recency Supported
              * @default false
              */
@@ -26042,7 +22307,7 @@ export interface components {
              * @default 0
              */
             slippage_per_share?: number;
-            /** @description Validated StrategySpec — see /api/spec-strategy/schema */
+            /** @description Validated StrategySpec */
             spec: components["schemas"]["StrategySpec-Input"];
             /**
              * Start Date
@@ -26357,146 +22622,6 @@ export interface components {
             /** Right */
             right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
         };
-        /**
-         * SurfaceBuildRequest
-         * @description Request to build an implied volatility surface.
-         */
-        SurfaceBuildRequest: {
-            /**
-             * Build Bid Ask
-             * @description Build separate bid/ask surfaces
-             * @default false
-             */
-            build_bid_ask?: boolean;
-            /**
-             * Dividend
-             * @description Dividend yield (continuous)
-             * @default 0
-             */
-            dividend?: number;
-            /**
-             * Eval Date
-             * @description Evaluation date (YYYY-MM-DD)
-             * @default
-             */
-            eval_date?: string;
-            /**
-             * @description Surface fitting method
-             * @default variance
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Min Contracts Per Slice
-             * @description Min contracts per expiry to include
-             * @default 5
-             */
-            min_contracts_per_slice?: number;
-            /**
-             * Options
-             * @description Option chain records
-             */
-            options: components["schemas"]["OptionRecord"][];
-            /**
-             * Rate
-             * @description Risk-free rate (continuous)
-             * @default 0.05
-             */
-            rate?: number;
-            /**
-             * Sabr Beta
-             * @description SABR beta (fixed parameter)
-             * @default 0.5
-             */
-            sabr_beta?: number;
-            /**
-             * Spot
-             * @description Current underlying price
-             */
-            spot: number;
-            /**
-             * Ticker
-             * @description Underlying ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * SurfaceBuildSummary
-         * @description Lightweight summary of a built surface.
-         */
-        SurfaceBuildSummary: {
-            /**
-             * Build Time Ms
-             * @description Build time in milliseconds
-             */
-            build_time_ms: number;
-            /**
-             * Cached
-             * @description Whether surface was loaded from cache
-             * @default false
-             */
-            cached?: boolean;
-            /**
-             * Date
-             * @description Build date (YYYY-MM-DD)
-             */
-            date: string;
-            /**
-             * Health Score
-             * @description Health score 0-100
-             */
-            health_score: number;
-            /**
-             * Method
-             * @description Fitting method used
-             */
-            method: string;
-            /**
-             * N Contracts Accepted
-             * @description Number of contracts accepted
-             */
-            n_contracts_accepted: number;
-            /**
-             * N Contracts Rejected
-             * @description Number rejected
-             */
-            n_contracts_rejected: number;
-            /**
-             * N Expiries
-             * @description Number of expiry slices
-             */
-            n_expiries: number;
-            /**
-             * Schema Version
-             * @description Schema version
-             * @default 1.0
-             */
-            schema_version?: string;
-            /**
-             * Spot
-             * @description Spot price at build time
-             */
-            spot: number;
-            /**
-             * Surface Id
-             * @description Opaque surface identifier
-             */
-            surface_id: string;
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-            /**
-             * Valid
-             * @description Whether surface is valid/usable
-             */
-            valid: boolean;
-        };
-        /**
-         * SurfaceMethodEnum
-         * @enum {string}
-         */
-        SurfaceMethodEnum: "variance" | "sabr" | "svi";
         /** SurvivalRule */
         "SurvivalRule-Input": {
             /** Action */
@@ -27029,34 +23154,6 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
-        /** TradeSimRunBody */
-        TradeSimRunBody: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Commission Per Unit
-             * @default 0.005
-             */
-            commission_per_unit?: number;
-            /**
-             * Instrument
-             * @default stock
-             * @enum {string}
-             */
-            instrument?: "stock" | "option";
-            /** Signals */
-            signals: Record<string, never>[];
-            /**
-             * Slippage Pct
-             * @default 0.0005
-             */
-            slippage_pct?: number;
-            /**
-             * Time Stop Bars
-             * @default 5
-             */
-            time_stop_bars?: number;
-        };
         /**
          * TraderDiagnosticView
          * @description All Trader-lens meaning, authored by the fixture producer.
@@ -27401,16 +23498,6 @@ export interface components {
             price?: number | null;
             /** Volume */
             volume?: number | null;
-        };
-        /**
-         * UnreadableFileResponse
-         * @description A data file that is on disk but its reader cannot decode (#2489, #2499).
-         */
-        UnreadableFileResponse: {
-            /** Path */
-            path: string;
-            /** Reason */
-            reason: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -28218,30 +24305,6 @@ export interface components {
              */
             timespan: "minute" | "hour" | "day";
         };
-        /** _CompareRequestModel */
-        _CompareRequestModel: {
-            /**
-             * Assert Fees
-             * @default false
-             */
-            assert_fees?: boolean;
-            /**
-             * Fill Price Atol
-             * @default 0.01
-             */
-            fill_price_atol?: number | string;
-            /** Left Trades */
-            left_trades: components["schemas"]["_TradeRecordModel"][];
-            /** Right Trades */
-            right_trades: components["schemas"]["_TradeRecordModel"][];
-        };
-        /** _CompareResponseModel */
-        _CompareResponseModel: {
-            /** Divergences */
-            divergences: components["schemas"]["_DivergenceModel"][];
-            /** First Divergence Ms Utc */
-            first_divergence_ms_utc?: number | null;
-        };
         /**
          * _DataPolicyModel
          * @description Pydantic shape for the canonical ``DataPolicy`` request block.
@@ -28293,25 +24356,6 @@ export interface components {
              * @constant
              */
             timezone?: "America/New_York";
-        };
-        /** _DivergenceModel */
-        _DivergenceModel: {
-            /** Category */
-            category: string;
-            /** Left Fill Price */
-            left_fill_price?: string | null;
-            /** Left Quantity */
-            left_quantity?: string | null;
-            /** Message */
-            message: string;
-            /** Ms Utc */
-            ms_utc?: number | null;
-            /** Right Fill Price */
-            right_fill_price?: string | null;
-            /** Right Quantity */
-            right_quantity?: string | null;
-            /** Trade Number */
-            trade_number?: number | null;
         };
         /** _EngineBarsSpecModel */
         _EngineBarsSpecModel: {
@@ -28434,39 +24478,6 @@ export interface components {
              */
             warmup_days?: number;
         };
-        /**
-         * _TradeRecordModel
-         * @description One closed round-trip trade in the persist-payload format.
-         *
-         *     Financial fields use ``Decimal`` to avoid IEEE 754 rounding errors in
-         *     cent-level divergence classification (FILL_PRICE_DRIFT / PNL_DRIFT).
-         *     Pydantic v2 serialises Decimal from JSON numbers or strings transparently.
-         */
-        _TradeRecordModel: {
-            /** Entry Ms Utc */
-            entry_ms_utc: number;
-            /** Entry Price */
-            entry_price: number | string;
-            /** Exit Ms Utc */
-            exit_ms_utc: number;
-            /** Exit Price */
-            exit_price: number | string;
-            /** Fee */
-            fee?: number | string | null;
-            /**
-             * Is Synthetic Exit
-             * @default false
-             */
-            is_synthetic_exit?: boolean;
-            /** Pnl */
-            pnl: number | string;
-            /** Quantity */
-            quantity: number | string;
-            /** Signal Reason */
-            signal_reason: string;
-            /** Trade Number */
-            trade_number: number;
-        };
         /** LowHighStepRangeRequest */
         app__routers__jobs__LowHighStepRangeRequest: {
             /** High */
@@ -28540,42 +24551,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get: {
-        parameters: {
-            query: {
-                from_ms: number;
-                to_ms: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccountPnlAttributionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -28717,44 +24692,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SanitizedDataResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get: {
-        parameters: {
-            query?: {
-                after_seq?: number;
-                through_seq?: number | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClerkDecisionEvidencePage"];
                 };
             };
             /** @description Validation Error */
@@ -29034,116 +24971,6 @@ export interface operations {
             };
         };
     };
-    get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                page_size?: number;
-                order_ref?: string | null;
-                effect_operation_id?: string | null;
-                uncertainty_id?: string | null;
-                execution_id?: string | null;
-                transition_kind?: components["schemas"]["TimelineTransitionKind"] | null;
-                sequence?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TimelinePageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                command_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReconciliationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     check_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -29384,74 +25211,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetBotHistoryPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get: {
-        parameters: {
-            query: {
-                since_ms: number;
-                clerk_id?: string | null;
-                limit?: number;
-                before_ms?: number | null;
-                before_correlation_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -30353,106 +26112,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlpacaDeskStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_events_api_brokers_alpaca_configuration_events_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                before_event_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigurationEventListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_owner_api_brokers_alpaca_configuration_owner_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OwnerResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_owner_api_brokers_alpaca_configuration_owner_patch: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OwnerPatchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OwnerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31570,41 +27229,6 @@ export interface operations {
             };
         };
     };
-    get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotControlAuthorityFacts"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get: {
         parameters: {
             query?: never;
@@ -31664,43 +27288,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get: {
-        parameters: {
-            query?: {
-                resolution?: "5s" | "1m";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLiveResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32210,43 +27797,6 @@ export interface operations {
             };
         };
     };
-    list_activities_api_brokers__broker__activities_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                after_ms?: number | null;
-                current_session?: boolean;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerActivity"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_activity_period_api_brokers__broker__activities_period_get: {
         parameters: {
             query: {
@@ -32283,42 +27833,6 @@ export interface operations {
             };
         };
     };
-    list_assets_api_brokers__broker__assets_get: {
-        parameters: {
-            query?: {
-                status?: ("active" | "inactive") | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerAsset"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_lane_attention_api_brokers__broker__attention_get: {
         parameters: {
             query?: never;
@@ -32339,366 +27853,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LaneAttentionRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_bots_api_brokers__broker__bots_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_catalog_unscoped_api_brokers__broker__bots_catalog_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotCatalogView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get: {
-        parameters: {
-            query: {
-                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get: {
-        parameters: {
-            query?: {
-                resolution?: "5s" | "1m";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLiveResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get: {
-        parameters: {
-            query?: {
-                transaction_ref?: string | null;
-                cursor?: string | null;
-                page_size?: number;
-                client_hint?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EvidencePage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_panel_unscoped_api_brokers__broker__bots__sid__panel_get: {
-        parameters: {
-            query?: {
-                transaction_ref?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotPanelView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bot_status_api_brokers__broker__bots__strategy_instance_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunView"];
-                };
-            };
-            /** @description The broker or strategy-instance run is unknown. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
-                };
-            };
-            /** @description The strategy-instance identifier is invalid. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunReadRunnerErrorResponse"];
-                };
-            };
-        };
-    };
-    read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReplayReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReplayReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -33333,42 +28487,6 @@ export interface operations {
             };
         };
     };
-    fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get: {
         parameters: {
             query?: never;
@@ -33406,78 +28524,6 @@ export interface operations {
         };
     };
     fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get: {
         parameters: {
             query?: never;
             header?: {
@@ -33940,188 +28986,6 @@ export interface operations {
                 clerk_id: string;
                 account_id: string;
                 sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                command_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
             };
             cookie?: never;
         };
@@ -35053,40 +29917,6 @@ export interface operations {
             };
         };
     };
-    fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     fleet_activity_period_read_api_brokers__broker__clerks__clerk_id__activities_period_get: {
         parameters: {
             query?: never;
@@ -35415,112 +30245,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -36553,39 +31277,6 @@ export interface operations {
             };
         };
     };
-    get_clock_evidence_api_brokers__broker__clock_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerClockEvidence"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get: {
         parameters: {
             query?: {
@@ -36609,41 +31300,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentFeeAttribution"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get: {
-        parameters: {
-            query: {
-                session_open_ms: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionFeeReconciliation"];
                 };
             };
             /** @description Validation Error */
@@ -36797,39 +31453,6 @@ export interface operations {
             };
         };
     };
-    clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LossHoldClearOutcome"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_live_verdict_api_brokers__broker__live_verdict_get: {
         parameters: {
             query?: never;
@@ -36850,43 +31473,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlpacaLiveVerdict"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_order_groups_api_brokers__broker__order_groups_get: {
-        parameters: {
-            query?: {
-                status?: ("open" | "closed" | "all") | null;
-                limit?: number | null;
-                after_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerOrderGroup"][];
                 };
             };
             /** @description Validation Error */
@@ -37106,59 +31692,6 @@ export interface operations {
             };
         };
     };
-    allowed_timeframes_api_chart_allowed_timeframes_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AllowedTimeframesRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_chart_indicators_api_chart_available_indicators_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     chart_data_api_chart_data_post: {
         parameters: {
             query?: never;
@@ -37272,26 +31805,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_timeframes_api_chart_timeframes_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -37578,138 +32091,6 @@ export interface operations {
             };
         };
     };
-    generate_dataset_csv_api_dataset_generate_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_metadata_api_dataset_generate_metadata_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_metadata_csv_api_dataset_generate_metadata_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_zip_api_dataset_generate_zip_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     plan_dataset_api_dataset_plan_post: {
         parameters: {
             query?: never;
@@ -37763,125 +32144,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    download_validation_report_api_dataset_validation_report_download_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_download_validation_report_api_dataset_validation_report_download_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cross_asset_run_api_edge_cross_asset_run_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrossAssetRunBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cross_asset_strategies_api_edge_cross_asset_strategies_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
-    edge_score_series_api_edge_edge_score_series_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EdgeScoreBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -37961,37 +32223,6 @@ export interface operations {
             };
         };
     };
-    realized_vs_iv_coverage_api_edge_realized_vs_iv_coverage__symbol__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     realized_vs_iv_series_api_edge_realized_vs_iv_series_post: {
         parameters: {
             query?: never;
@@ -38012,138 +32243,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealizedVsIvSeriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    realized_vs_iv_signals_api_edge_realized_vs_iv_signals_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SignalsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    regimes_cluster_api_edge_regimes_cluster_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegimeClusterBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    regimes_strategy_fit_api_edge_regimes_strategy_fit_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegimeStrategyFitBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trade_sim_run_api_edge_trade_sim_run_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TradeSimRunBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -38190,48 +32289,6 @@ export interface operations {
             };
         };
     };
-    get_engine_bars_api_engine_bars_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                from_date: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                to_date: string;
-                /** @description Adjustment mode — selects the policy-keyed cache subtree */
-                adjusted?: boolean;
-                session?: "regular" | "extended";
-                /** @description Strategy timeframe unit (DataPolicy strategy_bars.timespan) */
-                timespan?: "minute" | "hour" | "day";
-                /** @description Strategy timeframe multiplier */
-                multiplier?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EngineBarsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_engine_chart_api_engine_chart_post: {
         parameters: {
             query?: never;
@@ -38252,45 +32309,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EngineChartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_data_availability_api_engine_data_availability_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                start: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                end: string;
-                /** @description Resolution to check: 'minute' (per-day zips) or 'daily' */
-                resolution?: "minute" | "daily";
-                /** @description Adjustment mode — selects the policy-keyed cache subtree */
-                adjusted?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AvailabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38350,41 +32368,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_pine_script_api_engine_strategies__name__pine_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
             };
             /** @description Validation Error */
             422: {
@@ -38490,40 +32473,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IndicatorTableResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_series_api_iv_recorder_series__ticker__get: {
-        parameters: {
-            query?: {
-                start_ms?: number | null;
-                end_ms?: number | null;
-            };
-            header?: never;
-            path: {
-                ticker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeriesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38927,40 +32876,6 @@ export interface operations {
             };
         };
     };
-    get_calendar_blocked_dates_api_lean_sidecar_calendar_blocked_dates_get: {
-        parameters: {
-            query: {
-                /** @description Inclusive start date (YYYY-MM-DD) */
-                from: string;
-                /** @description Inclusive end date (YYYY-MM-DD) */
-                to: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_calendar_next_trading_day_open_api_lean_sidecar_calendar_next_trading_day_open_get: {
         parameters: {
             query: {
@@ -38980,39 +32895,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    compare_trades_api_lean_sidecar_compare_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["_CompareRequestModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["_CompareResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -39046,230 +32928,6 @@ export interface operations {
             };
         };
     };
-    get_runs_index_api_lean_sidecar_runs_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunIndexResponseModel"];
-                };
-            };
-        };
-    };
-    post_cross_reconcile_api_lean_sidecar_runs__run_id__cross_reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrossReconcileRequestModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrossEngineReconciliationReportModel"];
-                };
-            };
-            /** @description Caller-supplied strategy class is unknown / incompatible with the cross-run contract (must accept ``symbol`` kwarg), OR the LEAN-Lab manifest is missing fields the cross-runner needs (symbol, dates, starting cash). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Run not found, or run completed but no normalized result.json / manifest.json on disk. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_log_api_lean_sidecar_runs__run_id__log_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_manifest_api_lean_sidecar_runs__run_id__manifest_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_normalized_api_lean_sidecar_runs__run_id__normalized_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observations_api_lean_sidecar_runs__run_id__observations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_reconcile_api_lean_sidecar_runs__run_id__reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReconciliationReportModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     post_trusted_run_api_lean_sidecar_trusted_runs_post: {
         parameters: {
             query?: never;
@@ -39299,77 +32957,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_dashboard_api_market_dashboard_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketDashboardResponse"];
-                };
-            };
-        };
-    };
-    get_market_holidays_api_market_holidays_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketHolidaysResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_status_api_market_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketStatusResponse"];
                 };
             };
         };
@@ -39744,35 +33331,6 @@ export interface operations {
             };
         };
     };
-    delete_backtest_run_api_research_backtest_runs__run_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch: {
         parameters: {
             query?: never;
@@ -39841,46 +33399,6 @@ export interface operations {
             };
         };
     };
-    get_documentation_api_research_documentation_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
-    list_features_api_research_features_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FeatureInfoResponse"][];
-                };
-            };
-        };
-    };
     list_golden_runs_api_research_golden_validations_get: {
         parameters: {
             query?: {
@@ -39938,76 +33456,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenValidationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_golden_run_api_research_golden_validations__golden_run_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                golden_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenValidationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                golden_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GoldenValidationApplicabilityRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenValidationApplicabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40363,99 +33811,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecencyLaunchResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_recency_launch_api_research_recency_launches__launch_id__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                launch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                launch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_recency_run_api_research_recency_runs__run_id__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyRunMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -41186,40 +34541,6 @@ export interface operations {
             };
         };
     };
-    get_trading_calendar_api_research_trading_calendar_get: {
-        parameters: {
-            query: {
-                /** @description Window start date, YYYY-MM-DD (inclusive) */
-                start: string;
-                /** @description Window end date, YYYY-MM-DD (inclusive) */
-                end: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WindowSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_walk_forward_studies_api_research_walk_forward_studies_get: {
         parameters: {
             query?: {
@@ -41631,26 +34952,6 @@ export interface operations {
             };
         };
     };
-    get_schema_api_spec_strategy_schema_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
     list_strategy_validations_api_strategy_validation_strategies_get: {
         parameters: {
             query?: never;
@@ -41924,305 +35225,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RelatedTickersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    batch_summary_api_volatility_surface_batch_summary_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BatchSummaryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BatchSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_surface_api_volatility_surface_build_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SurfaceBuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_from_csv_api_volatility_surface_build_from_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildFromCsvRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_from_ticker_api_volatility_surface_build_from_ticker_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildFromTickerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_diagnostics_api_volatility_surface__surface_id__diagnostics_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DiagnosticsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_surface_api_volatility_surface__surface_id__export__format__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-                format: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_grid_api_volatility_surface__surface_id__grid_get: {
-        parameters: {
-            query?: {
-                axis?: string;
-                n_strikes?: number;
-                /** @description Comma-separated DTE days */
-                dte_days?: string | null;
-            };
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MatrixGridResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    query_surface_api_volatility_surface__surface_id__query_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>[];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_smiles_api_volatility_surface__surface_id__smiles_get: {
-        parameters: {
-            query?: {
-                axis?: string;
-            };
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SmilesResponse"];
                 };
             };
             /** @description Validation Error */

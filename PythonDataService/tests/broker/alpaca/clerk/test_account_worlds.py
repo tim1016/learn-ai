@@ -243,25 +243,3 @@ def test_the_kind_derivation_and_the_admitted_mode_table_are_one_rule(world: str
     # A reserved namespace is still decided by its prefix in every world.
     assert authority_kind_in_world("shadow:9LIVE0001", world) == "shadow"
     assert authority_kind_in_world("sim:ema-1", world) == "synthetic"
-
-
-@pytest.mark.parametrize(("world", "expected"), [("real_live", "live-evidence:ema-live-1"), ("real_paper", "paper:ema-live-1")])
-def test_a_bindings_replay_ledger_is_read_where_the_primary_world_wrote_it(
-    monkeypatch: pytest.MonkeyPatch, world: str, expected: str
-) -> None:
-    """R13: the writer (`PrimaryAccountBindingAuthority.source_bars`) and the reader name one namespace."""
-    from app.services import run_replay_proof
-    from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-
-    monkeypatch.setattr(run_replay_proof, "primary_custody_world", lambda: world)
-    binding = BrokerBotBinding(
-        strategy_instance_id="ema-live-1",
-        broker="alpaca",
-        symbol="SPY",
-        mode="trade",
-        action_plan=alpaca_v1_action_plan("SPY"),
-        sealed_account_id="9LIVE0001",
-        run_id="ema-live-1-run-1",
-        created_at_ms=1_757_000_000_000,
-    )
-    assert run_replay_proof.ledger_account_id_for(binding) == expected

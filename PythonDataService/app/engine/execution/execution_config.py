@@ -4,8 +4,6 @@ A reusable realism layer that decouples strategy logic from broker
 simulation. Strategies stay focused on signal generation; this config
 owns slippage, commission and fill-mode selection, threaded through the
 ``/api/engine/backtest`` request into ``FillModel`` and the engine.
-``limit_penetration`` is still accepted on the request but unread since
-#2752: the engine raises ``NotImplementedError`` for any non-MARKET order.
 
 It holds no session wall-clock rule. The one rule that reads the
 session's end -- a decision on the bar that ends at the calendar's close
@@ -31,10 +29,6 @@ class ExecutionConfig:
     fill_mode: FillMode = FillMode.SIGNAL_BAR_CLOSE
     commission_per_order: Decimal = field(default_factory=lambda: Decimal("1.00"))
     slippage_per_share: Decimal = field(default_factory=lambda: Decimal(0))
-    # Unread since #2752: the resting-limit fill path was removed and the
-    # engine raises NotImplementedError for any non-MARKET order. Still
-    # accepted on the /api/engine/backtest request and recorded on runs.
-    limit_penetration: Decimal = field(default_factory=lambda: Decimal(0))
 
     def build_fill_model(self) -> FillModel:
         return FillModel(

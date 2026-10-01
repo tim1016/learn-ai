@@ -139,7 +139,6 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "limit_penetration": 0.0,
             }
         ),
         "symbol": symbol,
@@ -216,7 +215,6 @@ def lean_payload(lean_run_id: str, symbol: str = "SPY", **overrides: Any) -> dic
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "limit_penetration": 0.0,
             }
         ),
         "symbol": symbol,

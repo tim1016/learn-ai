@@ -40,7 +40,6 @@ from app.config import fleet_settings, settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
 from app.routers import (
-    account_pnl_attribution,
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
@@ -69,7 +68,6 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
-    market_monitor,
     monte_carlo,
     news,
     options,
@@ -80,14 +78,12 @@ from app.routers import (
     research_divergence,
     research_runs,
     return_distribution,
-    run_replay,
     sanitize,
     snapshot,
     spec_strategy,
     strategy,
     strategy_validation,
     tickers,
-    volatility,
     walk_forward,
     walk_forward_study,
 )
@@ -1228,7 +1224,6 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
     app.include_router(options.router, prefix="/api/options", tags=["options"])
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
-    app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
     app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
@@ -1274,18 +1269,8 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     )
     # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
     app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
-    # Trading-calendar preview — sibling endpoint under ``/api/research`` so
-    # the date-picker UI can surface skipped sessions before a run is
-    # submitted. Lives in a separate ``APIRouter`` instance from the
-    # strategy-runs router because their prefixes differ.
-    app.include_router(
-        research_runs.calendar_router,
-        prefix="/api/research",
-        tags=["research-trading-calendar"],
-    )
     app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
     app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
-    app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
     app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
     # LEAN Sidecar Lab — data-plane API in front of the launcher service.
     # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
@@ -1343,13 +1328,6 @@ if _ROLE_RUNS_CLERK:
         broker_bots.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
-# Per-run replay-parity receipts (Direction 2). Reads + recompute over live
-# broker evidence — always-on data-plane control secret, like broker_bots.
-if _ROLE_RUNS_CLERK:
-    app.include_router(
-        run_replay.router,
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
 # Broker-v2 bot control panel contracts + projections (S1 — #1297).
 # panel-profile / catalog / panel / presented-actions / chart (live + bounded
 # history). Account-scoped reads and control actions on live broker state, so
@@ -1391,7 +1369,6 @@ app.include_router(
 )
 if _ROLE_RUNS_CLERK:
     app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-    app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
 # The active-authority selector fails closed instead of falling back to JSONL.
 # PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
@@ -1425,23 +1402,6 @@ if _ROLE_RUNS_CLERK:
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
-
-# Dev-only broker fault-injection seam (PRD #1354) — gated by
-# ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered
-# routes (clients get 404); the seam ALSO refuses to arm off a paper posture.
-# Registered behind the always-on data-plane control secret like every broker
-# control route. Never enable in a live/production path.
-if settings.ALPACA_FAULT_INJECTION_ENABLED:
-    from app.routers import alpaca_fault_injection as alpaca_fault_injection_router
-
-    app.include_router(
-        alpaca_fault_injection_router.router,
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
-    logger.warning(
-        "ALPACA FAULT INJECTION seam ENABLED (dev only, paper-only). "
-        "Never enable this in a live/production path."
-    )
 
 if _FLEET_COORDINATOR_SURFACE:
     from app.routers import internal_fleet as internal_fleet_router
@@ -1520,8 +1480,8 @@ if _FLEET_COORDINATOR_SURFACE:
     app.include_router(broker_clerks.router)
 
 # The production coordinator is the browser ingress during the narrow
-# unscoped-read compatibility window.  It deliberately receives only these
-# two read aliases; no agent, generic broker router, or mutation surface is
+# unscoped-read compatibility window.  It deliberately receives only this
+# one read alias; no agent, generic broker router, or mutation surface is
 # exposed by that compatibility bridge.
 if _FLEET_ROLE == "fleet_coordinator":
     app.include_router(

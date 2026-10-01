@@ -1,6 +1,6 @@
-"""Continuous confidence formula shared by VRP gating and regime weighting.
+"""Continuous confidence formula for VRP gating.
 
-Formula: confidence = health_score * (1 - variance_contribution_synthetic), clamped to hard floor; feature_weight = max(0, 2 * health_score - 1) * (1 - vcs)
+Formula: confidence = health_score * (1 - variance_contribution_synthetic), clamped to hard floor
 Reference: Internal — docs/architecture/iv-ownership-research.md §4.7
 Canonical implementation: app/engine/edge/confidence.py
 Validated against: NONE — pending
@@ -11,8 +11,6 @@ rationale (multiplicative form, hard floor, imputed-prior policy for missing
 
 Single source of truth for "how trustworthy is this IV30, on a 0..1 scale,
 given (a) chain stability and (b) how much of the chain is synthesized."
-Both the VRP signal generator and the regime classifier call this module
-so the two production gates can never drift against each other.
 
 The confidence is multiplicative:
 
@@ -21,13 +19,6 @@ The confidence is multiplicative:
 Multiplicative because stability and trust-in-inputs are roughly independent
 failure modes — both must be high for confidence to be high. Additive
 doesn't capture this.
-
-Regime feature weight uses an extra ramp:
-
-    feature_weight = max(0, 2 * health_score - 1) * (1 - vcs)
-
-The ramp-from-0.5 means a chain at health=0.5 carries no IV-feature weight
-in the regime classifier, while VRP gating still admits some signal.
 """
 
 from __future__ import annotations
@@ -104,21 +95,3 @@ def confidence_with_explanation(
         variance_contribution_synthetic=variance_contribution_synthetic,
         reason=reason,
     )
-
-
-def regime_feature_weight(
-    *,
-    health_score: float,
-    variance_contribution_synthetic: float,
-) -> float:
-    """Step F — weight applied to IV-derived features in the regime classifier.
-
-    ``max(0, 2 * health - 1)`` ramps from 0 at ``health = 0.5`` to 1 at
-    ``health = 1.0``: chains rated "uncertain" (around the existing 0.5
-    flag threshold) drop out of regime feature contribution entirely,
-    while clean chains contribute at full weight. The synthetic-share
-    penalty applies linearly on top.
-    """
-    h = max(0.0, min(1.0, float(health_score)))
-    s = max(0.0, min(1.0, float(variance_contribution_synthetic)))
-    return max(0.0, 2.0 * h - 1.0) * (1.0 - s)

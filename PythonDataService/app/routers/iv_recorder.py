@@ -9,10 +9,6 @@ endpoint at each slot time. The endpoint is idempotent on
 ``(ticker, snapshot_ts_ms)``: a duplicate fire writes a duplicate row,
 which is acceptable for the forward-only history use case (the read
 side de-dupes on ``snapshot_ts_ms``).
-
-Read endpoint exposes the recorded series for downstream consumers
-(the realized-vs-iv route reads from this when ``iv_series`` is
-omitted — wiring is a follow-up to keep this PR scoped).
 """
 
 from __future__ import annotations
@@ -26,7 +22,6 @@ from app.services.iv_recorder import (
     SLOT_CHOICES,
     get_iv_store,
     record_iv_snapshot,
-    set_iv_store,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -34,14 +29,6 @@ router = APIRouter(prefix="/api/iv-recorder", tags=["iv-recorder"])
 logger = logging.getLogger(__name__)
 
 polygon_client = PolygonClientService()
-
-
-# ── Test hook ───────────────────────────────────────────────────────────────
-
-
-def set_store(store) -> None:
-    """Backwards-compatible test hook. Prefer ``set_iv_store`` directly."""
-    set_iv_store(store)
 
 
 # ── Models ──────────────────────────────────────────────────────────────────
@@ -72,12 +59,6 @@ class RecordedSnapshotItem(BaseModel):
 class SnapshotResponse(BaseModel):
     success: bool
     snapshot: RecordedSnapshotItem
-
-
-class SeriesResponse(BaseModel):
-    ticker: str
-    n_snapshots: int
-    snapshots: list[RecordedSnapshotItem]
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -122,34 +103,3 @@ async def take_snapshot(req: SnapshotRequest) -> SnapshotResponse:
             health_score=row.health_score,
         ),
     )
-
-
-@router.get("/series/{ticker}", response_model=SeriesResponse)
-async def read_series(
-    ticker: str, start_ms: int | None = None, end_ms: int | None = None
-) -> SeriesResponse:
-    """Read recorded snapshots for a ticker over a time window.
-
-    Both bounds are inclusive; either may be omitted to leave the
-    corresponding bound open.
-    """
-    rows = get_iv_store().read_series(ticker, start_ms=start_ms, end_ms=end_ms)
-    items = [
-        RecordedSnapshotItem(
-            ticker=r.ticker,
-            snapshot_ts_ms=r.snapshot_ts_ms,
-            slot=r.slot,
-            spot=r.spot,
-            rate=r.rate,
-            dividend_yield=r.dividend_yield,
-            rate_source=r.rate_source,
-            dividend_source=r.dividend_source,
-            iv30_vix_style=r.iv30_vix_style,
-            iv30_parametric=r.iv30_parametric,
-            iv_provenance=r.iv_provenance,
-            error=r.error,
-            health_score=r.health_score,
-        )
-        for r in rows
-    ]
-    return SeriesResponse(ticker=ticker, n_snapshots=len(items), snapshots=items)

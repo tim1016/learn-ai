@@ -69,28 +69,3 @@ async def test_run_feature_invalid_body(client: AsyncClient) -> None:
     response = await client.post("/api/research/run-feature", json={"ticker": "TEST"})
 
     assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_list_features(client: AsyncClient) -> None:
-    """GET /api/research/features should return available features."""
-    response = await client.get("/api/research/features")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 10
-    names = {f["name"] for f in data}
-    assert "5-Minute Momentum" in names
-
-
-@pytest.mark.asyncio
-async def test_get_documentation(client: AsyncClient) -> None:
-    """GET /api/research/documentation should return full docs."""
-    response = await client.get("/api/research/documentation")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "target" in data
-    assert "features" in data
-    assert "validation" in data

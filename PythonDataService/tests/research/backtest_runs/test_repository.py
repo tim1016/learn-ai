@@ -28,28 +28,6 @@ async def _insert(conn, payload: dict) -> int:
     return outcome.run_id
 
 
-async def _recency_run_for(conn, run_id: int, unique: str, *, deleted: bool = False) -> int:
-    launch_id = f"launch-{unique}"
-    await conn.execute(
-        """
-        INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
-        VALUES ($1, '{}'::jsonb, 1, 1, 0, 'COMPLETED', 1)
-        """,
-        launch_id,
-    )
-    return await conn.fetchval(
-        """
-        INSERT INTO "RecencyRuns" ("RecencyLaunchId", "StrategyKey", "Symbol", "ParamsJson", "ParamsHash", "StudyId", "TotalPnl", "CreatedAtMs", "DeletedAtMs")
-        VALUES ($1, 'sma_crossover', $2, '{}'::jsonb, 'h', $3, 0, 1, $4)
-        RETURNING "Id"
-        """,
-        launch_id,
-        unique,
-        run_id,
-        1 if deleted else None,
-    )
-
-
 async def test_an_engine_run_survives_a_write_then_read_round_trip_with_every_field(conn, unique: str) -> None:
     payload = engine_payload(symbol=unique)
 
@@ -155,36 +133,6 @@ async def test_notes_persist_and_read_back(conn, unique: str) -> None:
     assert await repo.update_notes(conn, run_id, None) is True
     assert (await repo.get_run(conn, run_id)).notes is None
     assert await repo.update_notes(conn, -1, "x") is False
-
-
-async def test_a_run_backing_a_live_recency_run_cannot_be_hard_deleted(conn, unique: str) -> None:
-    run_id = await _insert(conn, engine_payload(symbol=unique))
-    recency_run_id = await _recency_run_for(conn, run_id, unique)
-
-    assert await repo.delete_run(conn, run_id) == "recency_member"
-    assert await repo.get_run(conn, run_id) is not None
-
-    await conn.execute('UPDATE "RecencyRuns" SET "DeletedAtMs" = 1 WHERE "Id" = $1', recency_run_id)
-    assert await repo.delete_run(conn, run_id) == "deleted"
-    assert await repo.get_run(conn, run_id) is None
-    assert await conn.fetchval("SELECT count(*) FROM research_backtest_run_trades WHERE run_id = $1", run_id) == 0
-    assert await repo.delete_run(conn, run_id) == "not_found"
-
-
-async def test_deleting_the_lean_side_takes_its_parity_verdict_with_it(conn, unique: str) -> None:
-    """A terminal verdict must not outlive the evidence it was judged against (Codex, PR #1969)."""
-    group = f"pg-{unique}"
-    left = await _insert(conn, engine_payload(symbol=unique, parity_group_id=group))
-    right = await _insert(conn, lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group))
-    await repo.freeze_parity_verdict(
-        conn, parity_group_id=group, left_run_id=left, right_run_id=right, status="agree", verdict_json='{"status":"agree"}'
-    )
-    assert (await repo.get_parity_verdict(conn, group)).status == "agree"
-
-    assert await repo.delete_run(conn, right) == "deleted"
-
-    assert await repo.get_parity_verdict(conn, group) is None
-    assert not (await repo.get_run(conn, left)).parity_verdicts
 
 
 async def test_a_parity_disposition_is_recorded_once_per_group(conn, unique: str) -> None:

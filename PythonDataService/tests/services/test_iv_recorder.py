@@ -251,7 +251,7 @@ class TestRecorderRoutes:
         )
         assert resp.status_code == 400
 
-    async def test_snapshot_then_read_back(self, client, in_memory_store):
+    async def test_snapshot_route_records_a_slot(self, client, in_memory_store):
         from app.routers import iv_recorder as iv_recorder_router
 
         spot = 591.0
@@ -282,28 +282,6 @@ class TestRecorderRoutes:
             assert body["success"] is True
             assert body["snapshot"]["iv30_vix_style"] is not None
             assert body["snapshot"]["error"] is None
-
-        read_resp = await client.get("/api/iv-recorder/series/SPY")
-        assert read_resp.status_code == 200
-        data = read_resp.json()
-        assert data["n_snapshots"] == 1
-        assert data["snapshots"][0]["slot"] == "09:35"
-
-    async def test_series_window_filters(self, client, in_memory_store):
-        for ts in (100, 200, 300):
-            in_memory_store.write(
-                RecordedIvSnapshot(
-                    ticker="SPY", snapshot_ts_ms=ts, slot="09:35", spot=0.0,
-                    rate=0.0, dividend_yield=0.0,
-                    rate_source="x", dividend_source="x",
-                    iv30_vix_style=None, iv30_parametric=None,
-                    iv_provenance={}, raw_chain=[], error=None,
-                )
-            )
-        resp = await client.get("/api/iv-recorder/series/SPY", params={"start_ms": 150, "end_ms": 250})
-        body = resp.json()
-        assert body["n_snapshots"] == 1
-        assert body["snapshots"][0]["snapshot_ts_ms"] == 200
 
 
 class TestSlotChoicesContract:

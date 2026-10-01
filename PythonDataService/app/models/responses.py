@@ -289,61 +289,6 @@ class UnifiedSnapshotResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Market Monitor responses
-# ------------------------------------------------------------------
-
-
-class ExchangeStatus(BaseModel):
-    """Status of individual exchanges"""
-
-    nyse: str | None = None
-    nasdaq: str | None = None
-    otc: str | None = None
-
-
-class MarketStatusResponse(BaseModel):
-    """Current market status response"""
-
-    success: bool
-    market: str = "unknown"
-    exchanges: ExchangeStatus = ExchangeStatus()
-    early_hours: bool = False
-    after_hours: bool = False
-    server_time: str = ""
-    server_time_readable: str = "N/A"
-    error: str | None = None
-
-
-class MarketHolidayEvent(BaseModel):
-    """A single upcoming market holiday event"""
-
-    date: str | None = None
-    name: str | None = None
-    status: str | None = None
-    open: str | None = None
-    close: str | None = None
-    exchanges: list[str] = []
-
-
-class MarketHolidaysResponse(BaseModel):
-    """Upcoming market holidays response"""
-
-    success: bool
-    events: list[MarketHolidayEvent] = []
-    count: int = 0
-    error: str | None = None
-
-
-class MarketDashboardResponse(BaseModel):
-    """Combined market status + holidays for the dashboard"""
-
-    success: bool
-    status: MarketStatusResponse | None = None
-    holidays: MarketHolidaysResponse | None = None
-    error: str | None = None
-
-
-# ------------------------------------------------------------------
 # Ticker Reference responses
 # ------------------------------------------------------------------
 

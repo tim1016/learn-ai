@@ -656,62 +656,6 @@ async def review(
         return await _load_dossier(conn, golden_run)
 
 
-def assess(dossier: GoldenValidationDossier, proposed_configuration: dict[str, Any]) -> ApplicabilityReceipt:
-    """Assess one accepted record against a proposed exact configuration.
-
-    This pure boundary is reusable by Deploy without moving any matching
-    logic into a UI. Broker, custody, arming, corpus, and every other
-    operational gate remain independent of this receipt.
-    """
-    case = dossier.validation_case
-    strategy = case.get("strategy") if isinstance(case.get("strategy"), dict) else {}
-    review = dossier.latest_review
-    authorized_program_version = (
-        review.authorized_program_version
-        if review is not None and review.decision == "accept"
-        else None
-    )
-    expected = {
-        "strategy_name": strategy.get("name"),
-        "program_version": strategy.get("program_version") or authorized_program_version,
-        "symbol": case.get("symbol"),
-        "parameters": case.get("parameters"),
-        "window": case.get("window"),
-        "data_policy": case.get("data_policy"),
-        "execution": case.get("execution"),
-    }
-    mismatches = tuple(field for field, value in expected.items() if proposed_configuration.get(field) != value)
-    classification = review.classification if review is not None and review.decision == "accept" else None
-    if mismatches:
-        explanation = "The proposed configuration differs from this Golden Validation case."
-    elif review is None:
-        explanation = "This Golden Validation candidate has not been reviewed."
-    elif review.decision != "accept":
-        explanation = "The latest human review rejected this Golden Validation case."
-    elif dossier.review_is_current is not True:
-        explanation = (
-            dossier.evidence_applicability.explanation
-            if dossier.evidence_applicability.status == "affected" else
-            "Computed evidence changed after the latest human review; review the new evidence revision."
-        )
-    else:
-        explanation = (
-            "This accepted Golden Validation matches the proposed configuration exactly. "
-            "All independent Paper or Live safety gates still apply."
-        )
-    if not mismatches and dossier.review_is_current is True and dossier.evidence_applicability.status != "current":
-        explanation += " " + dossier.evidence_applicability.explanation
-    applicable = not mismatches and review is not None and review.decision == "accept" and dossier.review_is_current is True
-    return ApplicabilityReceipt(
-        golden_validation_id=dossier.golden_run.id,
-        applicable=applicable,
-        state=dossier.state,
-        classification=classification,
-        mismatched_fields=mismatches,
-        explanation=explanation,
-    )
-
-
 def assess_deployment_scope(
     dossier: GoldenValidationDossier,
     proposed_configuration: dict[str, Any],

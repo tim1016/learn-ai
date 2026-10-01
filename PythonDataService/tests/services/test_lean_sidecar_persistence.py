@@ -146,7 +146,7 @@ def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: 
     )
 
     assert json.loads(lean_payload["execution_config_json"]) == python_receipt
-    assert set(python_receipt) == {"compatibility_profile", "warmup_from_date", "slippage_per_share", "limit_penetration"}
+    assert set(python_receipt) == {"compatibility_profile", "warmup_from_date", "slippage_per_share"}
 
 
 def test_pair_skips_non_filled_events() -> None:

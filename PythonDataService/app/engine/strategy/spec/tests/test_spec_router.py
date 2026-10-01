@@ -6,7 +6,6 @@ data-source dependency is overridden with a synthetic minute-bar
 reader so tests don't need access to the LEAN data archive.
 
 Coverage:
-  * GET  /api/spec-strategy/schema returns a draft-2020-12 JSON Schema
   * GET  /api/spec-strategy/fixtures lists the canonical fixtures on disk
   * GET  /api/spec-strategy/fixtures/sma_crossover round-trips through
     StrategySpec validation
@@ -63,16 +62,6 @@ async def _client():
 # ---------------------------------------------------------------------------
 # Tests.
 # ---------------------------------------------------------------------------
-async def test_schema_endpoint() -> None:
-    async with await _client() as client:
-        resp = await client.get("/api/spec-strategy/schema")
-    assert resp.status_code == 200
-    schema = resp.json()
-    assert "$defs" in schema
-    assert "FreshCross" in schema["$defs"]
-    assert "DrawdownFromPeak" in schema["$defs"]
-
-
 async def test_fixtures_list_endpoint() -> None:
     async with await _client() as client:
         resp = await client.get("/api/spec-strategy/fixtures")
@@ -244,7 +233,6 @@ async def test_backtest_rejects_malformed_spec() -> None:
 def run_all() -> None:
     failed = False
     tests = [
-        ("schema endpoint", test_schema_endpoint),
         ("fixtures list endpoint", test_fixtures_list_endpoint),
         ("fixture detail endpoint", test_fixture_detail_endpoint),
         ("fixture detail unknown -> 404", test_fixture_detail_unknown_returns_404),

@@ -110,13 +110,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # seam: the coordinator pins broker, clerk, epoch and binding before
         # forwarding to that established handler.
         _op(
-            "activities_read",
-            "GET",
-            "/activities",
-            capability=Capability.ACCOUNT_READ,
-            agent_path="/api/brokers/alpaca/activities",
-        ),
-        _op(
             "fee_attribution_read",
             "GET",
             "/fees/attribution",
@@ -248,21 +241,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/configuration/desk-state",
             capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
-        _op(
-            "configuration_owner_read",
-            "GET",
-            "/configuration/owner",
-            capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
-        _op(
-            "configuration_owner_update",
-            "PATCH",
-            "/configuration/owner",
-            capability=Capability.CONFIGURATION_MANAGE,
-            idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
         ),
         _op(
@@ -400,13 +378,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         ),
         _op("configuration_budget_authority_read", "GET", "/configuration/budget-authority", capability=Capability.CONFIGURATION_MANAGE, readiness=_CONFIGURATION),
         _op("configuration_budget_authority_apply", "POST", "/configuration/budget-authority/apply", capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION),
-        _op(
-            "configuration_events",
-            "GET",
-            "/configuration/events",
-            capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
         # ── Bot panel family (account-scoped execution) ──────────────────
         _op(
             "bots_catalog_read",
@@ -503,14 +474,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
         ),
         _op(
-            "bot_decision_evidence",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/decision-evidence",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence",
-        ),
-        _op(
             "bot_panel_action",
             "POST",
             "/accounts/{account_id}/bots/{sid}/actions",
@@ -539,13 +502,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             drain_admission=_QUIESCE,
         ),
         _op(
-            "bot_authority_facts",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/authority-facts",
-            capability=Capability.BOT_PANEL_READ,
-            account=True,
-        ),
-        _op(
             "bot_chart_history",
             "GET",
             "/accounts/{account_id}/bots/{sid}/chart/history",
@@ -560,13 +516,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             # or the outer request expires first and discards the
             # coordinator's completed work.
             read_timeout_s=HISTORY_BATCH_OUTER_TIMEOUT_S,
-        ),
-        _op(
-            "bot_chart_live",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/chart/live",
-            capability=Capability.BOT_PANEL_READ,
-            account=True,
         ),
         _op(
             "bot_evidence",
@@ -677,36 +626,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline",
         ),
         _op(
-            "custody_bot_snapshot",
-            "GET",
-            "/accounts/{account_id}/custody/bots/{sid}/snapshot",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/snapshot"
-            ),
-        ),
-        _op(
-            "custody_bot_timeline",
-            "GET",
-            "/accounts/{account_id}/custody/bots/{sid}/timeline",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/timeline"
-            ),
-        ),
-        _op(
-            "custody_command_read",
-            "GET",
-            "/accounts/{account_id}/custody/commands/{command_id}",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}"
-            ),
-        ),
-        _op(
             "custody_runs_stop",
             "POST",
             "/accounts/{account_id}/custody/bots/{sid}/runs/stop",
@@ -717,15 +636,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/runs/stop"
             ),
             drain_admission=_QUIESCE,
-        ),
-        _op(
-            "custody_reconcile",
-            "POST",
-            "/accounts/{account_id}/custody/reconcile",
-            capability=Capability.CUSTODY_COMMAND,
-            idempotency=_DURABLE,
-            account=True,
-            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile",
         ),
         _op(
             "custody_recovery_check",
@@ -823,14 +733,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "/api/accounts/{account_id}/transactions/external-orders/"
                 "{external_order_id}/acknowledge"
             ),
-        ),
-        _op(
-            "custody_pnl_attribution",
-            "GET",
-            "/accounts/{account_id}/custody/pnl-attribution",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path="/api/accounts/{account_id}/pnl-attribution",
         ),
         # ── Manual orders family ──────────────────────────────────────────
         _op(

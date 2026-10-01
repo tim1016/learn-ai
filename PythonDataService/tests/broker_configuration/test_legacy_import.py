@@ -476,15 +476,6 @@ def test_apply_creates_a_staged_unpinned_revision(service: BrokerConfigurationSe
     assert selection.effective_profile_id is None
 
 
-def test_the_owner_is_seeded_but_never_renamed(service: BrokerConfigurationService) -> None:
-    """"Import operator identity without rewriting history"."""
-    service.rename_owner(display_label="Chosen by the operator")
-
-    receipt = _plan_and_apply(service, _live_values())
-
-    assert receipt.owner_display_label == "Chosen by the operator"
-
-
 def test_the_owner_is_created_from_the_operator_identity(
     service: BrokerConfigurationService,
 ) -> None:

@@ -9,8 +9,6 @@ and §8.1.1). Exercises:
 - The realized-vs-iv route's ``iv_source`` field across the three states:
   ``caller_supplied`` (caller wins), ``recorder`` (fallback fires),
   ``absent`` (recorder empty).
-- The regime route's silent fallback (no response field, but the recorder
-  iv30 reaches the feature builder).
 """
 
 from __future__ import annotations
@@ -192,8 +190,8 @@ class TestIvSeriesFromRecorder:
 
 class TestParseIvSeriesNullCoalescing:
     """Caller-supplied iv_series may carry ``health_score: null`` on the
-    wire (a JSON-explicit "no value"), not just an absent key. Both
-    parsers must handle explicit null without crashing on ``float(None)``,
+    wire (a JSON-explicit "no value"), not just an absent key. The
+    parser must handle explicit null without crashing on ``float(None)``,
     and both shapes (missing-key, explicit-null) must take the same
     imputed-evidence branch. CodeRabbit P1 on PR 47, refined per
     iv-research-chat-notes.md §5.3 — imputed bars now drop the health
@@ -224,26 +222,6 @@ class TestParseIvSeriesNullCoalescing:
         # Drop-health-factor branch: confidence = (1 - vcs).
         assert confidence.loc[1_000] == pytest.approx(1.0 - 0.05)
         assert confidence.loc[2_000] == pytest.approx(1.0 - 0.07)
-
-    def test_parse_iv_series_for_regime_handles_explicit_null_health(self):
-        from app.routers.edge import _parse_iv_series_for_regime
-
-        idx = pd.Index([1_000, 2_000], dtype=np.int64)
-        iv_series = [
-            {"ts": 1_000, "iv30": 0.20, "health_score": None,
-             "variance_contribution_synthetic": 0.0},
-            {"ts": 2_000, "iv30": 0.21, "health_score": None,
-             "variance_contribution_synthetic": None},
-        ]
-
-        # Must not raise — the bug was float(None) → TypeError → 500.
-        iv, weight = _parse_iv_series_for_regime(iv_series, idx)
-
-        assert iv.notna().all()
-        assert weight is not None
-        # h=0.5 → max(0, 2·0.5 − 1) = 0 → feature_weight = 0 regardless of vcs.
-        assert weight.loc[1_000] == pytest.approx(0.0)
-        assert weight.loc[2_000] == pytest.approx(0.0)
 
     def test_parse_iv_series_explicit_null_matches_missing_key(self):
         # Explicit null and missing key must produce identical confidence

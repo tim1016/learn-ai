@@ -55,44 +55,6 @@ class ReviewGoldenRunRequest(BaseModel):
         return stripped or None
 
 
-class GoldenValidationApplicabilityRequest(BaseModel):
-    strategy_name: str = Field(min_length=1, max_length=120)
-    program_version: str | None = Field(default=None, max_length=200)
-    symbol: str = Field(min_length=1, max_length=32)
-    parameters: dict[str, Any]
-    window: dict[str, Any]
-    data_policy: dict[str, Any] | None
-    execution: dict[str, Any]
-
-    @field_validator("strategy_name", "symbol")
-    @classmethod
-    def _strip_required(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("must not be blank")
-        return stripped
-
-    @field_validator("program_version")
-    @classmethod
-    def _strip_optional(cls, value: str | None) -> str | None:
-        stripped = value.strip() if value is not None else None
-        return stripped or None
-
-    def as_configuration(self) -> dict[str, Any]:
-        payload = self.model_dump()
-        payload["symbol"] = self.symbol.strip().upper()
-        return payload
-
-
-class GoldenValidationApplicabilityResponse(BaseModel):
-    golden_validation_id: int
-    applicable: bool
-    state: str
-    classification: str | None
-    mismatched_fields: list[str]
-    explanation: str
-
-
 class GoldenReviewResponse(BaseModel):
     id: int
     decision: Literal["accept", "reject"]

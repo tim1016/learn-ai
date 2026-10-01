@@ -149,8 +149,7 @@ class BacktestEngine:
         """An engine whose runs commit every staged Signal Program decision.
 
         Decision identity -- a program's golden trace root, and the reference
-        trace a live run's decisions are compared with
-        (``qualification_shadow_trace``) -- is the program's decision math with
+        trace a live run's decisions are compared with -- is the program's decision math with
         every decision committed; the live adapter's own decision stream
         (``bot_trade_strategy.strategy_evaluations``) is the same. The
         closing-bar rule (#2607) is an execution disposition applied after it,

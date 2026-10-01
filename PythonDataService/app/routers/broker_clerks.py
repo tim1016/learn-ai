@@ -51,7 +51,6 @@ from app.services.fleet_bot_history import (
     merge_bot_history,
     unknown_lane_gap,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api", tags=["broker-clerks"])
 
@@ -167,33 +166,6 @@ async def describe_broker_clerk(
             )
         )
     return JSONResponse(fields)
-
-
-# ---- Resilient directory aggregate (PRD FR-083/084) ------------------------
-
-
-@router.get(
-    "/broker-clerks/aggregate/directory",
-    dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)",
-)
-async def aggregate_broker_clerks_directory(request: Request) -> Response:
-    """The same per-lane data as ``GET /broker-clerks``, per-lane isolated.
-
-    ``directory()`` loops every registered clerk with no per-lane exception
-    isolation -- one clerk's descriptor projection throwing fails the whole
-    roster. This calls the same projection through ``aggregate_lane_reads``'s
-    provenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one
-    lane's exception is that lane's explicit ``ok: False`` entry, never an
-    omission, a substitution, or a 500 for every other lane. No local
-    ``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the
-    audit read): ``aggregate_lane_reads`` already isolates every per-lane
-    exception, so the only ``FleetControlError`` this route could ever see is
-    an uninstalled fleet service, which the coordinator's global handler
-    already answers identically to ``_refuse`` -- the same reason
-    ``list_broker_clerks`` above carries no local try either.
-    """
-    return JSONResponse(_fleet_service(request).aggregate_directory_reads())
 
 
 @router.get(
@@ -353,57 +325,6 @@ async def aggregate_broker_clerks_bot_history(
         page_size=page_size,
     )
     return JSONResponse(history.model_dump(mode="json"))
-
-
-# ---- Audit read surface (#2104) --------------------------------------------
-
-
-@router.get(
-    "/broker-clerks/audit/routing-receipts",
-    dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="Routing-receipt audit trail, since a lower bound (#2104)",
-)
-async def list_routing_receipts_audit(
-    request: Request,
-    since_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
-    clerk_id: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=500),
-    before_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
-    before_correlation_id: str | None = Query(None, min_length=1, max_length=64),
-) -> Response:
-    """Routing receipts at or after ``since_ms``, newest first.
-
-    Read-only: no idempotency key, no command envelope, no ceremony. The
-    durable audit trail (routing receipts, assignment history, session
-    history) was otherwise reachable only by opening the coordinator's
-    SQLite file by hand.
-
-    The receipt ledger covers **commands only** (ADR 0063, #2153): routed
-    streams open no receipt and a lane's own bot runner never enters the
-    coordinator, so an empty or quiet window is not evidence of lane
-    inactivity.
-
-    ``before_ms``/``before_correlation_id`` continue a previous page's keyset
-    (#2133) -- pass back a truncated page's ``next_before_ms``/
-    ``next_before_correlation_id`` verbatim to walk the full window past
-    ``limit`` instead of only ever reaching the newest page.
-    """
-    try:
-        result = _fleet_service(request).list_routing_receipts(
-            since_ms=since_ms,
-            clerk_id=clerk_id,
-            limit=limit,
-            before_ms=before_ms,
-            before_correlation_id=before_correlation_id,
-        )
-    except FleetControlError as error:
-        return _refuse(error)
-    except ValueError as exc:
-        return JSONResponse(
-            status_code=422,
-            content={"reason": "audit_query_invalid", "message": str(exc)},
-        )
-    return JSONResponse(result)
 
 
 # ---- Catalog-generated operation routes (§10.2/§10.3) ----------------------

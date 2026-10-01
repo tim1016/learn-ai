@@ -150,7 +150,7 @@ async def test_range_presets_endpoint_returns_the_resolver_output(api: FastAPI) 
         # contract (AGENTS.md hard rule on ISO-free wire).
         assert "start_date" not in preset
         assert "end_date" not in preset
-        # Same estimator /allowed-timeframes uses; a window of all full
+        # Same estimator get_allowed_timeframes uses; a window of all full
         # sessions yields exactly session_count daily bars (rth), an
         # early-close half-day one fewer.
         assert 0 < preset["estimated_bars_per_timeframe"]["1D"] <= preset["session_count"]

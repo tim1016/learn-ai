@@ -1,8 +1,8 @@
 """Compare two backtest-run trade lists and classify divergences.
 
 Pure compute function: takes two trade arrays + tolerance config, returns
-a classified divergence list. No DB access; .NET fetches trades from
-Postgres and sends them via POST /api/lean-sidecar/compare (Task 3.2).
+a classified divergence list. No DB access; the backtest-run parity
+verdict (``app.research.backtest_runs.parity``) supplies the trades.
 
 Each trade dict represents a closed round-trip:
     entry_ms_utc    int       bar-open timestamp for entry fill (int64 ms UTC)

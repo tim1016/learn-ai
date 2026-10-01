@@ -16,7 +16,7 @@ from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.schemas.broker_bots import BotProcessFact, BotStatusView
+from app.schemas.broker_bots import BotStatusView
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_v2_panel.panel_errors import (
@@ -72,21 +72,6 @@ def bot_status(broker: str, sid: str) -> BotStatusView:
         )
     try:
         return registry.status(broker, sid)
-    except BotRunnerError as exc:
-        if exc.http_status == 404:
-            raise UnknownBotError(str(exc), detail=exc.detail) from exc
-        raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
-
-
-def bot_process_fact(broker: str, sid: str) -> BotProcessFact:
-    registry = get_bot_task_registry()
-    if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
-    try:
-        return registry.process_fact(broker, sid)
     except BotRunnerError as exc:
         if exc.http_status == 404:
             raise UnknownBotError(str(exc), detail=exc.detail) from exc

@@ -20,7 +20,6 @@ from app.models.research_models import (
     DataSufficiencyResponse,
     DeflatedSharpeResponse,
     EffectiveSampleSizeResponse,
-    FeatureInfoResponse,
     FeatureStageCriterionResponse,
     FeatureStageInfoResponse,
     FeatureValidationSpecResponse,
@@ -61,13 +60,11 @@ from app.models.research_models import (
 )
 from app.research.batch_runner import run_cross_sectional_study
 from app.research.config import ResearchConfig
-from app.research.documentation.formulas import get_all_documentation
 from app.research.feature_spec import FeatureValidationSpec
 from app.research.feature_validation import (
     FeatureValidationVerdict,
     ValidationScreen,
 )
-from app.research.features.registry import get_feature_metadata, list_available_features
 from app.research.options.diagnostics import run_iv_diagnostics
 from app.research.options.iv_builder import build_iv_history
 from app.research.options_runner import run_options_feature_research
@@ -646,34 +643,6 @@ async def run_signal_engine_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Signal engine execution failed: {e}",
         )
-
-
-@router.get("/features")
-async def list_features() -> list[FeatureInfoResponse]:
-    """List all available research features with metadata."""
-    result: list[FeatureInfoResponse] = []
-    for name in list_available_features():
-        meta = get_feature_metadata(name)
-        if meta is not None:
-            result.append(
-                FeatureInfoResponse(
-                    name=meta.name,
-                    formula_latex=meta.formula_latex,
-                    variables=meta.variables,
-                    example=meta.example,
-                    interpretation=meta.interpretation,
-                    implementation_note=meta.implementation_note,
-                    window=meta.window,
-                    category=meta.category,
-                )
-            )
-    return result
-
-
-@router.get("/documentation")
-async def get_documentation() -> dict:
-    """Return complete mathematical documentation for the UI information panel."""
-    return get_all_documentation()
 
 
 @router.post("/build-iv-history", response_model=BuildIvHistoryResponse)

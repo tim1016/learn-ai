@@ -184,10 +184,3 @@ class OperatorBlocker(BaseModel):
         if self.disposition == "terminal" and self.primary_move is None and not self.secondary_moves:
             raise ValueError("terminal blocker requires at least one move")
         return self
-
-
-class DeployPreflightResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    ready: bool
-    blockers: list[OperatorBlocker]

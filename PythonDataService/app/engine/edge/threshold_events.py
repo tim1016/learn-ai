@@ -16,8 +16,6 @@ each call site so the event vocabulary stays small and greppable.
 
 Event vocabulary (keep stable; downstream dashboards key off these):
 
-- ``iv_dominance_warn`` — single-strike share crossed the warn band
-  (below the hard gate).
 - ``iv_dominance_gate`` — single-strike share triggered the hard gate
   and the IV30 was either recomputed or set to confidence=0.
 - ``confidence_floor_fired`` — confidence below the hard floor; signal
@@ -33,32 +31,6 @@ import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-def log_iv_dominance_warn(
-    *,
-    ticker: str,
-    snapshot_ts_ms: int,
-    max_share: float,
-    threshold: float,
-) -> None:
-    """Emit when ``max_single_strike_share`` enters the warn band but
-    has not yet hit the hard gate. Operator wants to see the run-up
-    before the gate fires."""
-    logger.warning(
-        "[iv-threshold] dominance_warn ticker=%s ts=%d share=%.3f threshold=%.3f",
-        ticker,
-        snapshot_ts_ms,
-        max_share,
-        threshold,
-        extra={
-            "event": "iv_dominance_warn",
-            "ticker": ticker,
-            "snapshot_ts_ms": snapshot_ts_ms,
-            "max_share": max_share,
-            "threshold": threshold,
-        },
-    )
 
 
 def log_iv_dominance_gate(

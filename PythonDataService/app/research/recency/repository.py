@@ -453,8 +453,3 @@ async def hero_candidates(
 async def set_run_deleted(conn: asyncpg.Connection, run_id: int, *, deleted: bool) -> bool:
     result = await conn.execute('UPDATE "RecencyRuns" SET "DeletedAtMs" = $2 WHERE "Id" = $1', run_id, now_ms_utc() if deleted else None)
     return result.endswith(" 1")
-
-
-async def set_launch_deleted(conn: asyncpg.Connection, launch_id: str, *, deleted: bool) -> bool:
-    result = await conn.execute('UPDATE "RecencyLaunches" SET "DeletedAtMs" = $2 WHERE "Id" = $1', launch_id, now_ms_utc() if deleted else None)
-    return result.endswith(" 1")

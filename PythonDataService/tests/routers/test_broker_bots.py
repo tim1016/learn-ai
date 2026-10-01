@@ -1,7 +1,8 @@
 """Endpoint tests for /api/brokers/{broker}/bots (S2, #1260).
 
-The Button-Rule exit is exercised end-to-end through the HTTP surface:
-deploy → running roster row → stop → OFF_DUTY roster row.
+The Button-Rule exit is exercised end-to-end through the registry:
+deploy → ON_DUTY → stop → OFF_DUTY. The unscoped roster reads were cut (#2755);
+the account-scoped current-run read is the surface that remains.
 """
 
 from __future__ import annotations
@@ -156,49 +157,21 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_unknown_broker_is_typed_404(api) -> None:
-    app, _registry = api
-    async with _client(app) as client:
-        response = await client.get("/api/brokers/ibkr/bots")
-
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["broker"] == "ibkr"
-
-
-@pytest.mark.asyncio
 async def test_deploy_stop_button_rule_end_to_end(api) -> None:
-    app, registry = api
+    _app, registry = api
     deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert deployed.running is True
     assert deployed.phase == "ON_DUTY"
     assert deployed.broker == "alpaca"
     assert deployed.symbol == "SPY"
+    assert [row.strategy_instance_id for row in registry.list_bots("alpaca")] == [_SID]
 
-    async with _client(app) as client:
-        listed = await client.get("/api/brokers/alpaca/bots")
-        assert listed.status_code == 200
-        assert [row["strategy_instance_id"] for row in listed.json()] == [_SID]
-
-        stopped = await registry.stop("alpaca", _SID, reason="drill")
-        assert stopped.running is False
-        assert stopped.phase == "OFF_DUTY"
-        assert stopped.desired_state == "STOPPED"
-        assert stopped.duty_outcome.kind == "STOPPED"
-
-        status = await client.get(f"/api/brokers/alpaca/bots/{_SID}")
-        assert status.status_code == 200
-        assert status.json()["running"] is False
-
-
-@pytest.mark.asyncio
-async def test_registry_not_installed_is_503(api) -> None:
-    app, _registry = api
-    set_bot_task_registry(None)
-    async with _client(app) as client:
-        response = await client.get("/api/brokers/alpaca/bots")
-
-    assert response.status_code == 503
+    stopped = await registry.stop("alpaca", _SID, reason="drill")
+    assert stopped.running is False
+    assert stopped.phase == "OFF_DUTY"
+    assert stopped.desired_state == "STOPPED"
+    assert stopped.duty_outcome.kind == "STOPPED"
+    assert registry.status("alpaca", _SID).running is False
 
 
 @pytest.mark.asyncio
@@ -212,9 +185,6 @@ async def test_the_current_run_is_a_lazy_read_only_view(api) -> None:
     registry._bindings.record_launch(historical, launch_reason="deploy")
 
     async with _client(app) as client:
-        current = await client.get(
-            f"/api/brokers/alpaca/bots/{_SID}/runs/current"
-        )
         scoped_current = await client.get(
             f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/current"
         )
@@ -222,10 +192,6 @@ async def test_the_current_run_is_a_lazy_read_only_view(api) -> None:
             f"/api/brokers/alpaca/accounts/account-1/bots/{_SID}/runs/current"
         )
 
-    assert current.status_code == 200
-    assert current.json()["run_id"] == historical.run_id
-    assert current.json()["process"]["state"] == "UNKNOWN"
-    assert current.json()["terminal_outcome"] is None
     assert scoped_current.status_code == 200
     assert scoped_current.json()["run_id"] == historical.run_id
     assert wrong_account_current.status_code == 404
@@ -332,33 +298,3 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
 
     assert response.status_code == 503
     await registry.stop("alpaca", _SID)
-
-
-@pytest.mark.asyncio
-async def test_run_reads_reject_an_unknown_bot(api) -> None:
-    app, registry = api
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    async with _client(app) as client:
-        missing = await client.get(
-            "/api/brokers/alpaca/bots/missing/runs/current"
-        )
-
-    assert missing.status_code == 404
-    await registry.stop("alpaca", _SID)
-
-
-def test_run_read_openapi_documents_error_envelopes(api) -> None:
-    app, _registry = api
-    paths = app.openapi()["paths"]
-    current_responses = paths[
-        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current"
-    ]["get"]["responses"]
-
-    assert current_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/BotRunReadNotFoundResponse"
-    )
-    assert current_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/BotRunReadRunnerErrorResponse"
-    )
-    # The one-run-at-a-time pager is gone: Bot history lists every run (#2574).
-    assert "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history" not in paths

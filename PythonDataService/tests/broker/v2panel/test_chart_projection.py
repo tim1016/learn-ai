@@ -32,7 +32,6 @@ from app.services.broker_v2_panel import (
     chart_projection_service,
     history_batch_walk,
     panel_chart_data_source,
-    panel_data_source,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartTimeframeError,
@@ -753,87 +752,6 @@ def test_live_window_falls_back_when_market_closed() -> None:
     open_ms, close_ms = live_window(saturday_ms)
     assert open_ms <= saturday_ms < close_ms
     assert close_ms - open_ms == 86_400_000
-
-
-async def test_live_chart_before_session_open_is_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    open_ms = _NOW + 60_000
-    close_ms = open_ms + 6 * 60 * 60_000
-
-    async def symbol_and_fills(*_args, **_kwargs):
-        return "SPY", ()
-
-    async def unexpected_resolver(**kwargs) -> ChartWindowResult:
-        pytest.fail("the range resolver must not run before the session opens")
-
-    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", symbol_and_fills)
-    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "live_window",
-        lambda now_ms: (open_ms, close_ms),
-    )
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "resolve_chart_window",
-        unexpected_resolver,
-    )
-
-    result = await panel_data_source.get_live_chart(
-        "alpaca", "paper-account", SID, resolution="5s"
-    )
-
-    assert result.trading_date_open_ms == open_ms
-    assert result.trading_date_close_ms == close_ms
-    assert result.resolution == "5s"
-    assert result.bars == []
-    assert result.fill_markers == []
-    assert result.overlay_notices == []
-
-
-async def test_live_chart_forwards_selected_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    open_ms = _NOW - 60_000
-    close_ms = _NOW + 60_000
-    captured_request: list[tuple[str, bool]] = []
-
-    async def symbol_and_fills(*_args, **_kwargs):
-        return "SPY", ()
-
-    async def resolver(**kwargs) -> ChartWindowResult:
-        captured_request.append(
-            (kwargs["timeframe"], kwargs["polygon_overlay_enabled"])
-        )
-        return ChartWindowResult(
-            bars=[], timeframe="5s", resolution="5s", feed=ChartFeedStatus(state="LIVE")
-        )
-
-    subscribed: list[str] = []
-
-    async def subscribe(symbol: str) -> None:
-        subscribed.append(symbol)
-
-    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", symbol_and_fills)
-    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "live_window",
-        lambda now_ms: (open_ms, close_ms),
-    )
-    monkeypatch.setattr(panel_chart_data_source, "resolve_chart_window", resolver)
-    monkeypatch.setattr(LIVE_BAR_AGGREGATOR, "ensure_subscribed_5s", subscribe)
-
-    result = await panel_data_source.get_live_chart(
-        "alpaca", "paper-account", SID, resolution="5s"
-    )
-
-    assert captured_request == [("5s", False)]
-    assert subscribed == ["SPY"]
-    assert result.resolution == "5s"
 
 
 async def test_live_snapshot_uses_its_captured_sqlite_fills(

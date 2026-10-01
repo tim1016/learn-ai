@@ -312,19 +312,6 @@ async def test_plan_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> N
     assert response.status_code == 422
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["start_ms_utc", "end_ms_utc"])
-async def test_generation_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> None:
-    from app.utils.session_anchors import MAX_TIMESTAMP_MS
-
-    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-        response = await client.post(
-            "/api/dataset/generate-csv",
-            json={**_RECIPE, field: MAX_TIMESTAMP_MS + 1},
-        )
-    assert response.status_code == 422
-
-
 def test_generation_numeric_window_overrides_fetch_dates() -> None:
     """Numeric bounds take per-field precedence and resolve through the one
     shared Data Lab resolver (#2457): each ms value floors to its UTC
