@@ -7,7 +7,7 @@ import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.compone
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { defaults, emaCapability, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+import { defaults, emaCapability, INCUMBENT_PARAMS, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
 function fourMonthDefaults(): GoldenSearchDefaults {
@@ -184,6 +184,24 @@ describe('GoldenSearchPlanFormComponent', () => {
       ['gap_bps', 0.5],
     ]);
     expect(sent?.knobs.some((k) => 'grid_step' in k)).toBe(false);
+  });
+
+  it('says when a searched knob starts outside its range, a knob the seed omits starting at its declared default, without refusing the plan', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ seed: { ...INCUMBENT_PARAMS, fast_period: 2 } }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const knobRow = (name: string): string => screen.getByRole('rowheader', { name: new RegExp(name, 'i') }).closest('tr')?.textContent ?? '';
+    const note = /is outside this range\. It stays the answer only if nothing in the range beats it\./;
+
+    expect(knobRow('Fast EMA length')).toMatch(/Starting value 2 is outside this range/);
+    expect(knobRow('Slow EMA length')).not.toMatch(note);
+
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '2' } });
+    fireEvent.input(screen.getByLabelText('Slow EMA length low'), { target: { value: '12' } });
+    await waitFor(() => expect(knobRow('Fast EMA length')).not.toMatch(note));
+    expect(knobRow('Slow EMA length')).toMatch(/Starting value 10 is outside this range/);
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
   });
 
   it('locks the checked plan and reports its study; a retry after no answer reuses the idempotency key', async () => {

@@ -41,7 +41,7 @@
     }
     <section class="panel" aria-labelledby="gs-knobs-title">
       <h3 id="gs-knobs-title">Choose what the search is allowed to change</h3>
-      <app-golden-search-knob-table [knobs]="d.protocol.knobs" [capability]="capability()" [method]="d.protocol.method" [problems]="d.problems" (edit)="onEdit($event)" />
+      <app-golden-search-knob-table [knobs]="d.protocol.knobs" [capability]="capability()" [method]="d.protocol.method" [problems]="d.problems" [start]="d.protocol.seed ?? d.protocol.incumbent.params" (edit)="onEdit($event)" />
       <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
     </section>
     <app-golden-search-protocol-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" [finalMonths]="d.finalMonths" (edit)="onEdit($event)" />
