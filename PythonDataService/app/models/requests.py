@@ -78,24 +78,6 @@ class StockSnapshotRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
 
 
-class TickerListRequest(BaseModel):
-    """Request schema for fetching basic info for a list of tickers"""
-
-    tickers: list[str] = Field(..., min_length=1, description="List of ticker symbols")
-
-
-class TickerDetailRequest(BaseModel):
-    """Request schema for fetching detailed overview of a single ticker"""
-
-    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
-
-
-class RelatedTickersRequest(BaseModel):
-    """Request schema for fetching related companies for a ticker"""
-
-    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
-
-
 class OptionsCompanionConfig(BaseModel):
     """Optional companion-file config emitted alongside the underlying dataset CSV.
 

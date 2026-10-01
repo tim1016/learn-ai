@@ -5530,66 +5530,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tickers/details": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Ticker Details
-         * @description Fetch detailed overview for a single stock ticker.
-         */
-        post: operations["get_ticker_details_api_tickers_details_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tickers/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Tickers
-         * @description Fetch basic reference info for a batch of stock tickers.
-         */
-        post: operations["list_tickers_api_tickers_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tickers/related": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Related Tickers
-         * @description Fetch related company tickers for a given stock.
-         */
-        post: operations["get_related_tickers_api_tickers_related_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/health": {
         parameters: {
             query?: never;
@@ -9836,9 +9776,8 @@ export interface components {
          * CrossSectionalJobRequest
          * @description Body of POST /api/jobs-internal/cross-sectional.
          *
-         *     The Frontend posts the same shape it currently sends to the GraphQL
-         *     ``runBatchOptionsResearch`` mutation, plus an injected ``job_id``
-         *     from the .NET JobsApi.
+         *     The Frontend's research request, plus an injected ``job_id`` from the
+         *     .NET JobsApi.
          */
         CrossSectionalJobRequest: {
             /** Featurename */
@@ -17339,37 +17278,6 @@ export interface components {
             kind: "regular_session";
         };
         /**
-         * RelatedTickersRequest
-         * @description Request schema for fetching related companies for a ticker
-         */
-        RelatedTickersRequest: {
-            /**
-             * Ticker
-             * @description Stock ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * RelatedTickersResponse
-         * @description Response for related companies lookup
-         */
-        RelatedTickersResponse: {
-            /** Error */
-            error?: string | null;
-            /**
-             * Related
-             * @default []
-             */
-            related?: string[];
-            /** Success */
-            success: boolean;
-            /**
-             * Ticker
-             * @default
-             */
-            ticker?: string;
-        };
-        /**
          * RemoveAction
          * @description Move: soft-delete this bot from the operator catalog.
          */
@@ -19752,133 +19660,6 @@ export interface components {
             state: "TRADABLE" | "HALTED" | "UNKNOWN" | "NOT_REPORTED";
             /** Symbol */
             symbol: string;
-        };
-        /**
-         * TickerAddress
-         * @description Company address from ticker details
-         */
-        TickerAddress: {
-            /** Address1 */
-            address1?: string | null;
-            /** City */
-            city?: string | null;
-            /** Postal Code */
-            postal_code?: string | null;
-            /** State */
-            state?: string | null;
-        };
-        /**
-         * TickerDetailRequest
-         * @description Request schema for fetching detailed overview of a single ticker
-         */
-        TickerDetailRequest: {
-            /**
-             * Ticker
-             * @description Stock ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * TickerDetailResponse
-         * @description Response for detailed ticker overview
-         */
-        TickerDetailResponse: {
-            address?: components["schemas"]["TickerAddress"] | null;
-            /** Description */
-            description?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Homepage Url */
-            homepage_url?: string | null;
-            /** List Date */
-            list_date?: string | null;
-            /** Market Cap */
-            market_cap?: number | null;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Sic Description */
-            sic_description?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Ticker
-             * @default
-             */
-            ticker?: string;
-            /** Total Employees */
-            total_employees?: number | null;
-            /** Type */
-            type?: string | null;
-            /** Weighted Shares Outstanding */
-            weighted_shares_outstanding?: number | null;
-        };
-        /**
-         * TickerInfo
-         * @description Basic ticker info from the reference API
-         */
-        TickerInfo: {
-            /**
-             * Active
-             * @default true
-             */
-            active?: boolean;
-            /** Currency Name */
-            currency_name?: string | null;
-            /**
-             * Market
-             * @default
-             */
-            market?: string;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Ticker */
-            ticker: string;
-            /**
-             * Type
-             * @default
-             */
-            type?: string;
-        };
-        /**
-         * TickerListRequest
-         * @description Request schema for fetching basic info for a list of tickers
-         */
-        TickerListRequest: {
-            /**
-             * Tickers
-             * @description List of ticker symbols
-             */
-            tickers: string[];
-        };
-        /**
-         * TickerListResponse
-         * @description Response for batch ticker info lookup
-         */
-        TickerListResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Tickers
-             * @default []
-             */
-            tickers?: components["schemas"]["TickerInfo"][];
         };
         /**
          * TimeInForce
@@ -31129,105 +30910,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SymbolCatalogEntry"][];
-                };
-            };
-        };
-    };
-    get_ticker_details_api_tickers_details_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TickerDetailRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TickerDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_tickers_api_tickers_list_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TickerListRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TickerListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_related_tickers_api_tickers_related_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RelatedTickersRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RelatedTickersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

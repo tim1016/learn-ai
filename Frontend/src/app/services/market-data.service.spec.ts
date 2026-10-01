@@ -135,40 +135,6 @@ describe('MarketDataService', () => {
     });
   });
 
-  describe('getTrackedTickers', () => {
-    it('should send tickers array variable', () => {
-      service.getTrackedTickers(['AAPL', 'MSFT']).subscribe();
-
-      const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(req.request.body.variables).toEqual({ tickers: ['AAPL', 'MSFT'] });
-      req.flush({
-        data: {
-          getTrackedTickers: { success: true, tickers: [], count: 0, error: null },
-        },
-      });
-    });
-
-    it('should map response with tickers', async () => {
-      const promise = firstValueFrom(service.getTrackedTickers(['AAPL']));
-
-      httpMock.expectOne(GRAPHQL_URL).flush({
-        data: {
-          getTrackedTickers: {
-            success: true,
-            tickers: [{ ticker: 'AAPL', name: 'Apple', market: 'stocks', type: 'CS', active: true, primaryExchange: 'XNAS', currencyName: 'usd' }],
-            count: 1,
-            error: null,
-          },
-        },
-      });
-
-      const result = await promise;
-      expect(result.success).toBe(true);
-      expect(result.tickers.length).toBe(1);
-      expect(result.tickers[0].ticker).toBe('AAPL');
-    });
-  });
-
   describe('network error handling', () => {
     it('should propagate HTTP errors', async () => {
       const promise = firstValueFrom(

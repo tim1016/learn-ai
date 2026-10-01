@@ -245,9 +245,8 @@ class LeanEngineRunJobRequest(_CamelCaseModel):
 class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     """Body of POST /api/jobs-internal/cross-sectional.
 
-    The Frontend posts the same shape it currently sends to the GraphQL
-    ``runBatchOptionsResearch`` mutation, plus an injected ``job_id``
-    from the .NET JobsApi.
+    The Frontend's research request, plus an injected ``job_id`` from the
+    .NET JobsApi.
     """
 
     job_id: str = Field(..., min_length=1)
@@ -1106,13 +1105,11 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
 
 
 def _serialize_target(target: Any) -> dict:
-    """Project a ``TargetResult`` to a JSON-friendly dict that mirrors
-    the GraphQL ``TargetMetadata`` shape the Frontend already consumes
-    via ``runFeatureResearch``. The bulky ``values``/``timestamps``
+    """Project a ``TargetResult`` to the JSON-friendly ``TargetMetadata``
+    shape the Frontend consumes. The bulky ``values``/``timestamps``
     Series are intentionally dropped — only the metadata that drives
     the UI disclosure travels with the report. ``invalid_reason_counts``
-    is emitted as a list of ``{reason, count}`` so the async path
-    matches the projection Hot Chocolate emits for the sync path.
+    is emitted as a list of ``{reason, count}``.
     """
     return {
         "target_name": target.target_name,

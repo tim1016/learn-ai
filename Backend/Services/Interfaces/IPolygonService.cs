@@ -66,27 +66,6 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Fetch basic info for a batch of stock tickers
-    /// </summary>
-    Task<TickerListResponse> FetchTickerListAsync(
-        List<string> tickers,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Fetch detailed overview for a single ticker
-    /// </summary>
-    Task<TickerDetailResponse> FetchTickerDetailsAsync(
-        string ticker,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Fetch related company tickers for a given stock
-    /// </summary>
-    Task<RelatedTickersResponse> FetchRelatedTickersAsync(
-        string ticker,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Analyze an options strategy: payoff curve, POP, EV, breakevens.
     /// Optional <paramref name="options"/> opts in to Phase 1.1 extensions
     /// (current-time curves, Greek curves, per-leg diagnostics).

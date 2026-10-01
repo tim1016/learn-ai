@@ -5,7 +5,6 @@ import { Observable } from 'rxjs';
 import {
   SmartAggregatesResult,
   OptionsChainSnapshotResult, StockSnapshotResult,
-  TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput,
   PricingCompareResult,
 } from '../graphql/types';
@@ -124,57 +123,6 @@ const GET_STOCK_SNAPSHOT_QUERY = `
 
 interface StockSnapshotResponse {
   data: { getStockSnapshot: StockSnapshotResult };
-  errors?: { message: string }[];
-}
-
-// Ticker Reference queries
-const GET_TRACKED_TICKERS_QUERY = `
-  query GetTrackedTickers($tickers: [String!]!) {
-    getTrackedTickers(tickers: $tickers) {
-      success
-      tickers {
-        ticker name market type active
-        primaryExchange currencyName
-      }
-      count
-      error
-    }
-  }
-`;
-
-interface TrackedTickersResponseGql {
-  data: { getTrackedTickers: TrackedTickersResult };
-  errors?: { message: string }[];
-}
-
-const GET_TICKER_DETAILS_QUERY = `
-  query GetTickerDetails($ticker: String!) {
-    getTickerDetails(ticker: $ticker) {
-      success ticker name description
-      marketCap homepageUrl totalEmployees
-      listDate sicDescription primaryExchange
-      type weightedSharesOutstanding
-      address { address1 city state postalCode }
-      error
-    }
-  }
-`;
-
-interface TickerDetailResponseGql {
-  data: { getTickerDetails: TickerDetailResult };
-  errors?: { message: string }[];
-}
-
-const GET_RELATED_TICKERS_QUERY = `
-  query GetRelatedTickers($ticker: String!) {
-    getRelatedTickers(ticker: $ticker) {
-      success ticker related error
-    }
-  }
-`;
-
-interface RelatedTickersResponseGql {
-  data: { getRelatedTickers: RelatedTickersResult };
   errors?: { message: string }[];
 }
 
@@ -363,54 +311,6 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getStockSnapshot)
-      );
-  }
-
-  getTrackedTickers(tickers: string[]): Observable<TrackedTickersResult> {
-    return this.http
-      .post<TrackedTickersResponseGql>(GRAPHQL_URL, {
-        query: GET_TRACKED_TICKERS_QUERY,
-        variables: { tickers }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getTrackedTickers)
-      );
-  }
-
-  getTickerDetails(ticker: string): Observable<TickerDetailResult> {
-    return this.http
-      .post<TickerDetailResponseGql>(GRAPHQL_URL, {
-        query: GET_TICKER_DETAILS_QUERY,
-        variables: { ticker }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getTickerDetails)
-      );
-  }
-
-  getRelatedTickers(ticker: string): Observable<RelatedTickersResult> {
-    return this.http
-      .post<RelatedTickersResponseGql>(GRAPHQL_URL, {
-        query: GET_RELATED_TICKERS_QUERY,
-        variables: { ticker }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getRelatedTickers)
       );
   }
 

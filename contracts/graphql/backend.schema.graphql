@@ -283,9 +283,6 @@ type Query {
   getOptionsChainSnapshot(underlyingTicker: String! expirationDate: String): OptionsChainSnapshotResult! @cost(weight: "10")
   getStockSnapshot(ticker: String!): StockSnapshotResult! @cost(weight: "10")
   analyzeOptionsStrategy(symbol: String! legs: [StrategyLegInput!]! expirationDate: String! spotPrice: Decimal! riskFreeRate: Decimal! = 0.043 includeCurrentCurve: Boolean! = false includeGreekCurves: Boolean! = false includeLegDiagnostics: Boolean! = false whatIfTimeShiftDays: Decimal! = 0 whatIfIvShift: Decimal! = 0): StrategyAnalyzeResult! @cost(weight: "10")
-  getTrackedTickers(tickers: [String!]!): TrackedTickersResult! @cost(weight: "10")
-  getTickerDetails(ticker: String!): TickerDetailResult! @cost(weight: "10")
-  getRelatedTickers(ticker: String!): RelatedTickersResult! @cost(weight: "10")
   getResearchExperiments(ticker: String!): [ResearchExperimentType!]! @cost(weight: "10")
   getSignalExperiments(ticker: String!): [SignalExperimentType!]! @cost(weight: "10")
   getSignalExperimentReport(id: Int!): SignalEngineResultType @cost(weight: "10")
@@ -306,13 +303,6 @@ type RegimeBucketType {
 type RegimeCoverageEntryType {
   regime: String!
   count: Int!
-}
-
-type RelatedTickersResult {
-  success: Boolean!
-  ticker: String!
-  related: [String!]!
-  error: String
 }
 
 type ResearchExperimentType {
@@ -525,47 +515,6 @@ type StrategyGreeksResult {
 type ThresholdSharpeEntryType {
   threshold: Float!
   sharpe: Float!
-}
-
-type TickerAddressResult {
-  address1: String
-  city: String
-  state: String
-  postalCode: String
-}
-
-type TickerDetailResult {
-  success: Boolean!
-  ticker: String!
-  name: String!
-  description: String
-  marketCap: Float
-  homepageUrl: String
-  totalEmployees: Int
-  listDate: String
-  sicDescription: String
-  primaryExchange: String
-  type: String
-  weightedSharesOutstanding: Float
-  address: TickerAddressResult
-  error: String
-}
-
-type TickerInfoResult {
-  ticker: String!
-  name: String!
-  market: String!
-  type: String!
-  active: Boolean!
-  primaryExchange: String
-  currencyName: String
-}
-
-type TrackedTickersResult {
-  success: Boolean!
-  tickers: [TickerInfoResult!]!
-  count: Int!
-  error: String
 }
 
 type WalkForwardResultType {

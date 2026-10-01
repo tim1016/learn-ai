@@ -42,7 +42,6 @@ NEVER_GRANTED_TABLES = frozenset(
         "PortfolioSnapshots",
         "PortfolioTrades",
         "RiskRules",
-        "ReferenceData",
         "Tickers",
         "clerk_transactions",
         "clerk_transaction_events",

@@ -177,69 +177,6 @@ class StockSnapshotResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Ticker Reference responses
-# ------------------------------------------------------------------
-
-
-class TickerInfo(BaseModel):
-    """Basic ticker info from the reference API"""
-
-    ticker: str
-    name: str = ""
-    market: str = ""
-    type: str = ""
-    active: bool = True
-    primary_exchange: str | None = None
-    currency_name: str | None = None
-
-
-class TickerListResponse(BaseModel):
-    """Response for batch ticker info lookup"""
-
-    success: bool
-    tickers: list[TickerInfo] = []
-    count: int = 0
-    error: str | None = None
-
-
-class TickerAddress(BaseModel):
-    """Company address from ticker details"""
-
-    address1: str | None = None
-    city: str | None = None
-    state: str | None = None
-    postal_code: str | None = None
-
-
-class TickerDetailResponse(BaseModel):
-    """Response for detailed ticker overview"""
-
-    success: bool
-    ticker: str = ""
-    name: str = ""
-    description: str | None = None
-    market_cap: float | None = None
-    homepage_url: str | None = None
-    total_employees: int | None = None
-    list_date: str | None = None
-    sic_description: str | None = None
-    primary_exchange: str | None = None
-    type: str | None = None
-    weighted_shares_outstanding: float | None = None
-    address: TickerAddress | None = None
-    error: str | None = None
-
-
-class RelatedTickersResponse(BaseModel):
-    """Response for related companies lookup"""
-
-    success: bool
-    ticker: str = ""
-    related: list[str] = []
-    error: str | None = None
-
-
-# ------------------------------------------------------------------
 # Indicator Table responses (TradingView-style)
 # ------------------------------------------------------------------
 

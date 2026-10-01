@@ -1,13 +1,7 @@
-"""Pydantic models for portfolio scenario / live-Greeks endpoints.
-
-These models implement Phase 2 of `docs/architecture/numerical-authority-migration-plan.md`:
-move portfolio scenario / live-Greeks math out of `.NET` and into Python.
-The `.NET` services become passthroughs (Phase 2.2); this is the canonical
-shape they will call.
+"""Pydantic models for `portfolio_scenario.evaluate_scenario`.
 
 Design notes:
-- Each position is self-describing. The Python service does not load from
-  the .NET DB; the caller (`.NET`) projects DB state into these models.
+- Each position is self-describing; the caller supplies every field.
 - Stocks are represented as positions with `instrument="stock"` and no
   option fields. They contribute `delta=1, gamma=0, theta=0, vega=0` to
   scenario aggregates, computed from `quantity * spot_change`.
