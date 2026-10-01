@@ -18,8 +18,8 @@ purpose.** Contract §3 says a slot outside the allowlist is refused with
 *shape* of that allowlist is ADR 0060 open question 2, unanswered, and package
 C's fork to make. So a slot arrives here as an opaque string and is stored as
 one; the refusal it will produce is declared in ``errors.py``
-(``CredentialSlotUnknown``, ``CredentialSlotUnavailable``) as shared vocabulary
-for C to raise, not left for C to invent. What this package guarantees is
+(``CredentialSlotUnknown``) as shared vocabulary for C to raise, not left for C
+to invent. What this package guarantees is
 narrower and checkable: **it performs no environment lookup at all**, so a slot
 name it stores cannot reach one.
 

@@ -93,13 +93,6 @@ class CredentialSlotUnknown(BrokerConfigurationError):
     status_code: ClassVar[int] = 422
 
 
-class CredentialSlotUnavailable(BrokerConfigurationError):
-    """Also raised by the slot resolver, for the same reason as above."""
-
-    reason: ClassVar[str] = "credential_slot_unavailable"
-    status_code: ClassVar[int] = 409
-
-
 class AccountVerificationFailed(BrokerConfigurationError):
     reason: ClassVar[str] = "account_verification_failed"
     status_code: ClassVar[int] = 409
@@ -158,7 +151,6 @@ __all__ = [
     "AccountPinMismatch",
     "AccountVerificationFailed",
     "BrokerConfigurationError",
-    "CredentialSlotUnavailable",
     "CredentialSlotUnknown",
     "DisplayNameConflict",
     "InvalidLiveEnvelope",

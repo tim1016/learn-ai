@@ -14,11 +14,6 @@ import re
 import secrets
 
 _CLERK_ID = re.compile(r"^clrk_[0-9a-f]{24}$")
-_VOLUME_ID = re.compile(r"^vol_[0-9a-f]{24}$")
-_WORKER_KEY = re.compile(r"^wkrk_[0-9a-f]{32}$")
-_AGENT_INSTANCE_ID = re.compile(r"^agnt_[0-9a-f]{24}$")
-_CORRELATION_ID = re.compile(r"^corr_[0-9a-f]{24}$")
-_SERVICE_TOKEN = re.compile(r"^svct_[0-9a-f]{32}$")
 
 
 def new_clerk_id() -> str:
@@ -68,38 +63,8 @@ def is_clerk_id(value: object) -> bool:
     return isinstance(value, str) and _CLERK_ID.fullmatch(value) is not None
 
 
-def is_volume_id(value: object) -> bool:
-    """Whether the value is a well-formed opaque volume identity."""
-    return isinstance(value, str) and _VOLUME_ID.fullmatch(value) is not None
-
-
-def is_worker_key(value: object) -> bool:
-    """Whether the value is a well-formed opaque worker key."""
-    return isinstance(value, str) and _WORKER_KEY.fullmatch(value) is not None
-
-
-def is_agent_instance_id(value: object) -> bool:
-    """Whether the value is a well-formed agent instance identity."""
-    return isinstance(value, str) and _AGENT_INSTANCE_ID.fullmatch(value) is not None
-
-
-def is_correlation_id(value: object) -> bool:
-    """Whether the value is a well-formed correlation identity."""
-    return isinstance(value, str) and _CORRELATION_ID.fullmatch(value) is not None
-
-
-def is_service_token(value: object) -> bool:
-    """Whether the value is a well-formed internal service token."""
-    return isinstance(value, str) and _SERVICE_TOKEN.fullmatch(value) is not None
-
-
 __all__ = [
-    "is_agent_instance_id",
     "is_clerk_id",
-    "is_correlation_id",
-    "is_service_token",
-    "is_volume_id",
-    "is_worker_key",
     "new_agent_instance_id",
     "new_clerk_id",
     "new_correlation_id",

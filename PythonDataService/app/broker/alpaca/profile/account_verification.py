@@ -11,8 +11,8 @@ The pin rules, which exist to keep two different operations from being confused
 for one another:
 
 - **A pin is only ever set by explicit selection of an observed account.**
-  :func:`pin_observed_account` refuses an account the verification did not
-  observe, so nobody types an account ID and no discovery result auto-pins.
+  The pin path refuses an account the verification did not observe, so nobody
+  types an account ID and no discovery result auto-pins.
 - **Rotating a secret for the same account is a reconnection**, not a re-pin.
   :func:`reverify_pinned_account` confirms the pin and returns the observation;
   it has no way to return a *different* pin, because on its success path the
@@ -112,15 +112,6 @@ class AccountVerification:
             raise ValueError("an account verification carries at least one candidate")
 
 
-@dataclass(frozen=True)
-class AccountPin:
-    """An explicitly selected observed account, bound to the mode it was seen under."""
-
-    account_id: str
-    endpoint_mode: EndpointMode
-    pinned_at_ms: int
-
-
 def _observed_from_snapshot(snapshot: BrokerAccountSnapshot) -> ObservedAccount:
     return ObservedAccount(
         account_id=snapshot.account_id,
@@ -191,47 +182,6 @@ def _require_fresh(verification: AccountVerification, *, now_ms: int) -> None:
         )
 
 
-def pin_observed_account(
-    verification: AccountVerification,
-    *,
-    selected_account_id: str,
-    existing_pin: str | None = None,
-    now_ms: int | None = None,
-) -> AccountPin:
-    """Pin one explicitly selected observed account.
-
-    ``existing_pin`` is the revision's current pin, if it has one. Selecting a
-    *different* account is an account change, which the contract routes through
-    a new revision and fresh account approval — so it is refused here as
-    ``account_pin_mismatch`` and the caller's pin stays as it was. Re-selecting
-    the account already pinned is idempotent and re-stamps the pin.
-
-    Refuses a stale verification: a pin is recorded against an observation the
-    operator is actually looking at, not one from an hour ago.
-    """
-    pinned_at_ms = now_ms if now_ms is not None else now_ms_utc()
-    _require_fresh(verification, now_ms=pinned_at_ms)
-
-    observed_ids = {candidate.account_id for candidate in verification.candidates}
-    if selected_account_id not in observed_ids:
-        raise AccountVerificationFailed.not_observed(selected_account_id=selected_account_id)
-
-    if existing_pin is not None and existing_pin != selected_account_id:
-        raise AccountPinMismatch.on_selection(
-            pinned_account_id=existing_pin,
-            selected_account_id=selected_account_id,
-        )
-
-    return AccountPin(
-        account_id=selected_account_id,
-        endpoint_mode=verification.endpoint_mode,
-        # When the pin was recorded, not when the account was seen. Two pins
-        # minted from one observation are two events (contract §2.3's
-        # ``account_pinned_at_ms``).
-        pinned_at_ms=pinned_at_ms,
-    )
-
-
 def reverify_pinned_account(
     verification: AccountVerification,
     *,
@@ -266,10 +216,8 @@ def reverify_pinned_account(
 __all__ = [
     "ACCOUNT_VERIFICATION_MAX_AGE_MS",
     "AccountDiscoveryPort",
-    "AccountPin",
     "AccountVerification",
     "ObservedAccount",
-    "pin_observed_account",
     "reverify_pinned_account",
     "verify_account",
 ]
