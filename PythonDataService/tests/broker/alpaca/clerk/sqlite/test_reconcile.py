@@ -286,9 +286,9 @@ class _FakeRead:
         return self._positions
 
     async def read_activity_evidence(
-        self, *, page_token: str | None = None, after_ms: int | None = None
+        self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None
     ) -> BrokerActivityEvidence:
-        del page_token, after_ms
+        del page_token, after_ms, activity_type
         if self._error is not None:
             raise self._error
         return BrokerActivityEvidence(activities=[], history_complete=True)

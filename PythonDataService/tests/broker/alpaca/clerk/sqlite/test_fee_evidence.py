@@ -967,6 +967,37 @@ async def test_guard_passes_a_windowed_evidence_read_through_unchanged() -> None
     assert inner.calls == [("older", NOON)]
 
 
+async def test_guard_reads_one_activity_type_through_the_walk_and_its_fallback_alike() -> None:
+    from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.contract.models import BrokerActivityEvidence
+
+    class Paged:
+        def __init__(self) -> None:
+            self.activity_types: list[str | None] = []
+
+        async def read_activity_evidence(
+            self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None
+        ):
+            self.activity_types.append(activity_type)
+            return BrokerActivityEvidence(activities=[], history_complete=True)
+
+    class NewestOnly:
+        def __init__(self) -> None:
+            self.activity_types: list[str | None] = []
+
+        async def list_activities(
+            self, *, after_ms: int | None = None, limit: int = 100, activity_type: str | None = None
+        ) -> list[BrokerActivity]:
+            self.activity_types.append(activity_type)
+            return []
+
+    for inner in (Paged(), NewestOnly()):
+        guarded = guard_broker_read_port(inner, intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+        await guarded.read_activity_evidence(after_ms=NOON, activity_type="FILL")
+        assert inner.activity_types == ["FILL"]
+
+
 def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:
     record_fee_evidence(day_pnl_repo, [], checked_at_ms=NOON + 1, history_complete=True)
     result = day_pnl_repo.fee_attribution(now_ms=NOON)

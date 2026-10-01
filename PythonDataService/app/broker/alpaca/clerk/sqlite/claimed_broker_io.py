@@ -143,9 +143,14 @@ class ClaimedBrokerIO:
         return observed
 
     async def observe_activity_evidence(
-        self, read: BrokerActivityEvidencePort, *, after_ms: int, page_token: str | None = None
+        self,
+        read: BrokerActivityEvidencePort,
+        *,
+        after_ms: int,
+        activity_type: str,
+        page_token: str | None = None,
     ) -> BrokerActivityEvidence | BrokerError:
-        """One bounded read of the account's activity since ``after_ms``, or a value-domain error (#2686).
+        """One bounded read of the account's ``activity_type`` rows since ``after_ms``, or a value-domain error (#2686).
 
         Read under the claim like every other broker contact of a resolution,
         with :meth:`observe_broker_order`'s shape, so a failed read is the
@@ -155,7 +160,9 @@ class ClaimedBrokerIO:
         """
         self._renew()
         try:
-            evidence = await read.read_activity_evidence(page_token=page_token, after_ms=after_ms)
+            evidence = await read.read_activity_evidence(
+                page_token=page_token, after_ms=after_ms, activity_type=activity_type
+            )
         except BrokerError as exc:
             self._renew()
             return exc

@@ -24,13 +24,18 @@ from collections.abc import Callable
 
 import pytest
 
+from app.broker.alpaca.adapter import et_date_to_ms
 from app.broker.alpaca.broker import _ACTIVITY_MAX_PAGES, AlpacaBroker
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import manual_order_executions
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.manual_order_executions import ACTIVITY_READS_PER_WALK
+from app.broker.alpaca.clerk.sqlite.manual_order_executions import (
+    ACTIVITY_READS_PER_WALK,
+    BEYOND_REACH_REWALK_INTERVAL_MS,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -41,6 +46,8 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import _opt_ms_to_rfc3339
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderEvent
+from app.utils.session_anchors import et_date_at_ms
+from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_manual_order_replaced_at_alpaca import (
     _B,
     _C,
@@ -97,6 +104,14 @@ class _ActivityFeed:
             "leaves_qty": "0", "order_id": order_id, "cum_qty": str(quantity), "order_status": "filled",
         }))
 
+    def dividend(self, *, number: int, on_ms: int) -> None:
+        """Alpaca posts a dividend: a non-trade row, dated by its ET day alone."""
+        day = et_date_at_ms(on_ms).isoformat()
+        self.rows.append((et_date_to_ms(day), {
+            "id": f"{day.replace('-', '')}000000000::{uuid.UUID(int=0xD0_000 + number)}", "activity_type": "DIV",
+            "date": day, "net_amount": "1.25", "symbol": "QQQ", "qty": "1", "per_share_amount": "1.25",
+        }))
+
     async def list_activities(
         self, *, limit: int, page_token: str | None = None, activity_type: str | None = None
     ) -> list[dict[str, str]]:
@@ -120,9 +135,11 @@ class _AlpacaAccount(_FakeRead):
         self._activity = AlpacaBroker(client=feed)  # type: ignore[arg-type]
 
     async def read_activity_evidence(
-        self, *, page_token: str | None = None, after_ms: int | None = None
+        self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None
     ) -> BrokerActivityEvidence:
-        return await self._activity.read_activity_evidence(page_token=page_token, after_ms=after_ms)
+        return await self._activity.read_activity_evidence(
+            page_token=page_token, after_ms=after_ms, activity_type=activity_type
+        )
 
 
 class _PostsWhenRead(_Website):
@@ -553,6 +570,57 @@ async def test_a_chain_head_filled_after_the_first_activity_read_ends_the_leg_in
     assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
 
 
+async def test_a_former_members_answer_never_judges_the_chain_against_its_own_smaller_quantity(
+    clocked_repo,  # noqa: F811
+) -> None:
+    """A asks for 5 and fills 2; the owner's edit books B for 10, which fills the other 8.
+
+    The first pass cannot read the activity but records the A-to-B link. On
+    the next, Alpaca still answers for A under our client id. A's answer is a
+    former member's: it records nothing, so the chain's 10 shares are never
+    judged against A's 5 -- that would raise a false coverage conflict and
+    block trading. B's answer records the chain against B's 10 and ends the
+    leg, crediting each execution once.
+    """
+    repo, clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    now = repo.clock()
+    a_partial = website.orders[order_ref].model_copy(update={
+        "status": "partially_filled", "filled_quantity": 2, "filled_avg_price": 99.90,
+        "updated_at_ms": now, "observed_at_ms": now,
+    })
+    website.orders[order_ref] = a_partial
+    _replaced_a, replacement_b = _replace_at_alpaca(repo, website, order_ref, quantity=10)
+    feed = _ActivityFeed()
+    feed.unavailable = True
+
+    await _sweep(repo, website, feed, spy_held=2.0)
+
+    assert repo.order(order_ref).broker_order_id == _B, "the first pass must record the replacement link"
+    assert repo.effect_operation(effect_id).state == "in_progress"
+
+    feed.unavailable = False
+    feed.fill(execution_id=_EXEC_A, order_id=a_partial.order_id, quantity=2, price=99.90, at_ms=now)
+    feed.fill(execution_id=_EXEC_B, order_id=_B, quantity=8, price=99.80, at_ms=now + 1)
+    website.replacements[_B] = _filled(replacement_b, repo, filled_quantity=8, avg=99.80)
+    clock.value += 15_000
+    result = await _sweep(repo, website, feed, spy_held=10.0)
+
+    assert _coverage_conflict_episodes(repo) == [], "a former member's quantity must never fence the chain"
+    effect = repo.effect_operation(effect_id)
+    assert effect is not None and effect.state == "succeeded"
+    assert [t["transition_kind"] for t in _manual_endings(repo, order_ref)] == ["MANUAL_ORDER_FILLED"]
+    assert _exact_credited(repo, order_ref) == [
+        (_EXEC_A, "activity_recovery", 2.0, 99.90),
+        (_EXEC_B, "activity_recovery", 8.0, 99.80),
+    ]
+    assert repo.effective_fill_totals_for_order(order_ref)[0] == pytest.approx(10.0, abs=1e-9, rel=0)
+    assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 10.0}, abs=1e-9, rel=0)
+    assert result.verdict == "clean"
+
+
 # ── A wrong activity-to-execution id bridge fails closed ─────────────────────
 
 
@@ -592,6 +660,13 @@ async def test_an_activity_naming_a_recorded_execution_under_another_id_raises_a
     await _sweep(repo, website, feed, spy_held=5.0)
 
     assert _coverage_conflict_episodes(repo) == ["active"]
+    conflict = repo._conn.execute(
+        "SELECT headline FROM uncertainties WHERE reason_code = ? AND resolved_at_ms IS NULL",
+        (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+    ).fetchone()
+    assert conflict["headline"] == ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY.headline, (
+        "the recovery's quantity guard raised it, so its copy sends the operator to Alpaca"
+    )
     assert _exact_credited(repo, order_ref) == [(_EXEC_1, "websocket", 2.0, 99.90)]
     assert repo.effective_fill_totals_for_order(order_ref)[0] == pytest.approx(5.0, abs=1e-9, rel=0)
     assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
@@ -632,17 +707,16 @@ async def test_the_activity_walk_stops_once_it_proves_the_window_start(
     assert feed.pages_read == 2
 
 
-async def test_a_leg_whose_execution_lies_beyond_one_passs_activity_walk_is_reported_every_pass(
-    clocked_repo, caplog: pytest.LogCaptureFixture,  # noqa: F811
+async def test_the_activity_walk_reads_fills_only_so_other_activity_never_pushes_an_execution_out_of_reach(
+    clocked_repo,  # noqa: F811
 ) -> None:
-    """More newer activity rows than one pass walks push the leg's only execution out of reach.
+    """More newer dividend rows than one walk reads lie above the leg's only execution.
 
-    The walk stops short of the window's start and every later pass starts
-    from the newest row again, so the leg stays outstanding on its REST
-    cumulative. The pass says so, naming the order, instead of leaving it
-    silently outstanding.
+    The walk asks Alpaca for the account's FILL activity alone, so none of
+    them takes a read's room: the first page holds the execution, and the
+    leg ends on it.
     """
-    repo, clock = clocked_repo
+    repo, _clock = clocked_repo
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
@@ -651,25 +725,78 @@ async def test_a_leg_whose_execution_lies_beyond_one_passs_activity_walk_is_repo
     feed = _ActivityFeed()
     now = repo.clock()
     feed.fill(execution_id=_EXEC_1, order_id=original.order_id, quantity=5, price=99.90, at_ms=now)
-    rows_one_walk_reads = ACTIVITY_READS_PER_WALK * _ACTIVITY_MAX_PAGES * 100
-    for number in range(rows_one_walk_reads):
+    for number in range(ACTIVITY_READS_PER_WALK * _ACTIVITY_MAX_PAGES * 100):
+        feed.dividend(number=number, on_ms=now + 86_400_000)
+
+    await _sweep(repo, website, feed, spy_held=5.0)
+
+    assert repo.effect_operation(effect_id).state == "succeeded"
+    assert _credited(repo, order_ref) == [(_EXEC_1, "activity_recovery", 5.0, 99.90)]
+    assert feed.pages_read == 1
+
+
+@pytest.mark.parametrize("walked_again_once", ["its_answer_changes", "the_interval_passes"])
+async def test_a_leg_whose_execution_lies_beyond_one_walk_is_not_walked_again_for_the_same_answer(
+    clocked_repo, caplog: pytest.LogCaptureFixture, walked_again_once: str,  # noqa: F811
+) -> None:
+    """More newer fills than one walk reads push the leg's only execution out of reach.
+
+    The walk stops short of the window's start, and the pass says so, naming
+    the order. Every walk starts from the newest row again, so the next pass
+    would spend the same reads for the same answer: it reads nothing and says
+    the walk is deferred. The leg is walked again once its head's answer
+    changes, or once the re-walk interval has passed, and stays outstanding
+    on its REST cumulative throughout.
+    """
+    repo, clock = clocked_repo
+    website = _Website(repo=repo)
+    manual = await _buy_limit(repo, website)
+    order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
+    original = website.orders[order_ref]
+    now = repo.clock()
+    website.orders[order_ref] = original.model_copy(update={
+        "status": "partially_filled", "filled_quantity": 3, "filled_avg_price": 99.90,
+        "updated_at_ms": now, "observed_at_ms": now,
+    })
+    feed = _ActivityFeed()
+    feed.fill(execution_id=_EXEC_1, order_id=original.order_id, quantity=3, price=99.90, at_ms=now)
+    pages_one_walk_reads = ACTIVITY_READS_PER_WALK * _ACTIVITY_MAX_PAGES
+    for number in range(pages_one_walk_reads * 100):
         feed.fill(
             execution_id=str(uuid.UUID(int=0x10_000 + number)), order_id=_FOREIGN_ORDER,
             quantity=1, price=400.0, at_ms=now + 1 + number, symbol="QQQ",
         )
 
-    with caplog.at_level(logging.WARNING, logger=manual_order_executions.__name__):
-        await _sweep(repo, website, feed, spy_held=5.0)
-        clock.value += 15_000
-        await _sweep(repo, website, feed, spy_held=5.0)
+    def _logged(action: str) -> list[tuple[str, str]]:
+        return [
+            (record.order_ref, record.broker_order_id)
+            for record in caplog.records
+            if getattr(record, "action", None) == action
+        ]
 
+    with caplog.at_level(logging.INFO, logger=manual_order_executions.__name__):
+        await _sweep(repo, website, feed, spy_held=3.0)
+
+        assert feed.pages_read == pages_one_walk_reads
+        assert _logged("manual_order_executions_beyond_reach") == [(order_ref, original.order_id)]
+
+        clock.value += 15_000
+        await _sweep(repo, website, feed, spy_held=3.0)
+
+        assert feed.pages_read == pages_one_walk_reads, "the next pass must not walk the same answer again"
+        assert _logged("manual_order_executions_walk_deferred") == [(order_ref, original.order_id)]
+        assert _logged("manual_order_executions_beyond_reach") == [(order_ref, original.order_id)]
+
+        held = 3.0
+        if walked_again_once == "its_answer_changes":
+            website.orders[order_ref] = _filled(original, repo, filled_quantity=5, avg=99.88)
+            held = 5.0
+            clock.value += 15_000
+        else:
+            _walk_clock_to(repo, clock.value + BEYOND_REACH_REWALK_INTERVAL_MS)
+        await _sweep(repo, website, feed, spy_held=held)
+
+    assert feed.pages_read == 2 * pages_one_walk_reads
+    assert _logged("manual_order_executions_beyond_reach") == [(order_ref, original.order_id)] * 2
     assert repo.effect_operation(effect_id).state == "in_progress"
     assert _exact_credited(repo, order_ref) == []
-    beyond_reach = [
-        record for record in caplog.records
-        if getattr(record, "action", None) == "manual_order_executions_beyond_reach"
-    ]
-    assert [(record.order_ref, record.broker_order_id) for record in beyond_reach] == [
-        (order_ref, original.order_id),
-        (order_ref, original.order_id),
-    ]
