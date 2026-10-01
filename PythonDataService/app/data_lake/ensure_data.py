@@ -93,6 +93,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
     classify_overall_status,
 )
+from app.engine.live.identity import confine_path_to_root
 
 logger = logging.getLogger(__name__)
 
@@ -1746,9 +1747,10 @@ def _publish_action_snapshot(spec: DataRunSpec, symbol: str, snapshot: Corporate
     payload = snapshot.payload()
     current_path = current_snapshot_path(symbol)
     history_path = current_path.parent / symbol.lower() / f"{snapshot.version}.json"
-    if not (lake_root / history_path).exists():
+    if not confine_path_to_root(lake_root / history_path, lake_root, label="adjustment history").exists():
         atomic_write_and_promote(payload, lake_root, staging_root, history_path, spec.request_id, _WORKER_ID, 1)
-    if (lake_root / current_path).exists() and (lake_root / current_path).read_bytes() == payload:
+    current_file = confine_path_to_root(lake_root / current_path, lake_root, label="adjustment snapshot")
+    if current_file.exists() and current_file.read_bytes() == payload:
         return
     atomic_write_and_promote(payload, lake_root, staging_root, current_path, spec.request_id, _WORKER_ID, 1)
 

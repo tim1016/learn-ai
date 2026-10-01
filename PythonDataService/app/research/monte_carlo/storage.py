@@ -118,21 +118,20 @@ def list_monte_carlos(
         limit=None,
     )
 
-    # Reuse the descriptor's filename and the store's path
-    # construction so we don't duplicate them here.
-    base = store._base()  # thin delegator over our own store; private access is intentional
-
     out: list[MonteCarloConfig] = []
     for mc_id in ids:
-        config_path = base / mc_id / MONTE_CARLO_ARTIFACT.config_filename
         try:
+            # Reuse the store's confined path construction (private
+            # access is intentional) and the descriptor's filename so
+            # we don't duplicate them here.
+            config_path = store._artifact_dir(mc_id) / MONTE_CARLO_ARTIFACT.config_filename
             config = MonteCarloConfig.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except Exception as exc:
             logger.warning(
-                "[MC] skipping corrupt monte-carlo config at %s: %s",
-                config_path,
+                "[MC] skipping corrupt monte-carlo config for %s: %s",
+                mc_id,
                 exc,
             )
             continue
