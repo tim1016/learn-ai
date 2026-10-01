@@ -75,6 +75,8 @@ export class GoldenSearchStudyComponent {
   readonly actionRefusal = signal<GridSearchRefusal | null>(null);
   readonly busy = signal(false);
   readonly selectedStep = signal<StudyStep>('search');
+  /** The server's guidance, announced once when the study moves to a new state (never on the first load or a poll that changes nothing). */
+  readonly announcement = signal('');
 
   protected readonly progressText = PROGRESS_TEXT;
   protected readonly capability = computed(() => {
@@ -115,6 +117,7 @@ export class GoldenSearchStudyComponent {
       const id = this.studyId();
       untracked(() => {
         this.detail.set(null);
+        this.announcement.set('');
         this.stateStep = null;
         this.awaitingClaimPolls = 0;
         void this.reload(id);
@@ -234,6 +237,10 @@ export class GoldenSearchStudyComponent {
 
   /** Shows a study; moves to the step holding its decision whenever that step changes. */
   private apply(detail: StudyDetail): void {
+    const previous = this.detail();
+    if (previous !== null && previous.id === detail.id && previous.state !== detail.state) {
+      this.announcement.set(`${detail.guidance.headline}. ${detail.guidance.detail}`);
+    }
     this.detail.set(detail);
     const step = stepForState(detail.state);
     if (step !== this.stateStep) {

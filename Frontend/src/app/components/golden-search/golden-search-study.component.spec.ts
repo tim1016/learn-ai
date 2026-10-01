@@ -270,6 +270,19 @@ describe('GoldenSearchStudyComponent', () => {
     expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'approve', expected_revision: 3, payload: { acknowledge_missing_parity: true } });
   });
 
+  it('announces the new state once the server moves the study on, and says nothing on the first load', async () => {
+    const service = fakeService(studyDetail('awaiting_review'));
+    service.command.mockResolvedValueOnce({ study: studyDetail('qualification_pending', { revision: 4 }), jobId: 'job-q' });
+    await renderStudy(service);
+    const live = screen.getAllByRole('status').find((element) => element.classList.contains('sr-only'));
+    expect(live?.textContent?.trim()).toBe('');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve golden configuration' }));
+
+    await waitFor(() => expect(live?.textContent?.trim()).toBe('Building the proof. Qualification is running.'));
+  });
+
   it('passes axe on the Compare and Final decision steps', async () => {
     const view = await renderStudy(fakeService(studyDetail('awaiting_review')));
     const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));
