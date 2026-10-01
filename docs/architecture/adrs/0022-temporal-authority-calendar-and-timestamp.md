@@ -47,11 +47,11 @@ Two temporal concerns were scattered and partially contradictory across the repo
 
 ## Amendment 2026-09-30 — accepted deviations, the admissible range, finite-ingestion fail-fast, and the lake's trading-date anchor (#2749)
 
-These rules ran under this ADR but were written down only in `.claude/rules/temporal-rigor.md`, in code comments and in owner rulings (#2745 entry 7, widened by #2746 E7+a and E7+b). Code cites this ADR for them. The rule file only summarizes it. Decisions (a)–(e) are unchanged.
+These rules ran under this ADR but were written down only in `.claude/rules/temporal-rigor.md`, in code comments and in owner rulings (#2745 entry 7, widened by #2746 E7+a and E7+b). This ADR, not the rule file, is now their record. Code comments re-point here in later clean-up slices. Decisions (a)–(e) are unchanged.
 
-**f. Accepted deviations from (a).** Each one is named here and in the module it touches, and nowhere else:
+**f. Accepted deviations from (a).** Each one is named here:
 - **Polygon news filter parameters** (`app/routers/news.py`). The five `published_utc*` *filters* stay vendor date strings. Polygon accepts a bare `YYYY-MM-DD` with whole-day semantics, which an instant cannot express, so canonicalizing them would narrow what a caller can ask for and gain nothing. Returned values are still canonicalized to `published_utc_ms` at ingestion (`PolygonClientService.list_news`), and the vendor string is not kept.
-- **Data Lab session windows.** These are entered as `YYYY-MM-DD` strings (`DataLabSessionInput.FromDate` / `ToDate`, `Backend/GraphQL/DataLabMutation.cs`). The never-used `int64 ms` input branch is cut, by owner ruling ☆ on map #2700 (2026-09-30), which chose this over the wire-format preference.
+- **Data Lab session windows.** These are entered as `YYYY-MM-DD` strings (`DataLabSessionInput.FromDate` / `ToDate`, `Backend/GraphQL/DataLabMutation.cs`). The never-used `int64 ms` input branch (`WindowStartMsUtc` / `WindowEndMsUtc`, still live at `DataLabMutation.cs:75` today) goes, by owner ruling ☆ on map #2700 (2026-09-30), which chose this over the wire-format preference.
 - **An owner-facing CSV may carry one display-only wall-clock column** (owner decision 2026-09-19, #2217). This is (e) applied to a file, not a new wire format.
   - `unix_ts` (`int64 ms UTC`) is always present, always first, and cannot be deselected.
   - The readable column is rendered server-side from `unix_ts` in one owner-chosen IANA zone, and named for that zone (`time_america_chicago`).

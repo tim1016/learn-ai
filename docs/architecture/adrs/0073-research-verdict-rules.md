@@ -11,7 +11,7 @@ A verdict turns a pile of metrics into one answer: "keep researching this", "thi
 
 ## Decision
 
-1. **Signal graduation is a staged ladder with a kill switch first** (`PythonDataService/app/research/signal/graduation.py::evaluate_graduation`). A signal sits at exactly one stage: the lowest stage it fails to advance from.
+1. **Signal graduation is a staged ladder with a kill switch first** (`PythonDataService/app/research/signal/graduation.py::evaluate_graduation`). A signal sits at exactly one stage. Stage 0 is checked first. A signal that survives it is placed at the highest stage whose own criteria it meets, checked from Stage 3 down, and Stage 1 is the floor. Stage 3's test does not include Stage 2's fold minimum.
    - **Stage 0 rejects** if any one of these holds:
      - parameter stability is below 0.25;
      - median out-of-sample Sharpe is 0 or less;
@@ -19,10 +19,10 @@ A verdict turns a pile of metrics into one answer: "keep researching this", "thi
      - annual turnover is above 200× **and** net Sharpe is below 0.5.
 
      A Stage 0 rejection short-circuits interpretation: the deeper panels are suppressed and shown only on explicit request.
-   - **Stage 1 advances to Stage 2** when mean OOS Sharpe is above 0.3, stability is above 0.3, and there are at least 4 folds.
-   - **Stage 2 advances to Stage 3** when mean OOS Sharpe is above 0.5, stability is above 0.5, and more than 60% of folds are positive.
-   - **Stage 3 machinery is deliberately unbuilt:** a Deflated Sharpe above 0.5 on the in-sample grid, cross-asset confirmation, and Hansen SPA / White's Reality Check. No signal has reached Stage 3, so building it would be premature.
-   - Stability is `1 − σ/|mean|` of net Sharpe across the threshold grid at a fixed cost (1 bps). A noise-fit signal's Sharpe swings across thresholds, and a real one stays flat.
+   - **Stage 3** requires mean OOS Sharpe above 0.5, stability above 0.5, and more than 60% of folds positive.
+   - **Stage 2** requires mean OOS Sharpe above 0.3, stability above 0.3, and at least 4 folds.
+   - **Further Stage 3 machinery is deliberately unbuilt:** a Deflated Sharpe above 0.5 on the in-sample grid, cross-asset confirmation, and Hansen SPA / White's Reality Check. No signal has reached Stage 3, so building it would be premature.
+   - Stability is `1 − σ/|mean|` of net Sharpe across the threshold grid at a fixed cost of 2 bps (`default_cost=2.0`). A noise-fit signal's Sharpe swings across thresholds, and a real one stays flat.
    - The thresholds are the project defaults adopted from the 2026-04-30 review. A change moves the constants, the methodology doc and `tests/test_graduation.py` together, and is recorded here.
 2. **The alpha-decay test needs at least 5 folds** (`app/research/signal/walk_forward.py`, `ALPHA_DECAY_MIN_FOLDS = 5`). The test regresses per-fold OOS Sharpe on fold index, `S_i = β₀ + β₁·i + ε_i`. A negative `β₁` significant at `p < 0.05` is read as decay. With 4 folds or fewer, the regression has at most 2 residual degrees of freedom and its t-test says almost nothing. So the test is marked invalid, and the UI shows that the trend test needs 5 or more folds instead of a misleading p-value.
 3. **The spec-path walk-forward uses fixed split semantics and a compounded combined curve** (`app/research/walk_forward/`).
