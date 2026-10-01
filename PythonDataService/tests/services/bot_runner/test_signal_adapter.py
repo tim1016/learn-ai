@@ -123,11 +123,10 @@ async def test_human_override_strategies_emit_canonical_live_intents(
       non-``None``, mirroring
       ``test_ema_live_adapter_exposes_and_settles_signal_program_stages``'s
       pattern) — an unsettled stage would otherwise quarantine every later
-      decision clock (``UNSETTLED_STAGE``). Immediately committing each
-      staged evaluation matches ``strategy_intents``' own "no custody seam,
-      therefore immediate commit" semantics; it is a no-op for
-      compatibility strategies, whose evaluations never carry a stage to
-      settle.
+      decision clock (``UNSETTLED_STAGE``). This read-only stream has no
+      custody seam, so it commits each staged evaluation immediately; that
+      is a no-op for compatibility strategies, whose evaluations never
+      carry a stage to settle.
     """
     binding = BrokerBotBinding(
         strategy_instance_id=f"{strategy_key}-live-test",

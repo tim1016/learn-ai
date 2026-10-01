@@ -2426,12 +2426,6 @@ class BotTaskRegistry:
     ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._authority_for(binding).start_custody_guard()
 
-    def _start_custody_projection(
-        self,
-        binding: BrokerBotBinding,
-    ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
-        return self._authority_for(binding).start_custody_projection()
-
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
         binding = self._bindings.read(strategy_instance_id)
         if binding is None:

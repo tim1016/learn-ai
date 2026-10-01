@@ -411,28 +411,6 @@ class RelatedTickersResponse(BaseModel):
 # ------------------------------------------------------------------
 
 
-class IndicatorTableRow(BaseModel):
-    """A single row from the full indicator table"""
-
-    time: int
-    open: float | None = None
-    high: float | None = None
-    low: float | None = None
-    close: float | None = None
-    volume: float | None = None
-    bb_basis: float | None = None
-    bb_upper: float | None = None
-    bb_lower: float | None = None
-    supertrend_up: float | None = None
-    supertrend_down: float | None = None
-    rsi: float | None = None
-    rsi_ma: float | None = None
-    macd: float | None = None
-    macd_signal: float | None = None
-    macd_histogram: float | None = None
-    adx: float | None = None
-
-
 class IndicatorTableResponse(BaseModel):
     """Response containing the full indicator table"""
 
@@ -441,40 +419,6 @@ class IndicatorTableResponse(BaseModel):
     row_count: int = 0
     columns: list[str] = []
     rows: list[dict[str, Any]] = []
-    error: str | None = None
-
-
-# ------------------------------------------------------------------
-# Available Indicators & Dataset Generation
-# ------------------------------------------------------------------
-
-
-class IndicatorInfo(BaseModel):
-    """Metadata for a single pandas-ta indicator"""
-
-    name: str
-    category: str
-    description: str
-
-
-class AvailableIndicatorsResponse(BaseModel):
-    """All available pandas-ta indicators grouped by category"""
-
-    success: bool
-    categories: dict[str, list[IndicatorInfo]] = {}
-    total: int = 0
-    error: str | None = None
-
-
-class DatasetGenerationResponse(BaseModel):
-    """Response for dataset generation (non-CSV JSON mode)"""
-
-    success: bool
-    ticker: str
-    row_count: int = 0
-    bar_count: int = 0
-    columns: list[str] = []
-    indicators_calculated: list[str] = []
     error: str | None = None
 
 

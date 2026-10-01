@@ -31,8 +31,6 @@ logger = logging.getLogger(__name__)
 # America/New_York. We accept and emit ``int64`` ms UTC at the boundary
 # and translate at the wire only.
 
-_NY_OFFSET = UTC  # placeholder; we use date-only conversion below
-
 
 def expiry_ms_to_yyyymmdd(expiry_ms: int) -> str:
     """``int64 ms UTC`` → ``YYYYMMDD`` string for IBKR.
@@ -125,35 +123,6 @@ async def list_strikes(
     return sorted(float(k) for k in strikes)
 
 
-async def build_option_contract(
-    client: IbkrClient,
-    symbol: str,
-    expiry_ms: int,
-    strike: float,
-    right: OptionRight,
-):
-    """Construct + qualify a single option contract."""
-    from ib_async import Option
-
-    client.require_connected()
-    contract = Option(
-        symbol=symbol,
-        lastTradeDateOrContractMonth=expiry_ms_to_yyyymmdd(expiry_ms),
-        strike=float(strike),
-        right=right,
-        exchange="SMART",
-        currency="USD",
-        multiplier="100",
-    )
-    qualified = await client.ib.qualifyContractsAsync(contract)
-    if not qualified:
-        raise ValueError(
-            f"IBKR could not qualify option "
-            f"{symbol} {expiry_ms_to_yyyymmdd(expiry_ms)} {strike:g}{right}"
-        )
-    return qualified[0]
-
-
 async def search_option_contracts(
     client: IbkrClient,
     *,
@@ -165,8 +134,7 @@ async def search_option_contracts(
     """Qualify one (symbol, expiry, strike, right) option drill-down pick
     and return the rich ``OptionContractMatch`` rows (Slice 1F, #605).
 
-    Mirrors ``build_option_contract`` but returns repo-native DTOs
-    carrying ``con_id`` + ``local_symbol`` + ``trading_class`` +
+    Returns repo-native DTOs carrying ``con_id`` + ``local_symbol`` + ``trading_class`` +
     ``multiplier`` because the cockpit action-plan picker persists those
     alongside the leg. Returns ``[]`` when IBKR cannot qualify the
     contract — the picker shows the empty result inline rather than

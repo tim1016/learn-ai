@@ -575,7 +575,6 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
 #: as ceremony writes and every real agent re-confirms under its own session
 #: on first boot.
 _MIGRATION_INSTANCE = "agnt_migrationceremony000000"
-_MIGRATION_EPOCH = 1
 
 
 def _effective_tuple(volume_root: Path) -> tuple[str | None, str | None, int | None]:

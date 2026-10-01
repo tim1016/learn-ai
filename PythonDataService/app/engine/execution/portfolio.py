@@ -111,8 +111,6 @@ class Portfolio:
         quantity: int,
         submitted_at_ms: int,
         tag: str = "",
-        take_profit_price: Decimal | None = None,
-        stop_loss_price: Decimal | None = None,
     ) -> Order:
         if quantity == 0:
             raise ValueError("cannot submit a zero-quantity market order")
@@ -125,43 +123,6 @@ class Portfolio:
             submitted_at_ms=submitted_at_ms,
             direction=direction,
             tag=tag,
-            take_profit_price=take_profit_price,
-            stop_loss_price=stop_loss_price,
-        )
-        self.pending_orders.append(order)
-        return order
-
-    def submit_limit_order(
-        self,
-        symbol: str,
-        quantity: int,
-        submitted_at_ms: int,
-        limit_price: Decimal,
-        tag: str = "",
-        take_profit_price: Decimal | None = None,
-        stop_loss_price: Decimal | None = None,
-    ) -> Order:
-        """Submit a resting limit order.
-
-        The engine moves the order to its ``resting_limit_orders`` list
-        at drain time and evaluates it against every subsequent minute
-        bar until it fills (per the configured penetration rule) or the
-        evaluation boundary clears the book.
-        """
-        if quantity == 0:
-            raise ValueError("cannot submit a zero-quantity limit order")
-        direction = Direction.LONG if quantity > 0 else Direction.SHORT
-        order = Order(
-            order_id=self._next_id(),
-            symbol=symbol,
-            quantity=quantity,
-            order_type=OrderType.LIMIT,
-            submitted_at_ms=submitted_at_ms,
-            direction=direction,
-            tag=tag,
-            limit_price=limit_price,
-            take_profit_price=take_profit_price,
-            stop_loss_price=stop_loss_price,
         )
         self.pending_orders.append(order)
         return order

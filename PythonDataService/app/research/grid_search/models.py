@@ -11,9 +11,6 @@ from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
 
 SearchStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-# ``interrupted`` is never stored: it is what a ``running`` row reads back as
-# when no live job backs it (PRD #1926 "Lifecycle and persistence").
-PresentedStatus = Literal["queued", "running", "completed", "failed", "cancelled", "interrupted"]
 CellStatus = Literal["completed", "failed"]
 OwnerKind = Literal["user", "walk_forward"]
 

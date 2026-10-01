@@ -65,13 +65,6 @@ class Order:
     tag: str = ""
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
-    # Optional bracket attached to an entry order. When either is set, the
-    # engine registers a post-fill watcher that evaluates the bracket
-    # against every subsequent fired bar via the pessimistic intrabar
-    # resolver (app.engine.execution.intrabar_resolver). Brackets on exit
-    # orders are ignored — brackets only make sense on entries.
-    take_profit_price: Decimal | None = None
-    stop_loss_price: Decimal | None = None
 
     def __init__(
         self,
@@ -86,8 +79,6 @@ class Order:
         tag: str = "",
         limit_price: Decimal | None = None,
         stop_price: Decimal | None = None,
-        take_profit_price: Decimal | None = None,
-        stop_loss_price: Decimal | None = None,
     ) -> None:
         """Create an order with the canonical numeric submission timestamp.
 
@@ -104,8 +95,6 @@ class Order:
         self.tag = tag
         self.limit_price = limit_price
         self.stop_price = stop_price
-        self.take_profit_price = take_profit_price
-        self.stop_loss_price = stop_loss_price
 
 
 @dataclass(init=False)

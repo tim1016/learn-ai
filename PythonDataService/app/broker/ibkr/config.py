@@ -121,11 +121,6 @@ class IbkrSettings(BaseSettings):
     # source, not its owner (#2077).
     live_bars_root: str = "/app/artifacts/live_bars"
 
-    # Retention window for the live-bar persistence layer. Files older than
-    # this are removed by the periodic retention sweep; quarantined files
-    # are kept regardless as forensic evidence (see BarPersistence).
-    live_bars_retention_days: int = 30
-
     # ADR-0028 Stage 3C — one fleet owner polls the daemon's batched
     # ``/instances`` snapshot. Per-bot hubs consume its stamped observation;
     # they never create their own daemon cadence.

@@ -147,15 +147,6 @@ class AccountVerificationFailed(BrokerProfileError):
         )
 
     @classmethod
-    def not_observed(cls, *, selected_account_id: str) -> AccountVerificationFailed:
-        """The operator selected an account this verification did not observe."""
-        return cls(
-            f"Account {selected_account_id} was not among the accounts observed for "
-            "this configuration.",
-            next_step="Verify the account again and pin one of the observed accounts.",
-        )
-
-    @classmethod
     def stale(cls, *, age_ms: int, max_age_ms: int) -> AccountVerificationFailed:
         """The observation is too old to act on."""
         return cls(
@@ -208,10 +199,8 @@ class AccountModeDisagreement(BrokerProfileError):
 class AccountPinMismatch(BrokerProfileError):
     """The pin is contradicted. The previous pin is never replaced.
 
-    Two situations reach this, and each authors its own prose: a re-observation
-    that found a different account, and an operator selecting an account other
-    than the one already pinned. Both leave the caller's pin as it was —
-    neither constructor produces a pin value.
+    A re-observation that found a different account reaches this. It leaves
+    the caller's pin as it was — the constructor produces no pin value.
     """
 
     reason: ClassVar[str] = "account_pin_mismatch"
@@ -250,19 +239,6 @@ class AccountPinMismatch(BrokerProfileError):
             "unchanged.",
             pinned_account_id=pinned_account_id,
             contradicting_account_ids=observed_account_ids,
-        )
-
-    @classmethod
-    def on_selection(
-        cls, *, pinned_account_id: str, selected_account_id: str
-    ) -> AccountPinMismatch:
-        """The operator selected an account other than the one already pinned."""
-        return cls(
-            f"This configuration is pinned to account {pinned_account_id}; "
-            f"{selected_account_id} cannot replace it on this revision. The pin is "
-            "unchanged.",
-            pinned_account_id=pinned_account_id,
-            contradicting_account_ids=(selected_account_id,),
         )
 
 

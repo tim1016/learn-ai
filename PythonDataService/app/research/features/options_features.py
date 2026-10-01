@@ -8,9 +8,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_SKEW = 50
-MIN_OI_SKEW = 100
-
 
 class OptionsFeatures:
     """Compute options-derived features from IV time series."""

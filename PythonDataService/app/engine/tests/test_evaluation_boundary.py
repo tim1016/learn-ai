@@ -209,7 +209,7 @@ def test_without_an_evaluation_start_the_run_is_unchanged() -> None:
 
 
 class _WarmupNoiseStrategy(Strategy):
-    """Enters with a bracket, logs, and emits an insight during warmup — everything the reset must discard."""
+    """Enters, logs, and emits an insight during warmup — everything the reset must discard."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -230,7 +230,7 @@ class _WarmupNoiseStrategy(Strategy):
         assert self.ctx is not None
         self.bars_seen += 1
         if self.bars_seen == 1:
-            self.ctx.portfolio.submit_market_order("SPY", 100, bar.end_ms, tag="entry", take_profit_price=Decimal("505"))
+            self.ctx.portfolio.submit_market_order("SPY", 100, bar.end_ms, tag="entry")
             self.ctx.log("warmup entry")
             self.ctx.emit_insight(Insight(symbol="SPY", direction=InsightDirection.UP, period=timedelta(days=5)))
 
@@ -241,9 +241,8 @@ class _WarmupNoiseStrategy(Strategy):
 def test_fees_insights_logs_and_brackets_from_warmup_do_not_survive_the_boundary() -> None:
     """Every accumulator the reset names is checked, not only the position (review M10).
 
-    The warmup entry pays a commission, opens a take-profit bracket that the
-    600-level evaluation bars would trigger at once, logs a line, and emits a
-    five-day insight. None of it may reach the scored record.
+    The warmup entry pays a commission, logs a line, and emits a five-day
+    insight. None of it may reach the scored record.
     """
     warmup = _session(DAY_ONE, ["500", "501", "502"])
     evaluation = _session(DAY_TWO, ["600", "601", "602"])
@@ -257,7 +256,7 @@ def test_fees_insights_logs_and_brackets_from_warmup_do_not_survive_the_boundary
 
     assert result.total_fees == Decimal(0)
     assert result.final_equity == Decimal(100_000)
-    assert result.order_events == []  # the bracket was cleared, so no TP fill at 600
+    assert result.order_events == []
     assert "warmup entry" not in result.log_lines
     assert result.log_lines[0].startswith("[EVALUATION START]")
     assert result.insights == []

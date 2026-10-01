@@ -351,10 +351,10 @@ async def option_chain_stream(
                 "reason is in the service log."
             )
         except ValueError as exc:
-            # Contract qualification (``qualify_underlying``,
-            # ``build_option_contract``) raises ValueError when IBKR
-            # cannot resolve a symbol/strike/right combination — surface
-            # those through the same SSE error path as broker errors.
+            # Contract qualification (``qualify_underlying``) raises
+            # ValueError when IBKR cannot resolve a symbol/strike/right
+            # combination — surface those through the same SSE error path
+            # as broker errors.
             logger.error("Invalid option-chain request: %s", exc)
             yield _sse_error_frame(
                 "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."

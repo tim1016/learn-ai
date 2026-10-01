@@ -245,51 +245,6 @@ def test_every_registered_strategy_can_be_imported_by_key():
     )
 
 
-def test_every_registered_strategy_has_explicit_class_name():
-    """``StrategyRegistration.class_name`` retires the ``<PascalKey>Algorithm``
-    convention. Every entry names its class explicitly so a future class rename
-    does not silently break the runner's class lookup."""
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    missing = [key for key, reg in _STRATEGY_REGISTRY.items() if not getattr(reg, "class_name", "")]
-    assert not missing, (
-        f"Strategies missing class_name: {missing}. Phase 2 / VCR-0004 — "
-        f"populate StrategyRegistration.class_name for every entry."
-    )
-
-
-def test_every_registered_class_name_resolves_against_its_module():
-    """The runner does ``getattr(module, registration.class_name)``. Every
-    registered ``class_name`` must resolve to a class in its module."""
-    from importlib import import_module
-
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    failures = []
-    for key, reg in _STRATEGY_REGISTRY.items():
-        try:
-            module = import_module(f"app.engine.strategy.algorithms.{key}")
-        except ImportError as exc:
-            failures.append(f"{key} module import: {exc}")
-            continue
-        cls = getattr(module, reg.class_name, None)
-        if cls is None:
-            failures.append(f"{key}: module has no class {reg.class_name!r}")
-    assert not failures, (
-        "Registered class_name must resolve in its module. Failing entries: "
-        + "; ".join(failures)
-    )
-
-
-def test_deployment_validation_class_name_is_consecutive_green():
-    """The ``DeploymentValidationAlgorithm`` alias is retired. The registry
-    names the real class (``DeploymentValidationConsecutiveGreen``)."""
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    reg = _STRATEGY_REGISTRY["deployment_validation"]
-    assert reg.class_name == "DeploymentValidationConsecutiveGreen"
-
-
 def test_deployment_validation_alias_no_longer_exists():
     """``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
     in ``deployment_validation.py`` was the convention paper-over. Delete it

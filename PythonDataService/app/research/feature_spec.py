@@ -227,8 +227,3 @@ def get_spec(feature_name: str) -> FeatureValidationSpec:
         intent="",
         notes=("No validation contract registered for this feature.",),
     )
-
-
-def list_specs() -> list[FeatureValidationSpec]:
-    """All registered specs, in stable insertion order."""
-    return list(_BUILTIN_SPECS.values())
