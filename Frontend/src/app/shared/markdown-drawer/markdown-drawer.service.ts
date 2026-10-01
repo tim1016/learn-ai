@@ -27,9 +27,6 @@ export class MarkdownDrawerService {
    */
   readonly anchor = signal<string | null>(null);
 
-  /** Monotonic counter — increments each `open()` to bust effect caches. */
-  readonly openTick = signal<number>(0);
-
   /** Whether any drawer is currently visible. */
   readonly visible = signal<boolean>(false);
 
@@ -37,7 +34,6 @@ export class MarkdownDrawerService {
     this.activeDocId.set(docId);
     this.anchor.set(anchor ?? null);
     this.visible.set(true);
-    this.openTick.update((n: number) => n + 1);
   }
 
   close(): void {

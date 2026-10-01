@@ -19,8 +19,7 @@ import type { TickerOption, TickerRange } from '../ticker-range-picker/ticker-ra
  * outright passes `universe` instead: a closed list, never gated (ADR 0066).
  * The `TickerRange` projection pins
  * `from`/`to` to placeholders so the card's snap-to-held-window behavior is
- * a no-op here, exactly as `app-ticker-date-picker` does for its date
- * half: only the symbol crosses back.
+ * a no-op here: only the symbol crosses back.
  */
 @Component({
   selector: 'app-symbol-picker',

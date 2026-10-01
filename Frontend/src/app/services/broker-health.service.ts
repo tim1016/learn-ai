@@ -8,8 +8,8 @@ const POLL_INTERVAL_MS = 5000;
  * Singleton owner of the connection-health signal.
  *
  * Polls ``GET /api/broker/health`` every five seconds and exposes the
- * latest snapshot as a signal. The shell renders the global paper /
- * live / disconnected banner from this signal.
+ * latest snapshot as a signal. The IBKR options-chain and options-surface
+ * pages derive their feed-state banner from it.
  *
  * Per the IBKR integration plan: never derive the banner from the
  * ``IBKR_MODE`` env var. ``health.is_paper`` is the only source of

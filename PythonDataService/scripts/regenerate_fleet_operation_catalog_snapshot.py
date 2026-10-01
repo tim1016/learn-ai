@@ -9,9 +9,7 @@ builder all derive from the provider-declared
 This script writes **two identical** JSON snapshot files -- one in the
 PythonDataService tree, one in the Frontend tree -- so the two test
 containers (which do not share a working tree) each lock against their own
-copy, mirroring the established pattern for the broker-v2 panel vocabulary
-and the fleet refusal vocabulary (see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` and
+copy, mirroring the fleet refusal vocabulary (see
 ``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``):
 
 - pytest ``tests/broker/fleet/test_operation_catalog_snapshot.py`` asserts
@@ -26,7 +24,7 @@ and the fleet refusal vocabulary (see
 
 A CI job (``broker-v2-vocabulary-contract``, extended by Task 10) regenerates
 all three snapshots (broker-v2 panel, fleet refusal, fleet operation
-catalog) from live source on every PR and diffs each pair against its
+catalog) from live source on every PR and diffs each against its
 committed copies, so a hand-edit to either operation-catalog file -- even
 one applied identically to both -- fails CI.
 
