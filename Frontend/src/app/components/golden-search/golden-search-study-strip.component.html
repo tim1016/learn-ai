@@ -1,0 +1,22 @@
+@let s = study();
+<header class="strip">
+  <div class="strip__title">
+    <h2 id="gs-study-title">{{ capability()?.display_name ?? (s.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="s.symbol" size="sm" /></h2>
+    <p class="muted">
+      Study <code>{{ s.id.slice(0, 8) }}</code> · locked <app-timestamp-display [value]="s.created_at_ms" mode="local" />
+      @if (s.parent_study_id; as parent) { · revised from <a [routerLink]="['/golden-search', parent]"><code>{{ parent.slice(0, 8) }}</code></a> }
+    </p>
+  </div>
+  <div class="tags">
+    <span class="tag" [attr.data-state]="s.state">{{ s.state | receiptLabel }}</span>
+    @if (s.presented_status !== 'idle') { <span class="tag" [attr.data-status]="s.presented_status">{{ s.presented_status | receiptLabel }}</span> }
+    @if (s.incomplete) { <span class="tag tag--warn">Incomplete</span> }
+    @if (s.hidden) { <span class="tag">Hidden</span> }
+  </div>
+  <dl class="facts">
+    <div><dt>Development</dt><dd><app-timestamp-display [value]="s.receipt.development_start_ms" mode="date-et" /> → <app-timestamp-display [value]="s.receipt.development_end_ms - 1" mode="date-et" /></dd></div>
+    <div><dt>Final test</dt><dd><app-timestamp-display [value]="s.receipt.final_start_ms" mode="date-et" /> → <app-timestamp-display [value]="s.receipt.final_end_ms - 1" mode="date-et" /></dd></div>
+    <div><dt>Final-test exposure</dt><dd>{{ exposure() }}</dd></div>
+    <div><dt>Protocol</dt><dd><code>{{ s.protocol_hash.slice(0, 8) }}</code> · {{ s.method === 'zoom' ? 'Zoom' : 'Grid' }} · record revision {{ s.revision }}</dd></div>
+  </dl>
+</header>

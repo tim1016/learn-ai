@@ -1,0 +1,5 @@
+:host { display: block; }
+svg { display: block; width: 100%; max-width: 480px; height: 80px; }
+.zero { stroke: var(--border-strong); stroke-dasharray: 3 3; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.line { fill: none; stroke: var(--chart-series-blue); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.dot { fill: var(--chart-series-blue); }

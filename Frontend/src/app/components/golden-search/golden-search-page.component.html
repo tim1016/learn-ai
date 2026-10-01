@@ -1,0 +1,32 @@
+<app-page-header title="Golden Search" icon="pi-search-plus" />
+<section class="golden-search" aria-label="Golden Search">
+  @if (capabilitiesError(); as message) { <p class="notice notice--error" role="alert">{{ message }}</p> }
+  @if (studyId(); as id) {
+    <app-golden-search-study [studyId]="id" [capabilities]="capabilities() ?? []" (hidden)="onHidden()" />
+  } @else {
+    <p class="intro">Find settings you can explain, then test the reasons to doubt them: search on development data, check the procedure over time, and open one held-back final test.</p>
+    <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
+      <p-tablist>
+        <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New study</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+      <p-tabpanels>
+        <p-tabpanel value="new">
+          @if (reviseError(); as message) { <p class="notice notice--error" role="alert">{{ message }}</p> }
+          @if (capabilities(); as declared) {
+            @if (revise() && reviseFrom() === null && reviseError() === null) {
+              <p class="notice" role="status">Loading the study to revise…</p>
+            } @else {
+              <app-golden-search-plan-form [capabilities]="declared" [reviseFrom]="reviseFrom()" (locked)="onLocked($event)" />
+            }
+          } @else if (capabilitiesError() === null) {
+            <p class="notice" role="status">Loading the strategy declarations…</p>
+          }
+        </p-tabpanel>
+        <p-tabpanel value="history">
+          <app-golden-search-history [capabilities]="capabilities() ?? []" />
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  }
+</section>

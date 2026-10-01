@@ -1,0 +1,16 @@
+@if (metrics(); as m) {
+  @if (m.status === 'failed') {
+    <p class="failed">Run failed{{ m.error ? ' — ' + m.error : '' }}</p>
+  } @else {
+    <dl class="metrics" [class.metrics--compact]="compact()">
+      <div><dt>Trades</dt><dd>{{ m.total_trades }}</dd></div>
+      <div><dt>Net profit</dt><dd>{{ m.net_profit === null ? '—' : (m.net_profit | number: '1.0-2') }}</dd></div>
+      <div><dt>Return</dt><dd>{{ m.total_return_pct === null ? '—' : (m.total_return_pct | percent: '1.2-2') }}</dd></div>
+      <div><dt>Sharpe</dt><dd>{{ m.sharpe_ratio === null ? '—' : (m.sharpe_ratio | number: '1.2-2') }}</dd></div>
+      <div><dt>Worst drawdown</dt><dd>{{ m.max_drawdown_pct === null ? '—' : (m.max_drawdown_pct | percent: '1.2-2') }}</dd></div>
+      <div><dt>Win rate</dt><dd>{{ m.win_rate === null ? '—' : (m.win_rate | percent: '1.0-1') }}</dd></div>
+    </dl>
+  }
+} @else {
+  <p class="muted">No result recorded.</p>
+}

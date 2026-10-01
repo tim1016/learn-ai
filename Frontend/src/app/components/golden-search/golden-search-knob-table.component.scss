@@ -1,0 +1,22 @@
+:host { display: grid; gap: var(--space-3); min-width: 0; }
+.table-wrap { overflow-x: auto; }
+.knobs { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.knobs caption { text-align: left; color: var(--text-secondary); padding-bottom: var(--space-2); }
+.knobs th, .knobs td { padding: var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; vertical-align: top; }
+.knobs thead th { color: var(--text-secondary); font-weight: var(--fw-medium); white-space: nowrap; }
+.order { white-space: nowrap; display: flex; align-items: center; gap: var(--space-1); }
+.knob { display: grid; gap: 2px; font-weight: var(--fw-regular); min-width: 12rem; }
+.knob code { font-family: var(--font-mono); color: var(--text-secondary); }
+.knob small { color: var(--text-secondary); }
+.values { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: flex-end; }
+.values label { display: grid; gap: 2px; color: var(--text-secondary); }
+.values input, td > input { width: 7rem; }
+.values small { flex-basis: 100%; color: var(--text-secondary); }
+.values .problem, .problem { color: var(--bear); }
+.tag { justify-self: start; border: 1px solid var(--border-light); border-radius: var(--radius-pill); padding: 0 var(--space-2); }
+.icon { all: unset; cursor: pointer; padding: 2px; border-radius: var(--radius-sm); color: var(--text-secondary); }
+.icon:focus-visible { outline: 2px solid var(--accent); }
+.icon:disabled { cursor: default; opacity: 0.35; }
+.fixed-row .values { color: var(--text-secondary); }
+.fixed, .constraints { margin: 0; padding-left: var(--space-4); display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
+.muted { color: var(--text-secondary); }

@@ -1,0 +1,60 @@
+@let p = procedure();
+<section class="procedure" [attr.aria-labelledby]="headingId()">
+  <header class="procedure__header">
+    <h3 [id]="headingId()">{{ heading() }}</h3>
+    @if (p.incomplete) { <span class="tag tag--warn">Incomplete — stopped before the plan finished</span> }
+  </header>
+  <p class="muted">{{ description() }}</p>
+
+  <p class="stop"><strong>Stopped: {{ p.stop_reason | receiptLabel }}.</strong> {{ p.stop_explanation }}</p>
+  @for (label of edgeHits(); track label) {
+    <p class="edge" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ label }} ended at the edge of its searched range — a better setting may lie outside it.</p>
+  }
+
+  <div class="winner">
+    <h4>Retained settings</h4>
+    <ul class="point">
+      @for (entry of winner(); track entry.name) { <li><span>{{ entry.label }}</span> <strong>{{ entry.value ?? '—' }}</strong></li> }
+    </ul>
+    <app-golden-search-metrics [metrics]="p.winner_metrics" />
+    <p class="muted">{{ p.evaluations }} evaluations in this procedure · development data, used to choose these settings</p>
+  </div>
+
+  @if (path().length > 0) {
+    <div class="table-wrap">
+      <table class="path">
+        <caption>Where the search went, round by round</caption>
+        <thead>
+          <tr>
+            <th scope="col">Pass</th><th scope="col">Knob</th><th scope="col">Round</th><th scope="col">Searched</th>
+            <th scope="col">Started at</th><th scope="col">Values tried</th><th scope="col">Skipped (invalid)</th><th scope="col">Kept</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of path(); track row.key) {
+            <tr>
+              <td>{{ row.pass }}</td>
+              <th scope="row">{{ row.knob }}</th>
+              <td>{{ row.round }}</td>
+              <td class="num">{{ row.low }} – {{ row.high }}</td>
+              <td class="num">{{ row.startedAt }}</td>
+              <td>
+                <ul class="tried">
+                  @for (item of row.tried; track item.value) {
+                    <li [class.chosen]="item.chosen">{{ item.value }} <small>{{ item.ineligibility === null ? 'eligible' : (item.ineligibility | receiptLabel) }}</small></li>
+                  }
+                </ul>
+              </td>
+              <td>
+                @for (item of row.skipped; track item.value) { <span class="skipped">{{ item.value }} <small>{{ item.reason }}</small></span> } @empty { <span class="muted">—</span> }
+              </td>
+              <td><strong>{{ row.chosen }}</strong> <small>{{ row.moved ? 'moved' : 'kept current' }}</small></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else if (method() === 'grid') {
+    <p class="muted">Grid evaluates every listed combination, so there is no path to show.</p>
+  }
+</section>
