@@ -542,6 +542,8 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('sends the snapshot rate to the server analysis, even a rate of 0', async () => {
+      component.ticker.set('SPY');
+      component.selectedExpiration.set('2099-01-01');
       const chain = component.fetchChainSnapshot('SPY', '2099-01-01');
       expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
         data: {
@@ -616,6 +618,43 @@ describe('StrategyBuilderComponent', () => {
 
       req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
       await analysis;
+    });
+
+    it('ignores a late snapshot reply for an expiry the user has left', async () => {
+      function snapshotReply(rate: number) {
+        return {
+          data: {
+            getOptionsChainSnapshot: {
+              success: true,
+              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+              contracts: [],
+              count: 0,
+              riskFreeRate: rate,
+              dividendYield: null,
+              rateSource: 'FRED',
+              dividendSource: null,
+              error: null,
+            },
+          },
+        };
+      }
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      const farChain = component.onExpirationSelected(farExpiry);
+
+      const pending = httpMock.match(r =>
+        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
+      expect(pending.map(r => r.request.body.variables.expirationDate)).toEqual([nearExpiry, farExpiry]);
+      pending[1].flush(snapshotReply(0.05));
+      await farChain;
+      pending[0].flush(snapshotReply(0.0401));
+      await nearChain;
+
+      expect(component.selectedExpiration()).toBe(farExpiry);
+      expect(component.riskFreeRate()).toBe(0.05);
     });
   });
 

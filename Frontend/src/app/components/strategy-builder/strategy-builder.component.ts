@@ -993,6 +993,12 @@ export class StrategyBuilderComponent implements OnDestroy {
         this.marketDataService.getOptionsChainSnapshot(ticker, expiration)
       );
 
+      // A late reply for an expiration the user has since left must not set the
+      // current one's chain or rate (#2789).
+      if (this.selectedExpiration() !== expiration || this.ticker().trim().toUpperCase() !== ticker) {
+        return;
+      }
+
       if (!result.success) {
         this.error.set(result.error ?? 'Failed to fetch snapshot');
         return;
