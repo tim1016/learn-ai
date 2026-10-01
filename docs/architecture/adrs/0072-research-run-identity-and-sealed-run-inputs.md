@@ -7,20 +7,24 @@
 
 ## Context
 
-Research answers are only worth keeping if they can be found again and reproduced. "Did I already run this?", "why do these two runs disagree?" and "is this trade the same evidence as that one?" each need an identity that changes exactly when the inputs that decide the result change, and not otherwise. Every identity here rides the same canonical-JSON SHA-256 (`PythonDataService/app/research/runs/hashing.py::hash_payload`): `sort_keys`, tight separators, `ensure_ascii=False`, bare 64-character hex. It is a relaxed RFC 8785. The hashed payloads are closed-vocabulary Pydantic round-trips, so literal JCS escaping and float formatting buy nothing and would add a dependency.
+Research answers are only worth keeping if they can be found again and reproduced. "Did I already run this?", "why do these two runs disagree?" and "is this trade the same evidence as that one?" each need an identity that changes exactly when the inputs that decide the result change, and not otherwise. The run ledger and prediction sets use the canonical-JSON SHA-256 in `PythonDataService/app/research/runs/hashing.py::hash_payload`: `sort_keys`, tight separators, `ensure_ascii=False`, bare 64-character hex. It is a relaxed RFC 8785. The hashed payloads are closed-vocabulary Pydantic round-trips, so literal JCS escaping and float formatting buy nothing and would add a dependency. Two older identities, `params_hash` and the trade fingerprint, use their own frozen encoders (decisions 4 and 5).
 
 ## Decision
 
 1. **A run's identity is its input columns, and equal inputs must give equal result hashes.**
-   - `RunLedger` (`app/research/runs/ledger.py`) is the immutable identity record of one `StrategySpec` execution. Its identity columns:
+   - `RunLedger` (`app/research/runs/ledger.py`) is the immutable identity record of one `StrategySpec` execution. There is no single identity hash: the identity is the set of input columns the ledger records:
      - `strategy_spec_hash`: the spec after a Pydantic round-trip;
-     - `data_snapshot_id`;
      - `engine_name` / `ENGINE_VERSION`;
+     - `symbol`, `resolution_minutes`;
+     - the report window `start_ms` / `end_ms`, plus the data pre-roll start `warmup_start_ms`;
+     - `initial_cash`;
      - `fill_mode`, `commission_per_order`, `slippage_per_share`;
-     - `random_seed`;
-     - `prediction_set_hash`;
+     - `warmup_policy`, `random_seed`;
+     - `data_source`, `data_snapshot_id`, `prediction_set_hash`;
      - the parent lineage.
-   - Runs that agree on these columns must produce the same `result_hash`, `trade_log_hash` and `metrics_hash`. The deterministic engine guarantees it, and the run tests enforce it. The two sub-hashes exist to show *which* part of a result diverged.
+
+     `data_snapshot_id` starts at the pre-roll start, not at the report start. Two runs with the same `data_snapshot_id` can therefore differ in `start_ms`, and only the full column set identifies a run.
+   - Runs that agree on all of these columns must produce the same `result_hash`, `trade_log_hash` and `metrics_hash`. The deterministic engine guarantees it, and the run tests enforce it. The two sub-hashes exist to show *which* part of a result diverged.
    - `result_hash` excludes `run_id` (a per-run UUID would break the equal-inputs property) and `log_lines` (timing-dependent text).
    - `engine_git_commit` is informational, not identity.
    - **Bump `ENGINE_VERSION` when the engine's semantic output for a given input changes:** fill semantics, the drawdown definition, the annualization choice. Do not bump it for a cosmetic refactor.
@@ -29,22 +33,26 @@ Research answers are only worth keeping if they can be found again and reproduce
 2. **`data_snapshot_id` names the bars cheaply. It is not a hash of their content.**
    - The format is `symbol|resolution_minutes|start_ms|end_ms|data_root_revision`.
    - A lake-backed run (#2446) sets the revision to `lake:<data_availability_hash>` after admission. That hash covers the admitted lake state.
-   - Otherwise the revision resolves in order: `$LEAN_DATA_ROOT_REVISION`, the data root's git HEAD, `mtime:<seconds>`, then `unknown`.
+   - Otherwise it resolves in this order (`runs/ledger.py::resolve_data_root_revision`):
+     1. `$LEAN_DATA_ROOT_REVISION`;
+     2. `files:<16 hex>`, a hash over the modification times of the window's minute zips, taken in the reader's root precedence;
+     3. the data root's git HEAD;
+     4. `files:none` when a window was given, or `unknown` when none was.
    - Rejected: hashing every bar, an O(N) read that costs more than a short backtest.
 3. **The run ledger is immutable and hash-addressed; other research phases persist mutable configs; hashing is opt-in per phase** (artifact-seam decisions 1–2).
    - `runs/` keeps `ledger.json` + `result.json`. Monte Carlo, baselines and walk-forward keep `config.json`, through one descriptor-bound store (`app/research/artifact/`).
    - The descriptor's `hash_payload` hook is optional: a phase with no hook is not hashed. So existing replay addresses stay byte-stable, and a phase opts in only when it becomes replay-addressable.
-   - `runs/hashing.py` stays the one canonical-JSON SHA-256.
+   - `runs/hashing.py` stays the ledger's canonical-JSON SHA-256.
    - Collapsing the layouts would have erased the line between an immutable identity and a mutable input, and forced a migration for nothing.
 4. **`params_hash` is the one cell identity of every parameter sweep, and the grid has rails, not a cap** (Recency Chart D11; PRD [#1926](https://github.com/tim1016/learn-ai/issues/1926)).
-   - `params_hash` (`app/research/sweep/grid.py`) is a stable, key-order-independent hash of one strategy's parameter assignment. Recency, Grid Search and the Walk-Forward Study all use it as the cell identity, and ADR 0057 D5 answers redelivery with it.
+   - `params_hash` (`app/research/sweep/grid.py`) is a stable, key-order-independent hash of one strategy's parameter assignment. It is SHA-256 over `json.dumps({"strategy_key", "params"}, sort_keys=True)` with the default separators. That encoder is frozen. Recency, Grid Search and the Walk-Forward Study all use it as the cell identity, and ADR 0057 D5 answers redelivery with it.
    - The grid language has **no product cap on run count, only engineering rails**:
      - expansion is lazy (a generator; a large but legitimate sweep never fully materializes);
      - a cheap eager size check rejects a pathological or malformed grid above the `MAX_GRID_SIZE` sanity ceiling (2,000,000) before anything runs;
      - concurrency is bounded.
    - Why: a cap would be a product limit nobody asked for, but a fat-fingered step must fail at once rather than exhaust the service.
 5. **A trade's evidence fingerprint covers everything that can change the trade, never the parameters alone** (Recency Chart D16).
-   - `app/research/recency/fingerprint.py::trade_fingerprint` is a canonical-JSON SHA-256 over: symbol, strategy key, **strategy code version**, `params_hash`, **data policy** (adjustment, session, resolution), **fill model**, **commissions**, entry ms and exit ms.
+   - `app/research/recency/fingerprint.py::trade_fingerprint` is SHA-256 over `json.dumps(..., sort_keys=True)` with the default separators (a frozen encoder) of: symbol, strategy key, **strategy code version**, `params_hash`, **data policy** (adjustment, session, resolution), **fill model**, **commissions**, entry ms and exit ms.
    - Why: two runs with the same `params_hash` but a different fill model must never collapse into one piece of evidence. Deduplicating on parameters alone destroyed scientific provenance, as code review found.
    - Deduplication is deterministic. One fingerprint may back several runs. The representative is the newest live run, and the membership set is returned (ADR 0057 D6).
 6. **A model's output enters a run only as a precomputed, content-hashed prediction set** ("predictions as data"). Inside a run there is no training and no inference. A model trained elsewhere emits per-(symbol, timestamp) values, and `app/research/ml/` turns them into a canonical artifact that the spec `prediction` primitive reads (`app/engine/strategy/spec/primitives.py`).
@@ -58,5 +66,5 @@ Research answers are only worth keeping if they can be found again and reproduce
 ## Consequences
 
 - Any new input that can change a result must join the identity: a ledger column, the fingerprint, or a new hashed artifact. A schema change is a `schema_version` bump. Old ledgers keep loading, and no existing hash is rewritten.
-- `runs/hashing.py` is the one hash implementation for all of these. A second encoder would make identical inputs hash differently.
+- New identities use `runs/hashing.py::hash_payload`. The two frozen encoders, `params_hash` and `trade_fingerprint`, must not be "unified" with it without a migration. Changing either one changes every persisted `params_hash` and fingerprint, and breaks ADR 0057 D5's redelivery matching.
 - `docs/references/run-ledger.md` keeps the identity-column and exclusion details as a receipt. The decisions are here.

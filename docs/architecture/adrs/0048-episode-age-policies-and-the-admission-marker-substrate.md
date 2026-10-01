@@ -247,7 +247,7 @@ Accepted on the owner's map ruling ([#2700](https://github.com/tim1016/learn-ai/
   - `AgePolicy` is the closed sum `CauseCleared | VoidAfter | RedriveThenEscalate`. Every row of the reason-policy registry declares one (`app/broker/alpaca/clerk/sqlite/uncertainty_policies.py`).
   - Account holds are uncertainty episodes (`UNEXPLAINED_ORDER_HOLD`, `STREAM_HEALTH_HOLD`).
   - The three `ACCOUNT_HOLD_*` folds stay registered for replay only. The v9 ceremony replays them through `folds.V9_FOLD_REGISTRY`.
-- **Decision 4's subject no longer exists.** On 2026-08-27, `54e33bf4` deleted `app/engine/live/account_safety.py` together with its last callers, and with it every admission marker reader and writer. No admission marker exists in the tree today. Decision 4 (4a–4f) binds any marker mechanism that is reintroduced:
-  - it is never an episode;
-  - it never lives in the Alpaca clerk database;
-  - it is a single-writer claim whose fencing generation the store validates on every protected write.
+- **Decision 4's subject no longer exists.** On 2026-08-27, `54e33bf4` deleted `app/engine/live/account_safety.py` together with its last callers, and with it every admission marker reader and writer. No admission marker exists in the tree today. Only Decision 4's standing rules, 4a, 4b and 4f, bind a marker mechanism that is reintroduced. 4c–4e were one-off actions on the deleted code:
+  - it never lives in the Alpaca clerk database (4a);
+  - it is never an episode (4b);
+  - it is a single-writer claim whose fencing generation the store validates on every protected write (4f).
