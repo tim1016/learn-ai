@@ -23,6 +23,7 @@ from app.models.responses import (
 )
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
+from app.utils.session_anchors import calendar_days_to_expiry
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,12 +77,14 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
 
         # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
         # The rate always resolves, so the pricing pages never invent their
-        # own; the dividend is best-effort (#2764).
+        # own; the dividend is best-effort (#2764). The rate is the requested
+        # expiry's tenor, on the DTE the strategy analysis prices over; with
+        # no expiry, the IV30 convention's 30 days (#2789).
         rd = get_rate_and_dividend(
             ticker=request.underlying_ticker,
             spot_price=underlying.price or 0.0,
             polygon=polygon_client,
-            dte_days=30,
+            dte_days=calendar_days_to_expiry(request.expiration_date) if request.expiration_date else 30,
         )
 
         return OptionsChainSnapshotResponse(

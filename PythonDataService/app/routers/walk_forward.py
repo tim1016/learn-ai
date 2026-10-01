@@ -54,7 +54,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, require_schedulable_end
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -129,6 +129,10 @@ async def create_walk_forward(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"),
         )
+    try:
+        require_schedulable_end(request.end_ms)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Build the typed split policy from the JSON discriminator.
     try:

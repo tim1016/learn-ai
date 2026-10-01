@@ -1,4 +1,4 @@
-"""Run the quick Python tests within the two-minute budget.
+"""Run the quick Python tests: balanced to finish in two minutes, failed past three.
 
 A quick test is any test not marked ``slow``, wherever it lives: the runner
 collects pytest.ini's ``testpaths``, the same roots the daily run collects.
@@ -19,7 +19,12 @@ from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
-TEST_BUDGET_SECONDS = 120
+#: What a shard is balanced to finish within. A run past it still passes, but
+#: says so in the log and the step summary: rebalance or move slow tests.
+TEST_TARGET_SECONDS = 120
+
+#: The hard limit: a run still going here is killed and fails with 124.
+TEST_BUDGET_SECONDS = 180
 
 
 def pytest_command(
@@ -90,12 +95,13 @@ def report_elapsed_seconds(
         if shard_index is not None and shard_count is not None
         else "unsharded"
     )
+    over_target = elapsed > TEST_TARGET_SECONDS
     message = (
         f"Python PR tests ({scope}) took {elapsed:.1f}s of the "
-        f"{TEST_BUDGET_SECONDS}-second budget"
-        + (" (exceeded)" if exceeded_budget else "")
+        f"{TEST_TARGET_SECONDS}-second target ({TEST_BUDGET_SECONDS}-second limit)"
+        + (" (limit exceeded)" if exceeded_budget else " (over target)" if over_target else "")
     )
-    logger.info("%s", message)
+    logger.log(logging.WARNING if over_target else logging.INFO, "%s", message)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
@@ -116,7 +122,7 @@ def run_fast_tests(
     shard_index: int | None = None,
     shard_count: int | None = None,
 ) -> int:
-    """Run pytest and return 124 when the suite exceeds two minutes."""
+    """Run pytest and return 124 when the suite passes the hard limit."""
     started = time.monotonic()
     process = subprocess.Popen(
         pytest_command(
@@ -134,7 +140,7 @@ def run_fast_tests(
         returncode = 124
         exceeded = True
         logger.error(
-            "Python PR tests exceeded the hard %d-second budget. "
+            "Python PR tests exceeded the hard %d-second limit. "
             "Move expensive coverage to the daily suite or make it faster.",
             TEST_BUDGET_SECONDS,
         )

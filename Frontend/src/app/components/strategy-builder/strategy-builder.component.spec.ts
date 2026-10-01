@@ -542,6 +542,8 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('sends the snapshot rate to the server analysis, even a rate of 0', async () => {
+      component.ticker.set('SPY');
+      component.selectedExpiration.set('2099-01-01');
       const chain = component.fetchChainSnapshot('SPY', '2099-01-01');
       expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
         data: {
@@ -567,6 +569,128 @@ describe('StrategyBuilderComponent', () => {
 
       req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
       await analysis;
+    });
+
+    // Each expiry prices at its own tenor's rate (#2789).
+    it('never prices a new expiry at the previous expiry\'s rate', async () => {
+      function flushSnapshot(rate: number): void {
+        expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+          data: {
+            getOptionsChainSnapshot: {
+              success: true,
+              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+              contracts: [],
+              count: 0,
+              riskFreeRate: rate,
+              dividendYield: null,
+              rateSource: 'FRED',
+              dividendSource: null,
+              error: null,
+            },
+          },
+        });
+      }
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      flushSnapshot(0.0401);
+      await nearChain;
+
+      const farChain = component.onExpirationSelected(farExpiry);
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+
+      // Until the far expiry's snapshot lands there is no rate, so nothing is priced.
+      expect(component.currentPnlCurve()).toEqual([]);
+      expect(component.liveGreeks()).toBeNull();
+
+      flushSnapshot(0.05);
+      await farChain;
+      expect(component.currentPnlCurve().length).toBeGreaterThan(0);
+
+      const analysis = component.analyzeStrategy();
+      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
+      expect(req.request.body.variables.expirationDate).toBe(farExpiry);
+      expect(req.request.body.variables.riskFreeRate).toBe(0.05);
+
+      req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
+      await analysis;
+    });
+
+    it('ignores a late snapshot reply for an expiry the user has left', async () => {
+      function snapshotReply(rate: number) {
+        return {
+          data: {
+            getOptionsChainSnapshot: {
+              success: true,
+              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+              contracts: [],
+              count: 0,
+              riskFreeRate: rate,
+              dividendYield: null,
+              rateSource: 'FRED',
+              dividendSource: null,
+              error: null,
+            },
+          },
+        };
+      }
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      const farChain = component.onExpirationSelected(farExpiry);
+
+      const pending = httpMock.match(r =>
+        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
+      expect(pending.map(r => r.request.body.variables.expirationDate)).toEqual([nearExpiry, farExpiry]);
+      pending[1].flush(snapshotReply(0.05));
+      await farChain;
+      pending[0].flush(snapshotReply(0.0401));
+      await nearChain;
+
+      expect(component.selectedExpiration()).toBe(farExpiry);
+      expect(component.riskFreeRate()).toBe(0.05);
+    });
+
+    it('lets neither a late failure nor a late finish for a left expiry touch the current fetch', async () => {
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      const farChain = component.onExpirationSelected(farExpiry);
+
+      const pending = httpMock.match(r =>
+        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
+      pending[0].flush({ errors: [{ message: 'near expiry failed' }] });
+      await nearChain;
+
+      expect(component.error()).toBeNull();
+      expect(component.chainLoading()).toBe(true);
+
+      pending[1].flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0.05,
+            dividendYield: null,
+            rateSource: 'FRED',
+            dividendSource: null,
+            error: null,
+          },
+        },
+      });
+      await farChain;
+      expect(component.chainLoading()).toBe(false);
+      expect(component.riskFreeRate()).toBe(0.05);
     });
   });
 

@@ -38,9 +38,9 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - run: ruff check --config PythonDataService/ruff.toml scripts/alpaca_onboarding_gates.py scripts/test_alpaca_onboarding_gates.py
-      - run: timeout --signal=KILL 120s python scripts/test_alpaca_onboarding_gates.py -v
+      - run: timeout --signal=KILL 180s python scripts/test_alpaca_onboarding_gates.py -v
       - run: ruff check --config PythonDataService/ruff.toml scripts/measure_fill_to_cash_visibility.py scripts/test_measure_fill_to_cash_visibility.py
-      - run: timeout --signal=KILL 120s python scripts/test_measure_fill_to_cash_visibility.py -v
+      - run: timeout --signal=KILL 180s python scripts/test_measure_fill_to_cash_visibility.py -v
 
   fleet-topology-render:
     name: Fleet Topology Render
@@ -196,7 +196,7 @@ jobs:
         env:
           DOTNET_NOLOGO: true
         run: |
-          timeout --signal=KILL 120s dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults
+          timeout --signal=KILL 180s dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults
       - name: Upload backend test results
         if: failure()
         uses: actions/upload-artifact@v4
@@ -227,8 +227,8 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     env:
-      # Match the runner's 4 vCPUs so each shard stays well inside the
-      # 120-second budget (pytest-xdist reads this variable when `-n auto`
+      # Match the runner's 4 vCPUs so each shard stays well inside its
+      # 120-second target (pytest-xdist reads this variable when `-n auto`
       # is used; at 2 workers shards measured 95-120s on CI). Shard balance
       # comes from scripts/pr_shard_durations.json via scripts.pytest_shard:
       # at 12 hash-only shards the heaviest ran 103-109s (#2682), and 16
@@ -252,7 +252,8 @@ jobs:
 
       # The checked-in runner owns the test roots (pytest.ini testpaths, the
       # same roots the daily run collects), the `not slow` marker filter, the
-      # xdist settings and a hard 120-second wall-clock budget. Slow,
+      # xdist settings, a 120-second target each shard is balanced to, and a
+      # hard 180-second wall-clock limit that fails the job. Slow,
       # PostgreSQL-backed and browser coverage runs daily instead.
       - name: Run quick tests
         run: python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"

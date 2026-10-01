@@ -59,7 +59,7 @@ ordering across unrelated domains.
 
 **Three tiers.** Locally, run lint for the stack you touched plus the test that proves your change. Every PR runs every quick test — not marked `slow`, no Postgres, no browser — wherever it sits. The daily run adds the rest. CI green is the gate.
 
-- Each CI job keeps its 2-minute cap. When CI no longer fits, the slowest tests get `slow` and move to the daily run; no new jobs are added. The cap binds CI jobs, not local runs.
+- Each CI job is sized to finish in 2 minutes and fails only past 3 (owner, 2026-10-01). A job past 2 minutes still passes but says so; when one no longer fits 2 minutes, rebalance it or give the slowest tests `slow` so they move to the daily run. No new jobs are added. These limits bind CI jobs, not local runs.
 - A red daily run opens an issue (or comments on the open one). Fixing it is ordinary bug work.
 - Master requires one `CI passed` roll-up plus CodeQL.
 

@@ -157,20 +157,78 @@ class ExecutionCoverageSupersededFacts:
                 canonicalize(value["exact_execution"])
             )
             value["prior_exact_observations"] = [
-                ExecutionCoverageExactProvenance(
-                    exact_execution=ExecutionSliceFilledFacts.from_facts_json(
-                        canonicalize(item["exact_execution"])
-                    ),
-                    observation_transition_sequence=item["observation_transition_sequence"],
-                    clerk_observed_at_ms=item["clerk_observed_at_ms"],
-                    recorded_at_ms=item["recorded_at_ms"],
-                    recorded_transition_sequence=item["recorded_transition_sequence"],
-                )
+                _exact_provenance_from_mapping(item)
                 for item in value.pop("prior_exact_observations", [])
             ]
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("coverage supersession exact execution is invalid") from exc
         return cls(**value)
+
+
+def _exact_provenance_from_mapping(item: dict) -> ExecutionCoverageExactProvenance:
+    """One recorded exact provenance, read back from its facts JSON object."""
+    return ExecutionCoverageExactProvenance(
+        exact_execution=ExecutionSliceFilledFacts.from_facts_json(canonicalize(item["exact_execution"])),
+        observation_transition_sequence=item["observation_transition_sequence"],
+        clerk_observed_at_ms=item["clerk_observed_at_ms"],
+        recorded_at_ms=item["recorded_at_ms"],
+        recorded_transition_sequence=item["recorded_transition_sequence"],
+    )
+
+
+#: The transition kind and summary code of the chain-total coverage proof (#2786).
+CHAIN_TOTAL_PROVEN_TRANSITION = "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN"
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageChainTotalProvenFacts:
+    """A filled manual chain's exact executions replacing its cumulative coverage (#2786).
+
+    ``head_quantity`` is the chain head's own requested quantity, read from
+    the head's observation that proved the total: no other durable row holds
+    it. Every other figure is re-read from current rows by the fold, which
+    refuses a plan they no longer match. ``made_effective_exact_observations``
+    are the quarantined exacts that become effective fills, each with its
+    original custody clocks; ``effective_exact_execution_ids`` were effective
+    already. ``position_delta`` is ``exact_quantity - prior_effective_quantity``,
+    the one coverage change that moves the position.
+    """
+
+    actor: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    expected_control_revision: int
+    order_ref: str
+    symbol: str
+    side: str
+    head_broker_order_id: str
+    head_quantity: float
+    superseded_cumulative_fill_ids: list[str]
+    effective_exact_execution_ids: list[str]
+    made_effective_exact_observations: list[ExecutionCoverageExactProvenance]
+    exact_quantity: float
+    prior_effective_quantity: float
+    position_delta: float
+    quantity_tolerance: float
+    resolved_uncertainty_id: str | None
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageChainTotalProvenFacts:
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("chain-total coverage facts must be an object")
+        try:
+            value["made_effective_exact_observations"] = [
+                _exact_provenance_from_mapping(item) for item in value["made_effective_exact_observations"]
+            ]
+            return cls(**value)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("chain-total coverage facts are invalid") from exc
 
 
 @dataclass(frozen=True)
@@ -397,6 +455,52 @@ def order_total_proves_coverage(evidence: OrderTotalCoverageEvidence) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class ChainTotalCoverageEvidence:
+    """A manual leg's chain head and every distinct exact execution of its chain, in shares."""
+
+    head_state: str | None
+    head_quantity: float | None
+    exact_quantities: tuple[float, ...]
+
+
+def chain_total_proves_coverage(evidence: ChainTotalCoverageEvidence) -> bool:
+    """Whether a filled manual chain's exact executions are every share its head asked for (#2786).
+
+    The order-total proof above needs the broker's cumulative to equal the
+    recorded fills. A manual leg Alpaca replaced has no such figure: a
+    replacement's ``filled_qty`` may leave out its original's fills
+    (:mod:`manual_order_replacement`), so a cumulative folded from it can
+    under-credit the chain, and the exacts that arrive later conflict with
+    it for ever. The chain has a stronger final figure instead: a head that
+    reports ``filled`` executed its own ``qty``, which is the whole chain's
+    total. When the chain's distinct exact executions sum to it, they are
+    every execution of the chain, so they replace every cumulative-recovery
+    row and the leg's position becomes their total -- the one coverage proof
+    that moves the position. An unreplaced manual leg is a chain of one.
+
+    Formula: state = filled ∧ Q_head > 0 ∧ every q_exact finite and > 0
+      ∧ |fsum(q_exact) − Q_head| < QTY_ATOL (shares, rtol = 0).
+    Reference: Project-authored chain-total coverage proof for issue #2786,
+      extending the #2346 order-level proof to a manual replacement chain;
+      ADR 0036, 2026-10-01 amendment.
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_manual_order_chain_total_proof.py.
+    """
+    if (evidence.head_state or "").lower() != "filled":
+        return False
+    head_quantity = evidence.head_quantity
+    exact = evidence.exact_quantities
+    if head_quantity is None or not exact:
+        return False
+    if not all(_is_finite(value) for value in (head_quantity, *exact)):
+        return False
+    if head_quantity <= 0 or any(quantity <= 0 for quantity in exact):
+        return False
+    return abs(math.fsum(exact) - head_quantity) < QTY_ATOL
+
+
 def _validate_set_economics(
     observations: tuple[CumulativeCoverageObservation | ExactCoverageObservation, ...],
 ) -> ExecutionCoverageSetProofRefusal | None:
@@ -528,22 +632,7 @@ def validate_execution_coverage_superseded_facts(
     if prior_ids != sorted(set(prior_ids)) or exact.execution_id in prior_ids:
         raise ValueError("coverage supersession prior exact identities must be sorted and unique")
     for item in prior:
-        validate_execution_slice_facts(item.exact_execution)
-        if (
-            item.exact_execution.symbol.upper() != facts.symbol.upper()
-            or item.exact_execution.side != facts.side
-            or item.observation_transition_sequence != item.recorded_transition_sequence
-        ):
-            raise ValueError("coverage supersession prior exact provenance is inconsistent")
-        for field_name in (
-            "observation_transition_sequence",
-            "recorded_transition_sequence",
-            "clerk_observed_at_ms",
-            "recorded_at_ms",
-        ):
-            value = getattr(item, field_name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"coverage supersession prior {field_name} is invalid")
+        _validate_exact_provenance(item, symbol=facts.symbol, side=facts.side, subject="coverage supersession prior")
     all_exact = [*(item.exact_execution for item in prior), exact]
     expected_exact_quantity = math.fsum(item.slice_qty for item in all_exact)
     expected_exact_gross_cost = math.fsum(
@@ -572,6 +661,100 @@ def _require_finite_positive_coverage(value: object, *, field: str) -> None:
 def _require_finite_nonnegative_coverage(value: object, *, field: str) -> None:
     if not _is_finite(value) or value < 0:
         raise ValueError(f"{field} must be finite and non-negative")
+
+
+def _validate_exact_provenance(
+    item: ExecutionCoverageExactProvenance, *, symbol: str, side: str, subject: str
+) -> None:
+    """One retained exact's facts and custody clocks, for the leg ``symbol``/``side``."""
+    validate_execution_slice_facts(item.exact_execution)
+    if (
+        item.exact_execution.symbol.upper() != symbol.upper()
+        or item.exact_execution.side != side
+        or item.observation_transition_sequence != item.recorded_transition_sequence
+    ):
+        raise ValueError(f"{subject} exact provenance is inconsistent")
+    for field_name in (
+        "observation_transition_sequence",
+        "recorded_transition_sequence",
+        "clerk_observed_at_ms",
+        "recorded_at_ms",
+    ):
+        value = getattr(item, field_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{subject} {field_name} is invalid")
+
+
+def _require_sorted_unique_strings(values: object, *, field: str) -> None:
+    if (
+        not isinstance(values, list)
+        or any(not isinstance(value, str) or not value for value in values)
+        or values != sorted(set(values))
+    ):
+        raise ValueError(f"{field} must be sorted, unique, non-empty strings")
+
+
+def validate_execution_coverage_chain_total_proven_facts(
+    facts: ExecutionCoverageChainTotalProvenFacts,
+) -> None:
+    """Validate the closed chain-total coverage record before it reaches the hash chain (#2786).
+
+    The fold re-reads every figure but ``head_quantity`` from current rows;
+    this boundary makes the recorded plan self-contained: its binding, its
+    exact set, and the arithmetic that ties its totals to its position delta.
+    """
+    if facts.actor != "AUTOMATIC":
+        raise ValueError("chain-total coverage actor must be AUTOMATIC")
+    for field_name in ("account_id", "db_identity_token", "order_ref", "symbol", "head_broker_order_id"):
+        value = getattr(facts, field_name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"chain-total coverage requires {field_name}")
+    if (
+        isinstance(facts.authority_generation, bool)
+        or not isinstance(facts.authority_generation, int)
+        or facts.authority_generation < 1
+    ):
+        raise ValueError("chain-total coverage requires authority_generation")
+    if (
+        isinstance(facts.expected_control_revision, bool)
+        or not isinstance(facts.expected_control_revision, int)
+        or facts.expected_control_revision < 0
+    ):
+        raise ValueError("chain-total coverage requires expected_control_revision")
+    if facts.side not in {"BUY", "SELL"}:
+        raise ValueError("chain-total coverage requires an exact side")
+    _require_finite_positive_coverage(facts.head_quantity, field="head_quantity")
+    _require_finite_positive_coverage(facts.exact_quantity, field="exact_quantity")
+    _require_finite_nonnegative_coverage(facts.prior_effective_quantity, field="prior_effective_quantity")
+    if facts.quantity_tolerance != QTY_ATOL:
+        raise ValueError("chain-total coverage quantity tolerance is not the pinned QTY_ATOL")
+    if not _is_finite(facts.position_delta) or (
+        facts.position_delta != facts.exact_quantity - facts.prior_effective_quantity
+    ):
+        raise ValueError("chain-total coverage position delta is not its exact total less its prior fills")
+    if abs(facts.exact_quantity - facts.head_quantity) >= facts.quantity_tolerance:
+        raise ValueError("chain-total coverage exact total does not cover the head's quantity")
+    _require_sorted_unique_strings(facts.superseded_cumulative_fill_ids, field="superseded_cumulative_fill_ids")
+    _require_sorted_unique_strings(facts.effective_exact_execution_ids, field="effective_exact_execution_ids")
+    made_effective = facts.made_effective_exact_observations
+    if not isinstance(made_effective, list):
+        raise ValueError("chain-total coverage made-effective exacts must be a list")
+    made_effective_ids = [item.exact_execution.execution_id for item in made_effective]
+    if made_effective_ids != sorted(set(made_effective_ids)) or set(made_effective_ids) & set(
+        facts.effective_exact_execution_ids
+    ):
+        raise ValueError("chain-total coverage exact identities must be sorted and distinct")
+    for item in made_effective:
+        _validate_exact_provenance(item, symbol=facts.symbol, side=facts.side, subject="chain-total coverage")
+    if not facts.superseded_cumulative_fill_ids and not made_effective:
+        raise ValueError("chain-total coverage must supersede a cumulative fill or make an exact effective")
+    if facts.resolved_uncertainty_id is not None and (
+        not isinstance(facts.resolved_uncertainty_id, str) or not facts.resolved_uncertainty_id
+    ):
+        raise ValueError("chain-total coverage resolved uncertainty id is invalid")
+    _require_sorted_unique_strings(facts.evidence_refs, field="evidence_refs")
+    if not facts.evidence_refs:
+        raise ValueError("chain-total coverage requires evidence references")
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime
 
 import numpy as np
 from scipy.stats import lognorm, norm
@@ -29,6 +28,7 @@ from app.models.strategy import (
     StrategyLeg,
 )
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
+from app.utils.session_anchors import calendar_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -622,10 +622,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             request.expiration_date,
         )
 
-        # Days to expiry
-        exp_date = datetime.strptime(request.expiration_date, "%Y-%m-%d").date()
-        today = date.today()
-        days_to_expiry = max((exp_date - today).days, 0)
+        days_to_expiry = calendar_days_to_expiry(request.expiration_date)
 
         strategy_cost = compute_strategy_cost(request.legs)
 

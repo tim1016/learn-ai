@@ -32,6 +32,7 @@ from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
+from app.utils.session_anchors import require_schedulable_end
 
 router = APIRouter()
 
@@ -159,6 +160,7 @@ async def get_strategy_lean_source(name: str) -> StrategyLeanSourceResponse:
 async def get_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
     """Render exact strategy bars and indicators from one policy-store read."""
     try:
+        require_schedulable_end(request.to_ms_utc)
         return await asyncio.to_thread(build_engine_chart, request)
     except (ValueError, OverflowError, ValidationError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

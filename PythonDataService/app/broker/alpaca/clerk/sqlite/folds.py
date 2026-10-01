@@ -24,11 +24,13 @@ from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_versio
 from app.broker.alpaca.clerk.sqlite.budget_folds import fold_deploy_committed, fold_deploy_launched
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    CHAIN_TOTAL_PROVEN_TRANSITION,
     FILL_QTY_EPSILON,
     active_execution_coverage_conflicts,
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_supersession_fold import (
+    fold_execution_coverage_chain_total_proven,
     fold_execution_coverage_superseded,
 )
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
@@ -1091,6 +1093,15 @@ def _fold_execution_coverage_superseded(conn: sqlite3.Connection, payload: dict[
     )
 
 
+def _fold_execution_coverage_chain_total_proven(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Delegate a filled manual chain's exact-total supersession to its own fold (#2786)."""
+    fold_execution_coverage_chain_total_proven(
+        conn,
+        payload,
+        apply_position_delta=_apply_attributed_position_delta,
+    )
+
+
 def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Replace exactly one cumulative fold with verified exact economics.
 
@@ -1176,6 +1187,23 @@ def _complete_filled_manual_order_if_exact_coverage_complete(
     cumulative fold with the same exact evidence. Keeping this lifecycle
     consequence shared prevents their differing admission routes from
     changing manual-ticket completion semantics.
+
+    Formula: complete ⇔ broker_state = filled ∧ no MANUAL_ORDER_REPLACED link
+      ∧ |Q_exact_effective − Q_accepted| ≤ FILL_QTY_EPSILON (shares).
+    Reference: ADR 0036, 2026-09-30 amendment, item 1, and its 2026-10-01
+      amendment (#2786).
+    Canonical implementation: manual_order_completion.manual_order_has_exact_terminal_coverage;
+      this is its replay-time twin.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_manual_order_chain_total_proof.py::test_a_raised_replacement_ends_only_when_exact_executions_cover_its_own_quantity.
+
+    The governing quantity is the accepted leg's only until Alpaca replaced
+    the order; from then on it is the chain head's own, which only an
+    observation of the head carries (#2656) and no row a fold reads holds.
+    So a replaced leg is never completed here -- the original quantity
+    could end it early, at a raised head's partial fill (#2786) -- and the
+    head's next acknowledgement, which every route folds after this one and
+    the sweep repeats while the leg works, completes it against its own.
     """
     manual_order = conn.execute(
         "SELECT effect.kind, effect.state, effect.command_id, effect.effect_operation_id, "
@@ -1196,6 +1224,13 @@ def _complete_filled_manual_order_if_exact_coverage_complete(
         or manual_order["state"] in {"succeeded", "failed", "rejected"}
         or (manual_order["broker_state"] or "").lower() != "filled"
     ):
+        return
+    replaced = conn.execute(
+        "SELECT 1 FROM custody_transitions WHERE order_ref = ? "
+        "AND transition_kind = 'MANUAL_ORDER_REPLACED' LIMIT 1",
+        (order_ref,),
+    ).fetchone()
+    if replaced is not None:
         return
     exact_quantity, _ = reads.effective_exact_fill_totals_for_order(conn, order_ref)
     if abs(exact_quantity - float(manual_order["requested_quantity"])) > FILL_QTY_EPSILON:
@@ -1461,6 +1496,7 @@ DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_f
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_SUPERSEDED", _fold_execution_coverage_superseded)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
+DEFAULT_FOLD_REGISTRY.register(CHAIN_TOTAL_PROVEN_TRANSITION, _fold_execution_coverage_chain_total_proven)
 DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_ACCEPTED", fold_manual_order_accepted)

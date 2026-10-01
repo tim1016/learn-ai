@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -21,12 +22,14 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ExecutionCoverageSetCandidate,
     OrderTotalCoverageEvidence,
     QuarantineObservation,
+    active_execution_coverage_conflicts,
     cumulative_recovery_fills_for_order,
     first_quarantine_per_execution,
     order_total_proven_conflict_execution_ids,
     quarantine_observations_for_order,
 )
-from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts, ManualOrderAcceptedFacts
+from app.broker.contract.models import BrokerOrderLeg
 
 
 def quarantined_exact_provenance_for_conflict(
@@ -154,6 +157,134 @@ def order_total_coverage_evidence(
         quarantined_exact_quantities=tuple(
             quarantined[execution_id].slice_qty for execution_id in sorted(quarantined)
         ),
+    )
+
+
+#: The exact evidence a real broker chain's executions carry. A manual leg is
+#: never simulated, so a ``simulated_execution`` row refuses the chain proof.
+_BROKER_EXACT_EVIDENCE_SOURCES = frozenset({"websocket", "activity_recovery"})
+
+
+@dataclass(frozen=True)
+class ChainTotalCoveragePlan:
+    """What a chain-total proof would change on one manual leg, read from current rows (#2786).
+
+    ``exact_quantities`` are every distinct exact execution of the chain --
+    effective already, or quarantined and made effective by the proof --
+    sorted by execution id; ``exact_quantity`` and
+    ``prior_effective_quantity`` are ``math.fsum`` totals, in shares, of
+    those and of every currently effective fill.
+    """
+
+    symbol: str
+    side: str
+    superseded_cumulative_fill_ids: tuple[str, ...]
+    effective_exact_execution_ids: tuple[str, ...]
+    made_effective: tuple[ExecutionCoverageExactProvenance, ...]
+    exact_quantities: tuple[float, ...]
+    exact_quantity: float
+    prior_effective_quantity: float
+    resolved_uncertainty_id: str | None
+
+
+def chain_total_coverage_plan(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> ChainTotalCoveragePlan | None:
+    """Read one manual leg's exact executions, cumulative rows and open coverage episode (#2786).
+
+    The one reader both the chain-total planner and its fold use, so replay
+    re-derives exactly what was planned. ``None`` means there is nothing a
+    chain-total proof may change, or no safe way to read it: not a manual
+    leg; nothing to supersede or make effective; unreadable quarantine
+    evidence; one execution id quarantined with two economics; a fill or
+    exact on another side or symbol than the leg's, or from a simulated
+    source; or an open coverage episode the proof does not answer -- more
+    than one, or one no quarantined exact of this leg opened (the account
+    activity's over-quantity refusal and a changed redelivery of an
+    effective execution stay for an operator).
+    """
+    acceptance = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
+        "AND transition_kind = 'MANUAL_ORDER_ACCEPTED' ORDER BY sequence ASC LIMIT 1",
+        (order_ref,),
+    ).fetchone()
+    if acceptance is None:
+        return None
+    leg = BrokerOrderLeg.model_validate(ManualOrderAcceptedFacts.from_facts_json(acceptance["facts_json"]).leg)
+    symbol, side = leg.symbol.strip().upper(), leg.side.value.upper()
+    observations = quarantine_observations_for_order(conn, order_ref=order_ref)
+    if _unreadable_source_ids(observations):
+        return None
+    fills = conn.execute(
+        "SELECT fill_id, qty, side, execution_id, evidence_source FROM fills current_fill "
+        "WHERE order_ref = ? AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = current_fill.execution_id) ORDER BY fill_id ASC",
+        (order_ref,),
+    ).fetchall()
+    cumulative_ids: list[str] = []
+    exact_by_id: dict[str, float] = {}
+    for fill in fills:
+        if fill["side"] != side:
+            return None
+        if fill["evidence_source"] == "cumulative_recovery":
+            cumulative_ids.append(fill["fill_id"])
+        elif fill["evidence_source"] in _BROKER_EXACT_EVIDENCE_SOURCES and fill["execution_id"]:
+            exact_by_id[fill["execution_id"]] = float(fill["qty"])
+        else:
+            return None
+    effective_ids = tuple(sorted(exact_by_id))
+    quarantined: dict[str, ExecutionCoverageExactProvenance] = {}
+    for provenance in _exact_provenance(observations):
+        exact = provenance.exact_execution
+        if exact.execution_id in exact_by_id:
+            continue
+        if (
+            exact.symbol.strip().upper() != symbol
+            or exact.side != side
+            or exact.evidence_source not in _BROKER_EXACT_EVIDENCE_SOURCES
+            or quarantined.setdefault(exact.execution_id, provenance).exact_execution != exact
+        ):
+            return None
+    active = active_execution_coverage_conflicts(conn, order_ref=order_ref)
+    if len(active) > 1 or (active and not _opened_by_quarantine(active[0], observations, quarantined)):
+        return None
+    if not cumulative_ids and not quarantined:
+        return None
+    for execution_id, provenance in quarantined.items():
+        exact_by_id[execution_id] = provenance.exact_execution.slice_qty
+    exact_quantities = tuple(exact_by_id[execution_id] for execution_id in sorted(exact_by_id))
+    return ChainTotalCoveragePlan(
+        symbol=symbol,
+        side=side,
+        superseded_cumulative_fill_ids=tuple(cumulative_ids),
+        effective_exact_execution_ids=effective_ids,
+        made_effective=tuple(quarantined[execution_id] for execution_id in sorted(quarantined)),
+        exact_quantities=exact_quantities,
+        exact_quantity=math.fsum(exact_quantities),
+        prior_effective_quantity=math.fsum(float(fill["qty"]) for fill in fills),
+        resolved_uncertainty_id=active[0].uncertainty_id if active else None,
+    )
+
+
+def _opened_by_quarantine(
+    conflict: ActiveExecutionCoverageConflict,
+    observations: tuple[QuarantineObservation, ...],
+    quarantined: dict[str, ExecutionCoverageExactProvenance],
+) -> bool:
+    """Whether a quarantine of a not-yet-effective exact opened this coverage episode.
+
+    An episode's id names the transition that raised it
+    (``uncertainty_folds.fold_uncertainty_raised``); a quarantine that opens
+    an episode carries the episode's facts and roots it at its own exact.
+    """
+    return conflict.conflict_execution_id in quarantined and any(
+        observation.facts is not None
+        and observation.facts.uncertainty is not None
+        and observation.facts.exact_execution.execution_id == conflict.conflict_execution_id
+        and conflict.uncertainty_id == f"uncertainty:{observation.sequence}"
+        for observation in observations
     )
 
 

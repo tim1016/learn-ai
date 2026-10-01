@@ -16,6 +16,7 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import (
     custody_fee_attribution,
     record_fee_evidence,
 )
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.services.session_authority import et_minute_of_day_ms
@@ -238,7 +239,7 @@ async def test_background_producer_uses_completion_proof_without_ui(day_pnl_repo
             return BrokerActivityEvidence(activities=[], history_complete=True)
 
     _seed(day_pnl_repo)
-    assert await FeeEvidenceSync(repo=day_pnl_repo, read=Read()).tick()
+    assert await FeeEvidenceSync(repo=day_pnl_repo, read=Read(), intake=ReentrantAsyncLock()).tick()
     assert day_pnl_repo.fee_attribution(now_ms=NOON).known
 
 
@@ -280,7 +281,7 @@ async def test_a_malformed_activity_row_refuses_one_tick_instead_of_ending_the_p
     monkeypatch.setattr(fee_evidence_sync.asyncio, "sleep", lambda _seconds: real_sleep(0))
     _seed(day_pnl_repo)
     client = _Client()
-    sync = FeeEvidenceSync(repo=day_pnl_repo, read=AlpacaBroker(client=client))  # type: ignore[arg-type]
+    sync = FeeEvidenceSync(repo=day_pnl_repo, read=AlpacaBroker(client=client), intake=ReentrantAsyncLock())  # type: ignore[arg-type]
 
     with caplog.at_level(logging.WARNING, logger=fee_evidence_sync.__name__):
         sync.start()
@@ -339,13 +340,14 @@ async def test_busy_account_backfills_to_its_oldest_fill_day_instead_of_bricking
     older = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(100)]
     history = _PagedHistory([*today, *older])
     known = []
-    for sync in (FeeEvidenceSync(repo=repo, read=history),) * 2 + (FeeEvidenceSync(repo=repo, read=history),):
+    first = FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock())
+    for sync in (first, first, FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock())):
         await sync.tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert known == [False, False, True]
     # A fresh producer (restart) resumes from the retained cursor.
     assert history.tokens == [None, "row-299", None, "row-599", None, "row-899"]
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens[-1:] == [None] and repo.fee_attribution(now_ms=NOON).known
 
 
@@ -402,7 +404,7 @@ async def test_fee_in_a_gap_between_newest_first_reads_refuses_until_the_gap_wal
     bot = f"bot:{DAY_PNL_SID}"
     old = _before_floor(400)
     history = _PagedHistory(old)
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert repo.fee_attribution(now_ms=NOON).known
     # 350 rows arrive before the next poll. The fill day's fee posted after
     # that day ended and sorts at its start, under today's fills.
@@ -412,7 +414,7 @@ async def test_fee_in_a_gap_between_newest_first_reads_refuses_until_the_gap_wal
     gapped = repo.fee_attribution(now_ms=NOON)
     assert not gapped.known, f"the unread fee was left out of {gapped.total_for(bot)}"
     assert "The broker activity read does not cover this fee day." in gapped.unresolved
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens == [None, None, None, "new-299"]
     assert not _fee_records(repo)[-1].history_complete
     filled = repo.fee_attribution(now_ms=NOON)
@@ -421,7 +423,7 @@ async def test_fee_in_a_gap_between_newest_first_reads_refuses_until_the_gap_wal
         ("gap-fee", "observed", Decimal("0.05"))
     ]
     # Later polls re-read the fee's neighbours; it is still counted once.
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens[-1:] == [None]
     assert repo.fee_attribution(now_ms=NOON).total_for(bot) == Decimal("0.05")
     assert [row.activity_id for record in _fee_records(repo) for row in record.activities].count("gap-fee") == 1
@@ -441,7 +443,7 @@ async def test_a_date_only_row_in_a_newer_read_cannot_prove_it_met_retained_hist
     _seed(repo)
     afternoon = [_outside_fill(f"old-{index}", YESTERDAY_NOON + 3_600_000 - index * 1_000) for index in range(50)]
     history = _PagedHistory(afternoon)
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert repo.fee_attribution(now_ms=NOON).known
     burst = _burst(400)
     history.rows = [*burst[:150], _activity("fee", "FEE", YESTERDAY_NOON, -0.05), *burst[150:], *afternoon]
@@ -449,7 +451,7 @@ async def test_a_date_only_row_in_a_newer_read_cannot_prove_it_met_retained_hist
     gapped = repo.fee_attribution(now_ms=NOON)
     assert not gapped.known, "a date-only row joined the newest read to retained history"
     assert "The broker activity read does not cover this fee day." in gapped.unresolved
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens == [None, None, None, "new-298"]
     assert repo.fee_attribution(now_ms=NOON).known
 
@@ -466,12 +468,12 @@ async def test_outside_short_sale_in_a_gap_is_read_instead_of_counted_covered(da
     _seed(repo)
     old = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
     history = _PagedHistory(old)
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert repo.fee_attribution(now_ms=NOON).known
     burst = _burst(349)
     short = _outside_fill("gap-short", NOON - 320_500, side="sell_short", order="console-short")
     history.rows = [*burst[:320], short, *burst[320:], *old]
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     result = repo.fee_attribution(now_ms=NOON)
     assert not result.known, "the short sale in the gap was never read"
     assert history.tokens == [None, None, "new-299"]
@@ -487,11 +489,11 @@ async def test_closing_a_gap_hands_back_to_the_history_walk_where_it_stopped(day
     today = [_outside_fill(f"row-{index}", NOON - 1_000_000 - (index + 1) * 1_000) for index in range(900)]
     older = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(100)]
     history = _PagedHistory([*today, *older])
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     history.rows = [*_burst(400), *today, *older]
     known = []
     for _ in range(3):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     # The gap walk read down to row-199; the history walk resumes at row-599.
     assert history.tokens == [None, "row-299", None, "new-299", None, "row-599", None, "row-899"]
@@ -516,7 +518,7 @@ async def test_a_walk_read_that_loses_its_cursor_resumes_from_the_next_head_read
     history.lose_cursor_once.add("row-299")
     known = []
     for _ in range(4):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert history.tokens == [None, "row-299", None, "row-299", None, "row-599", None, "row-899"]
     assert known == [False, False, False, True]
@@ -530,12 +532,12 @@ async def test_a_gap_opened_by_a_cursorless_read_is_walked_from_the_next_head_re
     _seed(repo)
     old = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
     history = _PagedHistory(old)
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     history.rows = [*_burst(400), *old]
     history.lose_cursor_once.add(None)
     known = []
     for _ in range(2):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert history.tokens == [None, None, None, "new-299"]
     assert known == [False, True]
@@ -605,13 +607,13 @@ async def test_records_written_before_the_trade_reach_fact_refuse_until_a_read_r
     _seed(repo)
     old = _before_floor(400)
     history = _PagedHistory(old)
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert '"oldest_trade_at_ms"' in repo.custody_transitions()[-1]["facts_json"]
     history.rows = [*_burst(5), *old]
     await _record_master_era_head_read(repo, history)
     assert [row.activity_id for row in _fee_records(repo)[-1].activities] == [f"new-{index}" for index in range(5)]
     assert not repo.fee_attribution(now_ms=NOON).known
-    await FeeEvidenceSync(repo=repo, read=history).tick()
+    await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens[-1:] == [None]
     assert repo.fee_attribution(now_ms=NOON).known
 
@@ -652,7 +654,7 @@ async def test_a_record_without_a_trade_row_never_sends_the_walk_past_custodys_f
     history.tokens.clear()
     known = []
     for _ in range(3):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert known == [False, True, True]
     # Two gap walks reach the history retained below; no read starts before the floor.
@@ -681,7 +683,7 @@ async def test_a_first_read_without_a_trade_row_never_sends_the_walk_past_custod
     history.tokens.clear()
     known = []
     for _ in range(4):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert known == [False, False, True, True]
     assert history.tokens == [None, "new-299", None, "new-599", None, "deposit-199", None]
@@ -710,7 +712,7 @@ async def test_a_date_only_row_never_proves_how_far_a_read_reached(tmp_path) -> 
         unread = repo.fee_attribution(now_ms=NOON)
         assert not unread.known, "a midnight stamp counted as reaching custody's floor"
         assert "The broker activity read does not cover this fee day." in unread.unresolved
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         assert history.tokens == [None, None, "late-fee"]
         read = repo.fee_attribution(now_ms=NOON)
         assert "The broker activity read does not cover this fee day." not in read.unresolved
@@ -743,12 +745,12 @@ async def test_restarted_producer_resumes_an_unfinished_gap_walk_and_older_days_
         this_morning = [_outside_fill(f"morning-{index}", TODAY_OPEN - index * 1_000) for index in range(20)]
         older = [_activity(f"old-{index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(50)]
         history = _PagedHistory([*this_morning, *older])
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         assert repo.fee_attribution(now_ms=NOON).known
         # 700 rows arrive after this morning's before the next poll: one tick
         # reads the newest 300 and walks 300 more, still short of the gap's end.
         history.rows = [*_burst(700), *this_morning, *older]
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         gapped = repo.fee_attribution(now_ms=NOON)
         assert not gapped.known, "today's unread rows were counted as covered"
         assert gapped.unresolved == ("The broker activity read does not cover this fee day.",)
@@ -759,7 +761,7 @@ async def test_restarted_producer_resumes_an_unfinished_gap_walk_and_older_days_
         repo.close()
     restarted = ClerkSqliteRepository.open(account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=tmp_path, clock=day_pnl_clock)
     try:
-        await FeeEvidenceSync(repo=restarted, read=history).tick()
+        await FeeEvidenceSync(repo=restarted, read=history, intake=ReentrantAsyncLock()).tick()
         assert history.tokens[-2:] == [None, "new-599"]
         assert restarted.fee_attribution(now_ms=NOON).known
         assert fill_day(restarted).total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.01")
@@ -802,7 +804,7 @@ async def test_head_read_at_custody_floor_never_walks_into_older_history(day_pnl
     history = _PagedHistory([*recent, ancient, *older])
     known = []
     for _ in range(3):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert known == [True, True, True]
     # The head already reached custody's only day: no continuation is due.
@@ -822,7 +824,7 @@ async def test_walk_stops_at_custody_floor_and_never_attributes_older_rows(day_p
     history = _PagedHistory([*today, *before_floor, ancient, *beyond])
     known = []
     for _ in range(4):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
         known.append(repo.fee_attribution(now_ms=NOON).known)
     assert known == [False, False, True, True]
     assert history.tokens == [None, "row-299", None, "row-599", None, "row-899", None]
@@ -890,7 +892,7 @@ async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_
     beyond = [_activity(f"row-{901 + index}", "CSD", older.occurred_at_ms - 86_400_000 - index) for index in range(600)]
     history = _PagedHistory([*head, newer, *between, older, *beyond])
     for _ in range(4):
-        await FeeEvidenceSync(repo=repo, read=history).tick()
+        await FeeEvidenceSync(repo=repo, read=history, intake=ReentrantAsyncLock()).tick()
     assert history.tokens == [None, "row-299", None, "row-599", None, "row-899", None]
     result = repo.fee_attribution(now_ms=NOON)
     assert result.known

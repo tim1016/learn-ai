@@ -86,9 +86,9 @@ from app.config import FleetSettings
 #: Each role's document costs a real ``app.main`` import in its own
 #: subprocess, which is the whole point (see the probe below) and also makes
 #: this module too expensive for the pull-request gate. CI's Python shards
-#: already measure 95-120s against a hard 120-second budget
-#: (``.github/workflows/ci.yml``), so the two imports here are enough to
-#: push a shard over it -- they did, on the first push of #2108. A local
+#: are balanced to a 120-second target (``.github/workflows/ci.yml``), and
+#: the two imports here were enough to push a shard past it -- they did, on
+#: the first push of #2108. A local
 #: measurement does not settle this: the developer machine ran the whole
 #: fast gate in 63s where CI needs most of its 120s for the same work.
 #: ``run_fast_tests`` selects ``-m "not slow"``, and the scheduled
