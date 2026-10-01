@@ -8,7 +8,7 @@ Scope: 2-day window (2026-02-09 → 2026-02-11). QC free tier's minute-data
 trailing window (~90 days, per https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/)
 truncated the achievable backtest to this window; 1 entry fill fires on
 2026-02-10, no exit (positive prediction every day). Full round-trip P&L
-coverage is not pursued (decision 2026-05-12 — see authority doc § 10).
+coverage is not pursued (decision 2026-05-12 — see authority doc § 7).
 
 ``_build_our_fills`` imports the prediction set, runs ``BacktestEngine``
 directly (bypassing ``run_strategy_spec``) so it captures order_events

@@ -1,156 +1,17 @@
 # Alpaca Clerk SQLite — pinned implementation contracts
 
-- **Status:** Pinned for implementation (Slice 1 / issue #1374, PRD Phase 0).
-  Produced alongside ADR 0035, which remains **Proposed** — this document does
-  not change the ADR's acceptance status. It exists so Slices 2–10 build
-  against one frozen contract instead of re-deriving it from prose each time.
-  **Corrected by the corrective foundation slice** (see
-  `docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md`
-  and `docs/audits/open-pr-review-2026-08-05.md`): §3–§4 no longer describe a
-  standalone command reservation, which directly contradicted PRD §4 goal 3
-  and §9.3; §9 gained per-sequence mirror reconciliation, generation
-  validation, lease renewal, and full path confinement. `SCHEMA_VERSION`
-  bumped 1 → 2 for the DDL changes this correction required.
-- Issue #1377 (ENTER) added an index on `custody_transitions(order_ref)` (§3)
-  — no new columns, but a DDL change all the same, so `SCHEMA_VERSION` bumped
-  2 → 3. There is no live database to migrate yet (human cutover, #1383); the
-  bump exists so `open()`'s version check rejects a stale on-disk DDL
-  shape with a clear error instead of silently running without the index.
-- The consolidated Account Clerk control-plane PR keeps order provenance
-  immutable and records later resolution custody in `operation_order_links`.
-  The new table and once-only reducing-order index bump `SCHEMA_VERSION` 3 → 4.
-  There is still no live database to migrate (human cutover, #1383).
-- Issue #1395 adds covering read-model indexes for bounded account/bot
-  snapshots and timeline pages. `SCHEMA_VERSION` bumps 4 → 5; there is still
-  no activated SQLite account to migrate before the human cutover in #1383.
-- The execution-ledger authority expansion is a fresh schema-v7 generation.
-  It adds execution provenance to the `fills` fold plus `external_orders`,
-  `bot_config`, and `decision_receipts`. The registered v6 → v7 migration is
-  deliberately guarded: it atomically adds the complete v7 DDL only after
-  proving every operational v6 table is empty. A data-bearing v6 authority
-  fails closed and remains untouched; the human cutover initializes a clean
-  v7 authority generation after the existing account is safely retired.
-- Schema-v8 keeps the exact custody transition sequence which materialized
-  each execution, so equal broker timestamps never force a fabricated
-  secondary ordering key. It also replaces the ambiguous external-order
-  `price` field with the broker's order type plus separate limit, stop, and
-  filled-average prices. The additive v7 → v8 migration backfills only
-  execution rows whose transition facts name their execution identity; any
-  unprovable legacy sequence remains unavailable to sequence-sensitive reads.
-- Schema-v9 makes the economic actor explicit through immutable
-  `custody_subjects`: an existing strategy receives exactly one `BOT` subject,
-  and a trusted human receives exactly one `MANUAL_OPERATOR` subject. The v8 →
-  v9 path is deliberately **offline only**: normal startup refuses v8, while
-  the operator ceremony verifies a backup, replays finalized mirror facts into
-  a staged v9 authority, proves journal/projection parity, fsyncs a prepared
-  receipt, and atomically swaps only a verified stage. A stopped retry
-  finalizes a post-swap prepared receipt only after it re-verifies the selected
-  v9 journal identity. See the recovery runbook's “Offline v8-to-v9
-  custody-subject upgrade” procedure.
-- Schema-v10 adds the immutable `manual_order_cancellations` resource and
-  expands the subject-bound effect trigger to admit its `CANCEL` effect. The
-  registered v9 → v10 migration creates that resource and replaces the two
-  effect-subject triggers in the same transaction; the verified v8 → v9
-  ceremony remains exactly v9 and startup then applies this additive upgrade.
-- Schema-v11 adds an immutable `sequence_index` to each replayable manual
-  ticket leg. The registered v10 → v11 migration deterministically backfills
-  distinct indices for every historical ticket, adds the per-ticket uniqueness fence, and
-  replaces the leg-identity trigger so an operator cannot reorder a reserved
-  ticket after confirmation.
-- Schema-v12 folds `holds` into `uncertainties` (ADR 0048 Decision 2): the
-  hold table is retired and its name survives only as a read-only view over
-  the uncertainty rows whose `reason_code` is a registered hold cause. The
-  registered v11 → v12 migration drops the table with its indexes and
-  subject-compatibility triggers and creates the view in the same
-  transaction, so one vocabulary — the registry — decides what a hold is.
-- Schema-v13 adds `envelope_reservations`, the cash one accepted ENTER
-  claims until its fills are observed (ADR 0059 Decision 4). It was first
-  product evidence outside the hash chain, like `decision_receipts`: written
-  inside `ENTER_ACCEPTED`'s transaction, never in `facts_json`, never in the
-  mirror. Every reservation is now folded from `ENTER_ACCEPTED`'s facts (the
-  exact price and the recorded fee provision, #2553), so it replays; a row
-  written the earlier way carries no provision and refuses to price an
-  unfilled remainder's fee. It also indexes `external_orders.observed_at_ms`: the day-P&L rule asks
-  that column one question on every 15 s envelope tick and the table's only
-  index was on `broker_order_id`.
-  The registered v12 → v13 migration is the same statement list the fresh
-  block renders, so it also re-publishes the `holds` view — a view's SQL is
-  stored text fixed at the version that created it, and only re-rendering it
-  from `HOLD_REASON_CODES` makes an upgraded file project the new
-  loss-hold cause exactly as a fresh one does.
-- Schema-v14 admits `simulated_execution` into the `fills.evidence_source`
-  vocabulary (#2178). A deterministic no-submit adapter (the Shadow and
-  Dry-Run worlds) executes entirely inside `submit` and shapes each fill
-  event with its own durable execution identity, so its authoritative
-  submission response folds as exact execution slices — not through the
-  generic cumulative-recovery delta that read every simulated fill as
-  incomplete coverage and raised a false `needs_attention` flag on healthy
-  Shadow bots. SQLite cannot ALTER a CHECK constraint, so the registered
-  v13 → v14 migration replaces the table (the v11 → v12 holds replacement
-  is the precedent) and backfills only persisted rows whose own durable
-  evidence proves they were Shadow-synthesized: the order's
-  `broker_order_id` is the synthesized `shadow-order:<client_order_id>`
-  identity and the order owns exactly one cumulative fill. Real Paper/Live
-  cumulative recovery rows are untouched by construction — the re-derived
-  `shadow-execution:` identity is the Shadow world's own namespace, never a
-  fabricated broker receipt. The Dry-Run world's legacy rows are not
-  re-tagged by the migration; they convert lazily through the
-  auto-supersession proof when their order is next observed.
-- Schema-v15 is index-only (#2305): `ix_fills_order_ref` and
-  `ix_fills_superseded_execution_ref` cover the effective-fill predicate the
-  reconciliation worklist evaluates per nonterminal order, to decide whether
-  a terminal order's recorded fills still fall short of the broker's
-  reported cumulative (`ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity`,
-  omitted when absent so every earlier acknowledgement stays `{}`). Every
-  historical ENTER stays nonterminal, so without them that read scanned
-  `fills` once per order and again per fill. The registered v14 → v15
-  migration is the same two `CREATE INDEX IF NOT EXISTS` statements.
-- Schema-v16 is index-only (#2363): `ix_custody_transitions_resolution_summary`
-  (partial, `UNCERTAINTY_RESOLVED` rows only) lets the unfoldable-broker-order
-  fence read its operator reviews
-  (`UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED` resolutions) without scanning the
-  append-only journal on every sweep of a resting order, and
-  `ix_uncertainties_reason_code` lets the day-P&L fact read every
-  `UNFOLDABLE_BROKER_ORDER` episode without scanning `uncertainties`. The
-  registered v15 → v16 migration is the same two `CREATE INDEX IF NOT EXISTS`
-  statements.
-- Schema-v17 adds `exit_recovery_checks`, one replaceable freshness row per bot.
-  It stores the current episode, lease owner, successful-check and completed-pass
-  times, and configured interval. It stores no failure budget or recovery decision:
-  those remain hash-chained `EXIT_RECOVERY_EVALUATED` facts. The additive v16 → v17
-  migration starts with no freshness proof; the current owner must complete a pass.
-- Schema-v18 adds `strategy_exit_terms`, the single immutable, journal-rebuildable
-  projection of each bot's execution terms. The v17 → v18 migration folds existing
-  registration and `EXIT_TERMS_SEALED` facts without rewriting their hashes.
-  After arming refresh, the explicit legacy upgrade seals any remaining old
-  registrations once and appends `EXIT_TERMS_UPGRADE_COMPLETED`. New Starts must
-  supply deployed terms; binding JSON is never a pricing or arming authority.
-- Schema-v22 (#2555) adds `released_cents` and `held_cents` to
-  `deployment_budgets`: what a Stop released and what stayed claimed then, folded
-  from its `RUN_STOPPED` facts (both or neither) so a money read takes them from
-  the budget row instead of searching the journal. The v21 → v22 migration fills
-  them from the Stops already recorded, without rewriting any hash.
-- Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
-  captured *every* same-strategy/symbol sibling entry; it now captures every
-  sibling that is still **cancel-provable**, excluding one already carrying
-  durable proof that the broker never accepted it (no broker order id, no
-  acknowledgement, no fill, and a definitive-absence void on its owning
-  ENTER). Such an order can hold no exposure and can never be cancelled, so
-  enumerating it only gave each reconciliation pass a dead order to prove —
-  the mechanism behind fleet-stress finding S15c. The EXIT's own targeted
-  entry is always captured, whatever its state. No DDL change, so
-  `SCHEMA_VERSION` is unchanged; the shared every-ENTRY read that safe
-  flatten, runtime recovery and the stuck-EXIT watchdog use is unchanged too.
-- **Source of truth ranking:** ADR 0035 (decision rationale) →
-  `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
-  contract) → this document (concrete, implementable pin). Where this document
-  adds detail the PRD left unspecified (e.g. exact columns on `positions` or
-  `holds`), that detail is a Slice 1 implementation decision, called out
-  inline, and is binding on Slice 2 onward exactly like the rest of this file.
-- **Scope:** logical schema (DDL), required uniqueness/immutability, PRAGMA
-  set, transaction boundaries, command + custody state machines, hash-chain
-  row format, write-only mirror line format, and fail-closed startup checks.
-  No production code changes ship in this slice.
+- **Status:** The binding annex to
+  [ADR 0035](adrs/0035-alpaca-clerk-sqlite-event-sourced-authority.md#pinned-implementation-contracts)
+  (PRD Phase 0, issue #1374). ADR 0035 holds the decision rationale; this
+  document holds the invariants and reasons the code alone cannot state. Where
+  it adds detail the ADR leaves unspecified, that detail is binding too.
+- **Code holds the rest:** the DDL, the PRAGMA set and the current schema
+  version with its registered migrations are `SCHEMA_DDL`, `PRAGMA_STATEMENTS`,
+  `configure_connection`, `SCHEMA_VERSION` and the migrations in
+  `app/broker/alpaca/clerk/sqlite/schema.py`. The write-only mirror line format
+  is `sqlite/mirror.py`. Sections 2 and 8 restated that code and §10 was build
+  history, so all three are gone; the kept sections keep their numbers because
+  code cites them.
 
 ## 1. Database identity (PRD §9.1)
 
@@ -197,36 +58,6 @@ mechanism in this document.) Slice 2 owns writing to it as part of the
 pins only that the file exists, its format, and that startup consults it —
 see §9 check 2.
 
-## 2. PRAGMA / runtime configuration (PRD §9.2)
-
-Enabled and verified on every connection open, in this order:
-
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = FULL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;   -- ms; Slice 2 may tune, must stay bounded and documented
-```
-
-- All mutations use `BEGIN IMMEDIATE ... COMMIT`. No bare `BEGIN`.
-- One application-owned write coordinator (an `asyncio.Lock`-equivalent
-  serializing writers within the process) sits in front of `BEGIN IMMEDIATE`
-  — belt-and-suspenders, not a substitute for it.
-- A durable per-account **execution lease** (a row in `control_meta`, see
-  below) and a transactionally claimed **operation work item** (a row-level
-  claim on the owning `effect_operations` row) are acquired before any broker
-  contact. `BEGIN IMMEDIATE` proves single-writer-at-the-database; it does not
-  prove single-process. The lease + work claim close that gap. Claims are
-  exclusive even for the same process owner: each attempt gets a new token,
-  renews that exact still-live token before and after broker I/O, revalidates
-  it before folding evidence, and CAS-releases only its own token. An expired
-  attempt cannot resurrect itself or mutate projections after a successor
-  takes over.
-- A startup topology fence rejects a second local scheduler, stream-consumer,
-  or reconciler registration for the same account within one process, and
-  rejects a second process from acquiring the lease while it is held and
-  unexpired.
-
 ## 3. Logical schema (PRD §9.3)
 
 `custody_transitions` is the sole canonical authority. Every other
@@ -240,7 +71,7 @@ The DDL itself is code: `SCHEMA_DDL` in
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
 `command_id`, `effect_operation_id`, `order_ref`) are `DEFERRABLE INITIALLY
 DEFERRED` — discovered as a genuine implementation-level necessity while
-building Slice 2, per §10. A transition legitimately creates the very
+building Slice 2. A transition legitimately creates the very
 entity it references in the same atomic commit (e.g. a
 `STRATEGY_INSTANCE_REGISTERED` transition's fold inserts the
 `strategy_instances` row it points at). SQLite checks a plain `REFERENCES`
@@ -382,7 +213,7 @@ duplicating the whole table:
 
 | Transition | Required facts beyond the outer transition row |
 | --- | --- |
-| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry) and `entry_order_refs` (every still-cancel-provable same-strategy/symbol sibling entry captured before broker contact, plus the targeted entry itself — see the #1775 amendment above for what "cancel-provable" excludes and why). There is no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity are not knowable until every entry is terminal and refreshed. |
+| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry) and `entry_order_refs` (every still-cancel-provable same-strategy/symbol sibling entry captured before broker contact, plus the targeted entry itself — see the #1775 note below for what "cancel-provable" excludes and why). There is no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity are not knowable until every entry is terminal and refreshed. |
 
 `EXIT_REDUCING_ORDER_CREATED` falls outside §3d's table the same way §3e's two
 kinds do — it creates an `orders` row, but that row has no symbol/side/quantity
@@ -396,6 +227,18 @@ fidelity concern:
 | `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
 | `ENTRY_NEVER_ACCEPTED` (#1775) | `reason`, `why` | Records that an enumerated entry provably never reached the broker, so cancel proof has a terminal answer instead of folding `ORDER_CANCEL_UNCERTAIN` forever. Deliberately **not** `ORDER_SUBMIT_FAILED`: this transition belongs to the EXIT that enumerated the dead entry, and that EXIT has not failed. The fold releases the exact `(effect, order)` identity from any open unknown-outcome episode and returns the effect to `in_progress` only when nothing else about it is still unknown. The entry's own ENTER is voided separately, through the canonical definitive-absence producer. |
 | `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |
+
+**Cancel-provable siblings (#1775).** `EXIT_ACCEPTED.entry_order_refs`
+captured *every* same-strategy/symbol sibling entry; it now captures every
+sibling that is still **cancel-provable**, excluding one already carrying
+durable proof that the broker never accepted it (no broker order id, no
+acknowledgement, no fill, and a definitive-absence void on its owning
+ENTER). Such an order can hold no exposure and can never be cancelled, so
+enumerating it only gave each reconciliation pass a dead order to prove —
+the mechanism behind fleet-stress finding S15c. The EXIT's own targeted
+entry is always captured, whatever its state. The shared every-ENTRY read
+that safe flatten, runtime recovery and the stuck-EXIT watchdog use is
+unchanged.
 
 ### 3g. Uncertainty transition facts (#1380, Part A)
 
@@ -493,6 +336,12 @@ generic reservation lookup and the domain-specific admission decision (e.g.
 method, which accepts a small typed transition-plan builder rather than
 exposing a lock, cursor, connection, or arbitrary SQL callback.
 
+All mutations use `BEGIN IMMEDIATE ... COMMIT`. No bare `BEGIN`. The
+application-owned write coordinator (an `asyncio.Lock`-equivalent serializing
+writers within the process) sits in front of `BEGIN IMMEDIATE` —
+belt-and-suspenders, not a substitute for it. Single-process ownership of
+broker contact is the lease and work claim in §9a.
+
 Every row that carries a `custody_transitions` insert obeys R9's ordered
 fsync fence exactly:
 
@@ -503,8 +352,8 @@ fsync fence exactly:
    prepared identity, append the `custody_transitions` row, apply every
    fold, insert the matching `mirror_fence` PREPARE row, commit.
 3. **Finalize** — fsync the matching finalize line to the *external* mirror
-   file. This step writes nothing back into SQLite (§3, `mirror_fence`
-   comment) — the external fsync succeeding is itself the finalization fact.
+   file. This step writes nothing back into SQLite (the `mirror_fence`
+   comment in `SCHEMA_DDL`) — the external fsync succeeding is itself the finalization fact.
    Only after it completes may the backend return accepted or claim the
    operation for broker contact.
 
@@ -527,7 +376,7 @@ stateDiagram-v2
 
 Closed vocabulary (R3): `reserved | rejected | accepted | in_progress |
 unknown | succeeded | failed`. `commands.state` and `effect_operations.state`
-CHECK constraints above enforce this vocabulary at the schema level.
+CHECK constraints in `SCHEMA_DDL` enforce this vocabulary at the schema level.
 `UNKNOWN` is terminal only for the synchronous HTTP wait (endpoint may return
 `202 Accepted`); it is nonterminal for SQLite custody — no CHECK constraint
 can express that half, so Slice 5 (#1378) is responsible for the
@@ -603,41 +452,6 @@ identical hashes:
 - The chain is verified at startup (§9 check 8) and on every mirror rebuild
   by recomputing `row_hash` for each row in sequence order and comparing.
 
-## 8. Write-only mirror line format (R9, pinned)
-
-One line per record, newline-delimited JSON, append-only, fsync'd after every
-write. An immutable identity record is written once when the generation is
-established, before any transitions; PREPARE and FINALIZE records follow:
-
-```json
-{"phase": "IDENTITY", "account_id": "PA123", "authority_generation": 3, "db_identity_token": "…"}
-{"phase": "PREPARE", "sequence": 42, "authority_generation": 3, "row_hash": "…", "prev_hash": "…", "payload_canonical": "…", "recorded_at_ms": 1785900000000}
-{"phase": "FINALIZE", "sequence": 42, "authority_generation": 3, "row_hash": "…", "recorded_at_ms": 1785900000012}
-```
-
-- The IDENTITY record binds the mirror to the account, authority generation,
-  and random database identity token in the established-accounts registry.
-  Startup and rebuild require an exact match, so a valid mirror copied from a
-  different account or generation is rejected rather than replayed.
-- `payload_canonical` on the PREPARE line is the exact `canonical(payload)`
-  string hashed in §7 — this is what makes a from-mirror rebuild able to
-  recompute `row_hash` and reconstruct the row without touching `clerk.db`.
-- The FINALIZE line omits `payload_canonical` (redundant — it's a
-  fsync'd commitment that the matching PREPARE's transaction committed, not a
-  second copy of the payload).
-- Rebuild only imports a `sequence` that has **both** a PREPARE and a
-  matching FINALIZE line with the same `row_hash`. A PREPARE without a
-  FINALIZE is an aborted preparation (excluded, no broker effect could have
-  occurred). A sequence gap, a duplicate sequence with a different hash, or a
-  hash-chain break (recomputing `row_hash` from `prev_hash` +
-  `payload_canonical` disagrees with the stored `row_hash`) fails closed —
-  the rebuild halts rather than importing ambiguous data.
-- Mirror retention/rotation policy: rotated per authority generation. A prior
-  generation's mirror file is retained read-only for audit and is never
-  consulted for current-generation rebuild. (Rotation mechanics are a Slice 2
-  implementation detail; this pins only the *contract* — one mirror file is
-  scoped to exactly one authority generation.)
-
 ## 9. Fail-closed startup checks (PRD §9.2, §13, pinned as an ordered list)
 
 On every process start, before the Clerk accepts any command:
@@ -698,11 +512,26 @@ On every process start, before the Clerk accepts any command:
 
 Only after all nine checks pass (or check 2 explicitly clears a genuinely new
 account for initialization) does the process register its execution lease
-(§2) and accept commands.
+(§9a) and accept commands.
 
 ### 9a. Lease renewal and poison-after-uncertain-finalize (Scope C2/D)
 
-The execution lease acquired at open (§2, `control_meta.execution_lease_owner`
+- A durable per-account **execution lease** (a row in `control_meta`) and a
+  transactionally claimed **operation work item** (a row-level claim on the
+  owning `effect_operations` row) are acquired before any broker contact.
+  `BEGIN IMMEDIATE` proves single-writer-at-the-database; it does not prove
+  single-process. The lease + work claim close that gap. Claims are
+  exclusive even for the same process owner: each attempt gets a new token,
+  renews that exact still-live token before and after broker I/O, revalidates
+  it before folding evidence, and CAS-releases only its own token. An expired
+  attempt cannot resurrect itself or mutate projections after a successor
+  takes over.
+- A startup topology fence rejects a second local scheduler, stream-consumer,
+  or reconciler registration for the same account within one process, and
+  rejects a second process from acquiring the lease while it is held and
+  unexpired.
+
+The execution lease acquired at open (`control_meta.execution_lease_owner`
 + `execution_lease_expires_at_ms`) is **not** a one-time acquisition — a lease
 taken once at open and never revisited is not a live-process fence, only a
 "who opened this last" record (open-pr-review-2026-08-05.md P1 "Lease is
@@ -738,13 +567,3 @@ first write that creates the established-accounts registry file, each fsync
 their containing directory afterward — the directory-creation fsync that
 already runs when the account directory itself is first created predates
 either file's existence and does not cover their later directory entries.
-
-## 10. What Slice 2 owes back to this document
-
-Slice 2 (#1375) implements this schema, PRAGMA set, and transaction matrix
-literally — table names, column names, and constraint semantics above are
-binding, not illustrative. If Slice 2 discovers a genuine implementation-level
-necessity to deviate (e.g. a column needs a different type for a
-`sqlite3`-driver reason), it updates this document in the same PR and states
-the reason, per this repo's "single source of truth" rule — it does not
-silently diverge.
