@@ -25,6 +25,18 @@ export type ProtocolNumberField =
   | 'exam_min_trades'
   | 'budget_cap';
 
+/** Counts the protocol carries as integers; a fraction is unreadable, never rounded. */
+const WHOLE_NUMBER_FIELDS: ReadonlySet<ProtocolNumberField> = new Set([
+  'min_trades',
+  'training_months',
+  'test_months',
+  'zoom_points',
+  'zoom_refinements',
+  'zoom_passes',
+  'exam_min_trades',
+  'budget_cap',
+]);
+
 /** `final_start` is also the development end: the two intervals share one boundary. `final_end` is the inclusive last day. */
 export type ProtocolDateField = 'development_start' | 'final_start' | 'final_end';
 export type ProtocolFlag = 'require_positive_net' | 'recent_window' | 'neighbor_audit';
@@ -160,6 +172,7 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
       const key = numberProblemKey(edit.field);
       const value = readNumber(edit.raw);
       if (value === null) return { protocol, problems: withProblem(problems, key, 'Enter a number.') };
+      if (WHOLE_NUMBER_FIELDS.has(edit.field) && !Number.isInteger(value)) return { protocol, problems: withProblem(problems, key, 'Enter a whole number.') };
       return { protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
     }
     case 'date': {

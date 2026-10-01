@@ -33,6 +33,17 @@ describe('applyPlanEdit', () => {
     expect(fixed.problems.size).toBe(0);
   });
 
+  it('refuses a fraction for a count instead of sending it, and accepts the whole number', () => {
+    const fraction = applyPlanEdit(draft(), { kind: 'number', field: 'training_months', raw: '6.5' }, emaCapability());
+
+    expect(fraction.protocol.training_months).toBe(6);
+    expect(fraction.problems.get(numberProblemKey('training_months'))).toBe('Enter a whole number.');
+
+    const whole = applyPlanEdit(fraction, { kind: 'number', field: 'training_months', raw: '9' }, emaCapability());
+    expect(whole.protocol.training_months).toBe(9);
+    expect(whole.problems.size).toBe(0);
+  });
+
   it('turns the drawdown percent into the fraction of peak equity the protocol carries', () => {
     const next = applyPlanEdit(draft(), { kind: 'number', field: 'drawdown_percent', raw: '12.5' }, emaCapability());
 
