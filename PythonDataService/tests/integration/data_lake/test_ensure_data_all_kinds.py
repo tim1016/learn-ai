@@ -41,6 +41,7 @@ from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.metadata_bundle import metadata_data_contract_hash as _metadata_dch
 from app.data_lake.path_policy import lake_subpath
+from app.data_lake.root_identity import active_root_id, init_empty_root
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
@@ -146,6 +147,9 @@ def tmp_lake(tmp_path: Path, monkeypatch, request):
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    # Readers admit lake files only under a root identity marker (#2456),
+    # which production startup refuses to run without.
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")

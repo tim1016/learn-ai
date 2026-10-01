@@ -31,8 +31,10 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.backfill import BackfillDayProgress, run_backfill
+from app.data_lake.root_identity import active_root_id, init_empty_root
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.routers.data_lake import _bridge_ensure_fn, _bridge_status_fn
 
 pytestmark = pytest.mark.asyncio
@@ -73,6 +75,9 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    # Readers admit lake files only under a root identity marker (#2456),
+    # which production startup refuses to run without.
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
@@ -172,12 +177,11 @@ async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(cl
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake)
     )
-    # 2024-05-20/21/22 09:30 ET in ms UTC.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-20.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload(1716211800000))
+        return_value=httpx.Response(200, json=_polygon_ok_payload(session_open_ms_utc(date(2024, 5, 20))))
     )
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-21.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload(1716298200000))
+        return_value=httpx.Response(200, json=_polygon_ok_payload(session_open_ms_utc(date(2024, 5, 21))))
     )
     # 05-22 returns empty results — simulates an unknown-symbol-shaped gap
     # (provider_no_data), proving a real typed failure survives run_backfill's
@@ -228,13 +232,13 @@ async def test_backfill_survives_a_pool_initialized_on_a_different_loop(clean_ar
         side_effect=_launcher_side_effect(tmp_lake)
     )
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-20.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload(1716211800000))
+        return_value=httpx.Response(200, json=_polygon_ok_payload(session_open_ms_utc(date(2024, 5, 20))))
     )
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-21.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload(1716298200000))
+        return_value=httpx.Response(200, json=_polygon_ok_payload(session_open_ms_utc(date(2024, 5, 21))))
     )
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-22.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload(1716470400000))
+        return_value=httpx.Response(200, json=_polygon_ok_payload(session_open_ms_utc(date(2024, 5, 22))))
     )
     _mock_corpus_actions_and_events()  # the post-loop rollup call needs these (#1869)
 
