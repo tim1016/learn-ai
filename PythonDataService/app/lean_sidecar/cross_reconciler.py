@@ -55,7 +55,7 @@ Side = Literal["Buy", "Sell"]
 
 @dataclass(frozen=True)
 class CrossReconciliationTolerances:
-    """Per-field tolerances. Defaults follow ``numerical-rigor.md``."""
+    """Per-field tolerances. Defaults follow ADR 0069 §3."""
 
     fill_price_atol: Decimal = Decimal("0.01")
     commission_atol: Decimal = Decimal("0.01")

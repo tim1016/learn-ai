@@ -2,8 +2,7 @@
 
 Formula: keep first/last points, requested trade marks, running highs/lows,
   then stride the remaining points until the display cap is satisfied.
-Reference: Internal display-only policy in
-  docs/superpowers/specs/2026-07-12-engine-lab-overhaul-design.md § 4.3.
+Reference: Internal display-only policy.
 Canonical implementation: this file.
 Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py.
 """
@@ -67,8 +66,7 @@ def build_realized_equity_envelope(
     """Build the closed-trade equity staircase for a persisted run.
 
     Formula: E(t) = initial_cash + sum(net_pnl_i for closed trades where exit_i <= t).
-    Reference: [realized-equity-staircase-v1](../../../../docs/references/realized-equity-staircase-v1.md)
-      — the persisted ``BacktestTrade.PnL`` accounting contract.
+    Reference: the persisted ``BacktestTrade.PnL`` accounting contract.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py::test_realized_equity_matches_golden_fixture.
 
@@ -130,7 +128,7 @@ def build_run_equity_envelope(
 
     Formula: none; this is a typed transport envelope for independently
       producer-authored mark-to-market and realized-equity series.
-    Reference: docs/prds/strategy-lab-results-experience.md § 9–10.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py.
     """

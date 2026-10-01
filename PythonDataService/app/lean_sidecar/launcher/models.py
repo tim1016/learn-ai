@@ -3,9 +3,6 @@
 Per the ADR, the request payload is intentionally minimal: ``run_id``,
 ``image``, and ``limits``. The launcher resolves the workspace path
 itself; the data plane never sends paths and cannot widen the mount.
-
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Launcher
-shape".
 """
 
 from __future__ import annotations

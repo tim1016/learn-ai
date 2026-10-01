@@ -52,8 +52,7 @@ def compute_vrp(iv: pd.Series, rv: pd.Series) -> pd.Series:
     :func:`iv30_atm_50d_trading_basis`) before passing here.
 
     Mixing bases silently biases VRP by ~0.7% in normal weeks and up to
-    ~5% in dense-holiday windows. See
-    ``docs/references/iv-rv-basis-alignment.md`` for the math.
+    ~5% in dense-holiday windows.
     """
     return iv**2 - rv**2
 

@@ -5,8 +5,6 @@ the same fetch contract while sourcing bars from different places.
 Tests inject ``RecordedPolygonFixtureProvider``; production injects
 ``PolygonProvider``. ``fetch_canonical_minute_bars`` (Task 3) applies
 the RTH/extended filter and fail-fast monotonicity + dedup checks.
-
-See docs/superpowers/specs/2026-05-19-lean-engine-polygon-parity-design.md.
 """
 
 from __future__ import annotations
@@ -203,8 +201,7 @@ class PolygonProvider:
         # duplicates / non-monotonic timestamps from Polygon surface to
         # the canonical-input fail-fast loop in
         # ``fetch_canonical_minute_bars`` rather than being silently
-        # repaired in transit. See ``.claude/rules/numerical-rigor.md``
-        # §"External-API ingestion".
+        # repaired in transit. See ADR 0022 (h).
         return fetch_bars_chunks_raw(
             polygon=self.polygon,
             ticker=symbol,
@@ -252,7 +249,7 @@ def fetch_canonical_minute_bars(
         * Duplicate timestamps from the wire raise ``CanonicalBarsError``.
         * Non-monotonic timestamps raise ``CanonicalBarsError``.
         These are the canonical-input guards required by
-        ``.claude/rules/numerical-rigor.md`` §"External-API ingestion".
+        ADR 0022 (h).
 
     Opt-in completeness checks (``strict_completeness=True``, regular session only):
         * Every NYSE session in ``[start_date, end_date]`` must appear in
@@ -324,7 +321,7 @@ def _assert_window_complete(
          bar (half-day calendar aware); otherwise raise
          ``polygon_session_incomplete``.
 
-    See ``.claude/rules/numerical-rigor.md`` §"External-API ingestion".
+    See ADR 0022 (h).
     Production paths default to lenient; the parity test and freshness
     canary opt in.
     """

@@ -2,7 +2,7 @@
 
 The data-plane (``polygon-data-service`` container) reaches the
 launcher over HTTP. The launcher is a separate process — by design,
-per ``docs/architecture/lean-sidecar-lab.md`` §"Launcher topology" —
+per ADR 0070 decision 2 —
 so the data plane cannot escalate by exploiting the FastAPI handlers.
 
 This module is the single seam between the data plane and the

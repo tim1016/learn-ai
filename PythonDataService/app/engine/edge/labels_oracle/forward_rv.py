@@ -12,7 +12,7 @@ Identical estimator math as features_realtime/realized_vol.py, but with the
 forward .shift(-W) applied so RV[t] = realized vol over [t, t+W].
 
 The last W bars of any output series are NaN (forward window not realized).
-The UI surfaces this as a greyed terminal band — see edge-feature-design.md §4.2.
+The UI surfaces this as a greyed terminal band.
 """
 
 from __future__ import annotations

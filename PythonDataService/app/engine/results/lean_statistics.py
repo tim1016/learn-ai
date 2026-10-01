@@ -7,7 +7,7 @@ Every formula matches the C# implementation in Lean/Common/Statistics/:
   - TradeStatistics.cs      (TS.cs)
   - StatisticsBuilder.cs    (SB.cs)
 
-Reference: docs/spy-lean-output/verify.py and source-map.md
+Reference: the LEAN sources above and the ``lean-statistics-oracle-v1`` golden fixture.
 """
 
 from __future__ import annotations

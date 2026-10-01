@@ -5,8 +5,7 @@ consolidators, invokes strategy event handlers on consolidated bars, and
 processes pending orders through the fill model.
 
 Designed to reproduce LEAN's backtest semantics bit-exactly for the
-EmaCrossoverSignalAlgorithm. See docs/lean-engine-implementation-plan.md §2
-for the reproducibility details this engine guarantees.
+EmaCrossoverSignalAlgorithm.
 """
 
 from __future__ import annotations

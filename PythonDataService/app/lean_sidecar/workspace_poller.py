@@ -28,8 +28,6 @@ cap to kernel-enforced** (``--storage-opt size=<mb>m`` on
 The post-execute backstop is **not sufficient against an adversary**
 — they can wedge the host before the check fires. The poller alone
 is theater under that threat model.
-
-Authority: docs/handoffs/2026-05-18-design-p1-4-live-workspace-cap-v2.md.
 """
 
 from __future__ import annotations

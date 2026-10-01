@@ -2,9 +2,9 @@
 
 Pinned values that the rest of the package depends on. Image digest is
 resolved in Phase 1 by ``scripts/lean_sidecar_pin_image.py`` and written
-here, then echoed into ``docs/architecture/lean-sidecar-lab.md``.
+here.
 
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Runner choice".
+Authority: ADR 0070 decision 3.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from types import MappingProxyType
 LEAN_IMAGE_REPO = "localhost/learn-ai/lean-sandbox"
 
 # Resolved by Phase 1 spike on first successful pull. See
-# docs/architecture/lean-sidecar-lab.md §"Runner choice" for the policy.
+# ADR 0070 decision 3 for the policy.
 #
 # ``PINNED_LEAN_IMAGE_DIGEST`` is the default pin the orchestrator
 # passes to the launcher. The arm64 .NET-10.0.9 derivative is the
@@ -174,8 +174,7 @@ DIGEST_PLATFORMS: dict[str, str] = {
 #
 # The launcher refuses to run without explicit limits; these are the
 # defaults the data-plane uses when a request does not override them.
-# Authority: docs/architecture/lean-sidecar-lab.md §"Wall-clock timeout"
-# and §"Container execution boundary".
+# Authority: ADR 0070 decisions 4 and 5.
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,7 +238,7 @@ DEFAULT_RUN_LIMITS = RunLimits(
 # Per-request input ceilings
 # ---------------------------------------------------------------------------
 #
-# Authority: lean-sidecar-lab.md §"Wall-clock timeout" final bullet.
+# Authority: ADR 0070 decision 5 (input ceilings).
 
 MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024
 
@@ -256,8 +255,6 @@ MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024
 #
 # Tuning happens by improving the walk (``os.scandir`` vs ``du -sb``),
 # not by lengthening the interval.
-#
-# Authority: docs/handoffs/2026-05-18-design-p1-4-live-workspace-cap-v2.md.
 
 _WORKSPACE_POLL_INTERVAL_S: float = 1.0
 

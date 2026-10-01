@@ -154,7 +154,7 @@ def _safe_symbol(symbol: str) -> str:
     """Validate the symbol before it flows into a filesystem path."""
     # Lazy import: the canonical path-safety validator lives with the
     # sidecar workspace code; the engine layer reuses it rather than
-    # duplicating the ticker alphabet (guiding-philosophy #5).
+    # duplicating the ticker alphabet.
     from app.lean_sidecar.workspace import validate_symbol
 
     return validate_symbol(symbol)

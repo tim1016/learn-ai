@@ -483,7 +483,7 @@ async def run_backfill(
 
     Sessions come from the canonical NYSE calendar
     (app.lean_sidecar.trading_calendar.expected_sessions —
-    temporal-rigor.md's authority), not ensure_data's own internal
+    ADR 0022 (b), (d)), not ensure_data's own internal
     LEAN-image/hardcoded-holiday fallback (app.data_lake.sessions). The two
     can diverge on an edge date; when they do, ensure_data's per-day call
     finds nothing to require for it (expand_required_artifacts returns an

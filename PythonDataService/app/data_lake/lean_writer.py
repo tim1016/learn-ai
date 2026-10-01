@@ -70,8 +70,8 @@ def to_deci_cent(price: Decimal) -> int:
     diverges from a literal replication, because our on-disk format requires
     an integer field and LEAN's does not. The half-up rule below is
     therefore our own quantization decision, not a proven LEAN behavior —
-    see ``docs/references/lean-deci-cent-encoding.md`` for the source read
-    and the full reasoning.
+    see ADR 0069 §8 (accepted departures) for the decision
+    and its receipt.
     Canonical implementation: this function. Every writer in the tree encodes
     through it — the lake's own zip builders (``build_minute_trade_zip_bytes``,
     ``app.data_lake.derived_daily``, ``app.data_lake.derived_quote``) and the

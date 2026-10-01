@@ -10,7 +10,7 @@ Run from the repo root inside the python-service container:
         /app/app/engine/tests/fixtures/golden/adx_14/regenerate.py
 
 Regenerating this fixture invalidates the regression test. Only do so
-with a justification documented in docs/references/adx.md.
+with a justification in the commit message.
 """
 
 from __future__ import annotations

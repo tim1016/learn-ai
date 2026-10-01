@@ -98,8 +98,8 @@ def trading_date_at_ms(trading_date_ms: int) -> date:
 
     The inverse of ``trading_calendar.session_open_ms_utc``, and the lake's
     only one. A trading date travels the wire as a single ``int64 ms UTC``
-    value anchored at that session's open (``.claude/rules/temporal-rigor.md``,
-    "Date-anchored and wall-clock values"); this resolves it back in
+    value anchored at that session's open (ADR 0022 (a),
+    date-anchored values); this resolves it back in
     ``America/New_York``, which is what stops the date drifting a calendar day
     for a caller west of UTC.
 
@@ -422,7 +422,7 @@ class DataAvailabilityResult(BaseModel):
 #
 # Thin projections of the catalog for the future Observatory UI. All
 # timestamps are int64 ms UTC; a ``TradingDate`` column value is converted to
-# its canonical ET session-open anchor (see temporal-rigor.md) by
+# its canonical ET session-open anchor (ADR 0022 (a)) by
 # catalog_client (ArtifactDetail, SymbolCoverageSpan) or the router
 # (CoverageDay, which merges catalog rows with the calendar's own session
 # walk) — not here. These models only describe the wire shape.

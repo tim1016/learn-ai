@@ -137,7 +137,6 @@ async def test_backtest_runs_sma_spec_on_synthetic_data() -> None:
     # Indicator snapshots present on each trade.
     assert all(t["indicators"] for t in body["trades"])
 
-    # Per ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor",
     # entry_time / exit_time on the wire are int64 ms UTC, not ISO
     # strings. Verify the wire shape and that the values are roughly
     # in the expected millisecond range.
