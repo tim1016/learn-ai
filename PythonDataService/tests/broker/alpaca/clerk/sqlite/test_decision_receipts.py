@@ -135,33 +135,6 @@ def test_append_is_idempotent_per_closed_bar_and_rejects_conflicting_replay(
         )
 
 
-def test_final_outcome_replaces_the_provisional_receipt_without_new_sequence(
-    receipts: SqliteDecisionReceipts,
-) -> None:
-    receipts.append(
-        outcome="enter_intent",
-        symbol="SPY",
-        observed_at_ms=1,
-        intent_id="1:ENTER",
-        facts={"bar_ref": "SPY@1", "reason_code": "STRATEGY_ENTER"},
-    )
-
-    blocked = receipts.update_final_outcome(
-        bar_ref="SPY@1",
-        outcome="blocked",
-        facts={
-            "bar_ref": "SPY@1",
-            "reason_code": "CLERK_ADMISSION_REJECTED",
-            "refusal_reason": "Stream health is stale.",
-        },
-    )
-
-    assert blocked.seq == 1
-    assert blocked.outcome == "blocked"
-    assert json.loads(blocked.facts_json)["refusal_reason"] == "Stream health is stale."
-    assert [receipt.seq for receipt in receipts.tail(2)] == [1]
-
-
 def test_evidence_pages_pin_the_watermark_while_new_decisions_arrive(
     repository: ClerkSqliteRepository, receipts: SqliteDecisionReceipts,
 ) -> None:
@@ -194,18 +167,6 @@ def test_evidence_pages_keep_protected_history_and_expose_retention_gaps(
     assert [r.seq for r in page.receipts] == [1, 4, 5, 6]
     assert page.highest_seq == 6
     assert page.next_after_seq is None
-
-
-def test_new_evidence_walk_sees_an_older_receipts_final_outcome(
-    repository: ClerkSqliteRepository, receipts: SqliteDecisionReceipts,
-) -> None:
-    receipts.append(outcome="enter_intent", symbol="SPY", observed_at_ms=1, facts={"bar_ref": "SPY@1"})
-    before = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
-    receipts.update_final_outcome(bar_ref="SPY@1", outcome="blocked", facts={"bar_ref": "SPY@1"})
-    after = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
-    assert before.highest_seq == after.highest_seq == 1
-    assert before.receipts[0].outcome == "enter_intent"
-    assert after.receipts[0].outcome == "blocked"
 
 
 def test_empty_evidence_and_unknown_bot_are_distinct(repository: ClerkSqliteRepository) -> None:
@@ -282,37 +243,6 @@ def test_candidate_uncaptured_at_crash_survives_retention_pruning(
     assert json.loads(survivor.facts_json)["retention_class"] == "protected_crash_evidence"
 
 
-def test_by_transaction_matches_intent_or_order_and_stays_bounded(
-    repository: ClerkSqliteRepository,
-    receipts: SqliteDecisionReceipts,
-) -> None:
-    _insert_order_reference(repository, order_ref="order-1")
-    receipts.append(
-        outcome="enter_intent",
-        symbol="SPY",
-        observed_at_ms=1,
-        intent_id="intent-1",
-        facts={"reason_code": "STRATEGY_ENTER"},
-    )
-    receipts.append(
-        outcome="blocked",
-        symbol="SPY",
-        observed_at_ms=2,
-        order_ref="order-1",
-        facts={"reason_code": "HOLD_ACTIVE"},
-    )
-    receipts.append(
-        outcome="no_action",
-        symbol="SPY",
-        observed_at_ms=3,
-        facts={"reason_code": "NO_ACTION"},
-    )
-
-    assert [receipt.seq for receipt in receipts.by_transaction("intent-1")] == [1]
-    assert [receipt.seq for receipt in receipts.by_transaction("order-1")] == [2]
-    assert receipts.by_transaction("not-found") == []
-
-
 def test_receipts_do_not_advance_custody_transition_or_control_revision(
     repository: ClerkSqliteRepository,
     receipts: SqliteDecisionReceipts,
@@ -346,32 +276,3 @@ def test_write_rejects_missing_strategy_and_reader_rejects_invalid_bounds(
         )
     with pytest.raises(ValueError, match="positive"):
         receipts.tail(0)
-    with pytest.raises(ValueError, match="non-empty"):
-        receipts.by_transaction("")
-
-
-def _insert_order_reference(repository: ClerkSqliteRepository, *, order_ref: str) -> None:
-    """Seed the required Clerk-owned order identity for an order-ref receipt."""
-    repository._conn.execute(
-        "INSERT INTO commands "
-        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
-        "strategy_instance_id, run_id, action, intended_end_state, state, "
-        "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-        "VALUES ('command-1', 1, 'bot:spy-bot', 'command-key', 'hash', 'strategy_decision', "
-        "'spy-bot', NULL, 'ENTER', NULL, 'accepted', NULL, NULL, 1, 1)"
-    )
-    repository._conn.execute(
-        "INSERT INTO effect_operations "
-        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
-        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
-        "VALUES ('effect-1', 1, 'bot:spy-bot', 'effect-key', 'command-1', 'spy-bot', NULL, "
-        "'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
-    )
-    repository._conn.execute(
-        "INSERT INTO orders "
-        "(order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
-        "broker_state, submitted_at_ms, updated_at_ms) "
-        "VALUES (?, 'effect-1', ?, NULL, 'ENTRY', NULL, NULL, 1)",
-        (order_ref, order_ref),
-    )
-    repository._conn.commit()

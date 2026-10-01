@@ -314,10 +314,6 @@ class StartupBrokerTruthUnavailable(RuntimeError):
         )
 
 
-class MissingEntryCustodyError(RuntimeError):
-    """An EXIT decision has no SQLite-owned entry identity to target."""
-
-
 @dataclass(frozen=True)
 class _PublishedReconciliation:
     """A reconciliation verdict bound to the instant it was observed.
@@ -2134,7 +2130,6 @@ __all__ = [
     "EntryReading",
     "IntakeFencePoisonedError",
     "IntakeFenceYieldError",
-    "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",
     "StartupBrokerTruthUnavailable",

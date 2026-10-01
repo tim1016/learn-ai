@@ -45,7 +45,6 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_competing_decision_receipt_row,
     append_decision_receipt_row,
     atomic_decision_receipt_conflicts_with_existing,
-    update_decision_receipt_for_bar,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
@@ -56,11 +55,9 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
     unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
-    validate_execution_corrected_facts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_slice_facts,
 )
@@ -934,81 +931,6 @@ class ClerkSqliteRepository(
         if cause.order_ref != order_ref or cause.execution_id != execution_id:
             raise ValueError("coverage conflict must identify the order and exact execution")
 
-    def append_execution_correction_or_raise(
-        self,
-        *,
-        correction: TransitionInput,
-        build_uncertainty: Callable[[str], TransitionInput],
-    ) -> str:
-        """Validate and append one correction, or durably raise uncertainty.
-
-        An invalid correction must not enter the hash chain as a correction
-        that did not change the economic fold.  The same atomic lock instead
-        appends a typed ``UNCERTAINTY_RAISED`` transition, leaving admission
-        fail-closed until the broker evidence is reconciled.
-        """
-        if correction.transition_kind != "EXECUTION_CORRECTED":
-            raise ValueError("correction append requires EXECUTION_CORRECTED")
-        facts = ExecutionCorrectedFacts.from_facts_json(correction.facts_json)
-        validate_execution_corrected_facts(facts)
-        with self._write_lock:
-            self._assert_not_poisoned()
-            self._renew_execution_lease()
-            if reads.execution_exists(self._conn, facts.execution_id):
-                return "duplicate"
-            if reads.correction_uncertainty_exists(self._conn, facts.execution_id):
-                return "duplicate"
-            invalid_reason = self._execution_correction_invalid_reason(
-                correction=correction,
-                facts=facts,
-            )
-            if invalid_reason is not None:
-                uncertainty = build_uncertainty(invalid_reason)
-                if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
-                    raise ValueError("invalid correction must raise UNCERTAINTY_RAISED")
-                uncertainty_facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
-                if uncertainty_facts.cause_facts.get("execution_id") != facts.execution_id:
-                    raise ValueError("correction uncertainty must identify the broker execution")
-                self.append_transition(uncertainty)
-                return "invalid"
-            self.append_transition(correction)
-            return "appended"
-
-    def _execution_correction_invalid_reason(
-        self,
-        *,
-        correction: TransitionInput,
-        facts: ExecutionCorrectedFacts,
-    ) -> str | None:
-        if correction.order_ref is None:
-            return "correction transition is missing order identity"
-        try:
-            owner = self._validate_order_effect_ownership(
-                correction,
-                order_ref=correction.order_ref,
-            )
-        except ValueError as exc:
-            return str(exc)
-        target = reads.effective_execution_slice(self._conn, facts.superseded_execution_ref)
-        if target is None:
-            return (
-                f"superseded execution {facts.superseded_execution_ref!r} is missing "
-                "or no longer effective"
-            )
-        if target["order_ref"] != correction.order_ref:
-            return "superseded execution belongs to a different order"
-        if target["subject_id"] != owner["subject_id"]:
-            return "superseded execution belongs to a different custody subject"
-        if target["strategy_instance_id"] != owner["strategy_instance_id"]:
-            return "superseded execution belongs to a different strategy instance"
-        if not isinstance(target["symbol"], str) or not target["symbol"]:
-            return "superseded execution is missing owned symbol evidence"
-        if target["symbol"].upper() != facts.symbol.upper():
-            return "superseded execution has a different symbol"
-        if target["side"] != facts.side:
-            return "superseded execution has a different side"
-        return None
-
     def _commit_transition_row(
         self,
         *,
@@ -1397,34 +1319,6 @@ class ClerkSqliteRepository(
                 facts_json=facts_json,
             )
 
-    def update_decision_receipt_for_bar(
-        self,
-        *,
-        strategy_instance_id: str,
-        bar_ref: str,
-        outcome: str,
-        order_ref: str | None,
-        facts_json: str,
-    ) -> DecisionReceiptResource:
-        """Replace one closed bar's provisional receipt with its final outcome."""
-        if not strategy_instance_id:
-            raise ValueError("strategy_instance_id must be non-empty")
-        if not bar_ref:
-            raise ValueError("bar_ref must be non-empty")
-        if not outcome:
-            raise ValueError("outcome must be non-empty")
-        with self._write_lock:
-            self._assert_not_poisoned()
-            self._renew_execution_lease()
-            return update_decision_receipt_for_bar(
-                self._conn,
-                strategy_instance_id=strategy_instance_id,
-                bar_ref=bar_ref,
-                outcome=outcome,
-                order_ref=order_ref,
-                facts_json=facts_json,
-            )
-
     def capture_decision_against_active_exit(
         self,
         *,
@@ -1476,38 +1370,6 @@ class ClerkSqliteRepository(
     # form of the ADR's claim that a hold was always an uncertainty. Callers
     # reach the same episodes through ``uncertainty.raise_account_hold`` and
     # ``uncertainty.resolve_account_hold``.
-
-    def raise_uncertainty_if_none_active(
-        self,
-        *,
-        scope: str,
-        reason_code: str,
-        strategy_instance_id: str | None,
-        build_transition: Callable[[], TransitionInput],
-    ) -> bool:
-        """Atomic check-then-raise for an uncertainty (#1380) — the same
-        check-then-append-under-one-lock shape
-        :meth:`commit_first_transition` uses for commands, applied here so
-        two genuinely concurrent callers can never both observe "no active
-        uncertainty" for the same ``(scope, reason_code,
-        strategy_instance_id)`` and both append one. Returns ``True`` if a
-        new uncertainty was appended, ``False`` if one was already
-        ``ACTIVE`` (idempotent no-op — bounded growth, the policy the
-        pre-SQLite Alpaca clerk's ``reconcile.py`` used).
-        """
-        with self._write_lock:
-            if (
-                reads.active_uncertainty(
-                    self._conn,
-                    scope=scope,
-                    reason_code=reason_code,
-                    strategy_instance_id=strategy_instance_id,
-                )
-                is not None
-            ):
-                return False
-            self.append_transition(build_transition())
-            return True
 
     def observe_uncertainty(
         self,

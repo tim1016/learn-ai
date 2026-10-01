@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AttributedResidueDischargedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
-    ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
@@ -58,7 +57,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     RunStartedFacts,
     RunStoppedFacts,
     StrategyInstanceRetiredFacts,
-    validate_execution_corrected_facts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
@@ -1237,92 +1235,6 @@ def _complete_filled_manual_order_if_exact_coverage_complete(
     _fold_manual_order_filled(conn, completion_payload)
 
 
-def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Replace one effective execution while retaining its audit history.
-
-    Formula: attributed_qty' = attributed_qty + sign(side) *
-      (corrected_qty - superseded_qty).
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2 (execution-slice facts + folds).
-    Canonical implementation: this file.
-    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_execution_correction_replaces_effective_quantity.
-    """
-    facts = ExecutionCorrectedFacts.from_facts_json(payload["facts_json"])
-    validate_execution_corrected_facts(facts)
-
-    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
-    if already_recorded is not None:
-        return
-    owner = conn.execute(
-        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
-        (payload["effect_operation_id"],),
-    ).fetchone()
-    if owner is None:
-        raise ValueError("correction requires its durable owning effect")
-    superseded = conn.execute(
-        "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
-        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
-        "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
-        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
-        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
-        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
-        "WHERE acceptance.order_ref = o.order_ref "
-        "AND acceptance.effect_operation_id = e.effect_operation_id "
-        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
-        "WHERE f.execution_id = ? "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
-        (facts.superseded_execution_ref,),
-    ).fetchone()
-    if superseded is None:
-        raise ValueError(f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective")
-    if superseded["order_ref"] != payload["order_ref"]:
-        raise ValueError("correction target belongs to a different order")
-    if superseded["subject_id"] != owner["subject_id"]:
-        raise ValueError("correction target belongs to a different custody subject")
-    if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
-        raise ValueError("correction target belongs to a different strategy instance")
-    if not isinstance(superseded["symbol"], str) or not superseded["symbol"]:
-        raise ValueError("correction target is missing owned symbol evidence")
-    if superseded["symbol"].upper() != facts.symbol.upper():
-        raise ValueError("correction symbol does not match the superseded execution")
-    if superseded["side"] != facts.side:
-        raise ValueError("correction side does not match the superseded execution")
-
-    conn.execute(
-        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
-        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'correction', ?, ?, ?, ?, ?, ?, ?)",
-        (
-            facts.execution_id,
-            payload["order_ref"],
-            facts.corrected_qty,
-            facts.corrected_price,
-            facts.side,
-            facts.execution_id,
-            superseded["evidence_source"],
-            facts.superseded_execution_ref,
-            superseded["fee"],
-            superseded["fee_fidelity"],
-            payload["source_event_at_ms"],
-            payload["clerk_observed_at_ms"],
-            payload["recorded_at_ms"],
-            _this_transition_sequence(conn),
-        ),
-    )
-    _apply_attributed_position_delta(
-        conn,
-        payload=payload,
-        symbol=facts.symbol,
-        side=facts.side,
-        quantity=facts.corrected_qty - superseded["qty"],
-    )
-
-
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Namespace-attributed exposure fold: ``positions`` sums only this
     order's owned fills, keyed by ``strategy_instance_id`` — never derived by
@@ -1368,10 +1280,9 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     reverses exposure.
 
     This recovery fold never fabricates a correction identity: it writes only
-    a newly observed positive cumulative delta. Broker corrections instead
-    use ``EXECUTION_CORRECTED``, which names the superseded execution slice.
-    Effective totals exclude those superseded rows, allowing a later recovery
-    snapshot to contribute only its genuinely unrecorded delta.
+    a newly observed positive cumulative delta. Effective totals exclude
+    superseded rows (``fills.superseded_execution_ref``), allowing a later
+    recovery snapshot to contribute only its genuinely unrecorded delta.
     """
     facts = OrderFillObservedFacts.from_facts_json(payload["facts_json"])
     order_ref = payload["order_ref"]
@@ -1633,7 +1544,6 @@ DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCELED", _fold_manual_order_cance
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_terminal)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
-DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("ATTRIBUTED_RESIDUE_DISCHARGED", _fold_attributed_residue_discharged)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

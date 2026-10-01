@@ -267,10 +267,8 @@ def test_signal_shows_the_decision_linked_to_the_selected_transaction() -> None:
 
 def test_signal_matches_by_intent_id_when_order_ref_does_not_match() -> None:
     """A decision recorded against the transaction's intent id (rather than
-    its order_ref) still resolves — mirrors
-    ``decision_receipts_by_transaction``'s ``intent_id = ? OR order_ref = ?``
-    join, which this function's in-memory match is required to stay
-    equivalent to."""
+    its order_ref) still resolves: the match is ``intent_id`` or
+    ``order_ref``."""
     ref = order_ref(SID, "i1")
     decisions = [
         decision_receipt(

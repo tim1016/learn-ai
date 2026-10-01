@@ -35,7 +35,6 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
-from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import (
     EnterSubmission,
     EntrySubmissionRefusal,
@@ -48,7 +47,6 @@ from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
     entry_cash_claims,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -61,8 +59,6 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
-    RefusalClass,
-    classify_admission_refusal,
     raise_account_hold,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -550,116 +546,8 @@ def _append_slice(
     )
 
 
-def _append_correction(
-    repo: ClerkSqliteRepository,
-    accepted: EnterSubmission,
-    *,
-    execution_id: str,
-    superseded_execution_ref: str,
-    quantity: float,
-    source_event_at_ms: int,
-) -> None:
-    """Restate a prior slice's quantity, leaving the superseded row auditable."""
-    facts = ExecutionCorrectedFacts(
-        execution_id=execution_id,
-        superseded_execution_ref=superseded_execution_ref,
-        symbol="SPY",
-        side="BUY",
-        corrected_qty=quantity,
-        corrected_price=100.0,
-        why="Broker restated the execution quantity",
-    )
-    assert (
-        repo.append_execution_correction_or_raise(
-            correction=TransitionInput(
-                strategy_instance_id=accepted.command.strategy_instance_id,
-                run_id=accepted.command.run_id,
-                command_id=accepted.command.command_id,
-                effect_operation_id=accepted.effect_operation_id,
-                order_ref=accepted.order_ref,
-                transition_kind="EXECUTION_CORRECTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="in_progress",
-                source_event_at_ms=source_event_at_ms,
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="EXECUTION_CORRECTED",
-                facts_json=facts.to_facts_json(),
-            ),
-            build_uncertainty=_refuse_correction_uncertainty,
-        )
-        == "appended"
-    )
-
-
 def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
     raise AssertionError(f"the correction fixture must be valid: {reason}")
-
-
-@pytest.mark.parametrize(
-    ("original_qty", "corrected_qty", "expected"),
-    [
-        (10.0, 5.0, "500.01"),  # downward: the restated 5 units are unfilled cash again, with the whole fee
-        (5.0, 10.0, "0"),  # upward: the whole ENTER is filled, nothing left to reserve
-    ],
-)
-def test_a_corrected_fill_reserves_at_its_restated_size(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    active_instance: tuple[str, str],
-    original_qty: float,
-    corrected_qty: float,
-    expected: str,
-) -> None:
-    """A correction is dated by the root execution, not by its own arrival.
-
-    The original fill is recorded *before* the observation and restated
-    *after* it — the case that used to price the remainder at the superseded
-    size for the whole life of the working order. What the broker's cash
-    reflected at ``T2_OBSERVATION`` is the restated quantity, because the
-    execution itself happened at ``T1_TERMINAL_ACK``; only the Clerk's
-    knowledge of it arrived late.
-    """
-    sid, run_id = active_instance
-    accepted = accept_enter(
-        envelope_repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=sid,
-        decision_id="d1",
-        lifecycle_run_id=run_id,
-        leg=_leg(quantity=10),
-        envelope=_gate(),
-        reference_price=100.0,
-    )
-    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
-
-    envelope_clock.value = T1_TERMINAL_ACK
-    _append_slice(
-        envelope_repo,
-        accepted,
-        execution_id="exec-original-1",
-        quantity=original_qty,
-        source_event_at_ms=T1_TERMINAL_ACK,
-    )
-    envelope_clock.value = T3_TRAILING_FILL
-    _append_correction(
-        envelope_repo,
-        accepted,
-        execution_id="exec-corrected-1",
-        superseded_execution_ref="exec-original-1",
-        quantity=corrected_qty,
-        source_event_at_ms=T3_TRAILING_FILL,
-    )
-
-    # The order never acknowledged, so it is still working: its unfilled
-    # remainder is what the bound has to price.
-    assert (
-        envelope_repo._conn.execute(
-            "SELECT broker_state FROM orders WHERE order_ref = ?", (accepted.order_ref,)
-        ).fetchone()["broker_state"]
-        is None
-    )
-    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal(expected)
 
 
 def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
@@ -937,37 +825,6 @@ def test_a_legacy_reservation_with_an_unfilled_remainder_refuses_instead_of_clai
         lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1),
         envelope=_gate(observed_at_ms=T1_TERMINAL_ACK), reference_price=100.0,
     ).created
-
-
-def test_a_legacy_remainder_a_correction_reopens_refuses_the_next_enter_under_its_own_code(
-    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
-) -> None:
-    """A filled legacy entry claims no fee; a correction that reopens its remainder makes the fee unknown again.
-
-    The refused ENTER is transient: account-scoped, retried on the next
-    decision clock, and it writes nothing.
-    """
-    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
-    _append_slice(envelope_repo, legacy, execution_id="legacy-fill", quantity=10.0, source_event_at_ms=T0)
-    _stop(envelope_repo, SID, RUN_ID)
-    _register_active(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
-
-    envelope_clock.value = T1_TERMINAL_ACK
-    _append_correction(
-        envelope_repo, legacy, execution_id="legacy-corrected", superseded_execution_ref="legacy-fill",
-        quantity=5.0, source_event_at_ms=T1_TERMINAL_ACK,
-    )
-    before = envelope_repo.control_meta_snapshot().control_revision
-    with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
-            envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
-            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1), reference_price=100.0,
-            envelope=_gate(observed_at_ms=T1_TERMINAL_ACK, fill_sequence=risk_fill_sequence(envelope_repo)),
-        )
-    assert exc_info.value.decision.reason_code == ENTRY_FEE_PROVISION_UNRECORDED
-    assert classify_admission_refusal(ENTRY_FEE_PROVISION_UNRECORDED) is RefusalClass.TRANSIENT
-    assert envelope_repo.control_meta_snapshot().control_revision == before
 
 
 def test_a_legacy_reservation_with_no_remainder_still_claims_its_unseen_fills_at_cost(

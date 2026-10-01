@@ -79,10 +79,11 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     return price
 
 
-#: The declared default band multiple (#2229): the canonical number both
-#: the allowances default and ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``
-#: alias. A module constant here because the dataclass's home is the only
-#: place both sides can read without an import cycle.
+#: The declared default band multiple (#2229): how far through the book a
+#: confirmed limit may go, in multiples of the sealed exit allowance. Owner
+#: decision 2026-09-19: refuse a price more than twice the allowance past the
+#: bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
+#: The deploy form pre-fills this value; each bot seals its explicit choice.
 DEFAULT_EXIT_BAND_MULTIPLE = Decimal(2)
 #: The declared default spread cap (#2229): the canonical number both the
 #: allowances default and ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS``
@@ -111,10 +112,9 @@ class ExtendedHoursAllowances:
     deliberately **not** part of the sealed envelope, so every arming record
     ever written keeps validating and hashing byte-identically; unset they
     answer :data:`DEFAULT_EXIT_BAND_MULTIPLE` and
-    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical numbers
-    ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE`` and
-    ``RECOVERY_SPREAD_WARNING_BPS`` alias, so tuning the human's warning and
-    the Clerk's enforcement cannot drift apart. No constructor here reads
+    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical number
+    ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS`` aliases, so tuning the
+    human's warning and the Clerk's enforcement cannot drift apart. No constructor here reads
     them: the one canonical stamp is ``program_leg.with_deploy_recovery_pricing``,
     so a deploy-time value applies on every resolution path or none, never
     two of three.

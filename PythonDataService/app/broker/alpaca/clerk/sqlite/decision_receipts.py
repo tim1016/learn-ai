@@ -393,51 +393,6 @@ def _append_decision_receipt_in_transaction(
     )
 
 
-def update_decision_receipt_for_bar(
-    conn: sqlite3.Connection,
-    *,
-    strategy_instance_id: str,
-    bar_ref: str,
-    outcome: str,
-    order_ref: str | None,
-    facts_json: str,
-) -> DecisionReceiptResource:
-    """Replace the final outcome for an already-recorded closed-bar decision."""
-    if _bar_ref(facts_json) != bar_ref:
-        raise ValueError("final decision receipt facts must preserve the closed bar reference")
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        existing = _receipt_for_bar(
-            conn,
-            strategy_instance_id=strategy_instance_id,
-            bar_ref=bar_ref,
-        )
-        if existing is None:
-            raise DecisionReceiptConflictError(
-                f"closed bar {bar_ref!r} has no decision receipt to update"
-            )
-        conn.execute(
-            "UPDATE decision_receipts SET outcome = ?, order_ref = ?, facts_json = ? "
-            "WHERE strategy_instance_id = ? AND seq = ?",
-            (outcome, order_ref, facts_json, strategy_instance_id, existing.seq),
-        )
-    except Exception:
-        conn.rollback()
-        raise
-    else:
-        conn.commit()
-    return DecisionReceiptResource(
-        strategy_instance_id=existing.strategy_instance_id,
-        seq=existing.seq,
-        outcome=outcome,
-        symbol=existing.symbol,
-        intent_id=existing.intent_id,
-        order_ref=order_ref,
-        observed_at_ms=existing.observed_at_ms,
-        facts_json=facts_json,
-    )
-
-
 def _bar_ref(facts_json: str) -> str | None:
     facts = json.loads(facts_json)
     if not isinstance(facts, dict):
@@ -552,23 +507,6 @@ class SqliteDecisionReceipts:
             facts_json=canonicalize(dict(facts)),
         )
 
-    def update_final_outcome(
-        self,
-        *,
-        bar_ref: str,
-        outcome: DecisionOutcome,
-        facts: Mapping[str, JsonValue],
-        order_ref: str | None = None,
-    ) -> DecisionReceiptResource:
-        """Replace one closed bar's provisional receipt with its final outcome."""
-        return self._repository.update_decision_receipt_for_bar(
-            strategy_instance_id=self._strategy_instance_id,
-            bar_ref=bar_ref,
-            outcome=outcome,
-            order_ref=order_ref,
-            facts_json=canonicalize(dict(facts)),
-        )
-
     def tail(self, n: int) -> list[DecisionReceiptResource]:
         """Return the bounded newest suffix in ascending sequence order."""
         return self._repository.decision_receipt_tail(
@@ -590,21 +528,6 @@ class SqliteDecisionReceipts:
         return self._repository.decision_receipt_tail(
             strategy_instance_id=self._strategy_instance_id,
             limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
-        )
-
-    def by_transaction(
-        self,
-        transaction_ref: str,
-        *,
-        limit: int = MAX_DECISION_RECEIPT_READ,
-    ) -> list[DecisionReceiptResource]:
-        """Return a bounded receipt suffix matching an intent or order ref."""
-        if not transaction_ref:
-            raise ValueError("transaction_ref must be non-empty")
-        return self._repository.decision_receipts_by_transaction(
-            strategy_instance_id=self._strategy_instance_id,
-            transaction_ref=transaction_ref,
-            limit=_read_limit(limit),
         )
 
 

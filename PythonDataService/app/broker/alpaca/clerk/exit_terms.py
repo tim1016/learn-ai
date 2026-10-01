@@ -10,7 +10,6 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -25,19 +24,6 @@ def read_exit_terms(conn: sqlite3.Connection, strategy_instance_id: str) -> Exit
     """The one reader of the custody-owned, journal-rebuildable terms seal."""
     row = conn.execute("SELECT terms_json FROM strategy_exit_terms WHERE strategy_instance_id = ?", (strategy_instance_id,)).fetchone()
     return None if row is None else ExitTerms.model_validate_json(row[0])
-
-
-def registered_exit_terms_at(db_path: Path, strategy_instance_id: str) -> ExitTerms | None:
-    """Read the same seal without acquiring the live writer's lease."""
-    if not db_path.is_file():
-        return None
-    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
-    try:
-        return read_exit_terms(conn, strategy_instance_id)
-    except sqlite3.DatabaseError as exc:
-        raise ValueError("Custody exit terms are unavailable; complete the Clerk upgrade before arming.") from exc
-    finally:
-        conn.close()
 
 
 def seal_exit_terms(repo: ClerkSqliteRepository, strategy_instance_id: str, terms: ExitTerms) -> ExitTerms:

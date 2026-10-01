@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedBarBindingError
 from app.broker.alpaca.clerk.synthetic_broker import (
     SimulatedPriceUnavailableError,
-    SyntheticBarBindingError,
     SyntheticBroker,
 )
 from app.broker.contract.models import BrokerOrderLeg
@@ -246,7 +246,7 @@ def test_synthetic_port_rejects_binding_from_another_account_authority(tmp_path:
     retained = ledger.append(_bar(), run_id="run-a")
     broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
 
-    with pytest.raises(SyntheticBarBindingError, match="different account authority"):
+    with pytest.raises(SynthesizedBarBindingError, match="different account authority"):
         broker.bind_evaluated_bar(
             "bot:ema:enter",
             retained.model_copy(update={"account_id": "sim:other"}),

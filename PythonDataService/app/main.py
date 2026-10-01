@@ -1101,11 +1101,6 @@ async def _service_lifespan(
         set_active_clerk_runtime(None)
         if installed_alpaca_runtime is not None:
             await installed_alpaca_runtime.close()
-        from app.broker.alpaca.clerk.sqlite.process_repositories import (
-            close_all_repositories,
-        )
-
-        close_all_repositories()
         from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
 
         await stop_live_projection_hubs()
