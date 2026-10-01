@@ -141,6 +141,24 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.getByRole('button', { name: /^finish$/i })).not.toBeNull();
   });
 
+  it('a poll that was in flight when a command answered cannot roll the study back', async () => {
+    const service = fakeService(studyDetail('locked'));
+    service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4 }), jobId: 'job-1' });
+    const view = await renderStudy(service);
+    let answerPoll: (study: StudyDetail) => void = () => undefined;
+    service.get.mockImplementationOnce(() => new Promise<StudyDetail>((resolve) => (answerPoll = resolve)));
+    const poll = view.fixture.componentInstance.reload();
+
+    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    await screen.findByRole('heading', { name: /the search is running/i });
+    answerPoll(studyDetail('locked'));
+    await poll;
+    await view.fixture.whenStable();
+
+    expect(screen.getByRole('heading', { name: /the search is running/i })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /start the search/i })).toBeNull();
+  });
+
   it('a command with no answer can be retried with the same idempotency key', async () => {
     const service = fakeService(studyDetail('locked'));
     service.command.mockRejectedValueOnce(new Error('network down'));

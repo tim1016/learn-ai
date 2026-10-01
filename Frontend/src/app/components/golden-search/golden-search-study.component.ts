@@ -176,7 +176,7 @@ export class GoldenSearchStudyComponent {
       const outcome = await this.service.command(detail.id, request);
       this.keys.settle();
       if (outcome.jobId !== null) this.awaitingClaimPolls = AWAIT_CLAIM_POLLS;
-      this.apply(outcome.study);
+      this.applyAnswer(outcome.study);
     } catch (error) {
       this.onCommandFailure(error);
     } finally {
@@ -187,11 +187,11 @@ export class GoldenSearchStudyComponent {
   private onCommandFailure(error: unknown): void {
     if (error instanceof StageDispatchError) {
       this.keys.settle();
-      this.apply(error.study);
+      this.applyAnswer(error.study);
       this.actionMessage.set('The stage was authorized but its job did not start. Use Finish to start it.');
     } else if (error instanceof StudyConflictError) {
       this.keys.settle();
-      if (error.current !== null) this.apply(error.current);
+      if (error.current !== null) this.applyAnswer(error.current);
       this.actionMessage.set(
         error.code === 'STALE_REVISION' ? 'This study changed since it was shown (another tab, or a stage finished). Its current state is shown now — review it and try again.' : error.message,
       );
@@ -210,6 +210,12 @@ export class GoldenSearchStudyComponent {
   private clearFeedback(): void {
     this.actionMessage.set(null);
     this.actionRefusal.set(null);
+  }
+
+  /** Shows the study a command answered with; a load still in flight was read before it and must not replace it. */
+  private applyAnswer(detail: StudyDetail): void {
+    this.loadGeneration += 1;
+    this.apply(detail);
   }
 
   /** Shows a study; moves to the step holding its decision whenever that step changes. */
