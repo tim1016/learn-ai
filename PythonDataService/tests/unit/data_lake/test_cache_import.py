@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
+import respx
 
 from app.config import settings
 from app.data_lake import catalog_client, root_identity
@@ -51,10 +52,13 @@ from app.data_lake.cache_import import (
     provenance_covers_date,
     verify_and_read_zip,
 )
+from app.data_lake.ensure_data import ensure_data
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath, lake_subpath, resolve_lake_root
+from app.data_lake.run_materialization import _build_engine_run_spec
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
 
 _ET = ZoneInfo("America/New_York")
 
@@ -346,20 +350,20 @@ def test_provenance_covers_date_skips_malformed_entries_without_raising():
 
 
 # ---------------------------------------------------------------------------
-# _import_minute_trade_dch (imported-vs-fetched provenance distinction)
+# import_minute_trade_dch (imported-vs-fetched provenance distinction)
 # ---------------------------------------------------------------------------
 
 
 def test_import_minute_trade_dch_differs_by_adjustment_mode():
-    from app.data_lake.cache_import import _import_minute_trade_dch
+    from app.data_lake.cache_import import import_minute_trade_dch
 
-    assert _import_minute_trade_dch(adjusted=False) != _import_minute_trade_dch(adjusted=True)
+    assert import_minute_trade_dch(adjusted=False) != import_minute_trade_dch(adjusted=True)
 
 
 def test_import_minute_trade_dch_is_deterministic():
-    from app.data_lake.cache_import import _import_minute_trade_dch
+    from app.data_lake.cache_import import import_minute_trade_dch
 
-    assert _import_minute_trade_dch(adjusted=True) == _import_minute_trade_dch(adjusted=True)
+    assert import_minute_trade_dch(adjusted=True) == import_minute_trade_dch(adjusted=True)
 
 
 def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
@@ -369,10 +373,41 @@ def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
     must be visible there even when nothing else about the row would
     otherwise distinguish the two. Mirrors test_ensure_data.py's own style
     of importing a private DCH helper directly for a parity assertion."""
-    from app.data_lake.cache_import import _import_minute_trade_dch
+    from app.data_lake.cache_import import import_minute_trade_dch
     from app.data_lake.ensure_data import _minute_trade_dch
 
-    assert _import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw")
+    assert import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw")
+
+
+@respx.mock
+async def test_a_raw_capture_reuses_imported_days_without_a_provider_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The import DCH is provenance, not a different contract (#2660).
+
+    A raw capture over days the import already committed must reuse them:
+    saving those provider calls is what the import is for (#1839). Since
+    #2454 a minute cache hit had to carry the live-fetch DCH exactly, so
+    every imported raw day was refetched from Polygon on its first capture.
+    """
+    install_fake_catalog(monkeypatch)
+    write_root = point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    mock_launcher()
+    polygon = respx.route(host="api.polygon.io").respond(
+        200, json={"ticker": "SPY", "status": "OK", "results": []}
+    )
+    days = [date(2024, 5, 20), date(2024, 5, 21)]
+    report = await import_cache_root(
+        cache_root=_build_cache(tmp_path, "SPY", days, adjusted=False), lake_root=write_root
+    )
+    assert len(report.imported) == len(days), report
+
+    result = await ensure_data(_build_engine_run_spec(symbol="SPY", start=days[0], end=days[-1]))
+
+    assert polygon.call_count == 0, "an imported raw day was refetched from the provider"
+    assert result.overall_status == "complete", result.failures
+    reused_minutes = [a for a in result.artifacts if a.resolution == "minute" and a.trading_date in days]
+    assert len(reused_minutes) == len(days)
 
 
 # ---------------------------------------------------------------------------
