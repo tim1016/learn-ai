@@ -22,7 +22,7 @@ The brief's binding constraint is that a draining lane **finishes any order alre
 
 This is the same indictment this ADR levels at `_CapacityPool._inflight` below, and it applies to the receipts ledger verbatim. The first draft of this ADR made that error and is corrected here rather than defended.
 
-**Most orders never enter the ledger at all.** The routed operation catalog holds **76 operations** (`app/broker/fleet/operation_catalog.snapshot.json`), and it is a bot and configuration control surface — `bot_admission_plan`, `bot_authority_facts`, `bot_chart_history` and their siblings. An order placed by a lane's own bot runner on its own schedule never reaches the coordinator, so no receipt exists for it. Per ADR 0062 Decision 1 the registry stores no order, fill or position data by design, and per `docs/design/fleet-d-runtime-ownership-matrix.md:22-23` runner state is lane-local. The coordinator's blindness here is architectural, not an oversight to be patched.
+**Most orders never enter the ledger at all.** The routed operation catalog holds **76 operations** (`app/broker/fleet/operation_catalog.snapshot.json`), and it is a bot and configuration control surface — `bot_admission_plan`, `bot_authority_facts`, `bot_chart_history` and their siblings. An order placed by a lane's own bot runner on its own schedule never reaches the coordinator, so no receipt exists for it. Per ADR 0062 Decision 1 the registry stores no order, fill or position data by design, and per `docs/runbooks/fleet-d-two-clerk-rollout.md` §2 runner state is lane-local. The coordinator's blindness here is architectural, not an oversight to be patched.
 
 **Routed streams leave no trace either.** `stream_read` (`routing.py:251-320`) resolves and dispatches without ever calling `open_routing_attempt`. A lane serving an open SSE subscription is invisible to the receipts table.
 
@@ -333,7 +333,7 @@ The 2026-09-15 rejection of a flat requirement is not reopened. Drain and releas
 - `PythonDataService/app/broker/fleet/recovery.py` — `require_recovery_hold_clear` (`:400`), `closeout_empty_registry_recovery` (`:426`).
 - `PythonDataService/app/broker/alpaca/clerk/fleet_boot.py` — the offline-path entry on any `FleetPresenceError` (`:284-300`), `offline_boot_matches` (`:385-404`).
 - `PythonDataService/app/broker/fleet/operation_catalog.snapshot.json` — the 76 routed operations.
-- `docs/design/fleet-d-runtime-ownership-matrix.md` — per-lane ownership of runner state.
+- `docs/runbooks/fleet-d-two-clerk-rollout.md` §2 — per-lane ownership of runner state.
 - `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)".
 - `scripts/manage_broker_fleet.py` — the three host ceremonies (`retire` `:767-770`, `release-assignment` `:772`, `reassign` `:853`) and the `--proof` flag this ADR deletes (`:784-788`, `:860`, consumed at `:227` and `:306`).
 - `docs/runbooks/fleet-e-registry-recovery-exercise.md:81-92` and `docs/runbooks/fleet-dev-two-lane-posture.md:439-440` — the two committed procedures the implementation must re-author; correct today, unfollowable once this ships.

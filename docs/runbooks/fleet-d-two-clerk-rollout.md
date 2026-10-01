@@ -1,6 +1,6 @@
 # Fleet D two-Clerk rollout and qualification
 
-**Status:** Delivery D runbook. It is a gate sequence, not deployment evidence. Mark a gate complete only with the evidence fields in [the D ownership matrix](../design/fleet-d-runtime-ownership-matrix.md). The accepted decision remains [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md).
+**Status:** Delivery D runbook. It is a gate sequence, not deployment evidence. Mark a gate complete only with the evidence fields in [Evidence classifications and Delivery D gates](#evidence-classifications-and-delivery-d-gates). The accepted decision remains [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md).
 
 ## Scope and language
 
@@ -9,6 +9,27 @@ This runbook authorizes preparation, isolated actual-role Compose qualification 
 Enrollment, endpoint changes, remount, restore, reassignment, recovery, retirement, and Live arming remain host-only. Do not put a container-runtime socket in a service or use the browser or `FLEET_ROLE=combined` for a ceremony.
 
 Use exactly one of these status statements: `code complete`, `isolated actual-role Compose qualification passed`, `deployment qualified`, `Paper canary qualified`, `Live read-only qualified`, `Live command authorized`, or `operational rollout complete`. Never infer a later statement from an earlier one.
+
+The host and the upstream feed remain shared failure domains. Delivery D claims application fault containment only within the tested supported-host capacity; it does not claim independent host, power, network, or upstream-provider availability.
+
+## Evidence classifications and Delivery D gates
+
+The rollout owner opens one dated record for every attempt. A blank field is not
+evidence and blocks the next stage.
+
+| Gate | Required record fields | Pass condition | Abort / hold condition |
+|---|---|---|---|
+| Code completion | PR SHA; reviewed diff; config/render command and output location; targeted test names/results | Code and documentation are merged/review-ready | This gate proves no deployment behavior. Do not call it qualification. |
+| Isolated actual-role Compose qualification | Harness SHA/version; generated Compose project; actual role identities; fake upstream identities; redacted transcript; probe JSON; cleanup result | The recorded real coordinator/Clerk processes, mount inspection, capacity, isolation, and fault cases completed | This is bounded deployment evidence. It cannot prove production mounts/credentials, real provider/feed behavior, production host contention, or operator readiness. |
+| Deployment qualified | Exact supported fleet invocation; `config --services` output with no legacy combined role; rendered config; actual mount and egress inspection; image digests; resource limits; reviewed fault record | Real deployed roles, their actual mounts, ingress/egress policy, and bounded resource behavior meet the D checklist | Any legacy combined service, shared lane root/credential, wrong backend ingress, unexpected exposed agent, or cross-lane fault impact. |
+| Paper canary | Paper account/Clerk ID; admission receipt; current program/validation/build evidence; bounded duration; operator decision | Existing Paper gates admit and recorded observations meet the canary plan | Any refusal, unexpected command, stale/uncertain outcome, resource breach, or missing evidence. |
+| Live read-only | Live account/Clerk ID; read-only credential/posture proof; route/response/stream correlation; duration | Reads and streams preserve lane identity while all mutation gates remain closed | Any mutation attempt, cross-lane data, stale identity, unavailable market-status evidence, or degraded Live capacity. |
+| Live-command authorization | Separate named approver; eligible existing command; frozen target; arming/envelope/custody/risk evidence; idempotency/receipt plan | A separately authorized command passes unchanged existing Live gates | No separate authorization, no complete gates, unsupported capability, unknown outcome, or any widened authority. |
+| Operational rollout | Owner acceptance; compatibility observation package; rollback readiness; incident contacts | All preceding D gates are complete and E prerequisites are scheduled | A missing prior-stage evidence field, missing pre-cutover observation package, or any unperformed gate presented as evidence. |
+
+The `Live-command authorization` row is deliberately not a Delivery D completion
+claim. It is a per-command host/operator decision after successful Paper and
+read-only evidence, never a Compose setting.
 
 ## 0. Baseline and environment files
 
@@ -79,7 +100,7 @@ podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.ya
 
 The backend's Python base URL terminates at `fleet-coordinator`. The browser reaches the backend, then the coordinator; it never addresses an agent directly. `fleet-coordinator` is the only host-published fleet service. `alpaca-paper-clerk` and `alpaca-live-clerk` have no host port, are reachable only on the fleet network, and must have explicit `fleet_coordinator`/`clerk_agent` roles respectively.
 
-Verify three different identity-bearing volume sources (coordinator control, Paper, and Live), the separate coordinator non-custody artifact volume, no shared writable artifact tree, and lane-local `ALPACA_CLERK_DIR`, `IBKR_LIVE_RUNS_ROOT`, `IBKR_LIVE_BARS_ROOT`, and `BROKER_CAPTURE_DIR`. Verify each role has CPU, memory, PID, and tmpfs limits, each lane has its own request/SSE/queue budget, and no service mounts a Docker/Podman socket. Verify the coordinator contains no Alpaca execution credential, Clerk-local IBKR live-feed client, or lane custody mount; its research/data-lake configuration remains permitted. Verify Paper has no Live credential slot and Live has no Paper credential slot.
+Verify three different identity-bearing volume sources (coordinator control, Paper, and Live), the separate coordinator non-custody artifact volume, no shared writable artifact tree, and lane-local `ALPACA_CLERK_DIR`, `IBKR_LIVE_RUNS_ROOT`, `IBKR_LIVE_BARS_ROOT`, and `BROKER_CAPTURE_DIR`. Every lane-owned writable root (profile selection, custody, lease, receipts, streams, bot bindings, runner and arming evidence, backups, recovery) sits under that lane's own volume; the coordinator owns none of them. Verify each role has CPU, memory, PID, and tmpfs limits, each lane has its own request/SSE/queue budget, and no service mounts a Docker/Podman socket. Verify the coordinator contains no Alpaca execution credential, Clerk-local IBKR live-feed client, or lane custody mount; its research/data-lake configuration remains permitted. Verify Paper has no Live credential slot and Live has no Paper credential slot.
 
 Each lane's supported market-data wiring is the retained read-only IBKR client through the reviewed host/gateway aliases. Paper and Live use different `IBKR_CLIENT_ID` values and retain Clerk-scoped market-status evidence. The private bridge prevents direct app-network ingress to agents but does not itself implement an outbound allowlist; enforce an approved Alpaca/IBKR destination policy at the host edge where required. The coordinator receives neither an Alpaca execution credential nor a Clerk custody mount and has no Clerk-local IBKR live-feed client; its existing research/data-lake and Polygon dependencies remain permitted. Do not replace the market-data path with a deprecated IBKR control endpoint or a coordinator proxy. Rendering is validation, not qualification.
 
@@ -135,6 +156,8 @@ Without that separate record, stop at `Live read-only qualified`.
 
 ## 8. Begin compatibility observation before cutover and retain it
 
-Before switching off the combined role, retain its direct runtime aggregate from `$ALPACA_CLERK_DIR/compatibility/route_hits.json`; the same collector runs in `combined` and later in each `clerk_agent`. Schema v2 is `schema_version`, `updated_at_ms`, and sorted route-hit entries (`route_family`, `response_class`, `count`, `first_observed_at_ms`, `last_observed_at_ms`). `method` is intentionally omitted because only `GET`/`HEAD` reads are eligible. Retain the combined and post-cutover lane aggregates plus consumer-inventory reference in the restricted rollout record until E closes its retirement decision. Do not retain raw URLs, parameters, headers, bodies, identities, credentials, or raw access logs in fleet evidence.
+The only compatibility behavior observed in D is a browser-direct, unscoped **read** route. Fleet mutations never have an implicit target.
 
-E, not D, selects whether the window is representative, reconciles consumers, and accepts or rejects route retirement. Zero traffic in an idle window is not retirement proof.
+Before switching off the combined role, retain its direct runtime aggregate from `$ALPACA_CLERK_DIR/compatibility/route_hits.json`; the same collector runs in `combined` and later in each `clerk_agent`, so the evidence continues across the cutover without an access-log-exporter substitute. Schema v2 is `schema_version`, `updated_at_ms`, and sorted route-hit entries (`route_family`, `response_class`, `count`, `first_observed_at_ms`, `last_observed_at_ms`). `method` is intentionally omitted because only `GET`/`HEAD` reads are eligible. Retain the combined and post-cutover lane aggregates plus consumer-inventory reference in the restricted rollout record until E closes its retirement decision. Do not retain raw URLs, parameters, headers, bodies, identities, credentials, or raw access logs in fleet evidence.
+
+E, not D, selects whether the window is representative, reconciles consumers, and accepts or rejects route retirement; D neither selects the duration nor removes a compatibility route. Zero traffic in an idle window is not retirement proof.

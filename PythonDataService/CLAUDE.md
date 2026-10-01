@@ -19,7 +19,8 @@ The data plane depends on the **redis** container (health-checked) and reads `PO
 `/api/lean-sidecar/*` endpoints in the data plane forward to a
 **separate** launcher service that owns Podman API access. The
 launcher is NOT inside the `polygon-data-service` container (see
-`docs/architecture/lean-sidecar-lab.md` §"Launcher topology" for why).
+ADR 0070 decision 2 for why; `docs/runbooks/lean-sidecar-launcher.md`
+holds the placement and verification steps).
 
 Run it as a host process alongside `podman compose up`:
 
