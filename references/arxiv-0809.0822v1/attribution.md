@@ -23,6 +23,5 @@ The vendored artifact is the arXiv source archive supplied by the user and kept 
 
 ## Used By
 
-- `docs/design/bouchaud-farmer-lillo-2008-microstructure-implementation-design.md`
 - `docs/references/bouchaud-farmer-lillo-2008-market-impact.md`
 - `PythonDataService/tests/fixtures/golden/microstructure/BFL-2008-MICRO-001/v1/`

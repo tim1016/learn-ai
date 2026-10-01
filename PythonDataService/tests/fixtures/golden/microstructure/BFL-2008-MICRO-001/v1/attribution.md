@@ -8,7 +8,7 @@ Vendored source: `references/arxiv-0809.0822v1/source/arXiv-0809.0822v1.tar.gz`
 
 Oracle: paper-reported benchmark values extracted from `handbook20.tex`.
 
-Canonical implementation: planned; see `docs/design/bouchaud-farmer-lillo-2008-microstructure-implementation-design.md`.
+Canonical implementation: planned; see `docs/references/bouchaud-farmer-lillo-2008-market-impact.md`.
 
 Validated against: NONE - pending implementation. This fixture is a literature benchmark inventory, not a raw-market-data equivalence fixture.
 

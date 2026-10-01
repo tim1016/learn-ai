@@ -3,9 +3,8 @@
 **Status:** Accepted
 
 - **Date:** 2026-08-21
-- **Context:** Sealed Signal Programs to Governed Alpaca Bots PRD
-  (`docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`), implementation
-  tracker #1723, issue #1728 (PRD Slice 2).
+- **Context:** Sealed Signal Programs to Governed Alpaca Bots PRD (in Git
+  history), implementation tracker #1723, issue #1728 (PRD Slice 2).
 - **Amends:** ADR 0034 (the append-or-clone rule below extends its immutable-
   instance / append-only-run model to the v2 seal); ADR 0042 (adds the seal's
   internal two-level decomposition, settles the running-build-digest source PRD
