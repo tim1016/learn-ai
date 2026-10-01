@@ -5,11 +5,13 @@ These two tests hold the part of that claim no native-lake test repeats: a
 window imported from the old cache is served by the chart split-read and by an
 engine backtest without a single provider call.
 
-**Daily infrastructure.** The two-minute pull-request job deliberately has no
-Postgres and defers this directory. The chart test reads the imported bytes
-without consulting the catalog, so it runs on a plain developer checkout; the
-engine test goes through ``ensure_data`` and therefore needs the disposable,
-migrated catalog the daily suite supplies.
+**Daily infrastructure.** The pull-request shards have no Postgres. The daily
+suite supplies a disposable, migrated catalog, so both tests execute there.
+Since #2456 a reader admits a lake file only against a root identity and a
+committed catalog receipt, so the chart test, which reads the imported lake
+through that admission, carries the ``slow`` mark and runs daily only (it is
+red there until #2660 lands). The engine test goes through ``ensure_data`` and
+therefore needs the catalog too.
 """
 
 from __future__ import annotations
@@ -111,6 +113,7 @@ def _lake_relative_path(trading_date: date):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     imported_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

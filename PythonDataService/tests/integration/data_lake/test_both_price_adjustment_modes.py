@@ -40,8 +40,8 @@ catch it, rather than passing on two identical fixtures that could not tell
 the modes apart.
 
 No Postgres, no run: every test in this module skips cleanly when
-``POSTGRES_URL`` is unset. The pull-request gate defers this directory; the
-daily workflow supplies the disposable, migrated-to-head Postgres required to
+``POSTGRES_URL`` is unset, as it is in the pull-request shards; the daily
+workflow supplies the disposable, migrated-to-head Postgres required to
 execute it. Never point ``POSTGRES_URL`` at ``my-postgres``.
 """
 

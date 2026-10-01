@@ -59,9 +59,7 @@ def test_snapshot_file_exists() -> None:
 
 def test_committed_snapshots_match_freshly_generated_output() -> None:
     """Regression for #1666: committed bytes must equal what the generator
-    produces from live source right now — the same check CI's
-    ``broker-v2-vocabulary-contract`` job performs via `git diff --exit-code`
-    after regeneration, exercised here in-process.
+    produces from live source right now, exercised in-process.
     """
     from scripts.regenerate_broker_v2_vocabulary_snapshot import build_snapshot
 

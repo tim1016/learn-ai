@@ -9,10 +9,10 @@ writes its JSON snapshot in the PythonDataService tree. Pytest
 non-trivial server-authored copy. Failing means a code was added (or copy
 omitted) without regenerating.
 
-A CI job (``broker-v2-vocabulary-contract``) regenerates the file from live
-source on every PR and diffs it against the committed copy, so a hand-edit
-fails CI. ``test_vocabulary_snapshot.py`` additionally asserts that every
-code's committed ``copy`` matches live ``OPERATOR_COPY`` exactly, not merely
+``test_vocabulary_snapshot.py`` regenerates the snapshot from live source on
+every PR and requires the committed copy to match it byte for byte, so a
+hand-edit fails CI. It also asserts every code's committed ``copy`` matches
+live ``OPERATOR_COPY`` exactly, not merely
 non-trivially.
 
 Usage::

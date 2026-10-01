@@ -111,15 +111,15 @@ Every fixture declares `atol`, `rtol`, and a required `tolerance_note`:
 
 ## CI
 
-The `validate-golden-manifest` CI job runs `test_golden_manifest.py` on
-every PR. It validates:
+The Python test shards run `test_golden_manifest.py` on every PR. It
+validates:
 - manifest.json against manifest.schema.json
 - All active fixture files exist on disk
 - No duplicate IDs, no empty tolerance notes
 - SHA-256 hashes are valid hex
 
-Fixture validation tests (e.g. `test_options_pricing_fixtures.py`) run as
-part of the standard `python-test` CI job.
+Fixture validation tests (e.g. `test_options_pricing_fixtures.py`) run in
+the same shards.
 
 Tolerance note: tolerances in fixture metadata are validated on **Linux x86_64
 CI (ubuntu-latest, Python 3.12)**. Windows dev boxes are local environments,
