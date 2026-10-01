@@ -343,4 +343,4 @@ A golden-fixture parity test is still **pending** for this pipeline. Per the `nu
 - Reference IV computed via QuantLib **and** SciPy Brent independently; require agreement to `atol=1e-9`.
 - Reference Greeks from `_bsm_greeks` compared against an independent closed-form implementation (e.g. `py_vollib`); require agreement to `atol=1e-6, rtol=1e-6` (matching the project tolerance for Greeks per `.claude/rules/numerical-rigor.md`).
 
-The service's provenance block records it as pending a fixture. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.
+The service's module docstring records it as pending a parity pass. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.

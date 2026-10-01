@@ -17,12 +17,9 @@ namespace Backend.Services.Implementation;
 /// Reference: Standard accounting practice (FIFO inventory method, GAAP/IFRS).
 ///   No external paper port; this is well-known accounting arithmetic with
 ///   one canonical correct interpretation.
-/// Canonical implementation: this file. Per the contract's "single source of
-///   truth — math may live in any layer that fits the use case" rule, FIFO
-///   accounting lives in .NET because (a) the data lives in EF/Postgres,
-///   (b) it operates on persisted lot records via DbContext transactions,
-///   and (c) round-tripping every trade through Python would be gratuitous
-///   without simplifying anything.
+/// Canonical implementation: this file. It is not an ADR 0068 exception: it
+///   serves only the dead Portfolio page and goes with the Portfolio cut
+///   (#2756).
 /// Validated against: Backend.Tests/Unit/Services/PositionEngineTests.cs
 ///   (FIFO determinism, mark-to-market, cost basis after partials);
 ///   PortfolioValidationService.cs runtime suite Test1_FifoAccounting.

@@ -100,7 +100,7 @@ The endpoint usually isn't the final product — it has a consumer. Depending on
 
 ### 6. Regenerate the contract
 
-Regenerate the contract: `python PythonDataService/scripts/export_openapi_contract.py`, then `cd Frontend && npm run codegen:openapi`. Commit `contracts/openapi/python-data-service.openapi.json` and `Frontend/src/app/api/broker.types.ts`. Any change to a serialized model needs this, not just a new route.
+Regenerate the contract: `PythonDataService/.venv/bin/python PythonDataService/scripts/export_openapi_contract.py`, then `cd Frontend && npm run codegen:openapi`. Commit `contracts/openapi/python-data-service.openapi.json` and `Frontend/src/app/api/broker.types.ts`. Any change to a serialized model needs this, not just a new route.
 
 ## Output
 

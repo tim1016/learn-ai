@@ -68,7 +68,7 @@ supersession rules.
 
 **Regression tests.** A fix for a P0 or P1 bug ships with a regression test that fails before the fix and passes after. P0/P1 is the issue's label, or the author's call when there is no issue. Other fixes may skip it.
 
-**Thermo review.** Before the first push that opens a PR, an independent reviewer — a fresh subagent or Codex, never the author — runs the `thermo-nuclear-code-quality-review` skill on the diff.
+**Thermo review.** Before the first push that opens a PR, an independent reviewer — a fresh subagent or Codex, never the author — runs the repo's `thermo-nuclear-code-quality-review` skill (`.claude/skills/thermo-nuclear-code-quality-review/SKILL.md`, not a personal copy) on the diff.
 
 - Size sets the most reviewers. Count lines added or changed in Python code and Frontend logic (TypeScript, not templates or styles); deletions, docs, generated files (contract snapshots, `broker.types.ts`) and lockfiles don't count.
 
@@ -120,6 +120,8 @@ Codex: read the skill's `SKILL.md` when its task applies.
 - **write-graphql-resolver** — Write or debug a Hot Chocolate v15 resolver
 - **build-angular-component** — Build or modify an Angular 22 component
 - **meta-propose-skill** — When the same task shape repeats, propose a new skill instead of just doing the task
+- **learn-ai-validation** — Add or touch math: the provenance block, the canonical-implementation search, parity tests
+- **thermo-nuclear-code-quality-review** — The independent pre-PR review the Gates call for
 
 ## References
 
