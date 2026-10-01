@@ -1,12 +1,13 @@
 """Closed proof vocabulary for exact executions that overlap aggregate recovery.
 
-Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical set
-  proof accepts only abs(Q_E - Q_R) < 1e-9 shares and
-  abs(C_E - C_R) < tick(C_O / Q_O) × Q_O + max(|P_E|, |P_R|) × abs(Q_E - Q_R)
-  currency, where Q_O and C_O are the order's effective fills and tick is
-  one valid price increment (total_price_conflict_atol): putting the exacts
-  in place of the cumulative moves the order's average price by less than
-  one increment, beyond the priced share residue the quantity rule accepts.
+Formula: Q = fsum(qty); C = fsum(qty × price). The canonical set proof
+  accepts only abs(Q_E - Q_R) < 1e-9 shares and, in exact decimals,
+  abs(C_E - C_R) < tick(C_O / Q_O) × Q_O + max(p) × abs(Q_E - Q_R)
+  currency, where Q_O and C_O are the order's effective fills, tick is one
+  valid price increment (marketable_limit.price_increment) and max(p) the
+  highest row price: putting the exacts in place of the cumulative moves the
+  order's average price by less than one increment, beyond the priced share
+  residue the quantity rule accepts.
 Reference: Project-authored execution-coverage contract in PRD #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
   The price rule is ADR 0036's vendor-rounding rule (2026-09-30 amendment,
@@ -30,7 +31,7 @@ import json
 import math
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from enum import StrEnum
 
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -344,7 +345,7 @@ def prove_execution_coverage_set(
     precision, never at float precision (#2791): the cumulative's price comes
     from the broker's rounded order average, so exact executions explain it
     when they move the order's average by less than one valid increment
-    (:func:`execution_coverage_gross_cost_tolerance`).
+    (:func:`execution_coverage_cost_gap`).
 
     Fees are deliberately absent from the arithmetic because cumulative recovery
     has no fee observation. The success result returns the exact observations
@@ -428,13 +429,13 @@ def prove_execution_coverage_set(
             ExecutionCoverageSetProofRefusalReason.INVALID_ORDER_TOTAL,
             "The order's effective fills are not a positive total that holds its cumulative recovery.",
         )
-    cost_tolerance = execution_coverage_gross_cost_tolerance(
-        exact=exact_aggregate,
-        cumulative=cumulative_aggregate,
+    cost_gap, cost_tolerance = execution_coverage_cost_gap(
+        exact=exact,
+        cumulative=candidate.cumulative_recovery,
         order_quantity=order_quantity,
         order_gross_cost=order_gross_cost,
     )
-    if not abs(exact_aggregate.gross_cost - cumulative_aggregate.gross_cost) < cost_tolerance:
+    if not cost_gap < cost_tolerance:
         return _set_refusal(
             ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
             "The exact executions would move the order's average price by one valid increment or more.",
@@ -443,7 +444,7 @@ def prove_execution_coverage_set(
         exact=exact_aggregate,
         cumulative=cumulative_aggregate,
         position_delta=position_delta,
-        gross_cost_tolerance=cost_tolerance,
+        gross_cost_tolerance=float(cost_tolerance),
         retained_exact_observations=tuple(sorted(exact, key=lambda observation: observation.source_id)),
     )
 
@@ -634,25 +635,48 @@ def _aggregate_coverage(
     )
 
 
-def execution_coverage_gross_cost_tolerance(
+def execution_coverage_cost_gap(
     *,
-    exact: ExecutionCoverageAggregate,
-    cumulative: ExecutionCoverageAggregate,
+    exact: tuple[ExactCoverageObservation, ...],
+    cumulative: tuple[CumulativeCoverageObservation, ...],
     order_quantity: float,
     order_gross_cost: float,
-) -> float:
-    """The gross-cost gap at which exact executions move the order's average by one price increment.
+) -> tuple[Decimal, Decimal]:
+    """The exacts' gross-cost gap from the cumulative, and the gap at which they move the order's average one increment.
 
     ``tick(C_O / Q_O) × Q_O``: the cumulative carries the rounding of the
     broker's order average over every share of the order, however few of them
     the cumulative rows hold, so the gap is measured on the order's whole
-    average rather than on the rows'. ``max(|P_E|, |P_R|) × |Q_E − Q_R|``
-    prices the share residue, under ``QTY_ATOL``, the quantity rule accepted;
-    with equal quantities it is zero, so a gap of one increment is refused.
+    average rather than on the rows'. ``max(p) × |Q_E − Q_R|`` prices the
+    share residue, under ``QTY_ATOL``, the quantity rule accepted, at the
+    highest price any row carries; with equal quantities it is zero, so a gap
+    of exactly one increment is refused.
+
+    Both are exact: every recorded float enters as the decimal it was written
+    as (``Decimal(str(x))``, ADR 0036 item 4), so a one-increment gap is never
+    read as just under one by binary rounding (#2791).
     """
-    return total_price_conflict_atol(order_gross_cost / order_quantity) * order_quantity + max(
-        abs(exact.vwap), abs(cumulative.vwap)
-    ) * abs(exact.quantity - cumulative.quantity)
+    with localcontext(_EXACT_DECIMAL_CONTEXT):
+        rows = (*exact, *cumulative)
+        exact_cost = sum((_recorded(row.quantity) * _recorded(row.price) for row in exact), Decimal(0))
+        cumulative_cost = sum((_recorded(row.quantity) * _recorded(row.price) for row in cumulative), Decimal(0))
+        residue = abs(
+            sum((_recorded(row.quantity) for row in exact), Decimal(0))
+            - sum((_recorded(row.quantity) for row in cumulative), Decimal(0))
+        )
+        quantity = _recorded(order_quantity)
+        tick = price_increment(_recorded(order_gross_cost) / quantity)
+        tolerance = tick * quantity + max(abs(_recorded(row.price)) for row in rows) * residue
+        return abs(exact_cost - cumulative_cost), tolerance
+
+
+#: Wide enough that sums of products of any two finite float decimals are exact.
+_EXACT_DECIMAL_CONTEXT = Context(prec=1400)
+
+
+def _recorded(value: float) -> Decimal:
+    """A recorded float as the decimal it was written as."""
+    return Decimal(str(value))
 
 
 def strict_gross_cost_envelope(
@@ -1254,8 +1278,8 @@ def exact_replaces_cumulative(
     """Temporary S0 one-to-one mirror of the canonical set-proof predicate.
 
     Formula: same side, |q_cumulative − q_exact| < FILL_QTY_EPSILON shares,
-      and |p_cumulative − p_exact| < tick(p_cumulative) per share
-      (total_price_conflict_atol, #2791). It measures the gap on the one
+      and |p_cumulative − p_exact| < tick(p_cumulative) per share, compared
+      in exact decimals (#2791). It measures the gap on the one
       cumulative row, where the set proof measures it on the order's whole
       average; the two agree when that row is its order's only fill.
     Reference: Project-authored S0 operator contract retained during the
@@ -1270,8 +1294,15 @@ def exact_replaces_cumulative(
         cumulative.side == exact.side
         and abs(cumulative.quantity - exact.slice_qty) < FILL_QTY_EPSILON
         and _is_finite(cumulative.price)
-        and abs(cumulative.price - exact.slice_price) < total_price_conflict_atol(cumulative.price)
+        and _is_finite(exact.slice_price)
+        and _below_one_increment(reference=cumulative.price, other=exact.slice_price)
     )
+
+
+def _below_one_increment(*, reference: float, other: float) -> bool:
+    """Whether two recorded prices differ by less than one valid increment of ``reference``, compared exactly."""
+    with localcontext(_EXACT_DECIMAL_CONTEXT):
+        return abs(_recorded(reference) - _recorded(other)) < price_increment(_recorded(reference))
 
 
 def _unavailable(

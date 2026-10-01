@@ -207,9 +207,11 @@ amendment's item 1; the share rule is unchanged.
    The set proof (`execution_coverage.py::prove_execution_coverage_set`)
    still needs `|Q_E − Q_R| < QTY_ATOL`. Its price rule is now item 3's
    vendor-rounding rule, measured on the order's whole average:
-   `|C_E − C_R| < tick(C_O / Q_O) × Q_O + max(|P_E|, |P_R|) × |Q_E − Q_R|`,
-   where `Q_O` and `C_O` are the order's effective fills and `tick` is
-   `total_price_conflict_atol`.
+   `|C_E − C_R| < tick(C_O / Q_O) × Q_O + max(p) × |Q_E − Q_R|`,
+   where `Q_O` and `C_O` are the order's effective fills, `tick` is one
+   valid price increment and `max(p)` the highest row price. It is compared
+   in exact decimals, each float entering as `Decimal(str(x))` (item 4), so
+   a gap of exactly one increment is refused whatever binary rounding says.
    - Why the whole order: a cumulative row is priced on its delta (item 2)
      from the broker's rounded order average, so it carries that rounding
      for every share of the order, however few shares the row holds.
@@ -222,7 +224,9 @@ amendment's item 1; the share rule is unchanged.
    order-level proof (#2346) closes the episode on quantity alone, as before.
    When the exacts that proof keeps quarantined hold every share of the
    order's cumulative-recovery rows
-   (`order_total_retained_exacts_explain_cumulative`), the fee population
-   counts them as the order's executions. Budget admission then proceeds.
+   (`order_total_retained_exacts_explain_cumulative`), and all of them fall
+   on the cumulative rows' ET day, the fee population counts them as the
+   order's executions. Executions on another day would be charged under the
+   wrong day's fees, so that order's fee coverage stays incomplete. Budget admission then proceeds.
    Account P&L coverage stays incomplete, which marks the bot as needing
    attention: whose price stands is not settled.

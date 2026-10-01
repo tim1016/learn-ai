@@ -438,12 +438,30 @@ def test_prove_execution_coverage_set_records_one_increment_of_the_order_plus_th
 
     result = _assert_success(prove_execution_coverage_set(candidate))
 
-    assert result.gross_cost_tolerance == pytest.approx(
-        EXPECTED_TICK_AT_OR_ABOVE_ONE_DOLLAR * (4.0 + EXPECTED_QTY_ATOL / 2)
-        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * abs(result.position_delta),
-        abs=1e-12,
-        rel=0,
+    # One cent over the order's 4.0000000005 shares, plus the 5e-10-share
+    # residue at the highest row price, 1,000,000.004 -- in exact decimals.
+    assert result.gross_cost_tolerance == pytest.approx(0.040000000005 + 0.000500000002, abs=1e-15, rel=0)
+
+
+@pytest.mark.parametrize(("rest_average", "exact_price"), [(0.5, 0.5001), (0.5001, 0.5), (100.0, 100.01), (2.07, 2.08)])
+def test_a_gap_of_exactly_one_increment_is_refused_whatever_binary_rounding_says(
+    rest_average: float, exact_price: float,
+) -> None:
+    """In floats 5 × 0.5001 − 5 × 0.5 is 0.000499999…, just under one tick of 0.0005; the gap is exactly one."""
+    candidate = _candidate(
+        cumulative=(_cumulative("recovery-1", 5.0, rest_average),),
+        incoming=_exact("execution-incoming", 5.0, exact_price),
     )
+    exact = ExecutionSliceFilledFacts(
+        execution_id="execution-incoming", symbol="SPY", side="BUY", slice_qty=5.0, slice_price=exact_price,
+        fee=None, fee_fidelity="unavailable", evidence_source="golden-fixture", source_event_at_ms=1_723_748_800_000,
+    )
+    cumulative = CumulativeRecoveryFill(
+        fill_id="recovery-1", order_ref="order-1", quantity=5.0, price=rest_average, side="BUY"
+    )
+
+    _assert_refusal(prove_execution_coverage_set(candidate), ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH)
+    assert not exact_replaces_cumulative(exact=exact, cumulative=cumulative)
 
 
 def test_prove_execution_coverage_set_refuses_nonfinite_aggregate_from_finite_rows() -> None:

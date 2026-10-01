@@ -76,9 +76,10 @@ each `math.fsum` calculation:
 Quantity is strict: `abs(Q_E - Q_R) < QTY_ATOL`, with `QTY_ATOL = 1e-9`
 shares and zero relative tolerance. Price is compared at Alpaca's price
 precision, never at float precision (ADR 0036, 2026-10-01 amendment, #2791).
-With `Q_O` and `C_O` the order's effective fills and `tick` one valid price
-increment of `C_O / Q_O`, the proof requires
-`abs(C_E - C_R) < COST_ATOL = tick × Q_O + max(|P_E|, |P_R|) × abs(Q_E - Q_R)`:
+With `Q_O` and `C_O` the order's effective fills, `tick` one valid price
+increment of `C_O / Q_O` and `max(p)` the highest row price, the proof
+requires, in exact decimals,
+`abs(C_E - C_R) < COST_ATOL = tick × Q_O + max(p) × abs(Q_E - Q_R)`:
 the exacts move the order's average by less than one increment.
 Records proven before #2791 carry the float-precision envelope
 `max(|Q_E|, |Q_R|) × 1e-9 + max(|P_E|, |P_R|) × 1e-9 + 1e-18`, which the

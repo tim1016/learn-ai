@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,9 @@ from app.broker.alpaca.clerk.sqlite import execution_coverage
 from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, record_activity_executions
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    CumulativeCoverageObservation,
+    ExactCoverageObservation,
+    ExecutionCoverageAggregate,
     order_total_retained_exacts_explain_cumulative,
     strict_gross_cost_envelope,
 )
@@ -41,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXECUTION_COVERAGE_CONFLICT_REASON_CODE
 from app.broker.contract.models import BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture, _TestClock, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_manual_chain_foreign_member_fee_coverage import (
     _account_execution_coverage,
@@ -161,6 +165,44 @@ async def test_a_bot_execution_priced_two_cents_from_rest_keeps_the_rest_total_a
         assert fees.known, fees.unresolved
         assert _account_execution_coverage(repo) == "incomplete"
         assert _another_bots_entry_is_admitted(repo)
+    finally:
+        repo.close()
+
+
+async def test_executions_on_two_days_behind_a_one_day_rest_total_keep_fee_coverage_incomplete(
+    tmp_path: Path,
+) -> None:
+    """The bot's order executed 2 shares on one day and 3 the next, both two cents from REST's average.
+
+    REST's total lands on the second day, and the order-total proof closes
+    the disagreement as before. The fee population would price all 5 shares
+    on the second day, so the first day's execution is not witnessed by it:
+    fee coverage stays incomplete rather than charge it under the wrong
+    day's fees.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 60_000)
+        accepted = _bot_entry(repo, decision_id="two-days", quantity=5)
+        assert accepted.order_ref is not None and accepted.effect_operation_id is not None
+        next_day = NOON + 86_400_000
+        _walk_clock_to(repo, next_day)
+        filled = _broker_order_fixture(
+            accepted.order_ref, status="filled", quantity=5, filled_quantity=5, filled_avg_price=100,
+        ).model_copy(update={"updated_at_ms": next_day, "observed_at_ms": next_day, "filled_at_ms": next_day})
+        fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=2, price=100.02, at_ms=NOON)
+        feed.fill(execution_id=_EXEC_2, order_id=filled.order_id, quantity=3, price=100.02, at_ms=next_day)
+
+        await _read_account_activity(repo, feed)
+        await _sweep(repo, _Website(repo=repo), feed, spy_held=5.0)
+        await _read_account_activity(repo, feed)
+
+        assert _coverage_conflict_episodes(repo) == ["resolved"]
+        assert _credited(repo, accepted.order_ref) == [(None, "cumulative_recovery", 5.0, 100.0)]
+        unresolved = repo.fee_attribution(now_ms=repo.clock()).unresolved
+        assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in unresolved
     finally:
         repo.close()
 
@@ -319,12 +361,27 @@ async def test_a_supersession_proven_at_float_precision_before_2791_still_replay
         order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="before-2791")
         feed = _ActivityFeed()
         feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON)
+        cost_gap = execution_coverage.execution_coverage_cost_gap
+
+        def _proven_at_float_precision(
+            *,
+            exact: tuple[ExactCoverageObservation, ...],
+            cumulative: tuple[CumulativeCoverageObservation, ...],
+            **order_totals: float,
+        ) -> tuple[Decimal, Decimal]:
+            gap, _increment = cost_gap(exact=exact, cumulative=cumulative, **order_totals)
+            aggregates = [
+                ExecutionCoverageAggregate(
+                    quantity=sum(row.quantity for row in rows),
+                    gross_cost=sum(row.quantity * row.price for row in rows),
+                    vwap=sum(row.quantity * row.price for row in rows) / sum(row.quantity for row in rows),
+                )
+                for rows in (exact, cumulative)
+            ]
+            return gap, Decimal(strict_gross_cost_envelope(exact=aggregates[0], cumulative=aggregates[1]))
+
         with monkeypatch.context() as written_before_2791:
-            written_before_2791.setattr(
-                execution_coverage,
-                "execution_coverage_gross_cost_tolerance",
-                lambda *, exact, cumulative, **_order_totals: strict_gross_cost_envelope(exact=exact, cumulative=cumulative),
-            )
+            written_before_2791.setattr(execution_coverage, "execution_coverage_cost_gap", _proven_at_float_precision)
             await _read_account_activity(repo, feed)
         superseded = [
             json.loads(row["facts_json"])

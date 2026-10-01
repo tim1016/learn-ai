@@ -487,19 +487,32 @@ def _witnessed_executions(conn: sqlite3.Connection) -> tuple[frozenset[str], boo
     behind its order's cumulative-recovery fill, though no fill names it
     (#2791). A cumulative fill names no execution, so it is explained only
     once its order's retained exacts are every share it holds
-    (:func:`order_total_retained_exacts_explain_cumulative`).
+    (:func:`order_total_retained_exacts_explain_cumulative`), and only when
+    they and the cumulative fills all fall on one ET day: the population
+    prices the cumulative fill on its own day, so an execution on another
+    day would be charged under the wrong day's fees.
     """
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
-    cumulative: dict[str, list[float]] = defaultdict(list)
-    for row in conn.execute("SELECT order_ref, qty FROM fills WHERE evidence_source = 'cumulative_recovery'"):
-        cumulative[row[0]].append(float(row[1]))
+    cumulative: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT order_ref, qty, COALESCE(source_event_at_ms, recorded_at_ms) FROM fills "
+        "WHERE evidence_source = 'cumulative_recovery'"
+    ):
+        cumulative[row[0]].append((float(row[1]), int(row[2])))
     explained = True
-    for order_ref, quantities in cumulative.items():
+    for order_ref, rows in cumulative.items():
         retained = order_total_retained_exact_provenance(conn, order_ref=order_ref)
         execution_ids.update(item.exact_execution.execution_id for item in retained)
-        explained = explained and order_total_retained_exacts_explain_cumulative(
-            retained_quantities=tuple(item.exact_execution.slice_qty for item in retained),
-            cumulative_quantities=tuple(quantities),
+        days = {et_date_at_ms(at_ms) for _quantity, at_ms in rows} | {
+            et_date_at_ms(item.exact_execution.source_event_at_ms) for item in retained
+        }
+        explained = (
+            explained
+            and len(days) == 1
+            and order_total_retained_exacts_explain_cumulative(
+                retained_quantities=tuple(item.exact_execution.slice_qty for item in retained),
+                cumulative_quantities=tuple(quantity for quantity, _at_ms in rows),
+            )
         )
     return frozenset(execution_ids), explained
 
