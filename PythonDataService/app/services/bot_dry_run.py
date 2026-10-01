@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.services.jsonl_wal import JsonlWal
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 DRY_RUN_ACTIVITY_FILENAME = "dry_run_activity.jsonl"
 MAX_DRY_RUN_TAIL = 500
@@ -25,7 +26,7 @@ class DryRunActivity(BaseModel):
     run_id: str
     authority_account_id: str
     authority_kind: Literal["synthetic"]
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     bar_ref: str
     intent: Literal["ENTER", "EXIT"]
     order_ref: str

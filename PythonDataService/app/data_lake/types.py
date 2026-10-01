@@ -25,6 +25,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import active_root_id
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import ny_datetime
 
 # Every ``data_root_id`` field below defaults to active_root_id() — the
@@ -208,8 +209,8 @@ class DataRunSpec(BaseModel):
     # calendar_anchor_ms_to_trading_date (via _validate_calendar_anchor
     # below) alongside the anchor check itself — not restated here as a
     # second Field(ge=, le=) constraint on the same invariant.
-    start_trading_date_ms: int = Field(strict=True)
-    end_trading_date_ms: int = Field(strict=True)
+    start_trading_date_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    end_trading_date_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]

@@ -88,7 +88,7 @@ class ScenarioRequest(BaseModel):
     Greeks; passes a specific timestamp for what-if at a future date.
     """
 
-    as_of_ms: int = Field(..., description="Evaluation timestamp (int64 ms UTC)")
+    as_of_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Evaluation timestamp (int64 ms UTC)")
     spot_price: float = Field(..., gt=0, description="Current underlying spot")
     risk_free_rate: float = Field(0.043, ge=0, le=0.5)
     dividend_yield: float = Field(0.0, ge=0, le=0.5)

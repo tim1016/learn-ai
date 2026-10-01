@@ -44,7 +44,7 @@ from app.services.jsonl_wal import JsonlWal
 from app.services.session_authority import order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.advisory_lock import advisory_file_lock
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 # The sim world's existing file name; the shadow world writes the same shape
 # in its own custody directory, so one reader serves both.
@@ -78,9 +78,9 @@ class SynthesizedAnchor(BaseModel):
     provider: str
     bar_identity: str
     bar_ref: str
-    decision_bar_start_ms: int = Field(ge=0)
-    decision_bar_end_ms: int = Field(ge=0)
-    cancel_at_ms: int | None = Field(default=None, ge=0)
+    decision_bar_start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    decision_bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     fill_bar_ref: str | None = None
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
 

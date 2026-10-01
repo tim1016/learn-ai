@@ -20,6 +20,7 @@ from app.engine.live.account_binding_ledger import (
     binding_ledger_parity,
     read_account_binding_commands,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 ACCOUNT_INSTANCE_REGISTRY_FILENAME = "instance_registry.jsonl"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
@@ -39,7 +40,7 @@ class AccountInstanceBinding(BaseModel):
     # removed. The retained reader never serializes this field.
     cohort_id: str | None = Field(default=None, min_length=1, max_length=128, exclude=True)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE"
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     source: str = Field(min_length=1)
 
 

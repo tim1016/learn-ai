@@ -21,6 +21,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 
 class OptionContractMatch(BaseModel):
     """One row from ``/api/broker/option-contracts/{symbol}`` — a qualified
@@ -35,7 +37,7 @@ class OptionContractMatch(BaseModel):
     trading_class: str = Field(min_length=1)
     exchange: str
     currency: str
-    expiry_ms: int = Field(gt=0)
+    expiry_ms: int = Field(gt=0, le=MAX_TIMESTAMP_MS)
     strike: float = Field(gt=0)
     right: Literal["C", "P"]
     multiplier: int = Field(gt=0)

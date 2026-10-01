@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 SCHEMA_VERSION = 1
 _CHUNK = 1 << 16
 
@@ -116,7 +118,7 @@ class CellManifest(BaseModel):
     python_data_service_commit: str = Field(..., pattern=r"^[a-f0-9]{7,40}$")
     generator_script_sha256: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     captured_by: str
-    captured_at_ms_utc: int = Field(..., gt=0)
+    captured_at_ms_utc: int = Field(..., gt=0, le=MAX_TIMESTAMP_MS)
 
     @field_validator("cell_id")
     @classmethod

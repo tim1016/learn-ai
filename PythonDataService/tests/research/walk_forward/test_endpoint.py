@@ -25,6 +25,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _spec_dict() -> dict:
@@ -215,6 +216,16 @@ async def test_post_invalid_timestamp_returns_422(client):
     body["start_ms"] = "not-a-timestamp"
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["start_ms", "end_ms"])
+async def test_post_over_ceiling_timestamp_returns_422(client, field: str):
+    """An instant past ``MAX_TIMESTAMP_MS`` is refused at the schema boundary
+    (ADR 0022 (g)), not carried into datetime conversion to overflow (#2771)."""
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    body[field] = MAX_TIMESTAMP_MS + 1
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
+    assert response.status_code == 422, response.text
 
 
 async def test_post_unknown_split_kind_returns_400(client):
