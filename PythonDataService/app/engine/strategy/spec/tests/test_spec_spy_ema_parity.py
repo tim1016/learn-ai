@@ -16,16 +16,12 @@ See ``test_spec_sma_parity.py`` for the parity contract description.
 
 from __future__ import annotations
 
-import sys
-
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.spec.tests._parity_helpers import (
     assert_trade_logs_match,
     build_minute_bars,
     closes_for_spy_ema,
-    configure_script_logger,
     load_spec_algo,
-    logger,
     run_strategy,
 )
 
@@ -61,37 +57,3 @@ def test_spy_ema_spec_matches_hand_coded() -> None:
     assert_trade_logs_match(
         spec_trades, ref_trades, label="SPY EMA crossover spec parity"
     )
-
-
-def run_parity() -> None:
-    configure_script_logger()
-    try:
-        spec_trades, ref_trades = _run_parity()
-    except Exception as e:
-        logger.error("FAIL: setup error — %s", e)
-        sys.exit(1)
-
-    logger.info("Reference trades : %d  → %s", len(ref_trades), [t.result for t in ref_trades])
-    logger.info("Spec trades      : %d → %s", len(spec_trades), [t.result for t in spec_trades])
-
-    if len(ref_trades) < MIN_TRADES:
-        logger.error("FAIL: too few trades (%d) — test is vacuous", len(ref_trades))
-        sys.exit(1)
-
-    try:
-        assert_trade_logs_match(
-            spec_trades, ref_trades, label="SPY EMA crossover spec parity"
-        )
-    except AssertionError as e:
-        logger.error("FAIL: %s", e)
-        sys.exit(1)
-
-    logger.info(
-        "PASS: spec SPY EMA crossover reproduces EmaCrossoverSignalAlgorithm "
-        "(%d trades, identical trade-by-trade)",
-        len(spec_trades),
-    )
-
-
-if __name__ == "__main__":
-    run_parity()

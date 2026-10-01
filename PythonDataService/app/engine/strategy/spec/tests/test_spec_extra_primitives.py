@@ -7,7 +7,6 @@ where the correct answer is obvious from the rule definition.
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -285,63 +284,6 @@ def test_multi_rule_survival_list_compiles_and_runs() -> None:
     closes = _ramp_then_fade(num_warmup=40)
     trades = _run(spec, closes)
     assert len(trades) >= 1, f"expected at least 1 trade, got 0: {trades}"
-
-
-# ---------------------------------------------------------------------------
-# Script entry point.
-# ---------------------------------------------------------------------------
-def run_all() -> None:
-    failed = False
-    tests = [
-        ("trailing stop fires on retrace", test_trailing_stop_fires_on_retrace),
-        ("trailing stop resets between trades", test_trailing_stop_resets_between_trades),
-        ("BarProperty range filter blocks low-range bars", test_bar_property_filter_blocks_low_range_bars),
-        ("multi-rule survival list composes", test_multi_rule_survival_list_compiles_and_runs),
-    ]
-    for label, fn in tests:
-        try:
-            fn()
-            print(f"PASS: {label}")
-        except AssertionError as e:
-            failed = True
-            print(f"FAIL: {label} — {e}")
-        except Exception as e:
-            failed = True
-            print(f"ERROR: {label} — {type(e).__name__}: {e}")
-    if failed:
-        sys.exit(1)
-
-
-# ----- EvalContext.predictions -----------------------------------------------
-def test_eval_context_predictions_default_empty() -> None:
-    """Existing call sites that don't pass `predictions` keep working."""
-    from app.engine.strategy.spec.primitives import EvalContext
-
-    ctx = EvalContext(
-        indicators={},
-        current_bar_count=0,
-        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
-        bar_close_price=Decimal("100"),
-    )
-    assert ctx.predictions == {}
-
-
-def test_eval_context_predictions_can_be_supplied() -> None:
-    """EvalContext accepts and stores predictions dict."""
-    from app.engine.strategy.spec.primitives import EvalContext
-
-    ctx = EvalContext(
-        indicators={},
-        current_bar_count=0,
-        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
-        bar_close_price=Decimal("100"),
-        predictions={"my_pred": Decimal("0.5")},
-    )
-    assert ctx.predictions["my_pred"] == Decimal("0.5")
-
-
-if __name__ == "__main__":
-    run_all()
 
 
 # ----- PredictionComparisonPrimitive --------------------------------

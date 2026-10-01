@@ -16,9 +16,6 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
-import sys
-
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.strategy.spec.tests._parity_helpers import (
@@ -225,34 +222,3 @@ async def test_backtest_rejects_malformed_spec() -> None:
             },
         )
     assert resp.status_code in (400, 422), f"expected 4xx, got {resp.status_code}: {resp.text}"
-
-
-# ---------------------------------------------------------------------------
-# Script entry point.
-# ---------------------------------------------------------------------------
-def run_all() -> None:
-    failed = False
-    tests = [
-        ("fixtures list endpoint", test_fixtures_list_endpoint),
-        ("fixture detail endpoint", test_fixture_detail_endpoint),
-        ("fixture detail unknown -> 404", test_fixture_detail_unknown_returns_404),
-        ("backtest runs SMA spec on synthetic data", test_backtest_runs_sma_spec_on_synthetic_data),
-        ("backtest rejects unsupported feature with 400", test_backtest_rejects_unsupported_spec_feature_with_400),
-        ("backtest rejects malformed spec", test_backtest_rejects_malformed_spec),
-    ]
-    for label, fn in tests:
-        try:
-            asyncio.run(fn())
-            print(f"PASS: {label}")
-        except AssertionError as e:
-            failed = True
-            print(f"FAIL: {label} — {e}")
-        except Exception as e:
-            failed = True
-            print(f"ERROR: {label} — {type(e).__name__}: {e}")
-    if failed:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    run_all()
