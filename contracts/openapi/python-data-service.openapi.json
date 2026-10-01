@@ -10644,6 +10644,18 @@
             "title": "Protocol Version",
             "type": "string"
           },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
           "schema_version": {
             "const": 2,
             "default": 2,
@@ -15000,7 +15012,7 @@
       },
       "ExitEligibilityContract": {
         "additionalProperties": false,
-        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nThis is the evidence where carryover may later be considered. Two rules\nexist, matching the \"level- or countdown-true\" vocabulary for when a\ndiscarded staged EXIT must re-emit:\n\n* ``\"fixed_bar_count_countdown\"`` \u2014 ``ema_crossover_signal`` exits on a\n  fixed decision-clock countdown\n  (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets\n  ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is\n  required.\n* ``\"level_true\"`` \u2014 ``sma_crossover`` exits the instant its exit\n  relation (a fresh death cross) is true on a decision clock, with no\n  hold period or counter at all\n  (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no\n  \"countdown\" fact to seal, so ``countdown_decision_clocks`` must be\n  unset for this rule.\n\n``countdown_state_persistable`` records a real, checked fact about\ntoday's implementation, not an aspiration. No strategy persists its\nstate, so nothing -- an in-flight countdown included -- survives a\nrestart, and every program seals ``False``. Carryover work must either\nadd that persistence or treat a mid-countdown Resume as unsupported.",
+        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nThis is the evidence where carryover may later be considered. Two rules\nexist, matching the \"level- or countdown-true\" vocabulary for when a\ndiscarded staged EXIT must re-emit:\n\n* ``\"fixed_bar_count_countdown\"`` \u2014 ``ema_crossover_signal`` exits on a\n  fixed decision-clock countdown\n  (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets\n  ``_bars_until_exit`` to its ``hold_bars`` parameter, default 5, at\n  entry); ``countdown_decision_clocks`` is required.\n* ``\"level_true\"`` \u2014 ``sma_crossover`` exits the instant its exit\n  relation (a fresh death cross) is true on a decision clock, with no\n  hold period or counter at all\n  (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no\n  \"countdown\" fact to seal, so ``countdown_decision_clocks`` must be\n  unset for this rule.\n\n``countdown_state_persistable`` records a real, checked fact about\ntoday's implementation, not an aspiration. No strategy persists its\nstate, so nothing -- an in-flight countdown included -- survives a\nrestart, and every program seals ``False``. Carryover work must either\nadd that persistence or treat a mid-countdown Resume as unsupported.",
         "properties": {
           "countdown_decision_clocks": {
             "anyOf": [
@@ -16863,6 +16875,58 @@
         "title": "GoLiveHoldMarker",
         "type": "object"
       },
+      "GoldenDefaultView": {
+        "description": "One stock's current default for one program: the version Deploy offers first.",
+        "properties": {
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "qualification_id": {
+            "title": "Qualification Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked",
+              "unverifiable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_explanation": {
+            "title": "Status Explanation",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "program_key",
+          "symbol",
+          "qualification_id",
+          "revision",
+          "updated_at_ms",
+          "status",
+          "status_explanation"
+        ],
+        "title": "GoldenDefaultView",
+        "type": "object"
+      },
       "GoldenFixturesCatalog": {
         "properties": {
           "fixtures": {
@@ -16887,6 +16951,511 @@
           "fixtures"
         ],
         "title": "GoldenFixturesCatalog",
+        "type": "object"
+      },
+      "GoldenQualificationDeployOffer": {
+        "description": "The exact tuple Deploy applies when the owner chooses \"Use in Deploy\"; never applied unless ready.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "title": "Program Version",
+            "type": "string"
+          },
+          "qualification_id": {
+            "title": "Qualification Id",
+            "type": "string"
+          },
+          "research": {
+            "$ref": "#/components/schemas/GoldenQualificationResearch"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked",
+              "unverifiable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "qualification_id",
+          "program_key",
+          "program_version",
+          "symbol",
+          "parameters",
+          "status",
+          "is_default",
+          "explanation",
+          "research"
+        ],
+        "title": "GoldenQualificationDeployOffer",
+        "type": "object"
+      },
+      "GoldenQualificationDetail": {
+        "properties": {
+          "approved_by": {
+            "title": "Approved By",
+            "type": "string"
+          },
+          "artifact_digest": {
+            "title": "Artifact Digest",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenQualificationEventView"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "golden_review_id": {
+            "title": "Golden Review Id",
+            "type": "integer"
+          },
+          "golden_run_id": {
+            "title": "Golden Run Id",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "parameter_schema_version": {
+            "title": "Parameter Schema Version",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "params_sha256": {
+            "title": "Params Sha256",
+            "type": "string"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "title": "Program Version",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/GoldenQualificationProofView"
+          },
+          "proof_sha256": {
+            "title": "Proof Sha256",
+            "type": "string"
+          },
+          "research": {
+            "$ref": "#/components/schemas/GoldenQualificationResearch"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked",
+              "unverifiable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_explanation": {
+            "title": "Status Explanation",
+            "type": "string"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "wiring_digest": {
+            "title": "Wiring Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "program_key",
+          "program_version",
+          "symbol",
+          "parameters",
+          "status",
+          "status_explanation",
+          "is_default",
+          "created_at_ms",
+          "note",
+          "approved_by",
+          "research",
+          "study_id",
+          "golden_run_id",
+          "parameter_schema_version",
+          "params_sha256",
+          "artifact_digest",
+          "wiring_digest",
+          "golden_review_id",
+          "proof_sha256",
+          "proof",
+          "events"
+        ],
+        "title": "GoldenQualificationDetail",
+        "type": "object"
+      },
+      "GoldenQualificationEventView": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "artifact_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Digest"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "reproved",
+              "revoked"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "wiring_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wiring Digest"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "artifact_digest",
+          "wiring_digest",
+          "reason",
+          "actor",
+          "created_at_ms"
+        ],
+        "title": "GoldenQualificationEventView",
+        "type": "object"
+      },
+      "GoldenQualificationProofView": {
+        "description": "The approval proof's identity: what was replayed, over which window, to which trace root.",
+        "properties": {
+          "input_count": {
+            "title": "Input Count",
+            "type": "integer"
+          },
+          "lake_trace_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lake Trace Root"
+          },
+          "restored_trace_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restored Trace Root"
+          },
+          "trace_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Count"
+          },
+          "warmup_from_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmup From Ms"
+          },
+          "window_end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End Ms"
+          },
+          "window_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start Ms"
+          }
+        },
+        "required": [
+          "window_start_ms",
+          "window_end_ms",
+          "warmup_from_ms",
+          "trace_count",
+          "lake_trace_root",
+          "restored_trace_root",
+          "input_count"
+        ],
+        "title": "GoldenQualificationProofView",
+        "type": "object"
+      },
+      "GoldenQualificationResearch": {
+        "description": "What the research said when the version was approved; preserved forever, never upgraded by approval.",
+        "properties": {
+          "claim": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim"
+          },
+          "exam_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Outcome"
+          },
+          "exposure_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure State"
+          },
+          "research_override": {
+            "default": false,
+            "title": "Research Override",
+            "type": "boolean"
+          },
+          "validation_verdict_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Verdict Label"
+          },
+          "weakness": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Weakness",
+            "type": "array"
+          }
+        },
+        "title": "GoldenQualificationResearch",
+        "type": "object"
+      },
+      "GoldenQualificationSummary": {
+        "properties": {
+          "approved_by": {
+            "title": "Approved By",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "golden_run_id": {
+            "title": "Golden Run Id",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "title": "Program Version",
+            "type": "string"
+          },
+          "research": {
+            "$ref": "#/components/schemas/GoldenQualificationResearch"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked",
+              "unverifiable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_explanation": {
+            "title": "Status Explanation",
+            "type": "string"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "program_key",
+          "program_version",
+          "symbol",
+          "parameters",
+          "status",
+          "status_explanation",
+          "is_default",
+          "created_at_ms",
+          "note",
+          "approved_by",
+          "research",
+          "study_id",
+          "golden_run_id"
+        ],
+        "title": "GoldenQualificationSummary",
         "type": "object"
       },
       "GoldenReviewResponse": {
@@ -16975,6 +17544,4508 @@
           "expected_evidence_revision"
         ],
         "title": "GoldenReviewResponse",
+        "type": "object"
+      },
+      "GoldenSearchCandidateDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Candidate Key",
+            "type": "string"
+          },
+          "development": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchRunDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exam": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchRunDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          }
+        },
+        "required": [
+          "candidate_key",
+          "point",
+          "development",
+          "exam"
+        ],
+        "title": "GoldenSearchCandidateDetail",
+        "type": "object"
+      },
+      "GoldenSearchCandidateGuidance": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "GoldenSearchCandidateGuidance",
+        "type": "object"
+      },
+      "GoldenSearchCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "constraints": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchConstraint"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "default_pair_audits": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Default Pair Audits",
+            "type": "array"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "fixed": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFixedControl"
+            },
+            "title": "Fixed",
+            "type": "array"
+          },
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchCapabilityKnob"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "display_name",
+          "available",
+          "reason",
+          "knobs",
+          "fixed",
+          "constraints",
+          "default_pair_audits"
+        ],
+        "title": "GoldenSearchCapability",
+        "type": "object"
+      },
+      "GoldenSearchCapabilityKnob": {
+        "additionalProperties": false,
+        "properties": {
+          "default_high": {
+            "title": "Default High",
+            "type": "number"
+          },
+          "default_low": {
+            "title": "Default Low",
+            "type": "number"
+          },
+          "default_step": {
+            "title": "Default Step",
+            "type": "number"
+          },
+          "default_value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Default Value"
+          },
+          "domain_high": {
+            "title": "Domain High",
+            "type": "number"
+          },
+          "domain_low": {
+            "title": "Domain Low",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "integer",
+              "decimal"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "neighbor_step": {
+            "title": "Neighbor Step",
+            "type": "number"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "quantum": {
+            "title": "Quantum",
+            "type": "number"
+          },
+          "searchable_by_default": {
+            "title": "Searchable By Default",
+            "type": "boolean"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "warmup_dependent": {
+            "title": "Warmup Dependent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "kind",
+          "domain_low",
+          "domain_high",
+          "quantum",
+          "default_low",
+          "default_high",
+          "neighbor_step",
+          "default_step",
+          "searchable_by_default",
+          "warmup_dependent",
+          "default_value",
+          "note"
+        ],
+        "title": "GoldenSearchCapabilityKnob",
+        "type": "object"
+      },
+      "GoldenSearchCodeIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "git_revision": {
+            "title": "Git Revision",
+            "type": "string"
+          },
+          "tree_state": {
+            "enum": [
+              "clean",
+              "dirty",
+              "unknown"
+            ],
+            "title": "Tree State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "git_revision",
+          "tree_state"
+        ],
+        "title": "GoldenSearchCodeIdentity",
+        "type": "object"
+      },
+      "GoldenSearchCommandRequest": {
+        "additionalProperties": false,
+        "description": "One lifecycle command. The study service validates each command's payload and refuses it with a code.\n\n``revise`` carries a whole plan, so its payload is read through the same\nschema as a lock and normalized before the idempotency digest is taken.",
+        "properties": {
+          "command": {
+            "enum": [
+              "continue",
+              "select_candidate",
+              "open_exam",
+              "approve",
+              "retain",
+              "close",
+              "cancel",
+              "finish",
+              "revise"
+            ],
+            "title": "Command",
+            "type": "string"
+          },
+          "expectedRevision": {
+            "minimum": 0.0,
+            "title": "Expectedrevision",
+            "type": "integer"
+          },
+          "idempotencyKey": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotencykey",
+            "type": "string"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "command",
+          "expectedRevision",
+          "idempotencyKey"
+        ],
+        "title": "GoldenSearchCommandRequest",
+        "type": "object"
+      },
+      "GoldenSearchConstraint": {
+        "additionalProperties": false,
+        "properties": {
+          "left": {
+            "title": "Left",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "op": {
+            "const": "<",
+            "title": "Op"
+          },
+          "right": {
+            "title": "Right",
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "op",
+          "right",
+          "message"
+        ],
+        "title": "GoldenSearchConstraint",
+        "type": "object"
+      },
+      "GoldenSearchCosts": {
+        "additionalProperties": false,
+        "properties": {
+          "commission_per_order": {
+            "title": "Commission Per Order",
+            "type": "number"
+          },
+          "fill_mode": {
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open",
+              "decision_minute_open"
+            ],
+            "title": "Fill Mode",
+            "type": "string"
+          },
+          "slippage_per_share": {
+            "title": "Slippage Per Share",
+            "type": "number"
+          }
+        },
+        "required": [
+          "fill_mode",
+          "commission_per_order",
+          "slippage_per_share"
+        ],
+        "title": "GoldenSearchCosts",
+        "type": "object"
+      },
+      "GoldenSearchCreateStudyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotencyKey": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotencykey",
+            "type": "string"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/GoldenSearchProtocolRequest"
+          }
+        },
+        "required": [
+          "protocol",
+          "idempotencyKey"
+        ],
+        "title": "GoldenSearchCreateStudyRequest",
+        "type": "object"
+      },
+      "GoldenSearchCumulativeReturnPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ms",
+            "type": "integer"
+          },
+          "value": {
+            "description": "A fraction of starting capital.",
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ms",
+          "value"
+        ],
+        "title": "GoldenSearchCumulativeReturnPoint",
+        "type": "object"
+      },
+      "GoldenSearchDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "note",
+          "at_ms"
+        ],
+        "title": "GoldenSearchDecision",
+        "type": "object"
+      },
+      "GoldenSearchDefaults": {
+        "additionalProperties": false,
+        "description": "A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure.",
+        "properties": {
+          "budget_cap": {
+            "title": "Budget Cap",
+            "type": "integer"
+          },
+          "development_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development End Ms",
+            "type": "integer"
+          },
+          "development_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development Start Ms",
+            "type": "integer"
+          },
+          "exam_min_trades": {
+            "title": "Exam Min Trades",
+            "type": "integer"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/GoldenSearchExecution"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/GoldenSearchExposure"
+          },
+          "final_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final End Ms",
+            "type": "integer"
+          },
+          "final_months": {
+            "description": "The final interval's length in whole months, as laid out.",
+            "title": "Final Months",
+            "type": "integer"
+          },
+          "final_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final Start Ms",
+            "type": "integer"
+          },
+          "incumbent": {
+            "$ref": "#/components/schemas/GoldenSearchIncumbent"
+          },
+          "incumbent_label": {
+            "title": "Incumbent Label",
+            "type": "string"
+          },
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobPlan"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "neighbor_audit": {
+            "title": "Neighbor Audit",
+            "type": "boolean"
+          },
+          "pair_audits": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Pair Audits",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GoldenSearchSelectionPolicy"
+          },
+          "recent_window": {
+            "title": "Recent Window",
+            "type": "boolean"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "object"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "stress": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStressScenario"
+            },
+            "title": "Stress",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "test_months": {
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "training_months": {
+            "title": "Training Months",
+            "type": "integer"
+          },
+          "zoom": {
+            "$ref": "#/components/schemas/GoldenSearchZoomSettings"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "symbol",
+          "method",
+          "knobs",
+          "seed",
+          "incumbent",
+          "policy",
+          "zoom",
+          "development_start_ms",
+          "development_end_ms",
+          "final_start_ms",
+          "final_end_ms",
+          "training_months",
+          "test_months",
+          "recent_window",
+          "pair_audits",
+          "neighbor_audit",
+          "stress",
+          "execution",
+          "exam_min_trades",
+          "budget_cap",
+          "final_months",
+          "incumbent_label",
+          "exposure"
+        ],
+        "title": "GoldenSearchDefaults",
+        "type": "object"
+      },
+      "GoldenSearchDeployHandoff": {
+        "additionalProperties": false,
+        "properties": {
+          "parameters": {
+            "description": "The canonical point without symbol.",
+            "title": "Parameters",
+            "type": "object"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_key",
+          "symbol",
+          "parameters",
+          "program_version"
+        ],
+        "title": "GoldenSearchDeployHandoff",
+        "type": "object"
+      },
+      "GoldenSearchDispatch": {
+        "additionalProperties": false,
+        "description": "What the client hands the jobs boundary to start the stage a command authorized.",
+        "properties": {
+          "job_type": {
+            "const": "golden_search",
+            "title": "Job Type"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/GoldenSearchDispatchPayload"
+          }
+        },
+        "required": [
+          "job_type",
+          "payload"
+        ],
+        "title": "GoldenSearchDispatch",
+        "type": "object"
+      },
+      "GoldenSearchDispatchPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "stage_token": {
+            "title": "Stage Token",
+            "type": "string"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "stage_token"
+        ],
+        "title": "GoldenSearchDispatchPayload",
+        "type": "object"
+      },
+      "GoldenSearchDrawdownPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "drawdown": {
+            "title": "Drawdown",
+            "type": "number"
+          },
+          "ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ms",
+          "drawdown"
+        ],
+        "title": "GoldenSearchDrawdownPoint",
+        "type": "object"
+      },
+      "GoldenSearchEquityPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "equity": {
+            "title": "Equity",
+            "type": "number"
+          },
+          "ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ms",
+          "equity"
+        ],
+        "title": "GoldenSearchEquityPoint",
+        "type": "object"
+      },
+      "GoldenSearchEstimate": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_cap": {
+            "title": "Budget Cap",
+            "type": "integer"
+          },
+          "reserved_for_exam_and_proof": {
+            "title": "Reserved For Exam And Proof",
+            "type": "integer"
+          },
+          "serial_seconds_high": {
+            "description": "An estimate, not a promise.",
+            "title": "Serial Seconds High",
+            "type": "number"
+          },
+          "serial_seconds_low": {
+            "description": "An estimate, not a promise.",
+            "title": "Serial Seconds Low",
+            "type": "number"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStageEstimate"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "total_max": {
+            "title": "Total Max",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stages",
+          "total_max",
+          "reserved_for_exam_and_proof",
+          "budget_cap",
+          "serial_seconds_low",
+          "serial_seconds_high"
+        ],
+        "title": "GoldenSearchEstimate",
+        "type": "object"
+      },
+      "GoldenSearchEvaluationPage": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchEvaluationRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "page_size",
+          "rows"
+        ],
+        "title": "GoldenSearchEvaluationPage",
+        "type": "object"
+      },
+      "GoldenSearchEvaluationRow": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At Ms"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "evaluation_key": {
+            "title": "Evaluation Key",
+            "type": "string"
+          },
+          "fold_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fold Index"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          },
+          "point_hash": {
+            "title": "Point Hash",
+            "type": "string"
+          },
+          "retries": {
+            "title": "Retries",
+            "type": "integer"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "window_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "evaluation_key",
+          "point_hash",
+          "point",
+          "window_start_ms",
+          "window_end_ms",
+          "scenario",
+          "detail",
+          "stage",
+          "fold_index",
+          "status",
+          "attempt",
+          "retries",
+          "total_trades",
+          "net_profit",
+          "total_return_pct",
+          "sharpe_ratio",
+          "max_drawdown_pct",
+          "win_rate",
+          "error",
+          "created_at_ms",
+          "completed_at_ms"
+        ],
+        "title": "GoldenSearchEvaluationRow",
+        "type": "object"
+      },
+      "GoldenSearchEvidenceCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "development_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edge_hits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Edge Hits",
+            "type": "array"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "exam_eligible": {
+            "title": "Exam Eligible",
+            "type": "boolean"
+          },
+          "fixed_sentence": {
+            "title": "Fixed Sentence",
+            "type": "string"
+          },
+          "flags": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFinding"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "guidance": {
+            "$ref": "#/components/schemas/GoldenSearchCandidateGuidance"
+          },
+          "ineligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ineligibility"
+          },
+          "key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "neighbors": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchNeighborhood"
+            },
+            "title": "Neighbors",
+            "type": "array"
+          },
+          "params_sentence": {
+            "title": "Params Sentence",
+            "type": "string"
+          },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          },
+          "point_hash": {
+            "title": "Point Hash",
+            "type": "string"
+          },
+          "same_as": {
+            "items": {
+              "enum": [
+                "incumbent",
+                "all_period",
+                "recent"
+              ],
+              "type": "string"
+            },
+            "title": "Same As",
+            "type": "array"
+          },
+          "stress": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStressResult"
+            },
+            "title": "Stress",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "point",
+          "point_hash",
+          "same_as",
+          "development_metrics",
+          "eligible",
+          "ineligibility",
+          "neighbors",
+          "stress",
+          "edge_hits",
+          "guidance",
+          "flags",
+          "params_sentence",
+          "fixed_sentence",
+          "exam_eligible"
+        ],
+        "title": "GoldenSearchEvidenceCandidate",
+        "type": "object"
+      },
+      "GoldenSearchEvidenceScope": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "title": "Capital",
+            "type": "number"
+          },
+          "costs": {
+            "$ref": "#/components/schemas/GoldenSearchCosts"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          }
+        },
+        "required": [
+          "window",
+          "capital",
+          "costs"
+        ],
+        "title": "GoldenSearchEvidenceScope",
+        "type": "object"
+      },
+      "GoldenSearchEvidenceView": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchEvidenceCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "pair_maps": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchPairMap"
+            },
+            "title": "Pair Maps",
+            "type": "array"
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/GoldenSearchRecommendation"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/GoldenSearchEvidenceScope"
+          }
+        },
+        "required": [
+          "candidates",
+          "pair_maps",
+          "recommendation",
+          "scope",
+          "incomplete"
+        ],
+        "title": "GoldenSearchEvidenceView",
+        "type": "object"
+      },
+      "GoldenSearchExamCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "not_available"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "GoldenSearchExamCheck",
+        "type": "object"
+      },
+      "GoldenSearchExamView": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Candidate Key",
+            "type": "string"
+          },
+          "candidate_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidate_point": {
+            "title": "Candidate Point",
+            "type": "object"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchExamCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "claim": {
+            "enum": [
+              "confirmatory",
+              "exploratory"
+            ],
+            "title": "Claim",
+            "type": "string"
+          },
+          "exposure_state": {
+            "enum": [
+              "not_opened",
+              "previously_used",
+              "history_unknown"
+            ],
+            "title": "Exposure State",
+            "type": "string"
+          },
+          "incumbent_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "does_not_meet_rules",
+                  "not_enough_evidence",
+                  "could_not_evaluate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Descriptive only, never a check.",
+            "title": "Retention"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          }
+        },
+        "required": [
+          "candidate_key",
+          "candidate_point",
+          "window",
+          "claim",
+          "exposure_state",
+          "outcome",
+          "checks",
+          "retention",
+          "candidate_metrics",
+          "incumbent_metrics"
+        ],
+        "title": "GoldenSearchExamView",
+        "type": "object"
+      },
+      "GoldenSearchExecution": {
+        "additionalProperties": false,
+        "properties": {
+          "commission_per_order": {
+            "title": "Commission Per Order",
+            "type": "number"
+          },
+          "fill_mode": {
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open",
+              "decision_minute_open"
+            ],
+            "title": "Fill Mode",
+            "type": "string"
+          },
+          "initial_cash": {
+            "title": "Initial Cash",
+            "type": "number"
+          },
+          "slippage_per_share": {
+            "title": "Slippage Per Share",
+            "type": "number"
+          }
+        },
+        "required": [
+          "fill_mode",
+          "commission_per_order",
+          "slippage_per_share",
+          "initial_cash"
+        ],
+        "title": "GoldenSearchExecution",
+        "type": "object"
+      },
+      "GoldenSearchExecutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "commissionPerOrder": {
+            "default": 0.0,
+            "description": "Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).",
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "fillMode": {
+            "default": "decision_minute_open",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open",
+              "decision_minute_open"
+            ],
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "initialCash": {
+            "default": 100000.0,
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "slippagePerShare": {
+            "default": 0.0,
+            "title": "Slippagepershare",
+            "type": "number"
+          }
+        },
+        "title": "GoldenSearchExecutionRequest",
+        "type": "object"
+      },
+      "GoldenSearchExposure": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "ledger_overlaps": {
+            "title": "Ledger Overlaps",
+            "type": "integer"
+          },
+          "outside_activity_overlaps": {
+            "title": "Outside Activity Overlaps",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "not_opened",
+              "previously_used",
+              "history_unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "ledger_overlaps",
+          "outside_activity_overlaps",
+          "explanation"
+        ],
+        "title": "GoldenSearchExposure",
+        "type": "object"
+      },
+      "GoldenSearchFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "text"
+        ],
+        "title": "GoldenSearchFinding",
+        "type": "object"
+      },
+      "GoldenSearchFixedControl": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "reason"
+        ],
+        "title": "GoldenSearchFixedControl",
+        "type": "object"
+      },
+      "GoldenSearchFold": {
+        "additionalProperties": false,
+        "properties": {
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "test_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms"
+        ],
+        "title": "GoldenSearchFold",
+        "type": "object"
+      },
+      "GoldenSearchGuidance": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "detail"
+        ],
+        "title": "GoldenSearchGuidance",
+        "type": "object"
+      },
+      "GoldenSearchIncumbent": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "title": "Params",
+            "type": "object"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
+          "source": {
+            "enum": [
+              "registry",
+              "qualification"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "qualification_id",
+          "params"
+        ],
+        "title": "GoldenSearchIncumbent",
+        "type": "object"
+      },
+      "GoldenSearchIncumbentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "title": "Params",
+            "type": "object"
+          },
+          "qualificationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualificationid"
+          },
+          "source": {
+            "enum": [
+              "registry",
+              "qualification"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "qualificationId",
+          "params"
+        ],
+        "title": "GoldenSearchIncumbentRequest",
+        "type": "object"
+      },
+      "GoldenSearchJobAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "title": "Status"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "study_id",
+          "status"
+        ],
+        "title": "GoldenSearchJobAccepted",
+        "type": "object"
+      },
+      "GoldenSearchJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/jobs-internal/golden-search: the dispatch a guarded command returned, plus the minted job id.",
+        "properties": {
+          "jobId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "stageToken": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Stagetoken",
+            "type": "string"
+          },
+          "studyId": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Studyid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "studyId",
+          "stageToken"
+        ],
+        "title": "GoldenSearchJobRequest",
+        "type": "object"
+      },
+      "GoldenSearchKnobPlan": {
+        "additionalProperties": false,
+        "properties": {
+          "fixed_value": {
+            "title": "Fixed Value",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "search",
+              "fixed"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "low",
+          "high",
+          "fixed_value",
+          "step"
+        ],
+        "title": "GoldenSearchKnobPlan",
+        "type": "object"
+      },
+      "GoldenSearchKnobPlanRequest": {
+        "additionalProperties": false,
+        "description": "One declared knob: searched over ``[low, high]`` at ``step``, or held at ``fixed_value``.",
+        "properties": {
+          "fixedValue": {
+            "title": "Fixedvalue",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "search",
+              "fixed"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "low",
+          "high",
+          "fixedValue"
+        ],
+        "title": "GoldenSearchKnobPlanRequest",
+        "type": "object"
+      },
+      "GoldenSearchKnobSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "knob": {
+            "title": "Knob",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "moved": {
+            "title": "Moved",
+            "type": "boolean"
+          },
+          "retained_value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Retained Value"
+          },
+          "start_value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Start Value"
+          },
+          "stop_explanation": {
+            "title": "Stop Explanation",
+            "type": "string"
+          },
+          "stop_reason": {
+            "enum": [
+              "no_improvement",
+              "pass_limit",
+              "budget",
+              "quantization_limit",
+              "no_eligible"
+            ],
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "knob",
+          "label",
+          "unit",
+          "start_value",
+          "retained_value",
+          "moved",
+          "stop_reason",
+          "stop_explanation"
+        ],
+        "title": "GoldenSearchKnobSummary",
+        "type": "object"
+      },
+      "GoldenSearchLinkedReturn": {
+        "additionalProperties": false,
+        "properties": {
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "linked_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Growth of 1 linked across test folds, minus 1; null once a fold is missing.",
+            "title": "Linked Return"
+          },
+          "test_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test End Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fold_index",
+          "test_end_ms",
+          "linked_return"
+        ],
+        "title": "GoldenSearchLinkedReturn",
+        "type": "object"
+      },
+      "GoldenSearchMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A fraction of peak equity, as the engine reports it.",
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A fraction, as the engine reports it.",
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "title": "Total Trades",
+            "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          }
+        },
+        "required": [
+          "status",
+          "total_trades",
+          "net_profit",
+          "total_return_pct",
+          "sharpe_ratio",
+          "max_drawdown_pct",
+          "win_rate",
+          "error"
+        ],
+        "title": "GoldenSearchMetrics",
+        "type": "object"
+      },
+      "GoldenSearchMonthlyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "month_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Month Start Ms",
+            "type": "integer"
+          },
+          "net_profit": {
+            "title": "Net Profit",
+            "type": "number"
+          },
+          "return_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Fraction"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month_start_ms",
+          "net_profit",
+          "return_fraction",
+          "trades"
+        ],
+        "title": "GoldenSearchMonthlyResult",
+        "type": "object"
+      },
+      "GoldenSearchNeighborRow": {
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "center",
+              "tested",
+              "failed",
+              "untested",
+              "invalid",
+              "outside_domain"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "status",
+          "metrics",
+          "reason"
+        ],
+        "title": "GoldenSearchNeighborRow",
+        "type": "object"
+      },
+      "GoldenSearchNeighborhood": {
+        "additionalProperties": false,
+        "properties": {
+          "knob": {
+            "title": "Knob",
+            "type": "string"
+          },
+          "one_sided": {
+            "title": "One Sided",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchNeighborRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "knob",
+          "rows",
+          "one_sided"
+        ],
+        "title": "GoldenSearchNeighborhood",
+        "type": "object"
+      },
+      "GoldenSearchPairCell": {
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "center",
+              "tested",
+              "failed",
+              "untested",
+              "invalid",
+              "outside_domain"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "status",
+          "metrics",
+          "reason"
+        ],
+        "title": "GoldenSearchPairCell",
+        "type": "object"
+      },
+      "GoldenSearchPairMap": {
+        "additionalProperties": false,
+        "description": "A predeclared pair's landscape: rows are ``y_knob``, columns ``x_knob``, cells row-major.",
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchPairCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "x_knob": {
+            "title": "X Knob",
+            "type": "string"
+          },
+          "x_values": {
+            "items": {
+              "type": "number"
+            },
+            "title": "X Values",
+            "type": "array"
+          },
+          "y_knob": {
+            "title": "Y Knob",
+            "type": "string"
+          },
+          "y_values": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Y Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "x_knob",
+          "y_knob",
+          "x_values",
+          "y_values",
+          "cells"
+        ],
+        "title": "GoldenSearchPairMap",
+        "type": "object"
+      },
+      "GoldenSearchPreflight": {
+        "additionalProperties": false,
+        "description": "A plan's review: refusals are data in a 200, never a 400.",
+        "properties": {
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchExposure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFold"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "refusals": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchProtocolRefusal"
+            },
+            "title": "Refusals",
+            "type": "array"
+          },
+          "run_up": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchRunUp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "refusals",
+          "estimate",
+          "folds",
+          "exposure",
+          "run_up"
+        ],
+        "title": "GoldenSearchPreflight",
+        "type": "object"
+      },
+      "GoldenSearchProcedureCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "integer"
+          },
+          "evaluated": {
+            "title": "Evaluated",
+            "type": "integer"
+          },
+          "invalid": {
+            "title": "Invalid",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "evaluated",
+          "cached",
+          "invalid"
+        ],
+        "title": "GoldenSearchProcedureCounts",
+        "type": "object"
+      },
+      "GoldenSearchProcedureView": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/GoldenSearchProcedureCounts"
+          },
+          "edge_hits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Edge Hits",
+            "type": "array"
+          },
+          "evaluations": {
+            "title": "Evaluations",
+            "type": "integer"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "knob_summary": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobSummary"
+            },
+            "title": "Knob Summary",
+            "type": "array"
+          },
+          "passes_completed": {
+            "title": "Passes Completed",
+            "type": "integer"
+          },
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchZoomRound"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "stop_explanation": {
+            "title": "Stop Explanation",
+            "type": "string"
+          },
+          "stop_reason": {
+            "enum": [
+              "no_improvement",
+              "pass_limit",
+              "budget",
+              "quantization_limit",
+              "no_eligible"
+            ],
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          },
+          "winner": {
+            "title": "Winner",
+            "type": "object"
+          },
+          "winner_hash": {
+            "title": "Winner Hash",
+            "type": "string"
+          },
+          "winner_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "winner",
+          "winner_hash",
+          "winner_metrics",
+          "stop_reason",
+          "stop_explanation",
+          "rounds",
+          "edge_hits",
+          "evaluations",
+          "incomplete",
+          "knob_summary",
+          "counts",
+          "passes_completed",
+          "window"
+        ],
+        "title": "GoldenSearchProcedureView",
+        "type": "object"
+      },
+      "GoldenSearchProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "stage": {
+            "enum": [
+              "search",
+              "validation",
+              "exam",
+              "qualification"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "total_max": {
+            "title": "Total Max",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "completed",
+          "total_max"
+        ],
+        "title": "GoldenSearchProgress",
+        "type": "object"
+      },
+      "GoldenSearchProtocol": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_cap": {
+            "title": "Budget Cap",
+            "type": "integer"
+          },
+          "development_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development End Ms",
+            "type": "integer"
+          },
+          "development_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development Start Ms",
+            "type": "integer"
+          },
+          "exam_min_trades": {
+            "title": "Exam Min Trades",
+            "type": "integer"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/GoldenSearchExecution"
+          },
+          "final_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final End Ms",
+            "type": "integer"
+          },
+          "final_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final Start Ms",
+            "type": "integer"
+          },
+          "incumbent": {
+            "$ref": "#/components/schemas/GoldenSearchIncumbent"
+          },
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobPlan"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "neighbor_audit": {
+            "title": "Neighbor Audit",
+            "type": "boolean"
+          },
+          "pair_audits": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Pair Audits",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GoldenSearchSelectionPolicy"
+          },
+          "recent_window": {
+            "title": "Recent Window",
+            "type": "boolean"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "object"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "stress": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStressScenario"
+            },
+            "title": "Stress",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "test_months": {
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "training_months": {
+            "title": "Training Months",
+            "type": "integer"
+          },
+          "zoom": {
+            "$ref": "#/components/schemas/GoldenSearchZoomSettings"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "symbol",
+          "method",
+          "knobs",
+          "seed",
+          "incumbent",
+          "policy",
+          "zoom",
+          "development_start_ms",
+          "development_end_ms",
+          "final_start_ms",
+          "final_end_ms",
+          "training_months",
+          "test_months",
+          "recent_window",
+          "pair_audits",
+          "neighbor_audit",
+          "stress",
+          "execution",
+          "exam_min_trades",
+          "budget_cap"
+        ],
+        "title": "GoldenSearchProtocol",
+        "type": "object"
+      },
+      "GoldenSearchProtocolRefusal": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
+        "title": "GoldenSearchProtocolRefusal",
+        "type": "object"
+      },
+      "GoldenSearchProtocolRequest": {
+        "additionalProperties": false,
+        "description": "The plan, field for field ``GoldenSearchProtocol``; ``seed`` omitted or null starts from the incumbent.",
+        "properties": {
+          "budgetCap": {
+            "default": 5000,
+            "title": "Budgetcap",
+            "type": "integer"
+          },
+          "developmentEndMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Developmentendms",
+            "type": "integer"
+          },
+          "developmentStartMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Developmentstartms",
+            "type": "integer"
+          },
+          "examMinTrades": {
+            "default": 30,
+            "title": "Exammintrades",
+            "type": "integer"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/GoldenSearchExecutionRequest"
+          },
+          "finalEndMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Finalendms",
+            "type": "integer"
+          },
+          "finalStartMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Finalstartms",
+            "type": "integer"
+          },
+          "incumbent": {
+            "$ref": "#/components/schemas/GoldenSearchIncumbentRequest"
+          },
+          "knobs": {
+            "description": "Every declared knob, in search order.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobPlanRequest"
+            },
+            "maxItems": 64,
+            "title": "Knobs",
+            "type": "array"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "neighborAudit": {
+            "default": true,
+            "title": "Neighboraudit",
+            "type": "boolean"
+          },
+          "pairAudits": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "maxItems": 64,
+            "title": "Pairaudits",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GoldenSearchSelectionPolicyRequest"
+          },
+          "recentWindow": {
+            "default": true,
+            "title": "Recentwindow",
+            "type": "boolean"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "strategyKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          },
+          "stress": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStressScenarioRequest"
+            },
+            "maxItems": 16,
+            "title": "Stress",
+            "type": "array"
+          },
+          "symbol": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "testMonths": {
+            "default": 2,
+            "title": "Testmonths",
+            "type": "integer"
+          },
+          "trainingMonths": {
+            "default": 6,
+            "title": "Trainingmonths",
+            "type": "integer"
+          },
+          "zoom": {
+            "$ref": "#/components/schemas/GoldenSearchZoomSettingsRequest"
+          }
+        },
+        "required": [
+          "strategyKey",
+          "symbol",
+          "method",
+          "knobs",
+          "incumbent",
+          "developmentStartMs",
+          "developmentEndMs",
+          "finalStartMs",
+          "finalEndMs"
+        ],
+        "title": "GoldenSearchProtocolRequest",
+        "type": "object"
+      },
+      "GoldenSearchQualificationView": {
+        "additionalProperties": false,
+        "properties": {
+          "deploy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchDeployHandoff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "qualification_id",
+          "failure_reason",
+          "deploy"
+        ],
+        "title": "GoldenSearchQualificationView",
+        "type": "object"
+      },
+      "GoldenSearchReceiptSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/GoldenSearchCodeIdentity"
+          },
+          "data_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Data Start Ms",
+            "type": "integer"
+          },
+          "development_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development End Ms",
+            "type": "integer"
+          },
+          "development_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development Start Ms",
+            "type": "integer"
+          },
+          "final_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final End Ms",
+            "type": "integer"
+          },
+          "final_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final Start Ms",
+            "type": "integer"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "run_up_sessions": {
+            "title": "Run Up Sessions",
+            "type": "integer"
+          },
+          "snapshot_digest": {
+            "title": "Snapshot Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_start_ms",
+          "development_start_ms",
+          "development_end_ms",
+          "final_start_ms",
+          "final_end_ms",
+          "run_up_sessions",
+          "snapshot_digest",
+          "code",
+          "program_version"
+        ],
+        "title": "GoldenSearchReceiptSummary",
+        "type": "object"
+      },
+      "GoldenSearchRecommendation": {
+        "additionalProperties": false,
+        "properties": {
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "findings"
+        ],
+        "title": "GoldenSearchRecommendation",
+        "type": "object"
+      },
+      "GoldenSearchRefusalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/GoldenSearchRefusalDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "GoldenSearchRefusalBody",
+        "type": "object"
+      },
+      "GoldenSearchRefusalDetail": {
+        "additionalProperties": false,
+        "description": "Why a request was refused, under one shape for every refusal status (400, 404, 409, 503).",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "refusals": {
+            "description": "Every plan refusal when a lock is refused for more than one reason.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchProtocolRefusal"
+            },
+            "title": "Refusals",
+            "type": "array"
+          },
+          "study": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a 409 about a study: its GoldenSearchStudyDetail as it now stands.",
+            "title": "Study"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "field",
+          "refusals",
+          "study"
+        ],
+        "title": "GoldenSearchRefusalDetail",
+        "type": "object"
+      },
+      "GoldenSearchResults": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchEvidenceView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exam": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchExamView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "qualification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchQualificationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchProcedureView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchSearchView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchValidationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "search",
+          "recent",
+          "validation",
+          "evidence",
+          "exam",
+          "qualification"
+        ],
+        "title": "GoldenSearchResults",
+        "type": "object"
+      },
+      "GoldenSearchRunDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "cumulative_return": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchCumulativeReturnPoint"
+            },
+            "title": "Cumulative Return",
+            "type": "array"
+          },
+          "daily_equity": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchEquityPoint"
+            },
+            "title": "Daily Equity",
+            "type": "array"
+          },
+          "drawdown": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchDrawdownPoint"
+            },
+            "title": "Drawdown",
+            "type": "array"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/GoldenSearchMetrics"
+          },
+          "monthly": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchMonthlyResult"
+            },
+            "title": "Monthly",
+            "type": "array"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchTrade"
+            },
+            "title": "Trades",
+            "type": "array"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          }
+        },
+        "required": [
+          "window",
+          "metrics",
+          "cumulative_return",
+          "daily_equity",
+          "drawdown",
+          "monthly",
+          "trades"
+        ],
+        "title": "GoldenSearchRunDetail",
+        "type": "object"
+      },
+      "GoldenSearchRunUp": {
+        "additionalProperties": false,
+        "properties": {
+          "data_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Data Start Ms",
+            "type": "integer"
+          },
+          "required_samples": {
+            "title": "Required Samples",
+            "type": "integer"
+          },
+          "run_up_sessions": {
+            "title": "Run Up Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "required_samples",
+          "run_up_sessions",
+          "data_start_ms"
+        ],
+        "title": "GoldenSearchRunUp",
+        "type": "object"
+      },
+      "GoldenSearchScope": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "title": "Capital",
+            "type": "number"
+          },
+          "costs_sentence": {
+            "title": "Costs Sentence",
+            "type": "string"
+          },
+          "data_source": {
+            "title": "Data Source",
+            "type": "string"
+          },
+          "development_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development End Ms",
+            "type": "integer"
+          },
+          "development_label_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Development Label Start Ms",
+            "type": "integer"
+          },
+          "final_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final End Ms",
+            "type": "integer"
+          },
+          "final_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Final Start Ms",
+            "type": "integer"
+          },
+          "final_state": {
+            "enum": [
+              "locked",
+              "opened_once"
+            ],
+            "title": "Final State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "development_label_start_ms",
+          "development_end_ms",
+          "final_start_ms",
+          "final_end_ms",
+          "final_state",
+          "capital",
+          "costs_sentence",
+          "data_source"
+        ],
+        "title": "GoldenSearchScope",
+        "type": "object"
+      },
+      "GoldenSearchSearchView": {
+        "additionalProperties": false,
+        "description": "The all-period procedure, with the pair landscapes centered on its winner.",
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/GoldenSearchProcedureCounts"
+          },
+          "edge_hits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Edge Hits",
+            "type": "array"
+          },
+          "evaluations": {
+            "title": "Evaluations",
+            "type": "integer"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "knob_summary": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobSummary"
+            },
+            "title": "Knob Summary",
+            "type": "array"
+          },
+          "pair_maps": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchPairMap"
+            },
+            "title": "Pair Maps",
+            "type": "array"
+          },
+          "pair_maps_incomplete": {
+            "title": "Pair Maps Incomplete",
+            "type": "boolean"
+          },
+          "passes_completed": {
+            "title": "Passes Completed",
+            "type": "integer"
+          },
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchZoomRound"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "stop_explanation": {
+            "title": "Stop Explanation",
+            "type": "string"
+          },
+          "stop_reason": {
+            "enum": [
+              "no_improvement",
+              "pass_limit",
+              "budget",
+              "quantization_limit",
+              "no_eligible"
+            ],
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          },
+          "winner": {
+            "title": "Winner",
+            "type": "object"
+          },
+          "winner_hash": {
+            "title": "Winner Hash",
+            "type": "string"
+          },
+          "winner_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "winner",
+          "winner_hash",
+          "winner_metrics",
+          "stop_reason",
+          "stop_explanation",
+          "rounds",
+          "edge_hits",
+          "evaluations",
+          "incomplete",
+          "knob_summary",
+          "counts",
+          "passes_completed",
+          "window",
+          "pair_maps",
+          "pair_maps_incomplete"
+        ],
+        "title": "GoldenSearchSearchView",
+        "type": "object"
+      },
+      "GoldenSearchSelectionPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "max_drawdown_ceiling": {
+            "title": "Max Drawdown Ceiling",
+            "type": "number"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "objective": {
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Objective",
+            "type": "string"
+          },
+          "require_positive_net": {
+            "title": "Require Positive Net",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "objective",
+          "min_trades",
+          "max_drawdown_ceiling",
+          "require_positive_net"
+        ],
+        "title": "GoldenSearchSelectionPolicy",
+        "type": "object"
+      },
+      "GoldenSearchSelectionPolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "maxDrawdownCeiling": {
+            "default": 0.2,
+            "description": "A fraction of peak equity, in (0, 1].",
+            "title": "Maxdrawdownceiling",
+            "type": "number"
+          },
+          "minTrades": {
+            "default": 30,
+            "title": "Mintrades",
+            "type": "integer"
+          },
+          "objective": {
+            "default": "sharpe_ratio",
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Objective",
+            "type": "string"
+          },
+          "requirePositiveNet": {
+            "default": true,
+            "title": "Requirepositivenet",
+            "type": "boolean"
+          }
+        },
+        "title": "GoldenSearchSelectionPolicyRequest",
+        "type": "object"
+      },
+      "GoldenSearchStageEstimate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "max_evaluations": {
+            "title": "Max Evaluations",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "label",
+          "max_evaluations"
+        ],
+        "title": "GoldenSearchStageEstimate",
+        "type": "object"
+      },
+      "GoldenSearchStressResult": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario",
+          "label",
+          "metrics"
+        ],
+        "title": "GoldenSearchStressResult",
+        "type": "object"
+      },
+      "GoldenSearchStressScenario": {
+        "additionalProperties": false,
+        "properties": {
+          "commission_add": {
+            "title": "Commission Add",
+            "type": "number"
+          },
+          "fill_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "signal_bar_close",
+                  "next_bar_open",
+                  "decision_minute_open"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Mode"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "slippage_add": {
+            "title": "Slippage Add",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "slippage_add",
+          "commission_add",
+          "fill_mode"
+        ],
+        "title": "GoldenSearchStressScenario",
+        "type": "object"
+      },
+      "GoldenSearchStressScenarioRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "commissionAdd": {
+            "default": 0.0,
+            "title": "Commissionadd",
+            "type": "number"
+          },
+          "fillMode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "signal_bar_close",
+                  "next_bar_open",
+                  "decision_minute_open"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fillmode"
+          },
+          "key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "slippageAdd": {
+            "default": 0.0,
+            "title": "Slippageadd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "GoldenSearchStressScenarioRequest",
+        "type": "object"
+      },
+      "GoldenSearchStudyDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "action_refusals": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Action Refusals",
+            "type": "object"
+          },
+          "budget_cap": {
+            "title": "Budget Cap",
+            "type": "integer"
+          },
+          "cache_hits": {
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "candidate_key": {
+            "anyOf": [
+              {
+                "enum": [
+                  "incumbent",
+                  "all_period",
+                  "recent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Key"
+          },
+          "consumed_evaluations": {
+            "title": "Consumed Evaluations",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchDispatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exam_locked": {
+            "title": "Exam Locked",
+            "type": "boolean"
+          },
+          "exam_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "does_not_meet_rules",
+                  "not_enough_evidence",
+                  "could_not_evaluate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Outcome"
+          },
+          "exposure_claim": {
+            "anyOf": [
+              {
+                "enum": [
+                  "confirmatory",
+                  "exploratory"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Claim"
+          },
+          "exposure_preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchExposure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What opening the final test would record, while a candidate is chosen; null otherwise."
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "guidance": {
+            "$ref": "#/components/schemas/GoldenSearchGuidance"
+          },
+          "hidden": {
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "invalid_points": {
+            "title": "Invalid Points",
+            "type": "integer"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "parent_study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Study Id"
+          },
+          "permitted_actions": {
+            "items": {
+              "enum": [
+                "continue",
+                "select_candidate",
+                "open_exam",
+                "approve",
+                "retain",
+                "close",
+                "cancel",
+                "finish",
+                "revise"
+              ],
+              "type": "string"
+            },
+            "title": "Permitted Actions",
+            "type": "array"
+          },
+          "presented_status": {
+            "enum": [
+              "idle",
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Presented Status",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/GoldenSearchProtocol"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/GoldenSearchReceiptSummary"
+          },
+          "results": {
+            "$ref": "#/components/schemas/GoldenSearchResults"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/GoldenSearchScope"
+          },
+          "state": {
+            "enum": [
+              "locked",
+              "search_running",
+              "awaiting_validation",
+              "validation_running",
+              "awaiting_candidate",
+              "candidate_locked",
+              "exam_running",
+              "awaiting_review",
+              "qualification_pending",
+              "approved",
+              "qualification_failed",
+              "retained",
+              "closed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "parent_study_id",
+          "strategy_key",
+          "symbol",
+          "state",
+          "presented_status",
+          "revision",
+          "created_at_ms",
+          "updated_at_ms",
+          "protocol_hash",
+          "method",
+          "consumed_evaluations",
+          "budget_cap",
+          "cache_hits",
+          "invalid_points",
+          "incomplete",
+          "failure_reason",
+          "hidden",
+          "exposure_claim",
+          "exam_outcome",
+          "qualification_id",
+          "protocol",
+          "receipt",
+          "permitted_actions",
+          "action_refusals",
+          "guidance",
+          "progress",
+          "dispatch",
+          "results",
+          "decision",
+          "candidate_key",
+          "exam_locked",
+          "scope",
+          "exposure_preview"
+        ],
+        "title": "GoldenSearchStudyDetail",
+        "type": "object"
+      },
+      "GoldenSearchStudySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_cap": {
+            "title": "Budget Cap",
+            "type": "integer"
+          },
+          "cache_hits": {
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "consumed_evaluations": {
+            "title": "Consumed Evaluations",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "exam_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "does_not_meet_rules",
+                  "not_enough_evidence",
+                  "could_not_evaluate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Outcome"
+          },
+          "exposure_claim": {
+            "anyOf": [
+              {
+                "enum": [
+                  "confirmatory",
+                  "exploratory"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Claim"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "hidden": {
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "invalid_points": {
+            "title": "Invalid Points",
+            "type": "integer"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "parent_study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Study Id"
+          },
+          "presented_status": {
+            "enum": [
+              "idle",
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Presented Status",
+            "type": "string"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "locked",
+              "search_running",
+              "awaiting_validation",
+              "validation_running",
+              "awaiting_candidate",
+              "candidate_locked",
+              "exam_running",
+              "awaiting_review",
+              "qualification_pending",
+              "approved",
+              "qualification_failed",
+              "retained",
+              "closed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "parent_study_id",
+          "strategy_key",
+          "symbol",
+          "state",
+          "presented_status",
+          "revision",
+          "created_at_ms",
+          "updated_at_ms",
+          "protocol_hash",
+          "method",
+          "consumed_evaluations",
+          "budget_cap",
+          "cache_hits",
+          "invalid_points",
+          "incomplete",
+          "failure_reason",
+          "hidden",
+          "exposure_claim",
+          "exam_outcome",
+          "qualification_id"
+        ],
+        "title": "GoldenSearchStudySummary",
+        "type": "object"
+      },
+      "GoldenSearchSummaryPills": {
+        "additionalProperties": false,
+        "properties": {
+          "judged": {
+            "title": "Judged",
+            "type": "string"
+          },
+          "median_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Retention"
+          },
+          "test_trades": {
+            "title": "Test Trades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "judged",
+          "test_trades",
+          "median_retention"
+        ],
+        "title": "GoldenSearchSummaryPills",
+        "type": "object"
+      },
+      "GoldenSearchTrade": {
+        "additionalProperties": false,
+        "properties": {
+          "entry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Entry Ms",
+            "type": "integer"
+          },
+          "entry_price": {
+            "title": "Entry Price",
+            "type": "number"
+          },
+          "exit_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Exit Ms",
+            "type": "integer"
+          },
+          "exit_price": {
+            "title": "Exit Price",
+            "type": "number"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "indicators": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Indicators",
+            "type": "object"
+          },
+          "pnl": {
+            "description": "Price change times filled quantity, before fees.",
+            "title": "Pnl",
+            "type": "number"
+          },
+          "pnl_pct": {
+            "title": "Pnl Pct",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entry_ms",
+          "exit_ms",
+          "entry_price",
+          "exit_price",
+          "quantity",
+          "pnl",
+          "pnl_pct",
+          "indicators",
+          "exit_reason"
+        ],
+        "title": "GoldenSearchTrade",
+        "type": "object"
+      },
+      "GoldenSearchValidationFold": {
+        "additionalProperties": false,
+        "properties": {
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "incumbent_test_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "test_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "test_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "train_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train Start Ms",
+            "type": "integer"
+          },
+          "winner": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner"
+          },
+          "winner_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Hash"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms",
+          "status",
+          "winner",
+          "winner_hash",
+          "train_metrics",
+          "test_metrics",
+          "incumbent_test_metrics",
+          "failure_reason",
+          "failure_code"
+        ],
+        "title": "GoldenSearchValidationFold",
+        "type": "object"
+      },
+      "GoldenSearchValidationView": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchValidationFold"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "incumbent_linked": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
+            },
+            "title": "Incumbent Linked",
+            "type": "array"
+          },
+          "linked": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
+            },
+            "title": "Linked",
+            "type": "array"
+          },
+          "summary_pills": {
+            "$ref": "#/components/schemas/GoldenSearchSummaryPills"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "folds",
+          "verdict",
+          "linked",
+          "incumbent_linked",
+          "summary_pills",
+          "explanation",
+          "incomplete"
+        ],
+        "title": "GoldenSearchValidationView",
+        "type": "object"
+      },
+      "GoldenSearchVerdict": {
+        "additionalProperties": false,
+        "properties": {
+          "based_on": {
+            "title": "Based On",
+            "type": "string"
+          },
+          "defined_folds": {
+            "title": "Defined Folds",
+            "type": "integer"
+          },
+          "label": {
+            "enum": [
+              "still worked",
+              "got worse",
+              "stopped working",
+              "too few trades",
+              "could not be judged"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "median_test_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Test Sharpe"
+          },
+          "oos_trade_count": {
+            "title": "Oos Trade Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "retention_threshold": {
+            "title": "Retention Threshold",
+            "type": "number"
+          },
+          "study_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Retention"
+          },
+          "successful_folds": {
+            "title": "Successful Folds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "reason",
+          "successful_folds",
+          "defined_folds",
+          "study_retention",
+          "median_test_sharpe",
+          "oos_trade_count",
+          "based_on",
+          "retention_threshold"
+        ],
+        "title": "GoldenSearchVerdict",
+        "type": "object"
+      },
+      "GoldenSearchWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "GoldenSearchWindow",
+        "type": "object"
+      },
+      "GoldenSearchZoomRound": {
+        "additionalProperties": false,
+        "properties": {
+          "chosen": {
+            "title": "Chosen",
+            "type": "number"
+          },
+          "current_before": {
+            "title": "Current Before",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "invalid": {
+            "description": "Constraint-skipped values, never evaluated: [value, reason].",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Invalid",
+            "type": "array"
+          },
+          "knob": {
+            "title": "Knob",
+            "type": "string"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "moved": {
+            "title": "Moved",
+            "type": "boolean"
+          },
+          "objectives": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Objectives",
+            "type": "array"
+          },
+          "pass_index": {
+            "title": "Pass Index",
+            "type": "integer"
+          },
+          "quantization_limit": {
+            "title": "Quantization Limit",
+            "type": "boolean"
+          },
+          "results": {
+            "description": "[value, ineligibility code or null when eligible].",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "round_index": {
+            "title": "Round Index",
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pass_index",
+          "knob",
+          "round_index",
+          "low",
+          "high",
+          "values",
+          "invalid",
+          "results",
+          "objectives",
+          "chosen",
+          "moved",
+          "current_before",
+          "quantization_limit"
+        ],
+        "title": "GoldenSearchZoomRound",
+        "type": "object"
+      },
+      "GoldenSearchZoomSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "passes": {
+            "title": "Passes",
+            "type": "integer"
+          },
+          "points": {
+            "title": "Points",
+            "type": "integer"
+          },
+          "refinements": {
+            "title": "Refinements",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "refinements",
+          "passes"
+        ],
+        "title": "GoldenSearchZoomSettings",
+        "type": "object"
+      },
+      "GoldenSearchZoomSettingsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "passes": {
+            "default": 2,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "points": {
+            "default": 5,
+            "title": "Points",
+            "type": "integer"
+          },
+          "refinements": {
+            "default": 2,
+            "title": "Refinements",
+            "type": "integer"
+          }
+        },
+        "title": "GoldenSearchZoomSettingsRequest",
         "type": "object"
       },
       "GoldenValidationResponse": {
@@ -26711,11 +31782,22 @@
       },
       "QualifiedDeployConfiguration": {
         "additionalProperties": false,
-        "description": "An exact corpus-covered preset, authored from the program's registry contract.",
+        "description": "An exact corpus-covered preset: the stock's ready Golden Search default, else the registry's validated point.",
         "properties": {
           "explanation": {
             "title": "Explanation",
             "type": "string"
+          },
+          "golden_qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Golden Qualification Id"
           },
           "parameters": {
             "additionalProperties": {
@@ -28756,6 +33838,21 @@
         "title": "RemoveAction",
         "type": "object"
       },
+      "ReproveQualificationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotencyKey": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotencykey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotencyKey"
+        ],
+        "title": "ReproveQualificationRequest",
+        "type": "object"
+      },
       "Resolution": {
         "additionalProperties": false,
         "properties": {
@@ -29281,6 +34378,28 @@
           "created_at_ms"
         ],
         "title": "RevisionResponse",
+        "type": "object"
+      },
+      "RevokeQualificationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotencyKey": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotencykey",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "idempotencyKey"
+        ],
+        "title": "RevokeQualificationRequest",
         "type": "object"
       },
       "RollingSplitPolicySpec": {
@@ -54392,6 +59511,48 @@
         ]
       }
     },
+    "/api/jobs-internal/golden-search": {
+      "post": {
+        "description": "Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.\n\nA token the study did not issue, or a stage another job already holds,\nis refused (409); nothing runs without the matching token.",
+        "operationId": "start_golden_search_job_api_jobs_internal_golden_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoldenSearchJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchJobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Golden Search Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/grid-search": {
       "post": {
         "description": "Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.",
@@ -55304,6 +60465,1536 @@
         "summary": "Update Backtest Run Notes",
         "tags": [
           "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications": {
+      "get": {
+        "operationId": "list_golden_qualifications_api_research_golden_qualifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "program_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Program Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenQualificationSummary"
+                  },
+                  "title": "Response List Golden Qualifications Api Research Golden Qualifications Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Golden Qualifications",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications/defaults": {
+      "get": {
+        "operationId": "list_golden_defaults_api_research_golden_qualifications_defaults_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "program_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Program Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenDefaultView"
+                  },
+                  "title": "Response List Golden Defaults Api Research Golden Qualifications Defaults Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Golden Defaults",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications/{qualification_id}": {
+      "get": {
+        "operationId": "get_golden_qualification_api_research_golden_qualifications__qualification_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenQualificationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Golden Qualification",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications/{qualification_id}/deploy-offer": {
+      "get": {
+        "description": "The exact tuple for Deploy. Answered whatever the status; Deploy applies only a ready one.",
+        "operationId": "get_golden_qualification_deploy_offer_api_research_golden_qualifications__qualification_id__deploy_offer_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenQualificationDeployOffer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Golden Qualification Deploy Offer",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications/{qualification_id}/reprove": {
+      "post": {
+        "operationId": "reprove_golden_qualification_api_research_golden_qualifications__qualification_id__reprove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReproveQualificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenQualificationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reprove Golden Qualification",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-qualifications/{qualification_id}/revoke": {
+      "post": {
+        "operationId": "revoke_golden_qualification_api_research_golden_qualifications__qualification_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeQualificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenQualificationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Golden Qualification",
+        "tags": [
+          "research-golden-qualifications"
+        ]
+      }
+    },
+    "/api/research/golden-search/capabilities": {
+      "get": {
+        "description": "Every registered strategy: its Golden Search knobs, fixed controls and constraints, or why it has none.",
+        "operationId": "get_capabilities_api_research_golden_search_capabilities_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenSearchCapability"
+                  },
+                  "title": "Response Get Capabilities Api Research Golden Search Capabilities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capabilities",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/defaults": {
+      "get": {
+        "description": "A complete starting plan whose intervals the server computes from the calendar and the lake.",
+        "operationId": "get_defaults_api_research_golden_search_defaults_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "maxLength": 16,
+              "minLength": 1,
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "final_months",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "maximum": 60,
+              "minimum": 1,
+              "title": "Final Months",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "training_months",
+            "required": false,
+            "schema": {
+              "default": 6,
+              "maximum": 120,
+              "minimum": 1,
+              "title": "Training Months",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "test_months",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 60,
+              "minimum": 1,
+              "title": "Test Months",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchDefaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Defaults",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/preflight": {
+      "post": {
+        "description": "Review a plan without side effects. Every problem a well-formed plan can have is a refusal in a 200.",
+        "operationId": "preflight_plan_api_research_golden_search_preflight_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoldenSearchProtocolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchPreflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Preflight Plan",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies": {
+      "get": {
+        "description": "History, newest first; hidden studies only when asked for.",
+        "operationId": "list_studies_api_research_golden_search_studies_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "strategy_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenSearchStudySummary"
+                  },
+                  "title": "Response List Studies Api Research Golden Search Studies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Studies",
+        "tags": [
+          "research-golden-search"
+        ]
+      },
+      "post": {
+        "description": "Lock a reviewed plan into a new study; the same key and plan return the study it already locked.",
+        "operationId": "lock_study_api_research_golden_search_studies_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoldenSearchCreateStudyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchStudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Lock Study",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}": {
+      "delete": {
+        "description": "Hide a study from history; refused while a stage runs. Its rows, trials and exposures stay recorded.",
+        "operationId": "hide_study_api_research_golden_search_studies__study_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Hide Study",
+        "tags": [
+          "research-golden-search"
+        ]
+      },
+      "get": {
+        "operationId": "get_study_api_research_golden_search_studies__study_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchStudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Study",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/candidates/{candidate_key}": {
+      "get": {
+        "description": "A candidate's development detail run (equity, drawdown, months, trades), and its final-test run once scored.",
+        "operationId": "get_candidate_api_research_golden_search_studies__study_id__candidates__candidate_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_key",
+            "required": true,
+            "schema": {
+              "enum": [
+                "incumbent",
+                "all_period",
+                "recent"
+              ],
+              "title": "Candidate Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchCandidateDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Candidate",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/commands": {
+      "post": {
+        "description": "Apply one lifecycle command under its expected revision.\n\nA command that authorizes a stage answers with its ``dispatch``; the\nclient starts that stage through the jobs boundary. ``revise`` answers\nwith the new study it created.",
+        "operationId": "run_command_api_research_golden_search_studies__study_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoldenSearchCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchStudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Run Command",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/evaluations": {
+      "get": {
+        "operationId": "list_evaluations_api_research_golden_search_studies__study_id__evaluations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The step that asked for the evaluation, e.g. search or validation.",
+            "in": "query",
+            "name": "stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The step that asked for the evaluation, e.g. search or validation.",
+              "title": "Stage"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fold_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fold Index"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchEvaluationPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Evaluations",
+        "tags": [
+          "research-golden-search"
         ]
       }
     },

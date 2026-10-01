@@ -267,9 +267,10 @@ async def defaults(
         training_months=training_months,
         test_months=test_months,
     )
-    # The plan itself, plus its two annotations: a client edits it and sends it back as a ProtocolRequest.
+    # The plan itself, plus its annotations: a client edits it and sends it back as a ProtocolRequest.
     return {
         **protocol.as_dict(),
+        "final_months": final_months,
         "incumbent_label": incumbent.label,
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),
     }
@@ -398,7 +399,16 @@ async def detail(
         refusals=presentation.refusals,
         progress=await _progress(row, presentation.presented),
         dispatch=dispatch,
+        exposure_preview=await _exposure_preview(row),
     )
+
+
+async def _exposure_preview(row: StudyRow) -> dict[str, Any] | None:
+    """What opening the final test would record, while a candidate is being chosen; the exam records its own state."""
+    if row.exam_locked or row.state not in ("awaiting_candidate", "candidate_locked"):
+        return None
+    protocol = row.protocol
+    return await exposure_view(row.symbol, protocol["final_start_ms"], protocol["final_end_ms"], exclude_study_id=row.id)
 
 
 async def summaries(
@@ -567,6 +577,12 @@ async def run_command(
     prepared = None
     if command == "revise":
         protocol = protocol_from_request(require_mapping(body.get("protocol"), "payload.protocol"))
+        if (protocol.strategy_key, protocol.symbol) != (seen.strategy_key, seen.symbol):
+            raise GoldenSearchRefusal(
+                f"A revision studies the same strategy and stock ({seen.strategy_key} on {seen.symbol}); start a new study for another.",
+                code="REVISION_SUBJECT_CHANGED",
+                field="payload.protocol",
+            )
         prepared = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, parent_study_id=study_id, roots=roots, identity=identity)
     async with connection() as conn, conn.transaction():
         # Commands on one study serialize on its row lock, so the key is checked once the lock is held:

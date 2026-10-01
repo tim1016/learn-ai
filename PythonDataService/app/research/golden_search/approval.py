@@ -595,6 +595,28 @@ def _require_case(
         )
 
 
+async def _replaceable_default(conn: asyncpg.Connection, request: ApprovalRequest, running_digest: str) -> str | None:
+    """The default pointer this approval may move: the one the owner reviewed against.
+
+    A study planned with no usable default (none, or one that was stale or
+    revoked for the running build) was reviewed against the registry point,
+    so it may replace a pointer that is still not usable. A pointer that has
+    since become ready names a default the owner never saw, and the
+    compare-and-set refuses it.
+    """
+    expected = request.expected_default_qualification_id
+    if expected is not None:
+        return expected
+    pointer = await qualifications.get_default(conn, request.strategy_key, request.symbol)
+    if pointer is None or pointer.qualification_id is None:
+        return None
+    row = await qualifications.get_qualification(conn, pointer.qualification_id)
+    events = (await qualifications.events_for(conn, [pointer.qualification_id])).get(pointer.qualification_id, [])
+    if row is not None and qualifications.qualification_status(row, events, running_digest) == "ready":
+        return None
+    return pointer.qualification_id
+
+
 async def _publish(
     conn: asyncpg.Connection,
     *,
@@ -671,7 +693,7 @@ async def _publish(
                 program_key=request.strategy_key,
                 symbol=request.symbol,
                 qualification_id=qualification_id,
-                expected_qualification_id=request.expected_default_qualification_id,
+                expected_qualification_id=await _replaceable_default(conn, request, proof.artifact_digest),
                 reason=f"Approved Golden Search study {request.study_id}",
                 actor=request.actor,
                 now_ms=now_ms,

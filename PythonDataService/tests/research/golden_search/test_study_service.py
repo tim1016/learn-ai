@@ -76,6 +76,8 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert detail["permitted_actions"] == ["continue", "close", "revise"]
     assert detail["guidance"]["headline"] == "Ready to search"
     assert detail["scope"]["final_state"] == "locked"
+    assert detail["scope"]["data_source"] == "Historical research: Polygon, split adjusted, regular sessions"
+    assert detail["exposure_preview"] is None
 
     row = await driver.advance(row, "continue")
     detail = await driver.detail(row)
@@ -96,11 +98,15 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     keys = [candidate["key"] for candidate in evidence["candidates"]]
     assert keys == ["incumbent", "all_period", "recent"]
 
+    assert detail["exposure_preview"]["state"] == "not_opened"
     row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
     assert row.state == "candidate_locked" and row.candidate_key == "all_period"
+    # The lock box says what opening the test would record, before it is opened.
+    assert (await driver.detail(row))["exposure_preview"]["state"] == "not_opened"
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
     detail = await driver.detail(row)
     assert detail["state"] == "awaiting_review"
+    assert detail["exposure_preview"] is None
     exam = detail["results"]["exam"]
     assert (exam["exposure_state"], exam["claim"], exam["outcome"]) == ("not_opened", "confirmatory", "meets_rules")
     assert detail["guidance"]["headline"] == "Approve the settings you want to use"
@@ -606,6 +612,16 @@ async def test_revise_forks_a_linked_study_and_leaves_the_original_untouched(dri
 
     assert outcome.study.id != row.id and outcome.study.parent_study_id == row.id and outcome.study.state == "locked"
     assert (original.revision, original.state) == (row.revision, row.state)
+
+
+async def test_a_revision_keeps_the_strategy_and_stock_of_the_study_it_revises(driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "revise", {"protocol": plan_request(unique_symbol(), budget_cap=4000)})
+
+    assert refused.value.code == "REVISION_SUBJECT_CHANGED"
+    assert (await service.get_row(row.id)).revision == row.revision
 
 
 async def test_two_concurrent_revisions_under_one_key_fork_one_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:

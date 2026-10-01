@@ -53,7 +53,9 @@ def action_refusals(
         reasons["open_exam"] = "Lock a candidate first; the final test opens once per study."
     if row.state not in ("awaiting_review", "qualification_failed"):
         reasons["approve"] = "Approval follows the final test."
-    if row.state not in _RETAIN_STATES:
+    # A stopped approval published nothing (its publish moves the study in the same transaction), so the
+    # owner may still decide to keep the current settings instead of finishing it.
+    if row.state not in _RETAIN_STATES and not (stopped and row.state == "qualification_pending"):
         reasons["retain"] = "Keeping the current settings is a decision made between stages, not while one runs or after the study ended."
     if not (row.state in _CLOSE_STATES or (stopped and row.state != "qualification_pending")):
         reasons["close"] = "This study cannot be closed in its current state."

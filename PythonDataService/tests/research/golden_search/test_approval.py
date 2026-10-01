@@ -278,14 +278,14 @@ def _start_binding(symbol: str, params: dict[str, Any]) -> BrokerBotBinding:
     )
 
 
-async def _prior_default(conn: asyncpg.Connection, symbol: str, unique: str) -> str:
-    """An earlier qualified version already holding the stock's default."""
+async def _prior_default(conn: asyncpg.Connection, symbol: str, unique: str, *, ready: bool = False) -> str:
+    """An earlier qualified version already holding the stock's default: ready for the running build, or stale."""
     prior = await seed_qualification(
         conn,
         qualification_id=f"gq-prior-{unique}",
         symbol=symbol,
         params=canonical_point(symbol, rsi_min=40.0),
-        artifact_digest="1" * 64,
+        artifact_digest=admission_module.running_build_digests(CONTRACT)[0] if ready else "1" * 64,
         make_default=True,
     )
     return prior.id
@@ -434,12 +434,12 @@ async def test_a_moved_default_refuses_and_rolls_back_the_review_then_a_fresh_re
 ) -> None:
     study_id = f"study-{unique}"
     await _study(conn, study_id, symbol)
-    prior = await _prior_default(conn, symbol, unique)
+    prior = await _prior_default(conn, symbol, unique, ready=True)
     engine = _Engine()
     monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
     caller = _Caller(study_id)
 
-    # The owner reviewed when no default existed; another approval moved it since.
+    # The owner reviewed when no usable default existed; another approval set a ready one since.
     refused = await _approve(_request(study_id, symbol, snapshot, lake, expected_default=None), caller, blobs)
 
     assert refused.status == "failed"
@@ -461,6 +461,31 @@ async def test_a_moved_default_refuses_and_rolls_back_the_review_then_a_fresh_re
     # The retry reused the proof and the run: no second draw on the reservation, no second run.
     assert caller.consumed == [2, 1]
     assert len(engine.requests) == 1
+
+
+async def test_a_study_reviewed_against_the_registry_replaces_a_stale_default(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    # The pointer names a version approved under an earlier build, so the
+    # study's incumbent was the registry point and the owner expected none.
+    stale = await _prior_default(conn, symbol, unique)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine())
+    caller = _Caller(study_id)
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake, expected_default=None), caller, blobs)
+
+    assert outcome.status == "approved"
+    pointer = await get_default(conn, PROGRAM, symbol)
+    assert pointer is not None and pointer.qualification_id == outcome.qualification_id != stale
+    assert pointer.revision == 2
 
 
 async def test_restart_needed_refuses_before_any_work(

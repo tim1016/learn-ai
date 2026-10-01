@@ -328,6 +328,7 @@ class GoldenSearchExposure(_Wire):
 class GoldenSearchDefaults(GoldenSearchProtocol):
     """A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure."""
 
+    final_months: int = Field(description="The final interval's length in whole months, as laid out.")
     incumbent_label: str
     exposure: GoldenSearchExposure
 
@@ -458,6 +459,7 @@ class GoldenSearchScope(_Wire):
     final_state: Literal["locked", "opened_once"]
     capital: float
     costs_sentence: str
+    data_source: str
 
 
 class GoldenSearchZoomRound(_Wire):
@@ -713,6 +715,9 @@ class GoldenSearchStudyDetail(GoldenSearchStudySummary):
     candidate_key: CandidateKey | None
     exam_locked: bool
     scope: GoldenSearchScope
+    exposure_preview: GoldenSearchExposure | None = Field(
+        description="What opening the final test would record, while a candidate is chosen; null otherwise."
+    )
 
 
 # Reads beside the study.

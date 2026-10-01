@@ -25,6 +25,7 @@ from app.research.golden_search.guidance import (
     candidate_flags,
     candidate_guidance,
     costs_sentence,
+    data_source_sentence,
     fixed_sentence,
     knob_stop_explanation,
     params_sentence,
@@ -82,6 +83,7 @@ def study_detail(
     refusals: Mapping[CommandName, str | None],
     progress: Mapping[str, Any] | None,
     dispatch: Mapping[str, Any] | None,
+    exposure_preview: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     protocol = GoldenSearchProtocol.from_dict(row.protocol)
     declaration = declaration_for(row.strategy_key)
@@ -108,6 +110,7 @@ def study_detail(
         "candidate_key": row.candidate_key,
         "exam_locked": row.exam_locked,
         "scope": scope_view(row, protocol),
+        "exposure_preview": None if exposure_preview is None else dict(exposure_preview),
     }
 
 
@@ -144,6 +147,7 @@ def scope_view(row: StudyRow, protocol: GoldenSearchProtocol) -> dict[str, Any]:
         "final_state": "opened_once" if row.exam_locked else "locked",
         "capital": protocol.execution.initial_cash,
         "costs_sentence": costs_sentence(protocol.execution),
+        "data_source": data_source_sentence(row.receipt["execution_contract"]["data_policy"]),
     }
 
 

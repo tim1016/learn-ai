@@ -114,6 +114,14 @@ def test_a_bound_stage_whose_worker_died_reads_interrupted_and_finish_follows_th
     assert permitted(action_refusals(row, presented=presented_status(row, live=None), resume_refusal=None)) == ["cancel"]
 
 
+def test_a_stopped_approval_can_be_finished_revised_or_ended_by_keeping_the_current_settings() -> None:
+    row = _row(state="qualification_pending", status="failed", pending_stage="qualification", exam_locked=True)
+    assert permitted(action_refusals(row, presented="failed", resume_refusal=None)) == ["retain", "finish", "revise"]
+    # Code moved since lock: Finish is refused, and keeping the current settings is still an exit besides Revise.
+    blocked = action_refusals(row, presented="failed", resume_refusal="the engine or strategy code changed since launch")
+    assert permitted(blocked) == ["retain", "revise"]
+
+
 def test_a_candidate_can_be_changed_until_the_final_test_opens() -> None:
     evidence = {"evidence": {"candidates": []}}
     locked = _row(state="candidate_locked", results=evidence)

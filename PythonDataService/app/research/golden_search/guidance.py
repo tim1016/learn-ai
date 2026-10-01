@@ -296,6 +296,17 @@ def costs_sentence(execution: ExecutionAssumptions) -> str:
     )
 
 
+_DATA_SOURCES = {"polygon": "Polygon"}
+
+
+def data_source_sentence(policy: Mapping[str, Any]) -> str:
+    """The data every number on the page was computed from, as the footer states it."""
+    source = _DATA_SOURCES.get(str(policy.get("source")), str(policy.get("source")))
+    adjusted = "split adjusted" if policy.get("adjusted") else "unadjusted"
+    session = "regular sessions" if policy.get("session") == "regular" else "extended sessions"
+    return f"Historical research: {source}, {adjusted}, {session}"
+
+
 def validation_explanation(based_on: str | None, folds: int) -> str:
     coverage = f" The legacy verdict is {based_on}." if based_on else ""
     return (
