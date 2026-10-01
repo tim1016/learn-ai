@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXECUTION_COVERAGE_CONFLICT_REASON_CODE
@@ -112,7 +113,7 @@ async def test_a_bot_entry_is_admitted_once_a_chain_member_first_seen_as_foreign
         assert _credited(repo, order_ref) == [(_EXEC_C, "activity_recovery", 5.0, 99.90)]
         assert not _unexplained_hold_active(repo)
 
-        assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0)).tick()
+        assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0), intake=ReentrantAsyncLock()).tick()
 
         fees = repo.fee_attribution(now_ms=repo.clock())
         assert fees.known, fees.unresolved
@@ -153,7 +154,7 @@ def _bot_entry_filled_over_rest(
 
 async def _read_account_activity(repo: ClerkSqliteRepository, feed: _ActivityFeed) -> None:
     """One tick of the Clerk's fee-evidence producer against Alpaca's account activity."""
-    await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0)).tick()
+    await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0), intake=ReentrantAsyncLock()).tick()
 
 
 async def test_a_bot_entry_whose_fill_frame_never_arrives_is_credited_from_account_activity(

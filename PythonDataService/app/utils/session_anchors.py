@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 _NY = ZoneInfo("America/New_York")
 
@@ -63,3 +63,16 @@ def et_day_end_ms(day: date) -> int:
 def et_date_at_ms(ms: int) -> date:
     """The America/New_York calendar date containing instant ``ms``."""
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_NY).date()
+
+
+def calendar_days_to_expiry(expiration_date: str, now_ms: int | None = None) -> int:
+    """Calendar days from today's ET date to ``expiration_date`` (``YYYY-MM-DD``), floored at 0.
+
+    Today is the America/New_York date at ``now_ms`` (the wall clock when
+    omitted), never the host's local date. The chain snapshot looks its
+    risk-free rate up at this DTE and the strategy analysis prices over it,
+    so the two agree (#2789).
+    """
+    at_ms = now_ms_utc() if now_ms is None else now_ms
+    expiry = datetime.strptime(expiration_date, "%Y-%m-%d").date()
+    return max((expiry - et_date_at_ms(at_ms)).days, 0)

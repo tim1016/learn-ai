@@ -23,7 +23,7 @@ from app.models.responses import (
 )
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
-from app.services.strategy_engine import calendar_days_to_expiry
+from app.utils.session_anchors import calendar_days_to_expiry
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

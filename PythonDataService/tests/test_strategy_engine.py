@@ -12,7 +12,6 @@ from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
 from app.services.bs_greeks import bs_european_price
 from app.services.strategy_engine import (
     analyze_strategy,
-    calendar_days_to_expiry,
     compute_d2,
     compute_expected_value,
     compute_max_profit_loss,
@@ -24,7 +23,7 @@ from app.services.strategy_engine import (
     interpolate_iv_at_price,
     weighted_iv,
 )
-from app.utils.session_anchors import et_midnight_ms
+from app.utils.session_anchors import calendar_days_to_expiry, et_midnight_ms
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -332,7 +331,7 @@ class TestDaysToExpiry:
             risk_free_rate=0.04,
             include_leg_diagnostics=True,
         )
-        with patch("app.services.strategy_engine.now_ms_utc", return_value=_LATE_EVENING_ET_2027_03_05):
+        with patch("app.utils.session_anchors.now_ms_utc", return_value=_LATE_EVENING_ET_2027_03_05):
             result = analyze_strategy(req)
 
         one_day = bs_european_price(

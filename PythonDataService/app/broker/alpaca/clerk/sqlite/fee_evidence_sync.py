@@ -26,16 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class FeeEvidenceSync:
-    def __init__(
-        self, *, repo: ClerkSqliteRepository, read: BrokerReadPort, intake: ReentrantAsyncLock | None = None
-    ) -> None:
+    def __init__(self, *, repo: ClerkSqliteRepository, read: BrokerReadPort, intake: ReentrantAsyncLock) -> None:
         self._repo = repo
         self._read = read
         # The account's one intake fence, shared with the sweep and the
         # trade-updates sink: a bot order's recovered executions fold under
-        # it, and no broker read ever runs inside it. Without one -- a store
-        # nothing else writes -- the sync holds a fence of its own.
-        self._intake = intake if intake is not None else ReentrantAsyncLock()
+        # it, and no broker read ever runs inside it.
+        self._intake = intake
         self._task: asyncio.Task[None] | None = None
 
     async def tick(self) -> bool:

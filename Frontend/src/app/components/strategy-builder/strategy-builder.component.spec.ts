@@ -656,6 +656,42 @@ describe('StrategyBuilderComponent', () => {
       expect(component.selectedExpiration()).toBe(farExpiry);
       expect(component.riskFreeRate()).toBe(0.05);
     });
+
+    it('lets neither a late failure nor a late finish for a left expiry touch the current fetch', async () => {
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      const farChain = component.onExpirationSelected(farExpiry);
+
+      const pending = httpMock.match(r =>
+        r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
+      pending[0].flush({ errors: [{ message: 'near expiry failed' }] });
+      await nearChain;
+
+      expect(component.error()).toBeNull();
+      expect(component.chainLoading()).toBe(true);
+
+      pending[1].flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0.05,
+            dividendYield: null,
+            rateSource: 'FRED',
+            dividendSource: null,
+            error: null,
+          },
+        },
+      });
+      await farChain;
+      expect(component.chainLoading()).toBe(false);
+      expect(component.riskFreeRate()).toBe(0.05);
+    });
   });
 
   // ── UX: zero-TTM banner ─────────────────────────────────────────

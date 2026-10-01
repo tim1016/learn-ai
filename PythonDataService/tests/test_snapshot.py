@@ -184,7 +184,7 @@ async def test_snapshot_prices_each_expiry_at_its_own_tenor_rate(client, fresh_f
     with (
         patch("app.routers.snapshot.polygon_client.list_snapshot_options_chain", return_value=chain),
         patch("app.services.fred_service._fetch_all_tenors", return_value=bills),
-        patch("app.services.strategy_engine.now_ms_utc", return_value=noon_et_2026_10_01),
+        patch("app.utils.session_anchors.now_ms_utc", return_value=noon_et_2026_10_01),
     ):
         near = await client.post(
             "/api/snapshot/options-chain", json={"underlying_ticker": "SPY", "expiration_date": "2026-10-30"}

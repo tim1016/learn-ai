@@ -26,8 +26,8 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subjec
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.reads import OUTSIDE_ORDER_SQL, governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
+from app.broker.alpaca.clerk.sqlite.reads import filled_outside_order_ids, governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
@@ -555,13 +555,7 @@ def custody_fee_attribution(
     # A manual chain's member first seen as foreign is the leg's: its
     # executions are credited to the leg, never awaited as an outside
     # order's (#2787).
-    external_orders = {
-        row[0]
-        for row in conn.execute(
-            "SELECT eo.broker_order_id FROM external_orders eo "
-            f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {OUTSIDE_ORDER_SQL}"
-        )
-    }
+    external_orders = filled_outside_order_ids(conn)
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)

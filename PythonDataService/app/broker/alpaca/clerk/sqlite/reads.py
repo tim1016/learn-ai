@@ -115,7 +115,7 @@ def _manual_chain_order_ref_sql(broker_order_id: str) -> str:
 
     ``broker_order_id`` is an SQL expression: a parameter, or a column of the
     enclosing query. The one statement of chain membership (#2656) that
-    :func:`manual_chain_order_ref` and :data:`OUTSIDE_ORDER_SQL` both read.
+    :func:`manual_chain_order_ref` and :data:`_OUTSIDE_ORDER_SQL` both read.
     """
     return (
         "SELECT o.order_ref FROM orders o "
@@ -129,14 +129,14 @@ def _manual_chain_order_ref_sql(broker_order_id: str) -> str:
     )
 
 
-#: Whether an ``external_orders`` row (aliased ``eo``) is still an outside
-#: order. Alpaca gives a replacement a client id of its own, so the Clerk can
-#: take a replacement for a foreign order before it knows the manual leg's
-#: chain holds it (#2656). From the moment the chain holds it, the order is
+#: Whether the ``external_orders`` row ``eo`` is still an outside order. Only
+#: this module's reads apply it. Alpaca gives a replacement a client id of its
+#: own, so the Clerk can take a replacement for a foreign order before it
+#: knows the manual leg's chain holds it (#2656). From the moment the chain holds it, the order is
 #: the leg's own and its executions are the leg's (#2787): its row stays as
 #: the record of what was observed, but no money read counts it outside the
 #: Clerk again, so its fill is counted once.
-OUTSIDE_ORDER_SQL = f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')})"
+_OUTSIDE_ORDER_SQL = f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')})"
 
 
 def _row_to_command_resource(row: sqlite3.Row) -> CommandResource:
@@ -357,10 +357,19 @@ def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
     """
     rows = conn.execute(
         f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
-        f"WHERE {OUTSIDE_ORDER_SQL} "
+        f"WHERE {_OUTSIDE_ORDER_SQL} "
         "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
     ).fetchall()
     return [_external_order_resource(row) for row in rows]
+
+
+def filled_outside_order_ids(conn: sqlite3.Connection) -> frozenset[str]:
+    """The broker ids of every outside order (:func:`external_orders`) that reported a fill."""
+    rows = conn.execute(
+        "SELECT eo.broker_order_id FROM external_orders eo "
+        f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {_OUTSIDE_ORDER_SQL}"
+    ).fetchall()
+    return frozenset(row[0] for row in rows)
 
 
 UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"

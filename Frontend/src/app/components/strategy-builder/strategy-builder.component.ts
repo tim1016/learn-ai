@@ -300,6 +300,8 @@ export class StrategyBuilderComponent implements OnDestroy {
    * exception 1) never invent a rate of their own (#2764).
    */
   riskFreeRate = signal<number | null>(null);
+  /** Counts chain-snapshot fetches; only the latest may write the page (#2789). */
+  private chainRequest = 0;
   priceRangePct = signal(0.05);
   selectedGreek = signal<GreekType>('delta');
 
@@ -983,6 +985,12 @@ export class StrategyBuilderComponent implements OnDestroy {
   }
 
   async fetchChainSnapshot(ticker: string, expiration: string): Promise<void> {
+    const request = ++this.chainRequest;
+    // A late reply, value or error, for a fetch the user has since moved past
+    // must not touch the current expiration's chain, rate or error (#2789).
+    const current = () => request === this.chainRequest
+      && this.selectedExpiration() === expiration
+      && this.ticker().trim().toUpperCase() === ticker;
     this.chainLoading.set(true);
     this.error.set(null);
     // The rate belongs to one expiration; never price this one at another's (#2789).
@@ -993,11 +1001,7 @@ export class StrategyBuilderComponent implements OnDestroy {
         this.marketDataService.getOptionsChainSnapshot(ticker, expiration)
       );
 
-      // A late reply for an expiration the user has since left must not set the
-      // current one's chain or rate (#2789).
-      if (this.selectedExpiration() !== expiration || this.ticker().trim().toUpperCase() !== ticker) {
-        return;
-      }
+      if (!current()) return;
 
       if (!result.success) {
         this.error.set(result.error ?? 'Failed to fetch snapshot');
@@ -1014,9 +1018,10 @@ export class StrategyBuilderComponent implements OnDestroy {
 
       setTimeout(() => this.scrollToAtm(), 100);
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      if (current()) this.error.set(err instanceof Error ? err.message : String(err));
     } finally {
-      this.chainLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.chainRequest) this.chainLoading.set(false);
     }
   }
 
