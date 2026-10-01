@@ -14,7 +14,7 @@ already have their own external references:
 | `fixtures/sma_crossover.spec.json` | `app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_sma_crossover_parity.py` |
 | `fixtures/rsi_mean_reversion.spec.json` | `app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_rsi_mean_reversion_parity.py` |
 
-The hand-coded twins are math-authority per `docs/math-sources-of-truth.md`.
+The hand-coded twins are math-authority (their provenance blocks).
 The spec layer is parity-pinned secondary; if it ever drifts, the hand-
 coded version is the authority and the spec evaluator is the bug.
 
@@ -115,7 +115,5 @@ removed once it became clear the Phase 1 evaluator could not run them
 (see PR #90 review).
 
 ## Authority cross-references
-- `docs/math-sources-of-truth.md` § Strategies — declares the spec
-  layer as parity-pinned secondary
 - `docs/architecture/engine-authority-map.md` — declares the spec
   layer as the canonical owner of "configurable strategy spec" jobs

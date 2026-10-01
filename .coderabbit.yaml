@@ -26,7 +26,7 @@ reviews:
   path_instructions:
     - path: "Frontend/src/**/*.ts"
       instructions: >
-        Angular 21 with signals (signal(), computed(), input(), output(), inject()).
+        Angular 22 with signals (signal(), computed(), input(), output(), inject()).
         All components standalone with OnPush change detection.
         Modern control flow (@if, @for with track, @switch).
         Use takeUntilDestroyed() for RxJS cleanup.

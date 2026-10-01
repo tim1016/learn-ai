@@ -8,7 +8,7 @@ earlier revisions).
 **Owner:** Inkant (single-developer migration)
 **Started:** 2026-04-26
 
-**Current-state authority:** `docs/math-sources-of-truth.md` (concept
+**Current-state authority:** each math file's provenance block (concept
 level) and `docs/architecture/engine-authority-map.md` (engine level)
 are the authorities for what is canonical *today*. This plan is the
 sequencing record for how the migration ran, plus the open Phase 4
@@ -57,4 +57,4 @@ async job), `Frontend/src/app/services/market-data.service.ts`
 `tests/test_rule_based_backtest_validation.py`.
 
 Once a path is chosen and shipped, update the `rule_based_backtest.py`
-row in `math-sources-of-truth.md` to match.
+provenance block to match.

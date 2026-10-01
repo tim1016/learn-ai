@@ -1,19 +1,14 @@
-Run all three linters and report results.
+Run both local linters and report results.
 
-1. **Angular/TypeScript** (ESLint):
-   ```bash
-   npx eslint Frontend/src/ --max-warnings 0
-   ```
-
-2. **Python** (Ruff):
+1. **Python** (Ruff), from the repo root:
    ```bash
    ruff check PythonDataService/app/ PythonDataService/tests/
    ```
 
-3. **.NET** (dotnet format):
+2. **Angular/TypeScript** (ESLint — what CI runs):
    ```bash
-   dotnet format podman.sln --verify-no-changes
+   cd Frontend && npx eslint src/ && npx eslint tests/e2e --max-warnings 0
    ```
 
-Run all three. Report a summary: linter name, errors found, warnings.
-If a tool is not installed, note it and skip.
+Run both. Report a summary: linter name, errors found, warnings.
+If a tool is not installed, note it and skip. CI runs `dotnet format`; there is no `dotnet` on the owner's Mac.

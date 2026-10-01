@@ -15,7 +15,7 @@ describe('PageErrorComponent', () => {
     expect(el.querySelector('.page-error-title')?.textContent ?? '').toContain('IB Gateway');
   });
 
-  it('renders the math-sources-of-truth link when extensions.mathRef is present', () => {
+  it('renders the math reference link when extensions.mathRef is present', () => {
     const fixture = TestBed.createComponent(PageErrorComponent);
     fixture.componentRef.setInput(
       'error',

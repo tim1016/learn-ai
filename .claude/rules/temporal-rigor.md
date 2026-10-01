@@ -76,7 +76,7 @@ The fail-fast rule above governs **finite** ingestion — a historical fetch is 
 - Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → still **fatal**; downstream has already consumed a now-stale value. Non-monotonic-within-the-open-aggregate stays fatal too until a real feed demonstrates otherwise.
 - A *new, later* timestamp inside a minute the **sparse-minute timer** emitted (#2376) → ignore it: outside RTH a minute short of twelve prints is emitted `SPARSE_MINUTE_EMIT_GRACE_MS` (8 s) after its close so the decision lands inside the delivery allowance, and a print that arrives after that emit is dropped, logged (`action="late_print_after_emit_ignored"`, with its delivery lag) and counted (`LiveBarCounters.ignored_late_print_after_emit`). This is a deliberate latency-over-completeness trade: the minute the run decided on can then differ from the vendor's historical minute, so a live-vs-backtest reconciliation classifies such a minute as a known divergence, not an engine bug. A minute emitted by count holds all twelve slots, so a later timestamp there stays fatal.
 
-Reference implementation: `app/broker/ibkr/bars.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.
+Reference implementation: `app/broker/ibkr/minute_assembler.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.
 
 ## Calendar authority
 
@@ -102,7 +102,7 @@ Rules:
 - The rendered string is display-only: never stored, never returned to a server, never compared.
 - Backend-authored operator/trader prose about time is not re-derived on the client; it arrives from the backend. The component renders *values*, not sentences.
 
-## Ban list (CI-enforceable with grep)
+## Ban list
 
 - `datetime.utcnow` — deprecated in Python 3.12; use `datetime.now(UTC)` at the ingestion boundary, then immediately convert to ms.
 - `datetime.utcfromtimestamp` — same.

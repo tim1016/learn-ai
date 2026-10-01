@@ -12,9 +12,8 @@ artifacts were **hard-deleted to Git history**. Git history
 is their provenance record. Open defects belong in `docs/known-gaps.md`; current
 Alpaca Broker V2 behavior belongs in `docs/broker-clerk-fleet-authority.md`.
 
-**Agent instructions:** `AGENTS.md` is the Codex entry point. The committed
-`CLAUDE.md` / `.claude/**` hierarchy remains the Claude-specific configuration;
-adding Codex guidance must not restructure it.
+**Agent instructions:** `AGENTS.md` holds every rule Claude and Codex share;
+`CLAUDE.md` imports it, and `.claude/**` holds the Claude-only configuration.
 
 ## Classification contract
 
@@ -40,28 +39,13 @@ held to the same live-navigation guarantee.
 
 | Claim | Primary authority | Conflict rule |
 |---|---|---|
-| Agent behavior | Native client hierarchy (`AGENTS.md` for Codex; existing `CLAUDE.md` / `.claude/**` for Claude) | Preserve Claude's configuration; surface a cross-client safety conflict |
+| Agent behavior | `AGENTS.md`, then the routed rule file or skill | Surface the conflict |
 | Product/system decision | Accepted ADR | A later explicit supersession wins |
-| Mathematical port target | Pinned vendored reference, math registry, and golden/parity test | Surface unresolved disagreement |
+| Mathematical port target | Pinned vendored reference, plus the golden fixture and parity test | Surface unresolved disagreement |
 | Engine ownership | `docs/architecture/engine-authority-map.md` | Follow its migration plan |
 | Current runtime/wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe evidence; they do not override it |
 | Framework behavior | Installed manifest plus official version-matched docs | Do not rely on prose version caches |
 | Open defect | `docs/known-gaps.md` | Closed findings are deleted or retained only in durable decision history |
-
----
-
-## Protected canonicals (never edit without owner sign-off)
-
-| Doc | Domain | Owner | Last reviewed |
-|---|---|---|---|
-| `docs/CURRENT.md` | Short current-docs entry point | Tim | 2026-05-23 |
-| `docs/agent-start-here.md` | Minimal AI-agent loading guide | Tim | 2026-05-23 |
-| `docs/architecture/engine-authority-map.md` | Engine ownership map | Tim | 2026-05-04 |
-| `docs/architecture/numerical-authority-migration-plan.md` | Math authority consolidation | Tim | 2026-05-04 |
-| `docs/math-sources-of-truth.md` | All mathematical authorities | Tim | ongoing |
-| `README.md` | Short personal-project note (deliberately modest; setup lives in `docs/runbooks/`) | Tim | 2026-09-28 |
-| `AGENTS.md` | Agent operating instructions | Tim | — |
-| `CLAUDE.md` | Claude Code project instructions | Tim | — |
 
 ---
 
@@ -205,7 +189,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
 | `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | Consolidated 2026-09-12 from three per-invariant stubs; defers to the pinned contracts doc |
 | `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
-| `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by `math-sources-of-truth.md` — keep for traceability |
+| `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by the IV and FRED-rate provenance blocks |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
 | `docs/options-cross-section-overview.md` | Options cross-section research | Useful pipeline context |
 | `docs/portfolio-validation-plan.md` | Portfolio validation tests | 10 core tests; likely partially actionable — flag before archiving |
