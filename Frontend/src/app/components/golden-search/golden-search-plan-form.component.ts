@@ -91,6 +91,14 @@ export class GoldenSearchPlanFormComponent {
         if (revise !== this.appliedRevision) untracked(() => this.startRevision(revise));
         return;
       }
+      if (this.appliedRevision !== null) {
+        // Out of revise mode: the old study's frozen plan (and incumbent) must not become a new unlinked study.
+        untracked(() => {
+          this.appliedRevision = null;
+          void this.loadDefaults();
+        });
+        return;
+      }
       const available = this.available();
       if (this.strategyKey() === null && available.length > 0) untracked(() => this.selectStrategy(available[0].strategy_key));
     });

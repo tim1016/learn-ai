@@ -215,6 +215,21 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.createStudy).not.toHaveBeenCalled();
   });
 
+  it('leaving revise mode starts a fresh plan from the current defaults, not the old study frozen plan', async () => {
+    const service = fakeService();
+    const frozen = studyDetail('awaiting_validation');
+    const source = { ...frozen, protocol: { ...frozen.protocol, incumbent: { source: 'qualification' as const, qualification_id: 'q-old-0001', params: { gap: 0.3, symbol: 'SPY' } } } };
+    const { view } = await renderForm(service, { reviseFrom: source });
+    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+
+    view.fixture.componentRef.setInput('reviseFrom', null);
+
+    await waitFor(() => expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY'));
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].incumbent.source).toBe('registry'));
+    expect(screen.getByRole('heading', { name: 'Plan a study' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Lock plan' })).not.toBeNull();
+  });
+
   it('passes axe with the defaults loaded and a refusal shown', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
